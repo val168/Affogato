@@ -2,12 +2,10 @@ cmake_minimum_required(VERSION 3.25)
 
 project(Affogato LANGUAGES CXX)
 
-# Affogato currently targets 64-bit hosts.
 if(NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
     message(FATAL_ERROR "Affogato currently requires a 64-bit host.")
 endif()
 
-# GCC is our primary Windows compiler for now.
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
     if(CMAKE_CXX_COMPILER_VERSION VERSION_LESS "14.0")
         message(
