@@ -25,8 +25,10 @@ set(ZLIB_INSTALL OFF CACHE BOOL "" FORCE)
 add_subdirectory(third_party/zlib)
 
 add_library(affogato_cpu STATIC
+    src/cpu/espresso/cafe_os_hle.cpp
     src/cpu/espresso/decoder.cpp
     src/cpu/espresso/elf_loader.cpp
+    src/cpu/espresso/hle_dispatcher.cpp
     src/cpu/espresso/rpx_loader.cpp
     src/cpu/espresso/interpreter.cpp
 )

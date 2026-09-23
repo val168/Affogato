@@ -107,6 +107,16 @@ void set_record_result(CpuState& state, std::uint32_t value)
 StepResult EspressoCore::step()
 {
     const std::uint32_t cia = state.cia;
+    switch (hle.dispatch(*this, cia))
+    {
+    case HleDispatchResult::executed:
+        return StepResult::executed;
+    case HleDispatchResult::unimplemented:
+        return StepResult::unimplemented_hle_call;
+    case HleDispatchResult::not_hle:
+        break;
+    }
+
     const std::uint32_t instruction_word = memory.read32_be(cia);
     const DecodedInstruction instruction = decode(instruction_word);
 
@@ -343,9 +353,15 @@ RunResult EspressoCore::run(std::size_t max_steps)
 
     while (result.steps < max_steps)
     {
-        if (step() == StepResult::unsupported_instruction)
+        const StepResult step_result = step();
+        if (step_result == StepResult::unsupported_instruction)
         {
             result.reason = StopReason::unsupported_instruction;
+            return result;
+        }
+        if (step_result == StepResult::unimplemented_hle_call)
+        {
+            result.reason = StopReason::unimplemented_hle_call;
             return result;
         }
 

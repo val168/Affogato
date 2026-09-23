@@ -1,4 +1,5 @@
 #include "cpu/espresso/decoder.hpp"
+#include "cpu/espresso/cafe_os_hle.hpp"
 #include "cpu/espresso/elf_loader.hpp"
 #include "cpu/espresso/guest_memory.hpp"
 #include "cpu/espresso/interpreter.hpp"
@@ -81,12 +82,13 @@ void set_be32(std::vector<std::uint8_t>& bytes, std::size_t offset, std::uint32_
     constexpr std::uint32_t code_address = 0x02000000U;
     constexpr std::size_t header_size = 52;
     constexpr std::size_t section_header_size = 40;
-    constexpr std::size_t section_count = 5;
+    constexpr std::size_t section_count = 8;
     constexpr std::size_t section_table_offset = header_size;
-    constexpr std::size_t text_offset = 256;
-    const std::array<std::uint8_t, 8> code{
+    constexpr std::size_t text_offset = 384;
+    const std::array<std::uint8_t, 12> code{
         0x38, 0x63, 0x00, 0x05, // addi r3, r3, 5
         0x4E, 0x80, 0x00, 0x20, // blr
+        0, 0, 0, 0, // GHS relocation test slot
     };
 
     uLongf compressed_size = compressBound(code.size());
@@ -96,15 +98,20 @@ void set_be32(std::vector<std::uint8_t>& bytes, std::size_t offset, std::uint32_
     assert(status == Z_OK);
     compressed.resize(compressed_size);
 
-    const std::array<std::uint8_t, 41> names{
+    const std::array<std::uint8_t, 68> names{
         '\0', '.', 't', 'e', 'x', 't', '\0', '.', 's', 'h', 's', 't', 'r', 't', 'a', 'b', '\0',
-        '.', 'r', 'p', 'l', '_', 'c', 'r', 'c', 's', '\0', '.', 'r', 'p', 'l', '_', 'f', 'i', 'l', 'e', 'i', 'n', 'f', 'o', '\0'};
+        '.', 'r', 'p', 'l', '_', 'c', 'r', 'c', 's', '\0', '.', 'r', 'p', 'l', '_', 'f', 'i', 'l', 'e', 'i', 'n', 'f', 'o', '\0',
+        '.', 's', 'y', 'm', 't', 'a', 'b', '\0', '.', 's', 't', 'r', 't', 'a', 'b', '\0',
+        '.', 'r', 'e', 'l', 'a', '.', 't', 'e', 'x', 't', '\0'};
     constexpr std::size_t inflated_size_prefix = 4;
     const std::size_t text_size = inflated_size_prefix + compressed.size();
     const std::size_t names_offset = text_offset + text_size;
     const std::size_t crcs_offset = names_offset + names.size();
     const std::size_t fileinfo_offset = crcs_offset + section_count * sizeof(std::uint32_t);
-    std::vector<std::uint8_t> file(fileinfo_offset + 0x60, 0);
+    const std::size_t symtab_offset = (fileinfo_offset + 0x60 + 3U) & ~std::size_t{3U};
+    const std::size_t strtab_offset = symtab_offset + 16;
+    const std::size_t rela_offset = (strtab_offset + 1U + 3U) & ~std::size_t{3U};
+    std::vector<std::uint8_t> file(rela_offset + 24, 0);
 
     file[0] = 0x7F;
     file[1] = 'E';
@@ -126,7 +133,8 @@ void set_be32(std::vector<std::uint8_t>& bytes, std::size_t offset, std::uint32_
 
     const auto set_section = [&](std::size_t index, std::uint32_t name, std::uint32_t type,
                                  std::uint32_t flags, std::uint32_t address, std::uint32_t offset,
-                                 std::uint32_t size, std::uint32_t alignment, std::uint32_t entry_size) {
+                                 std::uint32_t size, std::uint32_t alignment, std::uint32_t entry_size,
+                                 std::uint32_t link = 0, std::uint32_t info = 0) {
         const std::size_t at = section_table_offset + index * section_header_size;
         set_be32(file, at, name);
         set_be32(file, at + 4, type);
@@ -134,6 +142,8 @@ void set_be32(std::vector<std::uint8_t>& bytes, std::size_t offset, std::uint32_
         set_be32(file, at + 12, address);
         set_be32(file, at + 16, offset);
         set_be32(file, at + 20, size);
+        set_be32(file, at + 24, link);
+        set_be32(file, at + 28, info);
         set_be32(file, at + 32, alignment);
         set_be32(file, at + 36, entry_size);
     };
@@ -144,9 +154,20 @@ void set_be32(std::vector<std::uint8_t>& bytes, std::size_t offset, std::uint32_
     set_section(3, 17, 0x80000003U, 0, 0, static_cast<std::uint32_t>(crcs_offset),
                 static_cast<std::uint32_t>(section_count * sizeof(std::uint32_t)), 4, 4);
     set_section(4, 27, 0x80000004U, 0, 0, static_cast<std::uint32_t>(fileinfo_offset), 0x60, 4, 0);
+    set_section(5, 41, 2, 0, 0, static_cast<std::uint32_t>(symtab_offset), 16, 4, 16, 6, 1);
+    set_section(6, 49, 3, 0, 0, static_cast<std::uint32_t>(strtab_offset), 1, 1, 0);
+    set_section(7, 57, 4, 0, 0, static_cast<std::uint32_t>(rela_offset), 24, 4, 12, 5, 1);
 
     set_be32(file, text_offset, static_cast<std::uint32_t>(code.size()));
     std::copy(compressed.begin(), compressed.end(), file.begin() + text_offset + inflated_size_prefix);
+    // Symbol zero is the ELF null symbol (S=0). Exercise Cafe's GHS relative
+    // high/low relocations at the final word in .text.
+    set_be32(file, rela_offset, code_address + 8);
+    set_be32(file, rela_offset + 4, 252);
+    set_be32(file, rela_offset + 8, 0);
+    set_be32(file, rela_offset + 12, code_address + 10);
+    set_be32(file, rela_offset + 16, 253);
+    set_be32(file, rela_offset + 20, 0);
     std::copy(names.begin(), names.end(), file.begin() + names_offset);
     set_be32(file, fileinfo_offset, 0xCAFE0402U);
     return file;
@@ -477,6 +498,7 @@ void rpx_loader_tests()
     assert(core.state.cia == entry_point);
     assert(core.memory.read32_be(entry_point) == 0x38630005U);
     assert(core.memory.read32_be(entry_point + 4) == 0x4E800020U);
+    assert(core.memory.read32_be(entry_point + 8) == 0xFDFFFFF6U);
 
     core.state.gpr[3] = 37;
     core.state.lr = entry_point + 8;
@@ -488,7 +510,7 @@ void rpx_loader_tests()
 
     // Reject bad compressed data before changing CPU state or guest memory.
     std::vector<std::uint8_t> malformed = file;
-    malformed[256 + 4] ^= 0xFF;
+    malformed[384 + 4] ^= 0xFF;
     core.state.cia = 0x80;
     core.memory.write32_be(entry_point, 0xAABBCCDDU);
     bool rejected = false;
@@ -503,6 +525,28 @@ void rpx_loader_tests()
     assert(rejected);
     assert(core.state.cia == 0x80);
     assert(core.memory.read32_be(entry_point) == 0xAABBCCDDU);
+}
+
+void hle_dispatch_tests()
+{
+    EspressoCore core(0x100);
+    register_coreinit_hle(core.hle);
+
+    const std::uint32_t debugger_check =
+        core.hle.bind_import("coreinit", "OSIsDebuggerInitialized");
+    core.state.cia = debugger_check;
+    core.state.lr = 0x40;
+    core.state.gpr[3] = 1;
+    assert(core.step() == StepResult::executed);
+    assert(core.state.gpr[3] == 0);
+    assert(core.state.cia == 0x40);
+
+    const std::uint32_t missing_import = core.hle.bind_import("coreinit", "OSFatal");
+    core.state.cia = missing_import;
+    core.state.lr = 0x44;
+    assert(core.step() == StepResult::unimplemented_hle_call);
+    assert(core.state.cia == missing_import);
+    assert(core.hle.last_unimplemented_call() == "coreinit::OSFatal");
 }
 
 void compare_and_conditional_branch_tests()
@@ -659,6 +703,7 @@ int main(int argc, char* argv[])
         try
         {
             EspressoCore core(0x10004000U);
+            register_coreinit_hle(core.hle);
             const RpxLoadResult result = load_rpx32_powerpc(core, file);
             std::cout << "Loaded RPX entry point 0x" << std::hex << result.entry_point
                       << " (" << std::dec << result.loaded_sections << " sections)\n";
@@ -679,6 +724,7 @@ int main(int argc, char* argv[])
     leaf_function_abi_tests();
     elf_loader_tests();
     rpx_loader_tests();
+    hle_dispatch_tests();
     compare_and_conditional_branch_tests();
     load_store_tests();
     function_call_and_stack_tests();

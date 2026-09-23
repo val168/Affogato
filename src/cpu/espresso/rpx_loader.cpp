@@ -4,7 +4,6 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
-#include <limits>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -30,8 +29,13 @@ constexpr std::uint32_t section_dynsym = 11;
 constexpr std::uint32_t section_rela = 4;
 constexpr std::uint32_t section_rpl_imports = 0x80000002;
 constexpr std::uint32_t section_rpl_fileinfo = 0x80000004;
+constexpr std::uint16_t symbol_section_absolute = 0xFFF1;
+constexpr std::uint8_t symbol_binding_weak = 2;
+constexpr std::uint32_t rpl_loader_metadata_base = 0xC0000000U;
 constexpr std::uint32_t relocation_none = 0;
 constexpr std::uint32_t relocation_addr32 = 1;
+constexpr std::uint32_t relocation_ghs_rel16_hi = 252;
+constexpr std::uint32_t relocation_ghs_rel16_lo = 253;
 constexpr std::uint32_t relocation_addr16_lo = 4;
 constexpr std::uint32_t relocation_addr16_hi = 5;
 constexpr std::uint32_t relocation_addr16_ha = 6;
@@ -104,77 +108,19 @@ void require_range(std::span<const std::uint8_t> bytes, std::size_t offset, std:
     return {begin, end};
 }
 
-[[nodiscard]] std::string import_symbol_name(
-    std::span<const std::uint8_t> file,
-    const std::vector<Section>& sections,
-    std::size_t import_section_index)
+[[nodiscard]] std::string symbol_name(
+    std::span<const std::uint8_t> strings,
+    std::span<const std::uint8_t> symbols,
+    std::uint32_t symbol_index)
 {
-    for (const Section& relocation_section : sections)
+    const std::size_t offset = static_cast<std::size_t>(symbol_index) * elf32_symbol_size;
+    if (offset > symbols.size() || elf32_symbol_size > symbols.size() - offset)
     {
-        if (relocation_section.type != section_rela || relocation_section.link >= sections.size() ||
-            relocation_section.entry_size != elf32_rela_size)
-        {
-            continue;
-        }
-
-        const Section& symbol_table = sections[relocation_section.link];
-        if (symbol_table.type != section_symtab || symbol_table.entry_size != elf32_symbol_size ||
-            symbol_table.link >= sections.size() ||
-            sections[symbol_table.link].type != section_strtab)
-        {
-            continue;
-        }
-
-        const std::vector<std::uint8_t> relocations = read_section(file, relocation_section);
-        const std::vector<std::uint8_t> symbols = read_section(file, symbol_table);
-        const std::vector<std::uint8_t> strings = read_section(file, sections[symbol_table.link]);
-        if (relocations.size() % elf32_rela_size != 0 || symbols.size() % elf32_symbol_size != 0)
-        {
-            continue;
-        }
-        for (std::size_t offset = 0; offset < relocations.size(); offset += elf32_rela_size)
-        {
-            const std::uint32_t symbol_index = read32_be(relocations, offset + 4) >> 8U;
-            const std::size_t symbol_offset =
-                static_cast<std::size_t>(symbol_index) * elf32_symbol_size;
-            if (symbol_offset >= symbols.size() ||
-                read16_be(symbols, symbol_offset + 14) != import_section_index)
-            {
-                continue;
-            }
-            const std::uint32_t name_offset = read32_be(symbols, symbol_offset);
-            if (name_offset != 0)
-            {
-                return read_string(strings, name_offset, "import symbol table");
-            }
-        }
+        throw std::invalid_argument("RPX relocation references a missing symbol");
     }
 
-    for (const Section& symbol_table : sections)
-    {
-        if (symbol_table.type != section_symtab || symbol_table.entry_size != elf32_symbol_size ||
-            symbol_table.link >= sections.size() ||
-            sections[symbol_table.link].type != section_strtab)
-        {
-            continue;
-        }
-
-        const std::vector<std::uint8_t> symbols = read_section(file, symbol_table);
-        const std::vector<std::uint8_t> strings = read_section(file, sections[symbol_table.link]);
-        if (symbols.size() % elf32_symbol_size != 0)
-        {
-            continue;
-        }
-        for (std::size_t offset = 0; offset < symbols.size(); offset += elf32_symbol_size)
-        {
-            const std::uint32_t name_offset = read32_be(symbols, offset);
-            if (name_offset != 0 && read16_be(symbols, offset + 14) == import_section_index)
-            {
-                return read_string(strings, name_offset, "import symbol table");
-            }
-        }
-    }
-    return {};
+    const std::uint32_t name_offset = read32_be(symbols, offset);
+    return name_offset == 0 ? std::string{} : read_string(strings, name_offset, "symbol table");
 }
 
 [[nodiscard]] std::string import_library_name(
@@ -234,8 +180,11 @@ void require_range(std::span<const std::uint8_t> bytes, std::size_t offset, std:
     return symbol + static_cast<std::uint32_t>(addend);
 }
 
-void apply_relocations(std::span<const std::uint8_t> file, const std::vector<Section>& sections,
-                       std::vector<LoadedSection>& loaded)
+void apply_relocations(
+    EspressoCore& core,
+    std::span<const std::uint8_t> file,
+    const std::vector<Section>& sections,
+    std::vector<LoadedSection>& loaded)
 {
     for (const Section& relocation_section : sections)
     {
@@ -246,28 +195,37 @@ void apply_relocations(std::span<const std::uint8_t> file, const std::vector<Sec
         if (relocation_section.info >= sections.size() || relocation_section.link >= sections.size() ||
             (sections[relocation_section.link].type != section_symtab &&
              sections[relocation_section.link].type != section_dynsym) ||
-            relocation_section.entry_size != elf32_rela_size ||
-            relocation_section.size % elf32_rela_size != 0)
+            relocation_section.entry_size != elf32_rela_size)
         {
             throw std::invalid_argument("RPX has an invalid RELA section or symbol-table link");
         }
 
+        const Section& target = sections[relocation_section.info];
+        if (target.address >= rpl_loader_metadata_base)
+        {
+            continue;
+        }
+
         const Section& symbol_table = sections[relocation_section.link];
-        if (symbol_table.entry_size != elf32_symbol_size ||
-            symbol_table.size % elf32_symbol_size != 0)
+        if (symbol_table.entry_size != elf32_symbol_size || symbol_table.link >= sections.size() ||
+            sections[symbol_table.link].type != section_strtab)
         {
             throw std::invalid_argument("RPX has an invalid ELF32 symbol table");
         }
         const LoadedSection& target_section = loaded[relocation_section.info];
-        require_range(file, relocation_section.offset, relocation_section.size);
-        require_range(file, symbol_table.offset, symbol_table.size);
-
-        for (std::size_t offset = 0; offset < relocation_section.size; offset += elf32_rela_size)
+        const std::vector<std::uint8_t> relocations = read_section(file, relocation_section);
+        const std::vector<std::uint8_t> symbols = read_section(file, symbol_table);
+        const std::vector<std::uint8_t> strings = read_section(file, sections[symbol_table.link]);
+        if (relocations.size() % elf32_rela_size != 0 || symbols.size() % elf32_symbol_size != 0)
         {
-            const std::size_t relocation_offset = relocation_section.offset + offset;
-            const std::uint32_t target_address = read32_be(file, relocation_offset);
-            const std::uint32_t info = read32_be(file, relocation_offset + 4);
-            const std::int32_t addend = static_cast<std::int32_t>(read32_be(file, relocation_offset + 8));
+            throw std::invalid_argument("RPX has malformed inflated relocation or symbol data");
+        }
+
+        for (std::size_t offset = 0; offset < relocations.size(); offset += elf32_rela_size)
+        {
+            const std::uint32_t target_address = read32_be(relocations, offset);
+            const std::uint32_t info = read32_be(relocations, offset + 4);
+            const std::int32_t addend = static_cast<std::int32_t>(read32_be(relocations, offset + 8));
             const std::uint32_t symbol_index = info >> 8U;
             const std::uint32_t type = info & 0xFFU;
             if (type == relocation_none)
@@ -276,21 +234,52 @@ void apply_relocations(std::span<const std::uint8_t> file, const std::vector<Sec
             }
 
             std::uint32_t symbol_value = 0;
+            std::string relocation_symbol;
             if (symbol_index != 0)
             {
-                const std::size_t symbol_offset = symbol_table.offset +
+                const std::size_t symbol_offset =
                     static_cast<std::size_t>(symbol_index) * elf32_symbol_size;
-                if (symbol_index >= symbol_table.size / elf32_symbol_size)
+                if (symbol_offset > symbols.size() ||
+                    elf32_symbol_size > symbols.size() - symbol_offset)
                 {
                     throw std::invalid_argument("RPX relocation references a missing symbol");
                 }
-                const std::uint16_t symbol_section = read16_be(file, symbol_offset + 14);
-                if (symbol_section == 0)
+                const std::uint16_t symbol_section = read16_be(symbols, symbol_offset + 14);
+                const std::string name = symbol_name(strings, symbols, symbol_index);
+                relocation_symbol = name;
+                const std::uint8_t binding = symbols[symbol_offset + 12] >> 4U;
+                const std::uint8_t symbol_type = symbols[symbol_offset + 12] & 0x0FU;
+                const std::uint32_t symbol_entry_value = read32_be(symbols, symbol_offset + 4);
+                const bool zero_valued_weak_absolute =
+                    symbol_section == symbol_section_absolute && binding == symbol_binding_weak &&
+                    symbol_entry_value == 0;
+                if (symbol_section == 0 || zero_valued_weak_absolute)
                 {
-                    throw std::invalid_argument(
-                        "RPX relocation references an unresolved import; Cafe OS/HLE is not available");
+                    if (binding != symbol_binding_weak)
+                    {
+                        throw std::invalid_argument("RPX relocation references unresolved symbol '" +
+                                                    name + "'");
+                    }
+                    if (symbol_type == 2U || type == relocation_rel24) // STT_FUNC or call relocation
+                    {
+                        // Preserve a callable address for optional weak
+                        // functions. Without an HLE registration this becomes
+                        // a named runtime trap if the guest actually calls it.
+                        symbol_value = core.hle.bind_import("ELF weak", name);
+                    }
+                    // Non-function undefined weak symbols retain ELF's zero
+                    // value semantics.
                 }
-                symbol_value = read32_be(file, symbol_offset + 4);
+                else if (symbol_section < sections.size() &&
+                         sections[symbol_section].type == section_rpl_imports)
+                {
+                    const std::string library = import_library_name(file, sections[symbol_section]);
+                    symbol_value = core.hle.bind_import(library, name);
+                }
+                else
+                {
+                    symbol_value = symbol_entry_value;
+                }
             }
 
             if (target_address < target_section.address)
@@ -312,6 +301,20 @@ void apply_relocations(std::span<const std::uint8_t> file, const std::vector<Sec
                 target[patch_offset + 2] = static_cast<std::uint8_t>(value >> 8U);
                 target[patch_offset + 3] = static_cast<std::uint8_t>(value);
                 break;
+            case relocation_ghs_rel16_hi:
+            case relocation_ghs_rel16_lo:
+            {
+                if (patch_offset > target.size() || 2 > target.size() - patch_offset)
+                {
+                    throw std::invalid_argument("RPX GHS REL16 relocation is outside its target section");
+                }
+                const std::uint32_t displacement = value - target_address;
+                const std::uint16_t half = static_cast<std::uint16_t>(
+                    type == relocation_ghs_rel16_hi ? displacement >> 16U : displacement);
+                target[patch_offset] = static_cast<std::uint8_t>(half >> 8U);
+                target[patch_offset + 1] = static_cast<std::uint8_t>(half);
+                break;
+            }
             case relocation_addr16_lo:
             case relocation_addr16_hi:
             case relocation_addr16_ha:
@@ -336,7 +339,12 @@ void apply_relocations(std::span<const std::uint8_t> file, const std::vector<Sec
                 const std::int64_t displacement = static_cast<std::int64_t>(value) - target_address;
                 if ((displacement & 3) != 0 || displacement < -0x02000000LL || displacement > 0x01FFFFFCLL)
                 {
-                    throw std::invalid_argument("RPX REL24 relocation is unaligned or out of range");
+                    throw std::invalid_argument("RPX REL24 relocation for '" + relocation_symbol +
+                                                "' at " + std::to_string(target_address) +
+                                                " to " + std::to_string(value) + " (symbol " +
+                                                std::to_string(symbol_value) + ", addend " +
+                                                std::to_string(addend) + ")" +
+                                                " is unaligned or out of range");
                 }
                 const std::uint32_t instruction =
                     (static_cast<std::uint32_t>(target[patch_offset]) << 24U) |
@@ -434,15 +442,7 @@ RpxLoadResult load_rpx32_powerpc(EspressoCore& core, std::span<const std::uint8_
             }
             if (read32_be(import_contents, 0) != 0)
             {
-                const std::string library = import_library_name(file, section);
-                const std::string symbol = import_symbol_name(file, sections, i);
-                std::string message = "RPX import from '" + library + "'";
-                if (!symbol.empty())
-                {
-                    message += " requires unresolved symbol '" + symbol + "'";
-                }
-                message += "; dynamic linking/Cafe OS HLE is not implemented yet";
-                throw std::invalid_argument(message);
+                static_cast<void>(import_library_name(file, section));
             }
         }
     }
@@ -458,7 +458,7 @@ RpxLoadResult load_rpx32_powerpc(EspressoCore& core, std::span<const std::uint8_
     {
         const Section& section = sections[i];
         if ((section.flags & section_alloc) == 0 || section.size == 0 ||
-            section.type == section_rpl_fileinfo)
+            section.type == section_rpl_fileinfo || section.address >= rpl_loader_metadata_base)
         {
             continue;
         }
@@ -484,7 +484,22 @@ RpxLoadResult load_rpx32_powerpc(EspressoCore& core, std::span<const std::uint8_
         throw std::invalid_argument("RPX entry point is not inside a loaded executable section");
     }
 
-    apply_relocations(file, sections, loaded);
+    for (const LoadedSection& section : loaded)
+    {
+        const std::uint64_t section_end =
+            static_cast<std::uint64_t>(section.address) + section.contents.size();
+        if (section.contents.empty())
+        {
+            continue;
+        }
+        if (section.address < HleDispatcher::import_address_limit &&
+            section_end > HleDispatcher::first_import_address)
+        {
+            throw std::invalid_argument("RPX section overlaps the reserved HLE import address range");
+        }
+    }
+
+    apply_relocations(core, file, sections, loaded);
     for (std::size_t i = 0; i < loaded.size(); ++i)
     {
         if (!loaded[i].contents.empty())
