@@ -172,6 +172,34 @@ StepResult EspressoCore::step()
         }
         break;
 
+    case Opcode::conditional_branch_to_link_register:
+    {
+        // Capture the target first: blrl writes the fall-through address to LR,
+        // but must still branch to the LR value from before that write.
+        const std::uint32_t target = state.lr & ~0x3U;
+        if (instruction.link)
+        {
+            state.lr = fallthrough;
+        }
+
+        if (conditional_branch_taken(
+                state,
+                instruction.branch_options,
+                instruction.condition_bit))
+        {
+            next_cia = target;
+        }
+        break;
+    }
+
+    case Opcode::move_from_link_register:
+        state.gpr[instruction.destination] = state.lr;
+        break;
+
+    case Opcode::move_to_link_register:
+        state.lr = state.gpr[instruction.destination];
+        break;
+
     case Opcode::load_word_zero:
         state.gpr[instruction.destination] =
             memory.read32_be(effective_address(state, instruction.base, instruction.immediate));
@@ -182,6 +210,16 @@ StepResult EspressoCore::step()
             effective_address(state, instruction.base, instruction.immediate),
             state.gpr[instruction.destination]);
         break;
+
+    case Opcode::store_word_update:
+    {
+        const std::uint32_t address =
+            effective_address(state, instruction.base, instruction.immediate);
+        const std::uint32_t value = state.gpr[instruction.destination];
+        memory.write32_be(address, value);
+        state.gpr[instruction.base] = address;
+        break;
+    }
 
     case Opcode::load_byte_zero:
         state.gpr[instruction.destination] =

@@ -61,6 +61,16 @@ DecodedInstruction decode(std::uint32_t raw) noexcept
         instruction.link = (raw & 0x1U) != 0;
         break;
 
+    case 19: // bclr / blrl
+        if (field(raw, 1, 0x3FFU) == 16)
+        {
+            instruction.opcode = Opcode::conditional_branch_to_link_register;
+            instruction.branch_options = static_cast<std::uint8_t>(field(raw, 21, 0x1FU));
+            instruction.condition_bit = static_cast<std::uint8_t>(field(raw, 16, 0x1FU));
+            instruction.link = (raw & 0x1U) != 0;
+        }
+        break;
+
     case 11: // cmpwi (L=0)
         if ((raw & (1U << 22U)) == 0)
         {
@@ -81,7 +91,22 @@ DecodedInstruction decode(std::uint32_t raw) noexcept
         break;
 
     case 31: // cmpw (cmp with L=0)
-        if (field(raw, 1, 0x3FFU) == 0 && (raw & (1U << 22U)) == 0)
+        if (field(raw, 1, 0x3FFU) == 339 || field(raw, 1, 0x3FFU) == 467)
+        {
+            // The SPR number is split into two five-bit fields in reverse
+            // order: the encoded rA field contains SPR[0:4].
+            const std::uint32_t spr =
+                (field(raw, 11, 0x1FU) << 5U) | field(raw, 16, 0x1FU);
+            if (spr == 8)
+            {
+                instruction.destination =
+                    static_cast<std::uint8_t>(field(raw, 21, 0x1FU));
+                instruction.opcode = field(raw, 1, 0x3FFU) == 339
+                    ? Opcode::move_from_link_register
+                    : Opcode::move_to_link_register;
+            }
+        }
+        else if (field(raw, 1, 0x3FFU) == 0 && (raw & (1U << 22U)) == 0)
         {
             instruction.opcode = Opcode::compare_signed_register;
             instruction.cr_field = static_cast<std::uint8_t>(field(raw, 23, 0x7U));
@@ -109,6 +134,17 @@ DecodedInstruction decode(std::uint32_t raw) noexcept
         instruction.destination = static_cast<std::uint8_t>(field(raw, 21, 0x1FU));
         instruction.base = static_cast<std::uint8_t>(field(raw, 16, 0x1FU));
         instruction.immediate = sign_extend(raw, 16);
+        break;
+
+    case 37: // stwu (rA must not be zero)
+        instruction.base = static_cast<std::uint8_t>(field(raw, 16, 0x1FU));
+        if (instruction.base != 0)
+        {
+            instruction.opcode = Opcode::store_word_update;
+            instruction.destination =
+                static_cast<std::uint8_t>(field(raw, 21, 0x1FU));
+            instruction.immediate = sign_extend(raw, 16);
+        }
         break;
 
     case 38: // stb

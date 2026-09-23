@@ -21,6 +21,10 @@ enum class Opcode
     store_byte,
     load_halfword_zero,
     store_halfword,
+    store_word_update,
+    move_from_link_register,
+    move_to_link_register,
+    conditional_branch_to_link_register,
 };
 
 struct DecodedInstruction

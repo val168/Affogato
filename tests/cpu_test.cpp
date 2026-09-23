@@ -83,7 +83,36 @@ void decoder_tests()
     assert(sth.opcode == Opcode::store_halfword);
     assert(sth.destination == 3);
 
+    const DecodedInstruction mflr = decode(0x7C0802A6U); // mflr r0
+    assert(mflr.opcode == Opcode::move_from_link_register);
+    assert(mflr.destination == 0);
+
+    const DecodedInstruction mtlr = decode(0x7C0803A6U); // mtlr r0
+    assert(mtlr.opcode == Opcode::move_to_link_register);
+    assert(mtlr.destination == 0);
+
+    const DecodedInstruction blr = decode(0x4E800020U); // blr
+    assert(blr.opcode == Opcode::conditional_branch_to_link_register);
+    assert(blr.branch_options == 20);
+    assert(!blr.link);
+
+    const DecodedInstruction beqlr = decode(0x4D820020U); // beqlr
+    assert(beqlr.opcode == Opcode::conditional_branch_to_link_register);
+    assert(beqlr.branch_options == 12);
+    assert(beqlr.condition_bit == 2);
+
+    const DecodedInstruction blrl = decode(0x4E800021U); // blrl
+    assert(blrl.opcode == Opcode::conditional_branch_to_link_register);
+    assert(blrl.link);
+
+    const DecodedInstruction stwu = decode(0x9421FFF0U); // stwu r1, -16(r1)
+    assert(stwu.opcode == Opcode::store_word_update);
+    assert(stwu.destination == 1);
+    assert(stwu.base == 1);
+    assert(stwu.immediate == -16);
+
     assert(decode(0U).opcode == Opcode::unsupported);
+    assert(decode(0x9400FFF0U).opcode == Opcode::unsupported); // stwu with rA=0
 }
 
 void guest_memory_tests()
@@ -225,6 +254,50 @@ void load_store_tests()
     assert(zero_base_core.state.gpr[9] == 0xCAFEBABEU);
 }
 
+void function_call_and_stack_tests()
+{
+    EspressoCore link_branch_core(0x20);
+    link_branch_core.state.lr = 0x12U;
+    link_branch_core.memory.write32_be(0, 0x4E800021U); // blrl
+    assert(link_branch_core.step() == StepResult::executed);
+    assert(link_branch_core.state.cia == 0x10U); // old LR target, aligned
+    assert(link_branch_core.state.lr == 0x04U); // new link address
+
+    EspressoCore conditional_link_branch_core(0x20);
+    conditional_link_branch_core.state.lr = 0x10U;
+    conditional_link_branch_core.state.cr = 0x20000000U; // CR0.EQ
+    conditional_link_branch_core.memory.write32_be(0, 0x4D820020U); // beqlr
+    assert(conditional_link_branch_core.step() == StepResult::executed);
+    assert(conditional_link_branch_core.state.cia == 0x10U);
+
+    EspressoCore core(0x100);
+
+    core.memory.write32_be(0x00, 0x382000F0U); // addi r1, r0, 0xF0 (initial SP)
+    core.memory.write32_be(0x04, 0x4800001DU); // bl +0x1C -> function at 0x20
+    core.memory.write32_be(0x08, 0x38830000U); // after return: addi r4, r3, 0
+
+    core.memory.write32_be(0x20, 0x7C0802A6U); // mflr r0
+    core.memory.write32_be(0x24, 0x9421FFF0U); // stwu r1, -16(r1)
+    core.memory.write32_be(0x28, 0x9001000CU); // stw r0, 12(r1): save LR
+    core.memory.write32_be(0x2C, 0x3860002AU); // addi r3, r0, 42 (return value)
+    core.memory.write32_be(0x30, 0x8001000CU); // lwz r0, 12(r1)
+    core.memory.write32_be(0x34, 0x7C0803A6U); // mtlr r0
+    core.memory.write32_be(0x38, 0x38210010U); // addi r1, r1, 16 (restore SP)
+    core.memory.write32_be(0x3C, 0x4E800020U); // blr
+
+    const RunResult result = core.run(16);
+
+    assert(result.steps == 11);
+    assert(result.reason == StopReason::unsupported_instruction);
+    assert(core.state.cia == 0x0CU);
+    assert(core.state.gpr[1] == 0xF0U);
+    assert(core.state.gpr[3] == 42U);
+    assert(core.state.gpr[4] == 42U);
+    assert(core.state.lr == 0x08U);
+    assert(core.memory.read32_be(0xE0) == 0xF0U); // stwu saved the old SP
+    assert(core.memory.read32_be(0xEC) == 0x08U); // function saved return LR
+}
+
 }
 
 int main()
@@ -235,5 +308,6 @@ int main()
     interpreter_tests();
     compare_and_conditional_branch_tests();
     load_store_tests();
+    function_call_and_stack_tests();
     return 0;
 }
