@@ -247,6 +247,26 @@ void integer_alu_tests()
     assert(wrapping_rotate_core.state.gpr[3] == 0xF000000FU);
 }
 
+void leaf_function_abi_tests()
+{
+    EspressoCore core(0x20);
+
+    // Compiler output for tests/powerpc_leaf_function.c, built with devkitPPC
+    // GCC 16.1.0 using -O2 -mcpu=750 -fno-pic -fno-asynchronous-unwind-tables:
+    // addi r3, r3, 5; blr.
+    core.memory.write32_be(0x00, 0x38630005U);
+    core.memory.write32_be(0x04, 0x4E800020U);
+    core.state.gpr[3] = 37U; // PPC ABI: first integer argument arrives in r3.
+    core.state.lr = 0x10U;   // Return to the test's unsupported sentinel.
+
+    const RunResult result = core.run(4);
+
+    assert(result.steps == 2);
+    assert(result.reason == StopReason::unsupported_instruction);
+    assert(core.state.cia == 0x10U);
+    assert(core.state.gpr[3] == 42U); // Integer result is returned in r3.
+}
+
 void compare_and_conditional_branch_tests()
 {
     const auto run_if_else = [](std::uint32_t value) {
@@ -391,6 +411,7 @@ int main()
     guest_memory_tests();
     interpreter_tests();
     integer_alu_tests();
+    leaf_function_abi_tests();
     compare_and_conditional_branch_tests();
     load_store_tests();
     function_call_and_stack_tests();
