@@ -25,6 +25,7 @@ constexpr std::uint32_t section_execute = 0x4;
 constexpr std::uint32_t section_deflated = 0x08000000;
 constexpr std::uint32_t section_nobits = 8;
 constexpr std::uint32_t section_symtab = 2;
+constexpr std::uint32_t section_strtab = 3;
 constexpr std::uint32_t section_dynsym = 11;
 constexpr std::uint32_t section_rela = 4;
 constexpr std::uint32_t section_rpl_imports = 0x80000002;
@@ -79,6 +80,113 @@ void require_range(std::span<const std::uint8_t> bytes, std::size_t offset, std:
            (static_cast<std::uint32_t>(bytes[offset + 1]) << 16U) |
            (static_cast<std::uint32_t>(bytes[offset + 2]) << 8U) |
            static_cast<std::uint32_t>(bytes[offset + 3]);
+}
+
+[[nodiscard]] std::vector<std::uint8_t> read_section(
+    std::span<const std::uint8_t> file,
+    const Section& section);
+
+[[nodiscard]] std::string read_string(
+    std::span<const std::uint8_t> bytes,
+    std::size_t offset,
+    const char* description)
+{
+    if (offset >= bytes.size())
+    {
+        throw std::invalid_argument(std::string("RPX ") + description + " has an invalid string offset");
+    }
+    const auto begin = bytes.begin() + static_cast<std::ptrdiff_t>(offset);
+    const auto end = std::find(begin, bytes.end(), std::uint8_t{});
+    if (end == bytes.end())
+    {
+        throw std::invalid_argument(std::string("RPX ") + description + " contains an unterminated string");
+    }
+    return {begin, end};
+}
+
+[[nodiscard]] std::string import_symbol_name(
+    std::span<const std::uint8_t> file,
+    const std::vector<Section>& sections,
+    std::size_t import_section_index)
+{
+    for (const Section& relocation_section : sections)
+    {
+        if (relocation_section.type != section_rela || relocation_section.link >= sections.size() ||
+            relocation_section.entry_size != elf32_rela_size)
+        {
+            continue;
+        }
+
+        const Section& symbol_table = sections[relocation_section.link];
+        if (symbol_table.type != section_symtab || symbol_table.entry_size != elf32_symbol_size ||
+            symbol_table.link >= sections.size() ||
+            sections[symbol_table.link].type != section_strtab)
+        {
+            continue;
+        }
+
+        const std::vector<std::uint8_t> relocations = read_section(file, relocation_section);
+        const std::vector<std::uint8_t> symbols = read_section(file, symbol_table);
+        const std::vector<std::uint8_t> strings = read_section(file, sections[symbol_table.link]);
+        if (relocations.size() % elf32_rela_size != 0 || symbols.size() % elf32_symbol_size != 0)
+        {
+            continue;
+        }
+        for (std::size_t offset = 0; offset < relocations.size(); offset += elf32_rela_size)
+        {
+            const std::uint32_t symbol_index = read32_be(relocations, offset + 4) >> 8U;
+            const std::size_t symbol_offset =
+                static_cast<std::size_t>(symbol_index) * elf32_symbol_size;
+            if (symbol_offset >= symbols.size() ||
+                read16_be(symbols, symbol_offset + 14) != import_section_index)
+            {
+                continue;
+            }
+            const std::uint32_t name_offset = read32_be(symbols, symbol_offset);
+            if (name_offset != 0)
+            {
+                return read_string(strings, name_offset, "import symbol table");
+            }
+        }
+    }
+
+    for (const Section& symbol_table : sections)
+    {
+        if (symbol_table.type != section_symtab || symbol_table.entry_size != elf32_symbol_size ||
+            symbol_table.link >= sections.size() ||
+            sections[symbol_table.link].type != section_strtab)
+        {
+            continue;
+        }
+
+        const std::vector<std::uint8_t> symbols = read_section(file, symbol_table);
+        const std::vector<std::uint8_t> strings = read_section(file, sections[symbol_table.link]);
+        if (symbols.size() % elf32_symbol_size != 0)
+        {
+            continue;
+        }
+        for (std::size_t offset = 0; offset < symbols.size(); offset += elf32_symbol_size)
+        {
+            const std::uint32_t name_offset = read32_be(symbols, offset);
+            if (name_offset != 0 && read16_be(symbols, offset + 14) == import_section_index)
+            {
+                return read_string(strings, name_offset, "import symbol table");
+            }
+        }
+    }
+    return {};
+}
+
+[[nodiscard]] std::string import_library_name(
+    std::span<const std::uint8_t> file,
+    const Section& section)
+{
+    const std::vector<std::uint8_t> contents = read_section(file, section);
+    if (contents.size() < 9)
+    {
+        throw std::invalid_argument("RPX import section is truncated");
+    }
+    return read_string(contents, 8, "import library name");
 }
 
 [[nodiscard]] std::vector<std::uint8_t> read_section(
@@ -299,6 +407,11 @@ RpxLoadResult load_rpx32_powerpc(EspressoCore& core, std::span<const std::uint8_
         section.link = read32_be(file, offset + 24);
         section.info = read32_be(file, offset + 28);
         section.entry_size = read32_be(file, offset + 36);
+    }
+
+    for (std::size_t i = 0; i < sections.size(); ++i)
+    {
+        const Section& section = sections[i];
         if (section.type == section_rpl_fileinfo)
         {
             if (section.size < 4)
@@ -312,13 +425,24 @@ RpxLoadResult load_rpx32_powerpc(EspressoCore& core, std::span<const std::uint8_
             }
             has_file_info = true;
         }
-        if (section.type == section_rpl_imports && section.size >= 4)
+        if (section.type == section_rpl_imports && section.size != 0)
         {
-            require_range(file, section.offset, section.size);
-            if (read32_be(file, section.offset) != 0)
+            const std::vector<std::uint8_t> import_contents = read_section(file, section);
+            if (import_contents.size() < 4)
             {
-                throw std::invalid_argument(
-                    "RPX declares library imports; dynamic linking is not implemented yet");
+                throw std::invalid_argument("RPX import section is truncated");
+            }
+            if (read32_be(import_contents, 0) != 0)
+            {
+                const std::string library = import_library_name(file, section);
+                const std::string symbol = import_symbol_name(file, sections, i);
+                std::string message = "RPX import from '" + library + "'";
+                if (!symbol.empty())
+                {
+                    message += " requires unresolved symbol '" + symbol + "'";
+                }
+                message += "; dynamic linking/Cafe OS HLE is not implemented yet";
+                throw std::invalid_argument(message);
             }
         }
     }

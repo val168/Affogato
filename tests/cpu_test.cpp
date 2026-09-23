@@ -9,6 +9,9 @@
 #include <array>
 #include <cassert>
 #include <cstdint>
+#include <fstream>
+#include <iostream>
+#include <iterator>
 #include <stdexcept>
 #include <vector>
 
@@ -639,8 +642,35 @@ void function_call_and_stack_tests()
 
 }
 
-int main()
+int main(int argc, char* argv[])
 {
+    if (argc == 2)
+    {
+        std::ifstream input(argv[1], std::ios::binary);
+        if (!input)
+        {
+            std::cerr << "could not open RPX: " << argv[1] << '\n';
+            return 1;
+        }
+        const std::vector<char> file_bytes{
+            std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
+        std::vector<std::uint8_t> file(file_bytes.begin(), file_bytes.end());
+
+        try
+        {
+            EspressoCore core(0x10004000U);
+            const RpxLoadResult result = load_rpx32_powerpc(core, file);
+            std::cout << "Loaded RPX entry point 0x" << std::hex << result.entry_point
+                      << " (" << std::dec << result.loaded_sections << " sections)\n";
+        }
+        catch (const std::exception& error)
+        {
+            std::cerr << "RPX load failed: " << error.what() << '\n';
+            return 1;
+        }
+        return 0;
+    }
+
     affogato::tests::cpu_state_tests();
     decoder_tests();
     guest_memory_tests();
