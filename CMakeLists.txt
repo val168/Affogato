@@ -3,21 +3,6 @@ cmake_minimum_required(VERSION 3.25)
 project(Affogato LANGUAGES CXX)
 
 include(CTest)
-include(FetchContent)
-
-find_package(ZLIB QUIET)
-if(NOT ZLIB_FOUND)
-    set(ZLIB_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-    FetchContent_Declare(
-        zlib
-        URL https://github.com/madler/zlib/releases/download/v1.3.1/zlib-1.3.1.tar.gz
-        DOWNLOAD_EXTRACT_TIMESTAMP TRUE
-    )
-    FetchContent_MakeAvailable(zlib)
-    set(AFFOGATO_ZLIB_TARGET zlibstatic)
-else()
-    set(AFFOGATO_ZLIB_TARGET ZLIB::ZLIB)
-endif()
 
 if(NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
     message(FATAL_ERROR "Affogato currently requires a 64-bit host.")
@@ -33,6 +18,12 @@ if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
     endif()
 endif()
 
+set(ZLIB_BUILD_TESTING OFF CACHE BOOL "" FORCE)
+set(ZLIB_BUILD_SHARED OFF CACHE BOOL "" FORCE)
+set(ZLIB_BUILD_STATIC ON CACHE BOOL "" FORCE)
+set(ZLIB_INSTALL OFF CACHE BOOL "" FORCE)
+add_subdirectory(third_party/zlib)
+
 add_library(affogato_cpu STATIC
     src/cpu/espresso/decoder.cpp
     src/cpu/espresso/elf_loader.cpp
@@ -44,7 +35,7 @@ target_include_directories(affogato_cpu PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 
-target_link_libraries(affogato_cpu PRIVATE ${AFFOGATO_ZLIB_TARGET})
+target_link_libraries(affogato_cpu PRIVATE ZLIB::ZLIBSTATIC)
 
 set_target_properties(affogato_cpu PROPERTIES
     OUTPUT_NAME "Affogato"
@@ -98,7 +89,7 @@ if(BUILD_TESTING)
     )
 
     target_link_libraries(affogato_cpu_tests PRIVATE affogato_cpu)
-    target_link_libraries(affogato_cpu_tests PRIVATE ${AFFOGATO_ZLIB_TARGET})
+    target_link_libraries(affogato_cpu_tests PRIVATE ZLIB::ZLIBSTATIC)
 
     set_target_properties(affogato_cpu_tests PROPERTIES
         CXX_STANDARD 23
