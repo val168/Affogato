@@ -1,15 +1,72 @@
 #include "cpu/espresso/decoder.hpp"
+#include "cpu/espresso/elf_loader.hpp"
 #include "cpu/espresso/guest_memory.hpp"
 #include "cpu/espresso/interpreter.hpp"
 #include "cpu_state_test.hpp"
 
 #include <cassert>
 #include <cstdint>
+#include <stdexcept>
+#include <vector>
 
 namespace
 {
 
 using namespace affogato::cpu::espresso;
+
+void set_be16(std::vector<std::uint8_t>& bytes, std::size_t offset, std::uint16_t value)
+{
+    bytes[offset] = static_cast<std::uint8_t>(value >> 8U);
+    bytes[offset + 1] = static_cast<std::uint8_t>(value);
+}
+
+void set_be32(std::vector<std::uint8_t>& bytes, std::size_t offset, std::uint32_t value)
+{
+    bytes[offset] = static_cast<std::uint8_t>(value >> 24U);
+    bytes[offset + 1] = static_cast<std::uint8_t>(value >> 16U);
+    bytes[offset + 2] = static_cast<std::uint8_t>(value >> 8U);
+    bytes[offset + 3] = static_cast<std::uint8_t>(value);
+}
+
+[[nodiscard]] std::vector<std::uint8_t> make_minimal_powerpc_elf()
+{
+    constexpr std::size_t elf_header_size = 52;
+    constexpr std::size_t program_header_offset = elf_header_size;
+    constexpr std::size_t program_header_size = 32;
+    constexpr std::size_t code_offset = elf_header_size + program_header_size;
+    constexpr std::uint32_t code_address = 0x1000U;
+
+    std::vector<std::uint8_t> file(code_offset + 8, 0);
+    file[0] = 0x7F;
+    file[1] = 'E';
+    file[2] = 'L';
+    file[3] = 'F';
+    file[4] = 1; // ELFCLASS32
+    file[5] = 2; // ELFDATA2MSB
+    file[6] = 1; // EV_CURRENT
+    set_be16(file, 16, 2); // ET_EXEC
+    set_be16(file, 18, 20); // EM_PPC
+    set_be32(file, 20, 1); // e_version
+    set_be32(file, 24, code_address); // e_entry
+    set_be32(file, 28, static_cast<std::uint32_t>(program_header_offset));
+    set_be16(file, 40, static_cast<std::uint16_t>(elf_header_size));
+    set_be16(file, 42, static_cast<std::uint16_t>(program_header_size));
+    set_be16(file, 44, 1); // e_phnum
+
+    set_be32(file, program_header_offset, 1); // PT_LOAD
+    set_be32(file, program_header_offset + 4, static_cast<std::uint32_t>(code_offset));
+    set_be32(file, program_header_offset + 8, code_address); // p_vaddr
+    set_be32(file, program_header_offset + 12, code_address); // p_paddr
+    set_be32(file, program_header_offset + 16, 8); // p_filesz
+    set_be32(file, program_header_offset + 20, 16); // p_memsz, including zero-fill tail
+    set_be32(file, program_header_offset + 24, 5); // PF_R | PF_X
+    set_be32(file, program_header_offset + 28, 4); // p_align
+
+    // PPC code emitted by devkitPPC for tests/powerpc_leaf_function.c.
+    set_be32(file, code_offset, 0x38630005U); // addi r3, r3, 5
+    set_be32(file, code_offset + 4, 0x4E800020U); // blr
+    return file;
+}
 
 void decoder_tests()
 {
@@ -267,6 +324,63 @@ void leaf_function_abi_tests()
     assert(core.state.gpr[3] == 42U); // Integer result is returned in r3.
 }
 
+void elf_loader_tests()
+{
+    const std::vector<std::uint8_t> file = make_minimal_powerpc_elf();
+    EspressoCore core(0x2000);
+    core.memory.write32_be(0x1008, 0xDEADBEEFU);
+
+    const ElfLoadResult load_result = load_elf32_powerpc(core, file);
+
+    assert(load_result.entry_point == 0x1000U);
+    assert(load_result.loaded_segments == 1);
+    assert(core.state.cia == 0x1000U);
+    assert(core.memory.read32_be(0x1000) == 0x38630005U);
+    assert(core.memory.read32_be(0x1004) == 0x4E800020U);
+    assert(core.memory.read32_be(0x1008) == 0U); // p_memsz - p_filesz is zero-filled.
+
+    core.state.gpr[3] = 37U;
+    core.state.lr = 0x1008U;
+    const RunResult run_result = core.run(4);
+    assert(run_result.steps == 2);
+    assert(run_result.reason == StopReason::unsupported_instruction);
+    assert(core.state.cia == 0x1008U);
+    assert(core.state.gpr[3] == 42U);
+
+    // Reject an invalid file without modifying guest memory or architectural state.
+    std::vector<std::uint8_t> invalid_file = file;
+    invalid_file[0] = 0;
+    EspressoCore unchanged_core(0x2000);
+    unchanged_core.state.cia = 0x40U;
+    unchanged_core.memory.write32_be(0x1000, 0xAABBCCDDU);
+    bool rejected = false;
+    try
+    {
+        static_cast<void>(load_elf32_powerpc(unchanged_core, invalid_file));
+    }
+    catch (const std::invalid_argument&)
+    {
+        rejected = true;
+    }
+    assert(rejected);
+    assert(unchanged_core.state.cia == 0x40U);
+    assert(unchanged_core.memory.read32_be(0x1000) == 0xAABBCCDDU);
+
+    std::vector<std::uint8_t> bad_segment = file;
+    set_be32(bad_segment, 52 + 20, 4); // p_memsz < p_filesz
+    EspressoCore bad_segment_core(0x2000);
+    rejected = false;
+    try
+    {
+        static_cast<void>(load_elf32_powerpc(bad_segment_core, bad_segment));
+    }
+    catch (const std::invalid_argument&)
+    {
+        rejected = true;
+    }
+    assert(rejected);
+}
+
 void compare_and_conditional_branch_tests()
 {
     const auto run_if_else = [](std::uint32_t value) {
@@ -412,6 +526,7 @@ int main()
     interpreter_tests();
     integer_alu_tests();
     leaf_function_abi_tests();
+    elf_loader_tests();
     compare_and_conditional_branch_tests();
     load_store_tests();
     function_call_and_stack_tests();

@@ -1,7 +1,9 @@
 #pragma once
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <span>
 #include <stdexcept>
 #include <vector>
 
@@ -29,6 +31,18 @@ public:
     void write8(std::uint32_t address, std::uint8_t value)
     {
         bytes_[checked_offset(address, 1)] = value;
+    }
+
+    void write_bytes(std::uint32_t address, std::span<const std::uint8_t> values)
+    {
+        const std::size_t offset = checked_offset(address, values.size());
+        std::copy(values.begin(), values.end(), bytes_.begin() + offset);
+    }
+
+    void zero_fill(std::uint32_t address, std::size_t length)
+    {
+        const std::size_t offset = checked_offset(address, length);
+        std::fill_n(bytes_.begin() + offset, length, std::uint8_t{});
     }
 
     [[nodiscard]] std::uint16_t read16_be(std::uint32_t address) const

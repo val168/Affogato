@@ -20,6 +20,7 @@ endif()
 
 add_library(affogato_cpu STATIC
     src/cpu/espresso/decoder.cpp
+    src/cpu/espresso/elf_loader.cpp
     src/cpu/espresso/interpreter.cpp
 )
 
