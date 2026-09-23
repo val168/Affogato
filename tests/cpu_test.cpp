@@ -2,12 +2,17 @@
 #include "cpu/espresso/elf_loader.hpp"
 #include "cpu/espresso/guest_memory.hpp"
 #include "cpu/espresso/interpreter.hpp"
+#include "cpu/espresso/rpx_loader.hpp"
 #include "cpu_state_test.hpp"
 
+#include <algorithm>
+#include <array>
 #include <cassert>
 #include <cstdint>
 #include <stdexcept>
 #include <vector>
+
+#include <zlib.h>
 
 namespace
 {
@@ -65,6 +70,82 @@ void set_be32(std::vector<std::uint8_t>& bytes, std::size_t offset, std::uint32_
     // PPC code emitted by devkitPPC for tests/powerpc_leaf_function.c.
     set_be32(file, code_offset, 0x38630005U); // addi r3, r3, 5
     set_be32(file, code_offset + 4, 0x4E800020U); // blr
+    return file;
+}
+
+[[nodiscard]] std::vector<std::uint8_t> make_minimal_compressed_rpx()
+{
+    constexpr std::uint32_t code_address = 0x02000000U;
+    constexpr std::size_t header_size = 52;
+    constexpr std::size_t section_header_size = 40;
+    constexpr std::size_t section_count = 5;
+    constexpr std::size_t section_table_offset = header_size;
+    constexpr std::size_t text_offset = 256;
+    const std::array<std::uint8_t, 8> code{
+        0x38, 0x63, 0x00, 0x05, // addi r3, r3, 5
+        0x4E, 0x80, 0x00, 0x20, // blr
+    };
+
+    uLongf compressed_size = compressBound(code.size());
+    std::vector<std::uint8_t> compressed(compressed_size);
+    const int status = compress2(
+        compressed.data(), &compressed_size, code.data(), code.size(), Z_BEST_COMPRESSION);
+    assert(status == Z_OK);
+    compressed.resize(compressed_size);
+
+    const std::array<std::uint8_t, 41> names{
+        '\0', '.', 't', 'e', 'x', 't', '\0', '.', 's', 'h', 's', 't', 'r', 't', 'a', 'b', '\0',
+        '.', 'r', 'p', 'l', '_', 'c', 'r', 'c', 's', '\0', '.', 'r', 'p', 'l', '_', 'f', 'i', 'l', 'e', 'i', 'n', 'f', 'o', '\0'};
+    constexpr std::size_t inflated_size_prefix = 4;
+    const std::size_t text_size = inflated_size_prefix + compressed.size();
+    const std::size_t names_offset = text_offset + text_size;
+    const std::size_t crcs_offset = names_offset + names.size();
+    const std::size_t fileinfo_offset = crcs_offset + section_count * sizeof(std::uint32_t);
+    std::vector<std::uint8_t> file(fileinfo_offset + 0x60, 0);
+
+    file[0] = 0x7F;
+    file[1] = 'E';
+    file[2] = 'L';
+    file[3] = 'F';
+    file[4] = 1;
+    file[5] = 2;
+    file[6] = 1;
+    set_be16(file, 7, 0xCAFE); // EI_ABIVERSION / Cafe ABI marker
+    set_be16(file, 16, 0xFE01); // ET_CAFE_RPL
+    set_be16(file, 18, 20); // EM_PPC
+    set_be32(file, 20, 1);
+    set_be32(file, 24, code_address);
+    set_be32(file, 32, static_cast<std::uint32_t>(section_table_offset));
+    set_be16(file, 40, static_cast<std::uint16_t>(header_size));
+    set_be16(file, 46, static_cast<std::uint16_t>(section_header_size));
+    set_be16(file, 48, static_cast<std::uint16_t>(section_count));
+    set_be16(file, 50, 2); // section-name string table
+
+    const auto set_section = [&](std::size_t index, std::uint32_t name, std::uint32_t type,
+                                 std::uint32_t flags, std::uint32_t address, std::uint32_t offset,
+                                 std::uint32_t size, std::uint32_t alignment, std::uint32_t entry_size) {
+        const std::size_t at = section_table_offset + index * section_header_size;
+        set_be32(file, at, name);
+        set_be32(file, at + 4, type);
+        set_be32(file, at + 8, flags);
+        set_be32(file, at + 12, address);
+        set_be32(file, at + 16, offset);
+        set_be32(file, at + 20, size);
+        set_be32(file, at + 32, alignment);
+        set_be32(file, at + 36, entry_size);
+    };
+    set_section(1, 1, 1, 0x08000006U, code_address, static_cast<std::uint32_t>(text_offset),
+                static_cast<std::uint32_t>(text_size), 32, 0); // .text, SHF_DEFLATED
+    set_section(2, 7, 3, 0, 0, static_cast<std::uint32_t>(names_offset),
+                static_cast<std::uint32_t>(names.size()), 1, 0); // .shstrtab
+    set_section(3, 17, 0x80000003U, 0, 0, static_cast<std::uint32_t>(crcs_offset),
+                static_cast<std::uint32_t>(section_count * sizeof(std::uint32_t)), 4, 4);
+    set_section(4, 27, 0x80000004U, 0, 0, static_cast<std::uint32_t>(fileinfo_offset), 0x60, 4, 0);
+
+    set_be32(file, text_offset, static_cast<std::uint32_t>(code.size()));
+    std::copy(compressed.begin(), compressed.end(), file.begin() + text_offset + inflated_size_prefix);
+    std::copy(names.begin(), names.end(), file.begin() + names_offset);
+    set_be32(file, fileinfo_offset, 0xCAFE0402U);
     return file;
 }
 
@@ -381,6 +462,46 @@ void elf_loader_tests()
     assert(rejected);
 }
 
+void rpx_loader_tests()
+{
+    const std::vector<std::uint8_t> file = make_minimal_compressed_rpx();
+    constexpr std::uint32_t entry_point = 0x02000000U;
+    EspressoCore core(static_cast<std::size_t>(entry_point) + 0x100U);
+    const RpxLoadResult load_result = load_rpx32_powerpc(core, file);
+
+    assert(load_result.entry_point == entry_point);
+    assert(load_result.loaded_sections == 1);
+    assert(core.state.cia == entry_point);
+    assert(core.memory.read32_be(entry_point) == 0x38630005U);
+    assert(core.memory.read32_be(entry_point + 4) == 0x4E800020U);
+
+    core.state.gpr[3] = 37;
+    core.state.lr = entry_point + 8;
+    const RunResult run_result = core.run(2);
+    assert(run_result.steps == 2);
+    assert(run_result.reason == StopReason::instruction_limit);
+    assert(core.state.cia == entry_point + 8);
+    assert(core.state.gpr[3] == 42);
+
+    // Reject bad compressed data before changing CPU state or guest memory.
+    std::vector<std::uint8_t> malformed = file;
+    malformed[256 + 4] ^= 0xFF;
+    core.state.cia = 0x80;
+    core.memory.write32_be(entry_point, 0xAABBCCDDU);
+    bool rejected = false;
+    try
+    {
+        static_cast<void>(load_rpx32_powerpc(core, malformed));
+    }
+    catch (const std::invalid_argument&)
+    {
+        rejected = true;
+    }
+    assert(rejected);
+    assert(core.state.cia == 0x80);
+    assert(core.memory.read32_be(entry_point) == 0xAABBCCDDU);
+}
+
 void compare_and_conditional_branch_tests()
 {
     const auto run_if_else = [](std::uint32_t value) {
@@ -527,6 +648,7 @@ int main()
     integer_alu_tests();
     leaf_function_abi_tests();
     elf_loader_tests();
+    rpx_loader_tests();
     compare_and_conditional_branch_tests();
     load_store_tests();
     function_call_and_stack_tests();
