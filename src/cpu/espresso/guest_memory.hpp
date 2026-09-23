@@ -23,80 +23,138 @@ public:
         return bytes_.size();
     }
 
+    void map_region(std::uint32_t address, std::size_t size)
+    {
+        if (size == 0 || overlaps(address, size, 0, bytes_.size()))
+        {
+            throw std::invalid_argument("guest memory mapping is empty or overlaps flat memory");
+        }
+        for (const MappedRegion& region : mapped_regions_)
+        {
+            if (overlaps(address, size, region.address, region.bytes.size()))
+            {
+                throw std::invalid_argument("guest memory mappings overlap");
+            }
+        }
+        mapped_regions_.push_back({address, std::vector<std::uint8_t>(size)});
+    }
+
     [[nodiscard]] std::uint8_t read8(std::uint32_t address) const
     {
-        return bytes_[checked_offset(address, 1)];
+        return storage_for(address, 1)[0];
     }
 
     void write8(std::uint32_t address, std::uint8_t value)
     {
-        bytes_[checked_offset(address, 1)] = value;
+        storage_for(address, 1)[0] = value;
     }
 
     void write_bytes(std::uint32_t address, std::span<const std::uint8_t> values)
     {
-        const std::size_t offset = checked_offset(address, values.size());
-        std::copy(values.begin(), values.end(), bytes_.begin() + offset);
+        auto destination = storage_for(address, values.size());
+        std::copy(values.begin(), values.end(), destination.begin());
     }
 
     void zero_fill(std::uint32_t address, std::size_t length)
     {
-        const std::size_t offset = checked_offset(address, length);
-        std::fill_n(bytes_.begin() + offset, length, std::uint8_t{});
+        auto destination = storage_for(address, length);
+        std::fill(destination.begin(), destination.end(), std::uint8_t{});
     }
 
     [[nodiscard]] std::uint16_t read16_be(std::uint32_t address) const
     {
-        const std::size_t offset = checked_offset(address, sizeof(std::uint16_t));
-
-        return (static_cast<std::uint16_t>(bytes_[offset]) << 8U) |
-               static_cast<std::uint16_t>(bytes_[offset + 1]);
+        const auto bytes = storage_for(address, sizeof(std::uint16_t));
+        return (static_cast<std::uint16_t>(bytes[0]) << 8U) |
+               static_cast<std::uint16_t>(bytes[1]);
     }
 
     [[nodiscard]] std::uint32_t read32_be(std::uint32_t address) const
     {
-        const std::size_t offset = checked_offset(address, sizeof(std::uint32_t));
-
-        return (static_cast<std::uint32_t>(bytes_[offset]) << 24U) |
-               (static_cast<std::uint32_t>(bytes_[offset + 1]) << 16U) |
-               (static_cast<std::uint32_t>(bytes_[offset + 2]) << 8U) |
-               static_cast<std::uint32_t>(bytes_[offset + 3]);
+        const auto bytes = storage_for(address, sizeof(std::uint32_t));
+        return (static_cast<std::uint32_t>(bytes[0]) << 24U) |
+               (static_cast<std::uint32_t>(bytes[1]) << 16U) |
+               (static_cast<std::uint32_t>(bytes[2]) << 8U) |
+               static_cast<std::uint32_t>(bytes[3]);
     }
 
     void write16_be(std::uint32_t address, std::uint16_t value)
     {
-        const std::size_t offset = checked_offset(address, sizeof(std::uint16_t));
-
-        bytes_[offset] = static_cast<std::uint8_t>(value >> 8U);
-        bytes_[offset + 1] = static_cast<std::uint8_t>(value);
+        auto bytes = storage_for(address, sizeof(std::uint16_t));
+        bytes[0] = static_cast<std::uint8_t>(value >> 8U);
+        bytes[1] = static_cast<std::uint8_t>(value);
     }
 
     void write32_be(std::uint32_t address, std::uint32_t value)
     {
-        const std::size_t offset = checked_offset(address, sizeof(std::uint32_t));
-
-        bytes_[offset] = static_cast<std::uint8_t>(value >> 24U);
-        bytes_[offset + 1] = static_cast<std::uint8_t>(value >> 16U);
-        bytes_[offset + 2] = static_cast<std::uint8_t>(value >> 8U);
-        bytes_[offset + 3] = static_cast<std::uint8_t>(value);
+        auto bytes = storage_for(address, sizeof(std::uint32_t));
+        bytes[0] = static_cast<std::uint8_t>(value >> 24U);
+        bytes[1] = static_cast<std::uint8_t>(value >> 16U);
+        bytes[2] = static_cast<std::uint8_t>(value >> 8U);
+        bytes[3] = static_cast<std::uint8_t>(value);
     }
 
 private:
-    [[nodiscard]] std::size_t checked_offset(
+    struct MappedRegion
+    {
+        std::uint32_t address{};
+        std::vector<std::uint8_t> bytes;
+    };
+
+    [[nodiscard]] static bool overlaps(
+        std::uint32_t address,
+        std::size_t size,
+        std::uint32_t other_address,
+        std::size_t other_size) noexcept
+    {
+        const std::uint64_t end = static_cast<std::uint64_t>(address) + size;
+        const std::uint64_t other_end = static_cast<std::uint64_t>(other_address) + other_size;
+        return address < other_end && other_address < end;
+    }
+
+    [[nodiscard]] std::span<std::uint8_t> storage_for(std::uint32_t address, std::size_t width)
+    {
+        if (address <= bytes_.size() && width <= bytes_.size() - address)
+        {
+            return std::span<std::uint8_t>(bytes_).subspan(address, width);
+        }
+        for (MappedRegion& region : mapped_regions_)
+        {
+            if (address >= region.address)
+            {
+                const std::size_t offset = static_cast<std::size_t>(address - region.address);
+                if (offset <= region.bytes.size() && width <= region.bytes.size() - offset)
+                {
+                    return std::span<std::uint8_t>(region.bytes).subspan(offset, width);
+                }
+            }
+        }
+        throw std::out_of_range("guest memory access is outside mapped guest memory");
+    }
+
+    [[nodiscard]] std::span<const std::uint8_t> storage_for(
         std::uint32_t address,
         std::size_t width) const
     {
-        const std::size_t offset = address;
-
-        if (offset > bytes_.size() || width > bytes_.size() - offset)
+        if (address <= bytes_.size() && width <= bytes_.size() - address)
         {
-            throw std::out_of_range("guest memory access is outside the guest address space");
+            return std::span<const std::uint8_t>(bytes_).subspan(address, width);
         }
-
-        return offset;
+        for (const MappedRegion& region : mapped_regions_)
+        {
+            if (address >= region.address)
+            {
+                const std::size_t offset = static_cast<std::size_t>(address - region.address);
+                if (offset <= region.bytes.size() && width <= region.bytes.size() - offset)
+                {
+                    return std::span<const std::uint8_t>(region.bytes).subspan(offset, width);
+                }
+            }
+        }
+        throw std::out_of_range("guest memory access is outside mapped guest memory");
     }
 
     std::vector<std::uint8_t> bytes_;
+    std::vector<MappedRegion> mapped_regions_;
 };
 
 }

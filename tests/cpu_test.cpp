@@ -5,6 +5,7 @@
 #include "cpu/espresso/interpreter.hpp"
 #include "cpu/espresso/rpx_loader.hpp"
 #include "cpu_state_test.hpp"
+#include "emulator.hpp"
 
 #include <algorithm>
 #include <array>
@@ -187,6 +188,19 @@ void decoder_tests()
     assert(addis.base == 3);
     assert(addis.immediate == -1);
 
+    const DecodedInstruction addic_dot = decode(0x3529FFD2U); // addic. r9, r9, -46
+    assert(addic_dot.opcode == Opcode::add_immediate_carry);
+    assert(addic_dot.destination == 9);
+    assert(addic_dot.base == 9);
+    assert(addic_dot.immediate == -46);
+    assert(addic_dot.record);
+
+    const DecodedInstruction subfic = decode(0x213FFFefU); // subfic r9, r31, -17
+    assert(subfic.opcode == Opcode::subtract_from_immediate_carry);
+    assert(subfic.destination == 9);
+    assert(subfic.base == 31);
+    assert(subfic.immediate == -17);
+
     const DecodedInstruction add = decode(0x7C642A14U); // add r3, r4, r5
     assert(add.opcode == Opcode::add);
     assert(add.destination == 3);
@@ -211,17 +225,35 @@ void decoder_tests()
     assert(bit_or.destination == 7);
     assert(bit_or.base == 5);
 
+    const DecodedInstruction slw = decode(0x7C844830U); // slw r4, r4, r9
+    assert(slw.opcode == Opcode::shift_left_word);
+    assert(slw.source == 4);
+    assert(slw.destination == 4);
+    assert(slw.base == 9);
+
     const DecodedInstruction bit_and = decode(0x7C882838U); // and r8, r4, r5
     assert(bit_and.opcode == Opcode::bitwise_and);
     assert(bit_and.source == 4);
     assert(bit_and.destination == 8);
     assert(bit_and.base == 5);
 
+    const DecodedInstruction andc = decode(0x7D293878U); // andc r9, r9, r7
+    assert(andc.opcode == Opcode::bitwise_and_complement);
+    assert(andc.source == 9);
+    assert(andc.destination == 9);
+    assert(andc.base == 7);
+
     const DecodedInstruction bit_xor = decode(0x7C892A78U); // xor r9, r4, r5
     assert(bit_xor.opcode == Opcode::bitwise_xor);
     assert(bit_xor.source == 4);
     assert(bit_xor.destination == 9);
     assert(bit_xor.base == 5);
+
+    const DecodedInstruction bit_equivalence = decode(0x7CE65238U); // eqv r7, r6, r10
+    assert(bit_equivalence.opcode == Opcode::bitwise_equivalence);
+    assert(bit_equivalence.source == 7);
+    assert(bit_equivalence.destination == 6);
+    assert(bit_equivalence.base == 10);
 
     const DecodedInstruction andi = decode(0x708AFF00U); // andi. r10, r4, 0xFF00
     assert(andi.opcode == Opcode::and_immediate_record);
@@ -238,6 +270,12 @@ void decoder_tests()
     assert(rlwinm.mask_begin == 0);
     assert(rlwinm.mask_end == 26);
 
+    const DecodedInstruction srawi = decode(0x7C691670U); // srawi r9, r3, 2
+    assert(srawi.opcode == Opcode::arithmetic_shift_right_immediate);
+    assert(srawi.source == 3);
+    assert(srawi.destination == 9);
+    assert(srawi.shift == 2);
+
     const DecodedInstruction branch = decode(0x48000009U); // bl +8
     assert(branch.opcode == Opcode::branch);
     assert(branch.immediate == 8);
@@ -250,11 +288,21 @@ void decoder_tests()
     assert(cmpwi.base == 3);
     assert(cmpwi.immediate == 7);
 
+    const DecodedInstruction cmplwi = decode(0x28050003U); // cmplwi cr0, r5, 3
+    assert(cmplwi.opcode == Opcode::compare_unsigned_immediate);
+    assert(cmplwi.base == 5);
+    assert(cmplwi.immediate == 3);
+
     const DecodedInstruction cmpw = decode(0x7E832000U); // cmpw cr5, r3, r4
     assert(cmpw.opcode == Opcode::compare_signed_register);
     assert(cmpw.cr_field == 5);
     assert(cmpw.base == 3);
     assert(cmpw.source == 4);
+
+    const DecodedInstruction cmplw = decode(0x7C083040U); // cmplw cr0, r8, r6
+    assert(cmplw.opcode == Opcode::compare_unsigned_register);
+    assert(cmplw.base == 8);
+    assert(cmplw.source == 6);
 
     const DecodedInstruction bc = decode(0x4182000CU); // beq +12
     assert(bc.opcode == Opcode::conditional_branch);
@@ -268,9 +316,20 @@ void decoder_tests()
     assert(lwz.base == 1);
     assert(lwz.immediate == -4);
 
+    const DecodedInstruction lwzu = decode(0x853C0004U); // lwzu r9, 4(r28)
+    assert(lwzu.opcode == Opcode::load_word_update);
+    assert(lwzu.destination == 9);
+    assert(lwzu.base == 28);
+
     const DecodedInstruction stw = decode(0x90610000U); // stw r3, 0(r1)
     assert(stw.opcode == Opcode::store_word);
     assert(stw.destination == 3);
+
+    const DecodedInstruction stwx = decode(0x7F7A492EU); // stwx r27, r26, r9
+    assert(stwx.opcode == Opcode::store_word_indexed);
+    assert(stwx.destination == 27);
+    assert(stwx.base == 26);
+    assert(stwx.source == 9);
 
     const DecodedInstruction lbz = decode(0x88810002U); // lbz r4, 2(r1)
     assert(lbz.opcode == Opcode::load_byte_zero);
@@ -278,9 +337,19 @@ void decoder_tests()
     assert(lbz.base == 1);
     assert(lbz.immediate == 2);
 
+    const DecodedInstruction lbzu = decode(0x8D090001U); // lbzu r8, 1(r9)
+    assert(lbzu.opcode == Opcode::load_byte_update);
+    assert(lbzu.destination == 8);
+    assert(lbzu.base == 9);
+
     const DecodedInstruction stb = decode(0x98610004U); // stb r3, 4(r1)
     assert(stb.opcode == Opcode::store_byte);
     assert(stb.destination == 3);
+
+    const DecodedInstruction stbu = decode(0x9CEA0001U); // stbu r7, 1(r10)
+    assert(stbu.opcode == Opcode::store_byte_update);
+    assert(stbu.destination == 7);
+    assert(stbu.base == 10);
 
     const DecodedInstruction lhz = decode(0xA0A10002U); // lhz r5, 2(r1)
     assert(lhz.opcode == Opcode::load_halfword_zero);
@@ -302,6 +371,14 @@ void decoder_tests()
     assert(blr.opcode == Opcode::conditional_branch_to_link_register);
     assert(blr.branch_options == 20);
     assert(!blr.link);
+
+    const DecodedInstruction mtctr = decode(0x7D8903A6U); // mtctr r12
+    assert(mtctr.opcode == Opcode::move_to_count_register);
+    assert(mtctr.destination == 12);
+
+    const DecodedInstruction bctr = decode(0x4E800420U); // bctr
+    assert(bctr.opcode == Opcode::conditional_branch_to_count_register);
+    assert(bctr.branch_options == 20);
 
     const DecodedInstruction beqlr = decode(0x4D820020U); // beqlr
     assert(beqlr.opcode == Opcode::conditional_branch_to_link_register);
@@ -338,10 +415,34 @@ void guest_memory_tests()
     assert(memory.read8(4) == 0xAB);
     assert(memory.read8(5) == 0xCD);
     assert(memory.read16_be(4) == 0xABCDU);
+
+    memory.map_region(0xC0000000U, 0x20);
+    memory.write32_be(0xC0000018U, 0x03F00024U);
+    assert(memory.read32_be(0xC0000018U) == 0x03F00024U);
+    memory.zero_fill(0xC0000018U, 4);
+    assert(memory.read32_be(0xC0000018U) == 0);
 }
 
 void interpreter_tests()
 {
+    EspressoCore import_table_core(0x20);
+    import_table_core.memory.map_region(0xC0000000U, 0x200);
+    const auto import_address =
+        import_table_core.hle.bind_import("coreinit", "MEMAllocFromDefaultHeap");
+    import_table_core.memory.write32_be(0xC00001E8U, import_address);
+    import_table_core.memory.write32_be(0x00, 0x3D20C000U); // lis r9, -16384
+    import_table_core.memory.write32_be(0x04, 0x812901E8U); // lwz r9, 488(r9)
+    import_table_core.memory.write32_be(0x08, 0x7D2903A6U); // mtctr r9
+    import_table_core.memory.write32_be(0x0C, 0x4E800421U); // bctrl
+    assert(import_table_core.step() == StepResult::executed);
+    assert(import_table_core.step() == StepResult::executed);
+    assert(import_table_core.state.gpr[9] == import_address);
+    assert(import_table_core.step() == StepResult::executed);
+    assert(import_table_core.state.ctr == import_address);
+    assert(import_table_core.step() == StepResult::executed);
+    assert(import_table_core.state.cia == import_address);
+    assert(import_table_core.step() == StepResult::unimplemented_hle_call);
+
     EspressoCore core(0x20);
 
     // addi r3, r0, 5
@@ -357,6 +458,8 @@ void interpreter_tests()
 
     assert(result.steps == 4);
     assert(result.reason == StopReason::unsupported_instruction);
+    assert(result.cia == 0x14U);
+    assert(result.instruction_word == 0U);
     assert(core.state.gpr[3] == 7);
     assert(core.state.gpr[4] == 8);
     assert(core.state.cia == 0x14);
@@ -368,6 +471,16 @@ void interpreter_tests()
     assert(link_core.step() == StepResult::executed);
     assert(link_core.state.cia == 8);
     assert(link_core.state.lr == 4);
+
+    EspressoCore count_branch_core(0x20);
+    count_branch_core.state.gpr[12] = 0x12U;
+    count_branch_core.memory.write32_be(0, 0x7D8903A6U); // mtctr r12
+    count_branch_core.memory.write32_be(4, 0x4E800420U); // bctr
+    const RunResult count_branch_result = count_branch_core.run(3);
+    assert(count_branch_result.reason == StopReason::unsupported_instruction);
+    assert(count_branch_result.cia == 0x10U);
+    assert(count_branch_result.instruction_word == 0U);
+    assert(count_branch_core.state.ctr == 0x12U);
 }
 
 void integer_alu_tests()
@@ -400,6 +513,27 @@ void integer_alu_tests()
     // and. and andi. update only CR0, preserving the lower CR fields and XER.SO.
     assert(core.state.cr == 0x52345678U);
 
+    EspressoCore subtract_carry_core(8);
+    subtract_carry_core.state.gpr[4] = 2U;
+    subtract_carry_core.memory.write32_be(0, 0x20640005U); // subfic r3, r4, 5
+    assert(subtract_carry_core.step() == StepResult::executed);
+    assert(subtract_carry_core.state.gpr[3] == 3U);
+    assert((subtract_carry_core.state.xer & 0x20000000U) != 0);
+
+    EspressoCore shift_left_core(8);
+    shift_left_core.state.gpr[4] = 3U;
+    shift_left_core.state.gpr[9] = 4U;
+    shift_left_core.memory.write32_be(0, 0x7C844830U); // slw r4, r4, r9
+    assert(shift_left_core.step() == StepResult::executed);
+    assert(shift_left_core.state.gpr[4] == 48U);
+
+    EspressoCore and_complement_core(8);
+    and_complement_core.state.gpr[9] = 0xFFFF0000U;
+    and_complement_core.state.gpr[7] = 0x00FF00FFU;
+    and_complement_core.memory.write32_be(0, 0x7D293878U); // andc r9, r9, r7
+    assert(and_complement_core.step() == StepResult::executed);
+    assert(and_complement_core.state.gpr[9] == 0xFF000000U);
+
     // rlwinm masks may wrap across the word boundary: MB=28 through ME=3.
     EspressoCore wrapping_rotate_core(8);
     wrapping_rotate_core.state.gpr[4] = 0xF000000FU;
@@ -407,6 +541,13 @@ void integer_alu_tests()
     wrapping_rotate_core.memory.write32_be(0, 0x54830706U);
     assert(wrapping_rotate_core.step() == StepResult::executed);
     assert(wrapping_rotate_core.state.gpr[3] == 0xF000000FU);
+
+    EspressoCore arithmetic_shift_core(8);
+    arithmetic_shift_core.state.gpr[3] = 0xFFFFFFFBU;
+    arithmetic_shift_core.memory.write32_be(0, 0x7C691670U); // srawi r9, r3, 2
+    assert(arithmetic_shift_core.step() == StepResult::executed);
+    assert(arithmetic_shift_core.state.gpr[9] == 0xFFFFFFFEU);
+    assert((arithmetic_shift_core.state.xer & 0x20000000U) != 0);
 }
 
 void leaf_function_abi_tests()
@@ -525,6 +666,14 @@ void rpx_loader_tests()
     assert(rejected);
     assert(core.state.cia == 0x80);
     assert(core.memory.read32_be(entry_point) == 0xAABBCCDDU);
+
+    affogato::Emulator session;
+    const auto session_image = session.load_rpx(file);
+    const auto session_run = session.run(2);
+    assert(session_image.entry_point == entry_point);
+    assert(session_run.image.entry_point == entry_point);
+    assert(session_run.execution.reason == StopReason::instruction_limit);
+    assert(session_run.gpr3 == 5U);
 }
 
 void hle_dispatch_tests()
@@ -541,6 +690,32 @@ void hle_dispatch_tests()
     assert(core.state.gpr[3] == 0);
     assert(core.state.cia == 0x40);
 
+    const std::uint32_t device_info = core.hle.bind_import("coreinit", "FSAGetDeviceInfo");
+    core.state.cia = device_info;
+    core.state.lr = 0x48;
+    assert(core.step() == StepResult::executed);
+    assert(core.state.gpr[3] == 0);
+    assert(core.state.cia == 0x48);
+
+    core.configure_guest_heap(0x80U, 0x100U);
+    const std::uint32_t allocate = core.hle.bind_import("coreinit", "MEMAllocFromDefaultHeap");
+    core.state.cia = allocate;
+    core.state.lr = 0x4C;
+    core.state.gpr[3] = 44;
+    assert(core.step() == StepResult::executed);
+    assert(core.state.gpr[3] == 0x80U);
+    assert(core.state.cia == 0x4C);
+
+    const std::uint32_t mutex_init = core.hle.bind_import("coreinit", "OSFastMutex_Init");
+    core.state.cia = mutex_init;
+    core.state.lr = 0x50;
+    core.state.gpr[3] = 0x90;
+    core.state.gpr[4] = 0x1234;
+    assert(core.step() == StepResult::executed);
+    assert(core.memory.read32_be(0x90) == 0x664D7458U);
+    assert(core.memory.read32_be(0x94) == 0x1234U);
+    assert(core.memory.read32_be(0xB8) == 0);
+
     const std::uint32_t missing_import = core.hle.bind_import("coreinit", "OSFatal");
     core.state.cia = missing_import;
     core.state.lr = 0x44;
@@ -551,6 +726,12 @@ void hle_dispatch_tests()
 
 void compare_and_conditional_branch_tests()
 {
+    EspressoCore unsigned_compare_core(8);
+    unsigned_compare_core.state.gpr[5] = 4U;
+    unsigned_compare_core.memory.write32_be(0, 0x28050003U); // cmplwi cr0, r5, 3
+    assert(unsigned_compare_core.step() == StepResult::executed);
+    assert(unsigned_compare_core.state.cr == 0x40000000U); // unsigned greater-than
+
     const auto run_if_else = [](std::uint32_t value) {
         EspressoCore core(0x20);
         // if (r3 == 7) r4 = 1; else r4 = 0;
@@ -638,6 +819,54 @@ void load_store_tests()
     zero_base_core.memory.write32_be(0xA0, 0xDEADBEEFU);
     assert(zero_base_core.step() == StepResult::executed);
     assert(zero_base_core.state.gpr[9] == 0xCAFEBABEU);
+
+    EspressoCore update_core(0x100);
+    update_core.state.gpr[28] = 0x40U;
+    update_core.memory.write32_be(0, 0x853C0004U); // lwzu r9, 4(r28)
+    update_core.memory.write32_be(0x44, 0x12345678U);
+    assert(update_core.step() == StepResult::executed);
+    assert(update_core.state.gpr[9] == 0x12345678U);
+    assert(update_core.state.gpr[28] == 0x44U);
+
+    EspressoCore indexed_core(0x100);
+    indexed_core.state.gpr[26] = 0x40U;
+    indexed_core.state.gpr[9] = 4U;
+    indexed_core.state.gpr[27] = 0xAABBCCDDU;
+    indexed_core.memory.write32_be(0, 0x7F7A492EU); // stwx r27, r26, r9
+    assert(indexed_core.step() == StepResult::executed);
+    assert(indexed_core.memory.read32_be(0x44) == 0xAABBCCDDU);
+
+    EspressoCore indexed_load_core(0x100);
+    indexed_load_core.state.gpr[9] = 0x40U;
+    indexed_load_core.state.gpr[10] = 4U;
+    indexed_load_core.memory.write32_be(0x44, 0x13579BDFU);
+    indexed_load_core.memory.write32_be(0, 0x7D09502EU); // lwzx r8, r9, r10
+    assert(indexed_load_core.step() == StepResult::executed);
+    assert(indexed_load_core.state.gpr[8] == 0x13579BDFU);
+
+    EspressoCore indexed_byte_core(0x100);
+    indexed_byte_core.state.gpr[24] = 0x40U;
+    indexed_byte_core.state.gpr[3] = 2U;
+    indexed_byte_core.state.gpr[9] = 0x123456ABU;
+    indexed_byte_core.memory.write32_be(0, 0x7D3819AEU); // stbx r9, r24, r3
+    assert(indexed_byte_core.step() == StepResult::executed);
+    assert(indexed_byte_core.memory.read8(0x42) == 0xABU);
+
+    EspressoCore byte_update_core(0x100);
+    byte_update_core.state.gpr[9] = 0x40U;
+    byte_update_core.memory.write32_be(0, 0x8D090001U); // lbzu r8, 1(r9)
+    byte_update_core.memory.write8(0x41, 0xABU);
+    assert(byte_update_core.step() == StepResult::executed);
+    assert(byte_update_core.state.gpr[8] == 0xABU);
+    assert(byte_update_core.state.gpr[9] == 0x41U);
+
+    EspressoCore store_byte_update_core(0x100);
+    store_byte_update_core.state.gpr[10] = 0x50U;
+    store_byte_update_core.state.gpr[7] = 0xABU;
+    store_byte_update_core.memory.write32_be(0, 0x9CEA0001U); // stbu r7, 1(r10)
+    assert(store_byte_update_core.step() == StepResult::executed);
+    assert(store_byte_update_core.memory.read8(0x51) == 0xABU);
+    assert(store_byte_update_core.state.gpr[10] == 0x51U);
 }
 
 void function_call_and_stack_tests()
@@ -702,11 +931,31 @@ int main(int argc, char* argv[])
 
         try
         {
-            EspressoCore core(0x10004000U);
-            register_coreinit_hle(core.hle);
-            const RpxLoadResult result = load_rpx32_powerpc(core, file);
-            std::cout << "Loaded RPX entry point 0x" << std::hex << result.entry_point
-                      << " (" << std::dec << result.loaded_sections << " sections)\n";
+            affogato::Emulator emulator;
+            const auto image = emulator.load_rpx(file);
+            std::cout << "Loaded RPX entry point 0x" << std::hex << image.entry_point
+                      << " (" << std::dec << image.loaded_sections << " sections)\n";
+            const auto session_result = emulator.run(1'000'000);
+            const auto& execution = session_result.execution;
+            std::cout << "Stopped after " << execution.steps << " instructions at CIA 0x"
+                      << std::hex << execution.cia << std::dec << ": ";
+            switch (execution.reason)
+            {
+            case StopReason::instruction_limit:
+                std::cout << "instruction limit";
+                break;
+            case StopReason::unsupported_instruction:
+                std::cout << "unsupported PPC instruction 0x" << std::hex
+                          << execution.instruction_word << std::dec;
+                break;
+            case StopReason::unimplemented_hle_call:
+                std::cout << "unimplemented HLE " << execution.hle_call;
+                break;
+            case StopReason::memory_fault:
+                std::cout << "guest memory fault: " << execution.detail;
+                break;
+            }
+            std::cout << " (guest r3=" << session_result.gpr3 << ")\n";
         }
         catch (const std::exception& error)
         {

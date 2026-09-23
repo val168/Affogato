@@ -31,6 +31,7 @@ add_library(affogato_cpu STATIC
     src/cpu/espresso/hle_dispatcher.cpp
     src/cpu/espresso/rpx_loader.cpp
     src/cpu/espresso/interpreter.cpp
+    src/emulator.cpp
 )
 
 target_include_directories(affogato_cpu PUBLIC

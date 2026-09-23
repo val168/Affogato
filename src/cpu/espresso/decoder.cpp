@@ -33,6 +33,13 @@ DecodedInstruction decode(std::uint32_t raw) noexcept
 
     switch (field(raw, 26, 0x3FU))
     {
+    case 8: // subfic
+        instruction.opcode = Opcode::subtract_from_immediate_carry;
+        instruction.destination = static_cast<std::uint8_t>(field(raw, 21, 0x1FU));
+        instruction.base = static_cast<std::uint8_t>(field(raw, 16, 0x1FU));
+        instruction.immediate = sign_extend(raw, 16);
+        break;
+
     case 14: // addi
         instruction.opcode = Opcode::addi;
         instruction.destination = static_cast<std::uint8_t>(field(raw, 21, 0x1FU));
@@ -79,15 +86,20 @@ DecodedInstruction decode(std::uint32_t raw) noexcept
         instruction.record = true;
         break;
 
-    case 19: // bclr / blrl
-        if (field(raw, 1, 0x3FFU) == 16)
+    case 19: // bclr / blrl / bcctr / bctr
+    {
+        const std::uint32_t extended_opcode = field(raw, 1, 0x3FFU);
+        if (extended_opcode == 16 || extended_opcode == 528)
         {
-            instruction.opcode = Opcode::conditional_branch_to_link_register;
+            instruction.opcode = extended_opcode == 16
+                ? Opcode::conditional_branch_to_link_register
+                : Opcode::conditional_branch_to_count_register;
             instruction.branch_options = static_cast<std::uint8_t>(field(raw, 21, 0x1FU));
             instruction.condition_bit = static_cast<std::uint8_t>(field(raw, 16, 0x1FU));
             instruction.link = (raw & 0x1U) != 0;
         }
         break;
+    }
 
     case 11: // cmpwi (L=0)
         if ((raw & (1U << 22U)) == 0)
@@ -97,6 +109,22 @@ DecodedInstruction decode(std::uint32_t raw) noexcept
             instruction.base = static_cast<std::uint8_t>(field(raw, 16, 0x1FU));
             instruction.immediate = sign_extend(raw, 16);
         }
+        break;
+
+    case 12: // addic
+    case 13: // addic.
+        instruction.opcode = Opcode::add_immediate_carry;
+        instruction.destination = static_cast<std::uint8_t>(field(raw, 21, 0x1FU));
+        instruction.base = static_cast<std::uint8_t>(field(raw, 16, 0x1FU));
+        instruction.immediate = sign_extend(raw, 16);
+        instruction.record = field(raw, 26, 0x3FU) == 13;
+        break;
+
+    case 10: // cmplwi
+        instruction.opcode = Opcode::compare_unsigned_immediate;
+        instruction.cr_field = static_cast<std::uint8_t>(field(raw, 23, 0x7U));
+        instruction.base = static_cast<std::uint8_t>(field(raw, 16, 0x1FU));
+        instruction.immediate = static_cast<std::int32_t>(field(raw, 0, 0xFFFFU));
         break;
 
     case 16: // bc / bcl / bca / bcla
@@ -117,18 +145,34 @@ DecodedInstruction decode(std::uint32_t raw) noexcept
             // order: the encoded rA field contains SPR[0:4].
             const std::uint32_t spr =
                 (field(raw, 11, 0x1FU) << 5U) | field(raw, 16, 0x1FU);
-            if (spr == 8)
+            if (spr == 8 || spr == 9)
             {
                 instruction.destination =
                     static_cast<std::uint8_t>(field(raw, 21, 0x1FU));
-                instruction.opcode = extended_opcode == 339
-                    ? Opcode::move_from_link_register
-                    : Opcode::move_to_link_register;
+                if (spr == 8)
+                {
+                    instruction.opcode = extended_opcode == 339
+                        ? Opcode::move_from_link_register
+                        : Opcode::move_to_link_register;
+                }
+                else
+                {
+                    instruction.opcode = extended_opcode == 339
+                        ? Opcode::move_from_count_register
+                        : Opcode::move_to_count_register;
+                }
             }
         }
         else if (extended_opcode == 0 && (raw & (1U << 22U)) == 0)
         {
             instruction.opcode = Opcode::compare_signed_register;
+            instruction.cr_field = static_cast<std::uint8_t>(field(raw, 23, 0x7U));
+            instruction.base = static_cast<std::uint8_t>(field(raw, 16, 0x1FU));
+            instruction.source = static_cast<std::uint8_t>(field(raw, 11, 0x1FU));
+        }
+        else if (extended_opcode == 32 && (raw & (1U << 22U)) == 0)
+        {
+            instruction.opcode = Opcode::compare_unsigned_register;
             instruction.cr_field = static_cast<std::uint8_t>(field(raw, 23, 0x7U));
             instruction.base = static_cast<std::uint8_t>(field(raw, 16, 0x1FU));
             instruction.source = static_cast<std::uint8_t>(field(raw, 11, 0x1FU));
@@ -142,11 +186,52 @@ DecodedInstruction decode(std::uint32_t raw) noexcept
             instruction.source = static_cast<std::uint8_t>(field(raw, 11, 0x1FU));
             instruction.record = (raw & 1U) != 0;
         }
-        else if (extended_opcode == 444 || extended_opcode == 28 || extended_opcode == 316)
+        else if (extended_opcode == 151) // stwx
+        {
+            instruction.opcode = Opcode::store_word_indexed;
+            instruction.destination = static_cast<std::uint8_t>(field(raw, 21, 0x1FU));
+            instruction.base = static_cast<std::uint8_t>(field(raw, 16, 0x1FU));
+            instruction.source = static_cast<std::uint8_t>(field(raw, 11, 0x1FU));
+        }
+        else if (extended_opcode == 23) // lwzx
+        {
+            instruction.opcode = Opcode::load_word_indexed;
+            instruction.destination = static_cast<std::uint8_t>(field(raw, 21, 0x1FU));
+            instruction.base = static_cast<std::uint8_t>(field(raw, 16, 0x1FU));
+            instruction.source = static_cast<std::uint8_t>(field(raw, 11, 0x1FU));
+        }
+        else if (extended_opcode == 215) // stbx
+        {
+            instruction.opcode = Opcode::store_byte_indexed;
+            instruction.destination = static_cast<std::uint8_t>(field(raw, 21, 0x1FU));
+            instruction.base = static_cast<std::uint8_t>(field(raw, 16, 0x1FU));
+            instruction.source = static_cast<std::uint8_t>(field(raw, 11, 0x1FU));
+        }
+        else if (extended_opcode == 824) // srawi
+        {
+            instruction.opcode = Opcode::arithmetic_shift_right_immediate;
+            instruction.source = static_cast<std::uint8_t>(field(raw, 21, 0x1FU));
+            instruction.destination = static_cast<std::uint8_t>(field(raw, 16, 0x1FU));
+            instruction.shift = static_cast<std::uint8_t>(field(raw, 11, 0x1FU));
+            instruction.record = (raw & 1U) != 0;
+        }
+        else if (extended_opcode == 24) // slw
+        {
+            instruction.opcode = Opcode::shift_left_word;
+            instruction.source = static_cast<std::uint8_t>(field(raw, 21, 0x1FU));
+            instruction.destination = static_cast<std::uint8_t>(field(raw, 16, 0x1FU));
+            instruction.base = static_cast<std::uint8_t>(field(raw, 11, 0x1FU));
+            instruction.record = (raw & 1U) != 0;
+        }
+        else if (extended_opcode == 444 || extended_opcode == 28 ||
+                 extended_opcode == 60 || extended_opcode == 316 ||
+                 extended_opcode == 284)
         {
             instruction.opcode = extended_opcode == 444 ? Opcode::bitwise_or
                 : extended_opcode == 28 ? Opcode::bitwise_and
-                                        : Opcode::bitwise_xor;
+                : extended_opcode == 60 ? Opcode::bitwise_and_complement
+                : extended_opcode == 316 ? Opcode::bitwise_xor
+                                          : Opcode::bitwise_equivalence;
             instruction.source = static_cast<std::uint8_t>(field(raw, 21, 0x1FU));
             instruction.destination =
                 static_cast<std::uint8_t>(field(raw, 16, 0x1FU));
@@ -163,11 +248,31 @@ DecodedInstruction decode(std::uint32_t raw) noexcept
         instruction.immediate = sign_extend(raw, 16);
         break;
 
+    case 33: // lwzu (rA must not be zero)
+        instruction.base = static_cast<std::uint8_t>(field(raw, 16, 0x1FU));
+        if (instruction.base != 0)
+        {
+            instruction.opcode = Opcode::load_word_update;
+            instruction.destination = static_cast<std::uint8_t>(field(raw, 21, 0x1FU));
+            instruction.immediate = sign_extend(raw, 16);
+        }
+        break;
+
     case 34: // lbz
         instruction.opcode = Opcode::load_byte_zero;
         instruction.destination = static_cast<std::uint8_t>(field(raw, 21, 0x1FU));
         instruction.base = static_cast<std::uint8_t>(field(raw, 16, 0x1FU));
         instruction.immediate = sign_extend(raw, 16);
+        break;
+
+    case 35: // lbzu (rA must not be zero)
+        instruction.base = static_cast<std::uint8_t>(field(raw, 16, 0x1FU));
+        if (instruction.base != 0)
+        {
+            instruction.opcode = Opcode::load_byte_update;
+            instruction.destination = static_cast<std::uint8_t>(field(raw, 21, 0x1FU));
+            instruction.immediate = sign_extend(raw, 16);
+        }
         break;
 
     case 36: // stw
@@ -193,6 +298,16 @@ DecodedInstruction decode(std::uint32_t raw) noexcept
         instruction.destination = static_cast<std::uint8_t>(field(raw, 21, 0x1FU));
         instruction.base = static_cast<std::uint8_t>(field(raw, 16, 0x1FU));
         instruction.immediate = sign_extend(raw, 16);
+        break;
+
+    case 39: // stbu (rA must not be zero)
+        instruction.base = static_cast<std::uint8_t>(field(raw, 16, 0x1FU));
+        if (instruction.base != 0)
+        {
+            instruction.opcode = Opcode::store_byte_update;
+            instruction.destination = static_cast<std::uint8_t>(field(raw, 21, 0x1FU));
+            instruction.immediate = sign_extend(raw, 16);
+        }
         break;
 
     case 40: // lhz

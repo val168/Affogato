@@ -4,6 +4,7 @@
 
 #include <bit>
 #include <cstdint>
+#include <exception>
 
 namespace affogato::cpu::espresso
 {
@@ -11,6 +12,7 @@ namespace
 {
 
 constexpr std::uint32_t xer_summary_overflow_mask = 0x80000000U;
+constexpr std::uint32_t xer_carry_mask = 0x20000000U;
 constexpr std::uint8_t cr_less_than = 0x8U;
 constexpr std::uint8_t cr_greater_than = 0x4U;
 constexpr std::uint8_t cr_equal = 0x2U;
@@ -32,6 +34,35 @@ void set_compare_result(CpuState& state, std::uint8_t field, std::int32_t lhs, s
         result |= cr_equal;
     }
 
+    if ((state.xer & xer_summary_overflow_mask) != 0)
+    {
+        result |= 1U;
+    }
+
+    const unsigned shift = (7U - field) * 4U;
+    const std::uint32_t mask = 0xFU << shift;
+    state.cr = (state.cr & ~mask) | (static_cast<std::uint32_t>(result) << shift);
+}
+
+void set_compare_result_unsigned(
+    CpuState& state,
+    std::uint8_t field,
+    std::uint32_t lhs,
+    std::uint32_t rhs)
+{
+    std::uint8_t result = 0;
+    if (lhs < rhs)
+    {
+        result |= cr_less_than;
+    }
+    else if (lhs > rhs)
+    {
+        result |= cr_greater_than;
+    }
+    else
+    {
+        result |= cr_equal;
+    }
     if ((state.xer & xer_summary_overflow_mask) != 0)
     {
         result |= 1U;
@@ -149,6 +180,44 @@ StepResult EspressoCore::step()
         break;
     }
 
+    case Opcode::add_immediate_carry:
+    {
+        const std::uint32_t lhs = instruction.base == 0 ? 0U : state.gpr[instruction.base];
+        const std::uint32_t rhs = static_cast<std::uint32_t>(instruction.immediate);
+        const std::uint64_t sum = static_cast<std::uint64_t>(lhs) + rhs;
+        const std::uint32_t value = static_cast<std::uint32_t>(sum);
+        state.gpr[instruction.destination] = value;
+        if ((sum >> 32U) != 0)
+        {
+            state.xer |= xer_carry_mask;
+        }
+        else
+        {
+            state.xer &= ~xer_carry_mask;
+        }
+        if (instruction.record)
+        {
+            set_record_result(state, value);
+        }
+        break;
+    }
+
+    case Opcode::subtract_from_immediate_carry:
+    {
+        const std::uint32_t immediate = static_cast<std::uint32_t>(instruction.immediate);
+        const std::uint32_t source = state.gpr[instruction.base];
+        state.gpr[instruction.destination] = immediate - source;
+        if (immediate >= source)
+        {
+            state.xer |= xer_carry_mask;
+        }
+        else
+        {
+            state.xer &= ~xer_carry_mask;
+        }
+        break;
+    }
+
     case Opcode::add:
     {
         const std::uint32_t result =
@@ -181,13 +250,18 @@ StepResult EspressoCore::step()
 
     case Opcode::bitwise_or:
     case Opcode::bitwise_and:
+    case Opcode::bitwise_and_complement:
     case Opcode::bitwise_xor:
+    case Opcode::bitwise_equivalence:
     {
         const std::uint32_t lhs = state.gpr[instruction.source];
         const std::uint32_t rhs = state.gpr[instruction.base];
         const std::uint32_t result = instruction.opcode == Opcode::bitwise_or
             ? lhs | rhs
-            : instruction.opcode == Opcode::bitwise_and ? lhs & rhs : lhs ^ rhs;
+            : instruction.opcode == Opcode::bitwise_and ? lhs & rhs
+            : instruction.opcode == Opcode::bitwise_and_complement ? lhs & ~rhs
+            : instruction.opcode == Opcode::bitwise_equivalence ? ~(lhs ^ rhs)
+                                                                  : lhs ^ rhs;
         state.gpr[instruction.destination] = result;
         if (instruction.record)
         {
@@ -211,6 +285,44 @@ StepResult EspressoCore::step()
             state.gpr[instruction.source], static_cast<int>(instruction.shift));
         const std::uint32_t result =
             rotated & rotate_mask(instruction.mask_begin, instruction.mask_end);
+        state.gpr[instruction.destination] = result;
+        if (instruction.record)
+        {
+            set_record_result(state, result);
+        }
+        break;
+    }
+
+    case Opcode::arithmetic_shift_right_immediate:
+    {
+        const std::int32_t source = std::bit_cast<std::int32_t>(state.gpr[instruction.source]);
+        const std::uint32_t mask = instruction.shift == 0
+            ? 0U
+            : (std::uint32_t{1} << instruction.shift) - 1U;
+        const bool carry = source < 0 && (state.gpr[instruction.source] & mask) != 0;
+        const std::uint32_t result = static_cast<std::uint32_t>(source >> instruction.shift);
+        state.gpr[instruction.destination] = result;
+        if (carry)
+        {
+            state.xer |= xer_carry_mask;
+        }
+        else
+        {
+            state.xer &= ~xer_carry_mask;
+        }
+        if (instruction.record)
+        {
+            set_record_result(state, result);
+        }
+        break;
+    }
+
+    case Opcode::shift_left_word:
+    {
+        const std::uint32_t shift = state.gpr[instruction.base] & 0x3FU;
+        const std::uint32_t result = shift >= 32U
+            ? 0U
+            : state.gpr[instruction.source] << shift;
         state.gpr[instruction.destination] = result;
         if (instruction.record)
         {
@@ -251,6 +363,22 @@ StepResult EspressoCore::step()
             std::bit_cast<std::int32_t>(state.gpr[instruction.source]));
         break;
 
+    case Opcode::compare_unsigned_immediate:
+        set_compare_result_unsigned(
+            state,
+            instruction.cr_field,
+            state.gpr[instruction.base],
+            static_cast<std::uint32_t>(instruction.immediate));
+        break;
+
+    case Opcode::compare_unsigned_register:
+        set_compare_result_unsigned(
+            state,
+            instruction.cr_field,
+            state.gpr[instruction.base],
+            state.gpr[instruction.source]);
+        break;
+
     case Opcode::conditional_branch:
         if (instruction.link)
         {
@@ -288,6 +416,24 @@ StepResult EspressoCore::step()
         break;
     }
 
+    case Opcode::conditional_branch_to_count_register:
+    {
+        const std::uint32_t target = state.ctr & ~0x3U;
+        if (instruction.link)
+        {
+            state.lr = fallthrough;
+        }
+
+        if (conditional_branch_taken(
+                state,
+                instruction.branch_options,
+                instruction.condition_bit))
+        {
+            next_cia = target;
+        }
+        break;
+    }
+
     case Opcode::move_from_link_register:
         state.gpr[instruction.destination] = state.lr;
         break;
@@ -296,16 +442,58 @@ StepResult EspressoCore::step()
         state.lr = state.gpr[instruction.destination];
         break;
 
+    case Opcode::move_from_count_register:
+        state.gpr[instruction.destination] = state.ctr;
+        break;
+
+    case Opcode::move_to_count_register:
+        state.ctr = state.gpr[instruction.destination];
+        break;
+
     case Opcode::load_word_zero:
         state.gpr[instruction.destination] =
             memory.read32_be(effective_address(state, instruction.base, instruction.immediate));
         break;
+
+    case Opcode::load_word_indexed:
+    {
+        const std::uint32_t base = instruction.base == 0 ? 0U : state.gpr[instruction.base];
+        const std::uint32_t address = base + state.gpr[instruction.source];
+        state.gpr[instruction.destination] = memory.read32_be(address);
+        break;
+    }
+
+    case Opcode::load_word_update:
+    {
+        const std::uint32_t address =
+            effective_address(state, instruction.base, instruction.immediate);
+        const std::uint32_t value = memory.read32_be(address);
+        state.gpr[instruction.destination] = value;
+        state.gpr[instruction.base] = address;
+        break;
+    }
 
     case Opcode::store_word:
         memory.write32_be(
             effective_address(state, instruction.base, instruction.immediate),
             state.gpr[instruction.destination]);
         break;
+
+    case Opcode::store_word_indexed:
+    {
+        const std::uint32_t base = instruction.base == 0 ? 0 : state.gpr[instruction.base];
+        const std::uint32_t address = base + state.gpr[instruction.source];
+        memory.write32_be(address, state.gpr[instruction.destination]);
+        break;
+    }
+
+    case Opcode::store_byte_indexed:
+    {
+        const std::uint32_t base = instruction.base == 0 ? 0 : state.gpr[instruction.base];
+        const std::uint32_t address = base + state.gpr[instruction.source];
+        memory.write8(address, static_cast<std::uint8_t>(state.gpr[instruction.destination]));
+        break;
+    }
 
     case Opcode::store_word_update:
     {
@@ -322,11 +510,30 @@ StepResult EspressoCore::step()
             memory.read8(effective_address(state, instruction.base, instruction.immediate));
         break;
 
+    case Opcode::load_byte_update:
+    {
+        const std::uint32_t address =
+            effective_address(state, instruction.base, instruction.immediate);
+        const std::uint8_t value = memory.read8(address);
+        state.gpr[instruction.destination] = value;
+        state.gpr[instruction.base] = address;
+        break;
+    }
+
     case Opcode::store_byte:
         memory.write8(
             effective_address(state, instruction.base, instruction.immediate),
             static_cast<std::uint8_t>(state.gpr[instruction.destination]));
         break;
+
+    case Opcode::store_byte_update:
+    {
+        const std::uint32_t address =
+            effective_address(state, instruction.base, instruction.immediate);
+        memory.write8(address, static_cast<std::uint8_t>(state.gpr[instruction.destination]));
+        state.gpr[instruction.base] = address;
+        break;
+    }
 
     case Opcode::load_halfword_zero:
         state.gpr[instruction.destination] =
@@ -350,18 +557,34 @@ StepResult EspressoCore::step()
 RunResult EspressoCore::run(std::size_t max_steps)
 {
     RunResult result{};
+    result.cia = state.cia;
 
     while (result.steps < max_steps)
     {
-        const StepResult step_result = step();
+        StepResult step_result{};
+        try
+        {
+            step_result = step();
+        }
+        catch (const std::exception& error)
+        {
+            result.reason = StopReason::memory_fault;
+            result.cia = state.cia;
+            result.detail = error.what();
+            return result;
+        }
         if (step_result == StepResult::unsupported_instruction)
         {
             result.reason = StopReason::unsupported_instruction;
+            result.cia = state.cia;
+            result.instruction_word = memory.read32_be(state.cia);
             return result;
         }
         if (step_result == StepResult::unimplemented_hle_call)
         {
             result.reason = StopReason::unimplemented_hle_call;
+            result.cia = state.cia;
+            result.hle_call = hle.last_unimplemented_call();
             return result;
         }
 
@@ -369,6 +592,7 @@ RunResult EspressoCore::run(std::size_t max_steps)
     }
 
     result.reason = StopReason::instruction_limit;
+    result.cia = state.cia;
     return result;
 }
 

@@ -201,7 +201,7 @@ void apply_relocations(
         }
 
         const Section& target = sections[relocation_section.info];
-        if (target.address >= rpl_loader_metadata_base)
+        if (target.address >= rpl_loader_metadata_base && target.type != section_rpl_imports)
         {
             continue;
         }
@@ -213,6 +213,10 @@ void apply_relocations(
             throw std::invalid_argument("RPX has an invalid ELF32 symbol table");
         }
         const LoadedSection& target_section = loaded[relocation_section.info];
+        if (target_section.contents.empty())
+        {
+            continue;
+        }
         const std::vector<std::uint8_t> relocations = read_section(file, relocation_section);
         const std::vector<std::uint8_t> symbols = read_section(file, symbol_table);
         const std::vector<std::uint8_t> strings = read_section(file, sections[symbol_table.link]);
@@ -274,7 +278,22 @@ void apply_relocations(
                          sections[symbol_section].type == section_rpl_imports)
                 {
                     const std::string library = import_library_name(file, sections[symbol_section]);
-                    symbol_value = core.hle.bind_import(library, name);
+                    const std::uint32_t import_address = core.hle.bind_import(library, name);
+                    symbol_value = symbol_type == 2U ? import_address : symbol_entry_value;
+                    LoadedSection& import_table = loaded[symbol_section];
+                    if (symbol_entry_value < import_table.address ||
+                        symbol_entry_value - import_table.address > import_table.contents.size() ||
+                        sizeof(std::uint32_t) >
+                            import_table.contents.size() - (symbol_entry_value - import_table.address))
+                    {
+                        throw std::invalid_argument(
+                            "RPX import symbol slot is outside its import section");
+                    }
+                    const std::size_t slot = symbol_entry_value - import_table.address;
+                    import_table.contents[slot] = static_cast<std::uint8_t>(import_address >> 24U);
+                    import_table.contents[slot + 1] = static_cast<std::uint8_t>(import_address >> 16U);
+                    import_table.contents[slot + 2] = static_cast<std::uint8_t>(import_address >> 8U);
+                    import_table.contents[slot + 3] = static_cast<std::uint8_t>(import_address);
                 }
                 else
                 {
@@ -457,8 +476,10 @@ RpxLoadResult load_rpx32_powerpc(EspressoCore& core, std::span<const std::uint8_
     for (std::size_t i = 0; i < sections.size(); ++i)
     {
         const Section& section = sections[i];
+        const bool import_section = section.type == section_rpl_imports;
         if ((section.flags & section_alloc) == 0 || section.size == 0 ||
-            section.type == section_rpl_fileinfo || section.address >= rpl_loader_metadata_base)
+            section.type == section_rpl_fileinfo ||
+            (section.address >= rpl_loader_metadata_base && !import_section))
         {
             continue;
         }
@@ -467,8 +488,11 @@ RpxLoadResult load_rpx32_powerpc(EspressoCore& core, std::span<const std::uint8_
         destination.executable = (section.flags & section_execute) != 0;
         destination.contents = read_section(file, section);
         const std::uint64_t end = static_cast<std::uint64_t>(destination.address) + destination.contents.size();
-        if (end > (std::uint64_t{1} << 32U) || destination.address > core.memory.size() ||
-            destination.contents.size() > core.memory.size() - destination.address)
+        if (end > (std::uint64_t{1} << 32U) ||
+            (destination.address < rpl_loader_metadata_base &&
+             (destination.address > core.memory.size() ||
+              destination.contents.size() > core.memory.size() - destination.address)) ||
+            (destination.address >= rpl_loader_metadata_base && !import_section))
         {
             throw std::invalid_argument("RPX section lies outside the current flat guest memory");
         }
@@ -500,12 +524,32 @@ RpxLoadResult load_rpx32_powerpc(EspressoCore& core, std::span<const std::uint8_
     }
 
     apply_relocations(core, file, sections, loaded);
+    std::uint64_t highest_guest_address = 0;
     for (std::size_t i = 0; i < loaded.size(); ++i)
     {
         if (!loaded[i].contents.empty())
         {
+            if (loaded[i].address >= rpl_loader_metadata_base)
+            {
+                core.memory.map_region(loaded[i].address, loaded[i].contents.size());
+            }
             core.memory.write_bytes(loaded[i].address, loaded[i].contents);
+            if (loaded[i].address < rpl_loader_metadata_base)
+            {
+                highest_guest_address = std::max(
+                    highest_guest_address,
+                    static_cast<std::uint64_t>(loaded[i].address) + loaded[i].contents.size());
+            }
         }
+    }
+    const std::uint64_t heap_begin = (highest_guest_address + 0xFFFU) & ~std::uint64_t{0xFFFU};
+    const std::uint64_t heap_limit = core.memory.size() > 0x10000U
+        ? core.memory.size() - 0x10000U
+        : 0U;
+    if (heap_begin < heap_limit && heap_limit <= UINT32_MAX)
+    {
+        core.configure_guest_heap(
+            static_cast<std::uint32_t>(heap_begin), static_cast<std::uint32_t>(heap_limit));
     }
     core.state.cia = entry_point;
     return {entry_point, loaded_count};
