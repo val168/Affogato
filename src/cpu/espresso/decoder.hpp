@@ -10,7 +10,14 @@ enum class Opcode
     unsupported,
     addi,
     addis,
+    add,
+    subtract_from,
     ori,
+    bitwise_or,
+    bitwise_and,
+    bitwise_xor,
+    and_immediate_record,
+    rotate_left_word_and_mask,
     branch,
     compare_signed_immediate,
     compare_signed_register,
@@ -39,11 +46,15 @@ struct DecodedInstruction
     std::uint8_t cr_field{};
     std::uint8_t branch_options{};
     std::uint8_t condition_bit{};
+    std::uint8_t shift{};
+    std::uint8_t mask_begin{};
+    std::uint8_t mask_end{};
 
-    // Signed for addi/addis and branch displacement; non-negative for ori.
+    // Signed for addi/addis and branch displacement; unsigned for logical ops.
     std::int32_t immediate{};
     bool absolute{};
     bool link{};
+    bool record{};
 };
 
 [[nodiscard]] DecodedInstruction decode(std::uint32_t raw) noexcept;

@@ -25,11 +25,56 @@ void decoder_tests()
     assert(addis.base == 3);
     assert(addis.immediate == -1);
 
+    const DecodedInstruction add = decode(0x7C642A14U); // add r3, r4, r5
+    assert(add.opcode == Opcode::add);
+    assert(add.destination == 3);
+    assert(add.base == 4);
+    assert(add.source == 5);
+
+    const DecodedInstruction subf = decode(0x7CC42850U); // subf r6, r4, r5
+    assert(subf.opcode == Opcode::subtract_from);
+    assert(subf.destination == 6);
+    assert(subf.base == 4);
+    assert(subf.source == 5);
+
     const DecodedInstruction ori = decode(0x60631234U); // ori r3, r3, 0x1234
     assert(ori.opcode == Opcode::ori);
     assert(ori.source == 3);
     assert(ori.destination == 3);
     assert(ori.immediate == 0x1234);
+
+    const DecodedInstruction bit_or = decode(0x7C872B78U); // or r7, r4, r5
+    assert(bit_or.opcode == Opcode::bitwise_or);
+    assert(bit_or.source == 4);
+    assert(bit_or.destination == 7);
+    assert(bit_or.base == 5);
+
+    const DecodedInstruction bit_and = decode(0x7C882838U); // and r8, r4, r5
+    assert(bit_and.opcode == Opcode::bitwise_and);
+    assert(bit_and.source == 4);
+    assert(bit_and.destination == 8);
+    assert(bit_and.base == 5);
+
+    const DecodedInstruction bit_xor = decode(0x7C892A78U); // xor r9, r4, r5
+    assert(bit_xor.opcode == Opcode::bitwise_xor);
+    assert(bit_xor.source == 4);
+    assert(bit_xor.destination == 9);
+    assert(bit_xor.base == 5);
+
+    const DecodedInstruction andi = decode(0x708AFF00U); // andi. r10, r4, 0xFF00
+    assert(andi.opcode == Opcode::and_immediate_record);
+    assert(andi.source == 4);
+    assert(andi.destination == 10);
+    assert(andi.immediate == 0xFF00);
+    assert(andi.record);
+
+    const DecodedInstruction rlwinm = decode(0x548B2834U); // rlwinm r11, r4, 5, 0, 26
+    assert(rlwinm.opcode == Opcode::rotate_left_word_and_mask);
+    assert(rlwinm.source == 4);
+    assert(rlwinm.destination == 11);
+    assert(rlwinm.shift == 5);
+    assert(rlwinm.mask_begin == 0);
+    assert(rlwinm.mask_end == 26);
 
     const DecodedInstruction branch = decode(0x48000009U); // bl +8
     assert(branch.opcode == Opcode::branch);
@@ -161,6 +206,45 @@ void interpreter_tests()
     assert(link_core.step() == StepResult::executed);
     assert(link_core.state.cia == 8);
     assert(link_core.state.lr == 4);
+}
+
+void integer_alu_tests()
+{
+    EspressoCore core(0x40);
+    core.state.gpr[4] = 0xF0F00F0FU;
+    core.state.gpr[5] = 0x0FF0FF00U;
+    core.state.cr = 0x12345678U;
+    core.state.xer = 0x80000000U;
+
+    core.memory.write32_be(0x00, 0x7C642A14U); // add r3, r4, r5
+    core.memory.write32_be(0x04, 0x7CC42850U); // subf r6, r4, r5
+    core.memory.write32_be(0x08, 0x7C872B78U); // or r7, r4, r5
+    core.memory.write32_be(0x0C, 0x7C882839U); // and. r8, r4, r5
+    core.memory.write32_be(0x10, 0x7C892A78U); // xor r9, r4, r5
+    core.memory.write32_be(0x14, 0x708AFF00U); // andi. r10, r4, 0xFF00
+    core.memory.write32_be(0x18, 0x548B2834U); // rlwinm r11, r4, 5, 0, 26
+
+    const RunResult result = core.run(8);
+
+    assert(result.steps == 7);
+    assert(result.reason == StopReason::unsupported_instruction);
+    assert(core.state.gpr[3] == 0x00E10E0FU);
+    assert(core.state.gpr[6] == 0x1F00EFF1U);
+    assert(core.state.gpr[7] == 0xFFF0FF0FU);
+    assert(core.state.gpr[8] == 0x00F00F00U);
+    assert(core.state.gpr[9] == 0xFF00F00FU);
+    assert(core.state.gpr[10] == 0x00000F00U);
+    assert(core.state.gpr[11] == 0x1E01E1E0U);
+    // and. and andi. update only CR0, preserving the lower CR fields and XER.SO.
+    assert(core.state.cr == 0x52345678U);
+
+    // rlwinm masks may wrap across the word boundary: MB=28 through ME=3.
+    EspressoCore wrapping_rotate_core(8);
+    wrapping_rotate_core.state.gpr[4] = 0xF000000FU;
+    // rlwinm r3, r4, 0, 28, 3
+    wrapping_rotate_core.memory.write32_be(0, 0x54830706U);
+    assert(wrapping_rotate_core.step() == StepResult::executed);
+    assert(wrapping_rotate_core.state.gpr[3] == 0xF000000FU);
 }
 
 void compare_and_conditional_branch_tests()
@@ -306,6 +390,7 @@ int main()
     decoder_tests();
     guest_memory_tests();
     interpreter_tests();
+    integer_alu_tests();
     compare_and_conditional_branch_tests();
     load_store_tests();
     function_call_and_stack_tests();

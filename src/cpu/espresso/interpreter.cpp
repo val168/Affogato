@@ -42,6 +42,28 @@ void set_compare_result(CpuState& state, std::uint8_t field, std::int32_t lhs, s
     state.cr = (state.cr & ~mask) | (static_cast<std::uint32_t>(result) << shift);
 }
 
+void set_record_result(CpuState& state, std::uint32_t value)
+{
+    set_compare_result(state, 0, std::bit_cast<std::int32_t>(value), 0);
+}
+
+[[nodiscard]] std::uint32_t rotate_mask(std::uint8_t begin, std::uint8_t end) noexcept
+{
+    std::uint32_t mask = 0;
+    for (std::uint8_t bit = 0; bit < 32; ++bit)
+    {
+        const bool selected = begin <= end
+            ? bit >= begin && bit <= end
+            : bit >= begin || bit <= end;
+        if (selected)
+        {
+            // PowerPC numbers mask bits from the most-significant end.
+            mask |= 1U << (31U - bit);
+        }
+    }
+    return mask;
+}
+
 [[nodiscard]] bool read_cr_bit(const CpuState& state, std::uint8_t bit) noexcept
 {
     return ((state.cr >> (31U - bit)) & 1U) != 0;
@@ -117,11 +139,75 @@ StepResult EspressoCore::step()
         break;
     }
 
+    case Opcode::add:
+    {
+        const std::uint32_t result =
+            state.gpr[instruction.base] + state.gpr[instruction.source];
+        state.gpr[instruction.destination] = result;
+        if (instruction.record)
+        {
+            set_record_result(state, result);
+        }
+        break;
+    }
+
+    case Opcode::subtract_from:
+    {
+        const std::uint32_t result =
+            state.gpr[instruction.source] - state.gpr[instruction.base];
+        state.gpr[instruction.destination] = result;
+        if (instruction.record)
+        {
+            set_record_result(state, result);
+        }
+        break;
+    }
+
     case Opcode::ori:
         state.gpr[instruction.destination] =
             state.gpr[instruction.source] |
             static_cast<std::uint32_t>(instruction.immediate);
         break;
+
+    case Opcode::bitwise_or:
+    case Opcode::bitwise_and:
+    case Opcode::bitwise_xor:
+    {
+        const std::uint32_t lhs = state.gpr[instruction.source];
+        const std::uint32_t rhs = state.gpr[instruction.base];
+        const std::uint32_t result = instruction.opcode == Opcode::bitwise_or
+            ? lhs | rhs
+            : instruction.opcode == Opcode::bitwise_and ? lhs & rhs : lhs ^ rhs;
+        state.gpr[instruction.destination] = result;
+        if (instruction.record)
+        {
+            set_record_result(state, result);
+        }
+        break;
+    }
+
+    case Opcode::and_immediate_record:
+    {
+        const std::uint32_t result = state.gpr[instruction.source] &
+            static_cast<std::uint32_t>(instruction.immediate);
+        state.gpr[instruction.destination] = result;
+        set_record_result(state, result);
+        break;
+    }
+
+    case Opcode::rotate_left_word_and_mask:
+    {
+        const std::uint32_t rotated = std::rotl(
+            state.gpr[instruction.source], static_cast<int>(instruction.shift));
+        const std::uint32_t result =
+            rotated & rotate_mask(instruction.mask_begin, instruction.mask_end);
+        state.gpr[instruction.destination] = result;
+        if (instruction.record)
+        {
+            set_record_result(state, result);
+        }
+        break;
+    }
 
     case Opcode::branch:
         if (instruction.link)
