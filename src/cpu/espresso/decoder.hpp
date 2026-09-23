@@ -12,6 +12,9 @@ enum class Opcode
     addis,
     ori,
     branch,
+    compare_signed_immediate,
+    compare_signed_register,
+    conditional_branch,
 };
 
 struct DecodedInstruction
@@ -23,6 +26,9 @@ struct DecodedInstruction
     std::uint8_t destination{};
     std::uint8_t source{};
     std::uint8_t base{};
+    std::uint8_t cr_field{};
+    std::uint8_t branch_options{};
+    std::uint8_t condition_bit{};
 
     // Signed for addi/addis and branch displacement; non-negative for ori.
     std::int32_t immediate{};

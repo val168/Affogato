@@ -2,8 +2,75 @@
 
 #include "cpu/espresso/decoder.hpp"
 
+#include <bit>
+#include <cstdint>
+
 namespace affogato::cpu::espresso
 {
+namespace
+{
+
+constexpr std::uint32_t xer_summary_overflow_mask = 0x80000000U;
+constexpr std::uint8_t cr_less_than = 0x8U;
+constexpr std::uint8_t cr_greater_than = 0x4U;
+constexpr std::uint8_t cr_equal = 0x2U;
+
+void set_compare_result(CpuState& state, std::uint8_t field, std::int32_t lhs, std::int32_t rhs)
+{
+    std::uint8_t result = 0;
+
+    if (lhs < rhs)
+    {
+        result |= cr_less_than;
+    }
+    else if (lhs > rhs)
+    {
+        result |= cr_greater_than;
+    }
+    else
+    {
+        result |= cr_equal;
+    }
+
+    if ((state.xer & xer_summary_overflow_mask) != 0)
+    {
+        result |= 1U;
+    }
+
+    const unsigned shift = (7U - field) * 4U;
+    const std::uint32_t mask = 0xFU << shift;
+    state.cr = (state.cr & ~mask) | (static_cast<std::uint32_t>(result) << shift);
+}
+
+[[nodiscard]] bool read_cr_bit(const CpuState& state, std::uint8_t bit) noexcept
+{
+    return ((state.cr >> (31U - bit)) & 1U) != 0;
+}
+
+[[nodiscard]] bool conditional_branch_taken(
+    CpuState& state,
+    std::uint8_t branch_options,
+    std::uint8_t condition_bit) noexcept
+{
+    const bool ignore_condition = (branch_options & 0x10U) != 0;
+    const bool condition_sense = (branch_options & 0x08U) != 0;
+    const bool ignore_count = (branch_options & 0x04U) != 0;
+    const bool count_sense = (branch_options & 0x02U) != 0;
+
+    const bool condition_ok =
+        ignore_condition || (read_cr_bit(state, condition_bit) == condition_sense);
+
+    bool count_ok = true;
+    if (!ignore_count)
+    {
+        --state.ctr;
+        count_ok = ((state.ctr != 0) != count_sense);
+    }
+
+    return condition_ok && count_ok;
+}
+
+}
 
 StepResult EspressoCore::step()
 {
@@ -59,6 +126,39 @@ StepResult EspressoCore::step()
         else
         {
             next_cia = cia + static_cast<std::uint32_t>(instruction.immediate);
+        }
+        break;
+
+    case Opcode::compare_signed_immediate:
+        set_compare_result(
+            state,
+            instruction.cr_field,
+            std::bit_cast<std::int32_t>(state.gpr[instruction.base]),
+            instruction.immediate);
+        break;
+
+    case Opcode::compare_signed_register:
+        set_compare_result(
+            state,
+            instruction.cr_field,
+            std::bit_cast<std::int32_t>(state.gpr[instruction.base]),
+            std::bit_cast<std::int32_t>(state.gpr[instruction.source]));
+        break;
+
+    case Opcode::conditional_branch:
+        if (instruction.link)
+        {
+            state.lr = fallthrough;
+        }
+
+        if (conditional_branch_taken(
+                state,
+                instruction.branch_options,
+                instruction.condition_bit))
+        {
+            next_cia = instruction.absolute
+                ? static_cast<std::uint32_t>(instruction.immediate)
+                : cia + static_cast<std::uint32_t>(instruction.immediate);
         }
         break;
 

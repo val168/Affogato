@@ -61,6 +61,35 @@ DecodedInstruction decode(std::uint32_t raw) noexcept
         instruction.link = (raw & 0x1U) != 0;
         break;
 
+    case 11: // cmpwi (L=0)
+        if ((raw & (1U << 22U)) == 0)
+        {
+            instruction.opcode = Opcode::compare_signed_immediate;
+            instruction.cr_field = static_cast<std::uint8_t>(field(raw, 23, 0x7U));
+            instruction.base = static_cast<std::uint8_t>(field(raw, 16, 0x1FU));
+            instruction.immediate = sign_extend(raw, 16);
+        }
+        break;
+
+    case 16: // bc / bcl / bca / bcla
+        instruction.opcode = Opcode::conditional_branch;
+        instruction.branch_options = static_cast<std::uint8_t>(field(raw, 21, 0x1FU));
+        instruction.condition_bit = static_cast<std::uint8_t>(field(raw, 16, 0x1FU));
+        instruction.immediate = sign_extend(raw & 0xFFFCU, 16);
+        instruction.absolute = (raw & 0x2U) != 0;
+        instruction.link = (raw & 0x1U) != 0;
+        break;
+
+    case 31: // cmpw (cmp with L=0)
+        if (field(raw, 1, 0x3FFU) == 0 && (raw & (1U << 22U)) == 0)
+        {
+            instruction.opcode = Opcode::compare_signed_register;
+            instruction.cr_field = static_cast<std::uint8_t>(field(raw, 23, 0x7U));
+            instruction.base = static_cast<std::uint8_t>(field(raw, 16, 0x1FU));
+            instruction.source = static_cast<std::uint8_t>(field(raw, 11, 0x1FU));
+        }
+        break;
+
     default:
         break;
     }
