@@ -70,6 +70,16 @@ void set_compare_result(CpuState& state, std::uint8_t field, std::int32_t lhs, s
     return condition_ok && count_ok;
 }
 
+[[nodiscard]] std::uint32_t effective_address(
+    const CpuState& state,
+    std::uint8_t base_register,
+    std::int32_t displacement) noexcept
+{
+    const std::uint32_t base =
+        base_register == 0 ? 0U : state.gpr[base_register];
+    return base + static_cast<std::uint32_t>(displacement);
+}
+
 }
 
 StepResult EspressoCore::step()
@@ -160,6 +170,39 @@ StepResult EspressoCore::step()
                 ? static_cast<std::uint32_t>(instruction.immediate)
                 : cia + static_cast<std::uint32_t>(instruction.immediate);
         }
+        break;
+
+    case Opcode::load_word_zero:
+        state.gpr[instruction.destination] =
+            memory.read32_be(effective_address(state, instruction.base, instruction.immediate));
+        break;
+
+    case Opcode::store_word:
+        memory.write32_be(
+            effective_address(state, instruction.base, instruction.immediate),
+            state.gpr[instruction.destination]);
+        break;
+
+    case Opcode::load_byte_zero:
+        state.gpr[instruction.destination] =
+            memory.read8(effective_address(state, instruction.base, instruction.immediate));
+        break;
+
+    case Opcode::store_byte:
+        memory.write8(
+            effective_address(state, instruction.base, instruction.immediate),
+            static_cast<std::uint8_t>(state.gpr[instruction.destination]));
+        break;
+
+    case Opcode::load_halfword_zero:
+        state.gpr[instruction.destination] =
+            memory.read16_be(effective_address(state, instruction.base, instruction.immediate));
+        break;
+
+    case Opcode::store_halfword:
+        memory.write16_be(
+            effective_address(state, instruction.base, instruction.immediate),
+            static_cast<std::uint16_t>(state.gpr[instruction.destination]));
         break;
 
     case Opcode::unsupported:

@@ -15,6 +15,12 @@ enum class Opcode
     compare_signed_immediate,
     compare_signed_register,
     conditional_branch,
+    load_word_zero,
+    store_word,
+    load_byte_zero,
+    store_byte,
+    load_halfword_zero,
+    store_halfword,
 };
 
 struct DecodedInstruction

@@ -31,6 +31,14 @@ public:
         bytes_[checked_offset(address, 1)] = value;
     }
 
+    [[nodiscard]] std::uint16_t read16_be(std::uint32_t address) const
+    {
+        const std::size_t offset = checked_offset(address, sizeof(std::uint16_t));
+
+        return (static_cast<std::uint16_t>(bytes_[offset]) << 8U) |
+               static_cast<std::uint16_t>(bytes_[offset + 1]);
+    }
+
     [[nodiscard]] std::uint32_t read32_be(std::uint32_t address) const
     {
         const std::size_t offset = checked_offset(address, sizeof(std::uint32_t));
@@ -39,6 +47,14 @@ public:
                (static_cast<std::uint32_t>(bytes_[offset + 1]) << 16U) |
                (static_cast<std::uint32_t>(bytes_[offset + 2]) << 8U) |
                static_cast<std::uint32_t>(bytes_[offset + 3]);
+    }
+
+    void write16_be(std::uint32_t address, std::uint16_t value)
+    {
+        const std::size_t offset = checked_offset(address, sizeof(std::uint16_t));
+
+        bytes_[offset] = static_cast<std::uint8_t>(value >> 8U);
+        bytes_[offset + 1] = static_cast<std::uint8_t>(value);
     }
 
     void write32_be(std::uint32_t address, std::uint32_t value)

@@ -90,6 +90,48 @@ DecodedInstruction decode(std::uint32_t raw) noexcept
         }
         break;
 
+    case 32: // lwz
+        instruction.opcode = Opcode::load_word_zero;
+        instruction.destination = static_cast<std::uint8_t>(field(raw, 21, 0x1FU));
+        instruction.base = static_cast<std::uint8_t>(field(raw, 16, 0x1FU));
+        instruction.immediate = sign_extend(raw, 16);
+        break;
+
+    case 34: // lbz
+        instruction.opcode = Opcode::load_byte_zero;
+        instruction.destination = static_cast<std::uint8_t>(field(raw, 21, 0x1FU));
+        instruction.base = static_cast<std::uint8_t>(field(raw, 16, 0x1FU));
+        instruction.immediate = sign_extend(raw, 16);
+        break;
+
+    case 36: // stw
+        instruction.opcode = Opcode::store_word;
+        instruction.destination = static_cast<std::uint8_t>(field(raw, 21, 0x1FU));
+        instruction.base = static_cast<std::uint8_t>(field(raw, 16, 0x1FU));
+        instruction.immediate = sign_extend(raw, 16);
+        break;
+
+    case 38: // stb
+        instruction.opcode = Opcode::store_byte;
+        instruction.destination = static_cast<std::uint8_t>(field(raw, 21, 0x1FU));
+        instruction.base = static_cast<std::uint8_t>(field(raw, 16, 0x1FU));
+        instruction.immediate = sign_extend(raw, 16);
+        break;
+
+    case 40: // lhz
+        instruction.opcode = Opcode::load_halfword_zero;
+        instruction.destination = static_cast<std::uint8_t>(field(raw, 21, 0x1FU));
+        instruction.base = static_cast<std::uint8_t>(field(raw, 16, 0x1FU));
+        instruction.immediate = sign_extend(raw, 16);
+        break;
+
+    case 44: // sth
+        instruction.opcode = Opcode::store_halfword;
+        instruction.destination = static_cast<std::uint8_t>(field(raw, 21, 0x1FU));
+        instruction.base = static_cast<std::uint8_t>(field(raw, 16, 0x1FU));
+        instruction.immediate = sign_extend(raw, 16);
+        break;
+
     default:
         break;
     }

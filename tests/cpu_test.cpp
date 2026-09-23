@@ -55,6 +55,34 @@ void decoder_tests()
     assert(bc.condition_bit == 2);
     assert(bc.immediate == 12);
 
+    const DecodedInstruction lwz = decode(0x8041FFFCU); // lwz r2, -4(r1)
+    assert(lwz.opcode == Opcode::load_word_zero);
+    assert(lwz.destination == 2);
+    assert(lwz.base == 1);
+    assert(lwz.immediate == -4);
+
+    const DecodedInstruction stw = decode(0x90610000U); // stw r3, 0(r1)
+    assert(stw.opcode == Opcode::store_word);
+    assert(stw.destination == 3);
+
+    const DecodedInstruction lbz = decode(0x88810002U); // lbz r4, 2(r1)
+    assert(lbz.opcode == Opcode::load_byte_zero);
+    assert(lbz.destination == 4);
+    assert(lbz.base == 1);
+    assert(lbz.immediate == 2);
+
+    const DecodedInstruction stb = decode(0x98610004U); // stb r3, 4(r1)
+    assert(stb.opcode == Opcode::store_byte);
+    assert(stb.destination == 3);
+
+    const DecodedInstruction lhz = decode(0xA0A10002U); // lhz r5, 2(r1)
+    assert(lhz.opcode == Opcode::load_halfword_zero);
+    assert(lhz.destination == 5);
+
+    const DecodedInstruction sth = decode(0xB0610006U); // sth r3, 6(r1)
+    assert(sth.opcode == Opcode::store_halfword);
+    assert(sth.destination == 3);
+
     assert(decode(0U).opcode == Opcode::unsupported);
 }
 
@@ -69,6 +97,11 @@ void guest_memory_tests()
     assert(memory.read8(2) == 0x56);
     assert(memory.read8(3) == 0x78);
     assert(memory.read32_be(0) == 0x12345678U);
+
+    memory.write16_be(4, 0xABCDU);
+    assert(memory.read8(4) == 0xAB);
+    assert(memory.read8(5) == 0xCD);
+    assert(memory.read16_be(4) == 0xABCDU);
 }
 
 void interpreter_tests()
@@ -140,6 +173,58 @@ void compare_and_conditional_branch_tests()
     assert(count_core.state.cia == 4);
 }
 
+void load_store_tests()
+{
+    EspressoCore core(0x100);
+
+    // Set up a base pointer and a word value, then exercise each requested
+    // load/store width against the same big-endian guest memory.
+    core.memory.write32_be(0x00, 0x38200080U); // addi r1, r0, 0x80
+    core.memory.write32_be(0x04, 0x38601234U); // addi r3, r0, 0x1234
+    core.memory.write32_be(0x08, 0x90610000U); // stw r3, 0(r1)
+    core.memory.write32_be(0x0C, 0x88810002U); // lbz r4, 2(r1)
+    core.memory.write32_be(0x10, 0xA0A10002U); // lhz r5, 2(r1)
+    core.memory.write32_be(0x14, 0x80C10000U); // lwz r6, 0(r1)
+    core.memory.write32_be(0x18, 0x98610004U); // stb r3, 4(r1)
+    core.memory.write32_be(0x1C, 0xB0610006U); // sth r3, 6(r1)
+    core.memory.write32_be(0x20, 0x88E10004U); // lbz r7, 4(r1)
+    core.memory.write32_be(0x24, 0xA1010006U); // lhz r8, 6(r1)
+
+    const RunResult result = core.run(16);
+
+    assert(result.reason == StopReason::unsupported_instruction);
+    assert(result.steps == 10);
+    assert(core.state.gpr[1] == 0x80U);
+    assert(core.state.gpr[3] == 0x1234U);
+    assert(core.memory.read8(0x82) == 0x12U);
+    assert(core.state.gpr[4] == 0x12U);
+    assert(core.state.gpr[5] == 0x1234U);
+    assert(core.state.gpr[6] == 0x1234U);
+    assert(core.state.gpr[7] == 0x34U);
+    assert(core.state.gpr[8] == 0x1234U);
+    assert(core.memory.read32_be(0x80) == 0x00001234U);
+    assert(core.memory.read8(0x84) == 0x34U);
+    assert(core.memory.read8(0x86) == 0x12U);
+    assert(core.memory.read8(0x87) == 0x34U);
+
+    // D-form displacement is signed, and rA=0 supplies a zero base even if
+    // the stored contents of GPR0 are nonzero.
+    EspressoCore address_core(0x100);
+    address_core.state.gpr[1] = 0x54U;
+    address_core.memory.write32_be(0x00, 0x8041FFFCU); // lwz r2, -4(r1)
+    address_core.memory.write32_be(0x50, 0x89ABCDEFU);
+    assert(address_core.step() == StepResult::executed);
+    assert(address_core.state.gpr[2] == 0x89ABCDEFU);
+
+    EspressoCore zero_base_core(0x100);
+    zero_base_core.state.gpr[0] = 0x20U;
+    zero_base_core.memory.write32_be(0x00, 0x81200080U); // lwz r9, 0x80(r0)
+    zero_base_core.memory.write32_be(0x80, 0xCAFEBABEU);
+    zero_base_core.memory.write32_be(0xA0, 0xDEADBEEFU);
+    assert(zero_base_core.step() == StepResult::executed);
+    assert(zero_base_core.state.gpr[9] == 0xCAFEBABEU);
+}
+
 }
 
 int main()
@@ -149,5 +234,6 @@ int main()
     guest_memory_tests();
     interpreter_tests();
     compare_and_conditional_branch_tests();
+    load_store_tests();
     return 0;
 }
