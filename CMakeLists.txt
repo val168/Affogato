@@ -60,12 +60,46 @@ set_target_properties(affogato PROPERTIES
     CXX_EXTENSIONS NO
 )
 
+# The desktop frontend is deliberately a separate executable: it talks to the
+# public Emulator session API and does not add UI dependencies to the core.
+set(SDL_SHARED OFF CACHE BOOL "" FORCE)
+set(SDL_STATIC ON CACHE BOOL "" FORCE)
+set(SDL_TESTS OFF CACHE BOOL "" FORCE)
+set(SDL_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(SDL_INSTALL OFF CACHE BOOL "" FORCE)
+add_subdirectory(third_party/SDL EXCLUDE_FROM_ALL)
+
+add_executable(affogato_frontend
+    src/frontend/main.cpp
+    third_party/imgui/imgui.cpp
+    third_party/imgui/imgui_draw.cpp
+    third_party/imgui/imgui_tables.cpp
+    third_party/imgui/imgui_widgets.cpp
+    third_party/imgui/backends/imgui_impl_sdl3.cpp
+    third_party/imgui/backends/imgui_impl_sdlrenderer3.cpp
+)
+target_include_directories(affogato_frontend PRIVATE
+    third_party/imgui
+    third_party/imgui/backends
+)
+target_link_libraries(affogato_frontend PRIVATE affogato_cpu SDL3::SDL3-static)
+set_target_properties(affogato_frontend PROPERTIES
+    OUTPUT_NAME "AffogatoFrontend"
+    CXX_STANDARD 23
+    CXX_STANDARD_REQUIRED YES
+    CXX_EXTENSIONS NO
+)
+
 if(MSVC)
     target_compile_options(affogato_cpu PRIVATE
         /W4
         /permissive-
     )
     target_compile_options(affogato PRIVATE
+        /W4
+        /permissive-
+    )
+    target_compile_options(affogato_frontend PRIVATE
         /W4
         /permissive-
     )
@@ -76,6 +110,11 @@ else()
         -Wpedantic
     )
     target_compile_options(affogato PRIVATE
+        -Wall
+        -Wextra
+        -Wpedantic
+    )
+    target_compile_options(affogato_frontend PRIVATE
         -Wall
         -Wextra
         -Wpedantic
