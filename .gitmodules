@@ -2,3 +2,11 @@
 	path = third_party/zlib
 	url = https://github.com/madler/zlib.git
 	branch = v1.3.2
+[submodule "third_party/SDL"]
+	path = third_party/SDL
+	url = https://github.com/libsdl-org/SDL.git
+	branch = release-3.4.16
+[submodule "third_party/imguim"]
+	path = third_party/imgui
+	url = https://github.com/ocornut/imgui.git
+	branch = v1.92.9b
