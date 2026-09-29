@@ -881,6 +881,24 @@ void rpx_loader_tests()
     assert(session_run.image.entry_point == entry_point);
     assert(session_run.execution.reason == StopReason::instruction_limit);
     assert(session_run.gpr3 == 5U);
+    constexpr std::uint32_t thread_tag_offset = 0x320U;
+    constexpr std::uint32_t thread_state_offset = 0x324U;
+    constexpr std::uint32_t thread_attributes_offset = 0x325U;
+    constexpr std::uint32_t thread_id_offset = 0x326U;
+    constexpr std::uint32_t thread_stack_start_offset = 0x394U;
+    constexpr std::uint32_t thread_stack_end_offset = 0x398U;
+    constexpr std::uint32_t thread_type_offset = 0x5BCU;
+    const std::uint32_t thread_address = session.core().current_thread_address;
+    assert(thread_address != 0);
+    assert(session.core().memory.read32_be(thread_address + thread_tag_offset) == 0x74487244U);
+    assert(session.core().memory.read8(thread_address + thread_state_offset) == 2U);
+    assert(session.core().memory.read8(thread_address + thread_attributes_offset) == 2U);
+    assert(session.core().memory.read16_be(thread_address + thread_id_offset) != 0);
+    assert(session.core().memory.read32_be(thread_address + thread_stack_start_offset) ==
+           session.core().state.gpr[1]);
+    assert(session.core().memory.read32_be(thread_address + thread_stack_end_offset) ==
+           session.core().state.gpr[1] - affogato::Emulator::guest_stack_size);
+    assert(session.core().memory.read32_be(thread_address + thread_type_offset) == 2U);
 
     // Allocated sections outside the flat backing vector use GuestMemory's
     // sparse map without changing their guest-visible addresses or bytes.
@@ -914,7 +932,8 @@ void rpx_loader_tests()
     affogato::Emulator sparse_session(0x20000U);
     static_cast<void>(sparse_session.load_rpx(sparse_file));
     assert(sparse_session.core().state.gpr[1] == 0x1F000U);
-    assert(sparse_session.core().guest_heap_cursor == 0U);
+    assert(sparse_session.core().current_thread_address == 0x1000U);
+    assert(sparse_session.core().guest_heap_cursor > 0x1000U);
 
     // A loaded RPX section may not overwrite another section, whether the
     // address belongs to flat memory or a sparse mapping.
@@ -1017,6 +1036,69 @@ void hle_dispatch_tests()
     assert(core.step() == StepResult::unimplemented_hle_call);
     assert(core.state.cia == missing_import);
     assert(core.hle.last_unimplemented_call() == "coreinit::OSFatal");
+
+    EspressoCore thread_core(0x2000U);
+    register_coreinit_hle(thread_core.hle);
+    thread_core.configure_guest_heap(0x100U, 0x1000U);
+    constexpr std::uint32_t stack_start = 0x1800U;
+    constexpr std::uint32_t stack_end = 0x800U;
+    const std::uint32_t thread_address = initialize_default_guest_thread(
+        thread_core, stack_start, stack_end);
+    assert(thread_address == 0x100U);
+
+    const std::uint32_t get_current_thread =
+        thread_core.hle.bind_import("coreinit", "OSGetCurrentThread");
+    for (std::uint32_t call = 0; call < 2; ++call)
+    {
+        thread_core.state.cia = get_current_thread;
+        thread_core.state.lr = 0x60U + call * 4U;
+        assert(thread_core.step() == StepResult::executed);
+        assert(thread_core.state.gpr[3] == thread_address);
+        assert(thread_core.state.cia == thread_core.state.lr);
+    }
+    assert(thread_core.memory.read32_be(thread_address + 0x320U) == 0x74487244U);
+    assert(thread_core.memory.read8(thread_address + 0x324U) == 2U);
+    assert(thread_core.memory.read16_be(thread_address + 0x326U) == 1U);
+
+    const std::uint32_t get_specific =
+        thread_core.hle.bind_import("coreinit", "OSGetThreadSpecific");
+    const std::uint32_t set_specific =
+        thread_core.hle.bind_import("coreinit", "OSSetThreadSpecific");
+    constexpr std::uint32_t specific_id = 5U;
+    const std::uint32_t specific_slot = thread_address + 0x57CU + specific_id * 4U;
+    thread_core.state.cia = set_specific;
+    thread_core.state.lr = 0x68U;
+    thread_core.state.gpr[3] = specific_id;
+    thread_core.state.gpr[4] = 0xA1B2C3D4U;
+    assert(thread_core.step() == StepResult::executed);
+    assert(thread_core.memory.read32_be(specific_slot) == 0xA1B2C3D4U);
+
+    thread_core.state.cia = get_specific;
+    thread_core.state.lr = 0x6CU;
+    thread_core.state.gpr[3] = specific_id;
+    assert(thread_core.step() == StepResult::executed);
+    assert(thread_core.state.gpr[3] == 0xA1B2C3D4U);
+
+    // Direct guest writes and HLE reads share the same guest-visible slots.
+    thread_core.memory.write32_be(specific_slot, 0x55667788U);
+    thread_core.state.cia = get_specific;
+    thread_core.state.lr = 0x70U;
+    thread_core.state.gpr[3] = specific_id;
+    assert(thread_core.step() == StepResult::executed);
+    assert(thread_core.state.gpr[3] == 0x55667788U);
+
+    thread_core.state.cia = get_specific;
+    thread_core.state.lr = 0x74U;
+    thread_core.state.gpr[3] = 16U;
+    assert(thread_core.step() == StepResult::executed);
+    assert(thread_core.state.gpr[3] == 0U);
+    const std::uint32_t thread_type_before = thread_core.memory.read32_be(thread_address + 0x5BCU);
+    thread_core.state.cia = set_specific;
+    thread_core.state.lr = 0x78U;
+    thread_core.state.gpr[3] = 16U;
+    thread_core.state.gpr[4] = 0xFFFFFFFFU;
+    assert(thread_core.step() == StepResult::executed);
+    assert(thread_core.memory.read32_be(thread_address + 0x5BCU) == thread_type_before);
 }
 
 void compare_and_conditional_branch_tests()

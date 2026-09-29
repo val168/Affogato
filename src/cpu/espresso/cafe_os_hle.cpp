@@ -3,11 +3,68 @@
 #include "cpu/espresso/hle_dispatcher.hpp"
 #include "cpu/espresso/interpreter.hpp"
 
+#include <stdexcept>
+
 namespace affogato::cpu::espresso
 {
 
+std::uint32_t initialize_default_guest_thread(
+    EspressoCore& core,
+    std::uint32_t stack_start,
+    std::uint32_t stack_end)
+{
+    constexpr std::uint32_t thread_size = 0x6A0U;
+    constexpr std::uint32_t thread_tag_offset = 0x320U;
+    constexpr std::uint32_t thread_state_offset = 0x324U;
+    constexpr std::uint32_t thread_attributes_offset = 0x325U;
+    constexpr std::uint32_t thread_id_offset = 0x326U;
+    constexpr std::uint32_t thread_stack_start_offset = 0x394U;
+    constexpr std::uint32_t thread_stack_end_offset = 0x398U;
+    constexpr std::uint32_t thread_type_offset = 0x5BCU;
+    constexpr std::uint32_t thread_tag = 0x74487244U;
+    constexpr std::uint8_t thread_state_running = 1U << 1U;
+    constexpr std::uint8_t thread_affinity_cpu1 = 1U << 1U;
+    constexpr std::uint16_t default_thread_id = 1U;
+    constexpr std::uint32_t thread_type_application = 2U;
+
+    if (core.current_thread_address != 0)
+    {
+        throw std::logic_error("the default guest thread is already initialized");
+    }
+    if (stack_end >= stack_start)
+    {
+        throw std::invalid_argument("default guest thread stack bounds are invalid");
+    }
+
+    const std::uint32_t address = core.allocate_guest_memory(thread_size, 8U);
+    if (address == 0)
+    {
+        throw std::runtime_error(
+            "guest heap cannot fit the default Cafe OSThread object (cursor " +
+            std::to_string(core.guest_heap_cursor) + ", limit " +
+            std::to_string(core.guest_heap_limit) + ")");
+    }
+
+    core.memory.zero_fill(address, thread_size);
+    core.memory.write32_be(address + thread_tag_offset, thread_tag);
+    core.memory.write8(address + thread_state_offset, thread_state_running);
+    core.memory.write8(address + thread_attributes_offset, thread_affinity_cpu1);
+    core.memory.write16_be(address + thread_id_offset, default_thread_id);
+    core.memory.write32_be(address + thread_stack_start_offset, stack_start);
+    core.memory.write32_be(address + thread_stack_end_offset, stack_end);
+    core.memory.write32_be(address + thread_type_offset, thread_type_application);
+    core.current_thread_address = address;
+    return address;
+}
+
 void register_coreinit_hle(HleDispatcher& dispatcher)
 {
+    dispatcher.register_function(
+        "coreinit",
+        "OSGetCurrentThread",
+        [](EspressoCore& core) {
+            core.state.gpr[3] = core.current_thread_address;
+        });
     dispatcher.register_function(
         "coreinit",
         "FSAInit",
@@ -90,14 +147,30 @@ void register_coreinit_hle(HleDispatcher& dispatcher)
         "coreinit",
         "OSGetThreadSpecific",
         [](EspressoCore& core) {
-            const auto value = core.thread_specific.find(core.state.gpr[3]);
-            core.state.gpr[3] = value == core.thread_specific.end() ? 0U : value->second;
+            constexpr std::uint32_t specific_slot_count = 16U;
+            constexpr std::uint32_t specific_offset = 0x57CU;
+            const std::uint32_t id = core.state.gpr[3];
+            if (core.current_thread_address == 0 || id >= specific_slot_count)
+            {
+                core.state.gpr[3] = 0;
+                return;
+            }
+            core.state.gpr[3] = core.memory.read32_be(
+                core.current_thread_address + specific_offset + id * sizeof(std::uint32_t));
         });
     dispatcher.register_function(
         "coreinit",
         "OSSetThreadSpecific",
         [](EspressoCore& core) {
-            core.thread_specific[core.state.gpr[3]] = core.state.gpr[4];
+            constexpr std::uint32_t specific_slot_count = 16U;
+            constexpr std::uint32_t specific_offset = 0x57CU;
+            const std::uint32_t id = core.state.gpr[3];
+            if (core.current_thread_address != 0 && id < specific_slot_count)
+            {
+                core.memory.write32_be(
+                    core.current_thread_address + specific_offset + id * sizeof(std::uint32_t),
+                    core.state.gpr[4]);
+            }
         });
     dispatcher.register_function(
         "coreinit",

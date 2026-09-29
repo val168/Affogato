@@ -8,6 +8,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <zlib.h>
@@ -837,7 +838,6 @@ RpxLoadResult load_rpx32_powerpc(EspressoCore& core, std::span<const std::uint8_
     std::vector<LoadedSection> trampolines;
     apply_relocations(core, file, sections, loaded, file_info, trampolines);
     std::uint64_t highest_flat_guest_address = 0;
-    bool has_flat_sections = false;
     for (std::size_t i = 0; i < loaded.size(); ++i)
     {
         if (!loaded[i].contents.empty())
@@ -855,7 +855,6 @@ RpxLoadResult load_rpx32_powerpc(EspressoCore& core, std::span<const std::uint8_
             core.memory.write_bytes(loaded[i].address, loaded[i].contents);
             if (loaded[i].address < core.memory.size())
             {
-                has_flat_sections = true;
                 highest_flat_guest_address = std::max(
                     highest_flat_guest_address,
                     std::min<std::uint64_t>(section_end, core.memory.size()));
@@ -895,21 +894,99 @@ RpxLoadResult load_rpx32_powerpc(EspressoCore& core, std::span<const std::uint8_
         }
         if (trampoline.address < core.memory.size())
         {
-            has_flat_sections = true;
             highest_flat_guest_address = std::max(
                 highest_flat_guest_address,
                 std::min<std::uint64_t>(section_end, core.memory.size()));
         }
     }
-    const std::uint64_t heap_begin =
-        (highest_flat_guest_address + 0xFFFU) & ~std::uint64_t{0xFFFU};
     const std::uint64_t heap_limit = core.memory.size() > 0x10000U
         ? core.memory.size() - 0x10000U
         : 0U;
-    if (has_flat_sections && heap_begin < heap_limit && heap_limit <= UINT32_MAX)
+
+    if (heap_limit > 0x1000U && heap_limit <= UINT32_MAX)
     {
-        core.configure_guest_heap(
-            static_cast<std::uint32_t>(heap_begin), static_cast<std::uint32_t>(heap_limit));
+        using AddressRange = std::pair<std::uint64_t, std::uint64_t>;
+        std::vector<AddressRange> occupied_ranges;
+        const auto add_occupied_range = [&](std::uint64_t address, std::uint64_t size) {
+            const std::uint64_t end = address + size;
+            const std::uint64_t begin_in_heap = std::max<std::uint64_t>(address, 0x1000U);
+            const std::uint64_t end_in_heap = std::min(end, heap_limit);
+            if (begin_in_heap < end_in_heap)
+            {
+                occupied_ranges.emplace_back(begin_in_heap, end_in_heap);
+            }
+        };
+        for (const LoadedSection& section : loaded)
+        {
+            if (!section.contents.empty())
+            {
+                add_occupied_range(section.address, section.contents.size());
+            }
+        }
+        for (const LoadedSection& trampoline : trampolines)
+        {
+            add_occupied_range(trampoline.address, trampoline.contents.size());
+        }
+        add_occupied_range(
+            HleDispatcher::first_import_address,
+            HleDispatcher::import_address_limit - HleDispatcher::first_import_address);
+        std::sort(occupied_ranges.begin(), occupied_ranges.end());
+
+        std::uint64_t selected_begin = 0;
+        std::uint64_t selected_end = 0;
+        const auto consider_gap = [&](std::uint64_t begin, std::uint64_t end) {
+            begin = (begin + 0xFU) & ~std::uint64_t{0xFU};
+            end &= ~std::uint64_t{0xFU};
+            if (end > begin && end - begin > selected_end - selected_begin)
+            {
+                selected_begin = begin;
+                selected_end = end;
+            }
+        };
+
+        // Preserve the existing placement after the image whenever that gap
+        // remains available; otherwise choose the largest free flat-memory gap.
+        const std::uint64_t preferred_begin = std::max<std::uint64_t>(
+            0x1000U, (highest_flat_guest_address + 0xFFFU) & ~std::uint64_t{0xFFFU});
+        std::uint64_t preferred_end = heap_limit;
+        bool preferred_is_free = preferred_begin < heap_limit;
+        if (preferred_is_free)
+        {
+            for (const AddressRange& range : occupied_ranges)
+            {
+                if (range.first <= preferred_begin && preferred_begin < range.second)
+                {
+                    preferred_is_free = false;
+                    break;
+                }
+                if (range.first > preferred_begin)
+                {
+                    preferred_end = std::min(preferred_end, range.first);
+                }
+            }
+        }
+        if (preferred_is_free)
+        {
+            consider_gap(preferred_begin, preferred_end);
+        }
+
+        if (selected_begin == 0)
+        {
+            std::uint64_t cursor = 0x1000U;
+            for (const AddressRange& range : occupied_ranges)
+            {
+                consider_gap(cursor, range.first);
+                cursor = std::max(cursor, range.second);
+            }
+            consider_gap(cursor, heap_limit);
+        }
+
+        if (selected_begin != 0)
+        {
+            core.configure_guest_heap(
+                static_cast<std::uint32_t>(selected_begin),
+                static_cast<std::uint32_t>(selected_end));
+        }
     }
     core.state.cia = entry_point;
     return {entry_point, loaded_count};

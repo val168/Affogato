@@ -20,14 +20,19 @@ cpu::espresso::RpxLoadResult Emulator::load_rpx(std::span<const std::uint8_t> fi
     {
         throw std::logic_error("this Emulator session already has an RPX loaded");
     }
-    if (core_.memory.size() <= 0x1000U)
+    if (core_.memory.size() <= guest_stack_size + guest_stack_top_reserve ||
+        core_.memory.size() > UINT32_MAX)
     {
-        throw std::invalid_argument("guest memory is too small to reserve an RPX stack");
+        throw std::invalid_argument("guest memory cannot safely reserve the RPX stack");
     }
 
     loaded_image_ = cpu::espresso::load_rpx32_powerpc(core_, file);
-    core_.state.gpr[1] = static_cast<std::uint32_t>(
-        (core_.memory.size() - 0x1000U) & ~std::size_t{0xFU});
+    const std::uint32_t stack_start = static_cast<std::uint32_t>(
+        (core_.memory.size() - guest_stack_top_reserve) & ~std::size_t{0xFU});
+    const std::uint32_t stack_end = stack_start - guest_stack_size;
+    core_.state.gpr[1] = stack_start;
+    static_cast<void>(cpu::espresso::initialize_default_guest_thread(
+        core_, stack_start, stack_end));
     has_loaded_image_ = true;
     return loaded_image_;
 }

@@ -21,6 +21,8 @@ class Emulator
 {
 public:
     static constexpr std::size_t default_guest_memory_size = 0x10100000U;
+    static constexpr std::uint32_t guest_stack_size = 0x1000U;
+    static constexpr std::uint32_t guest_stack_top_reserve = 0x1000U;
 
     explicit Emulator(std::size_t guest_memory_size = default_guest_memory_size);
 

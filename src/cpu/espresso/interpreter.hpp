@@ -6,7 +6,6 @@
 
 #include <cstddef>
 #include <string>
-#include <unordered_map>
 
 namespace affogato::cpu::espresso
 {
@@ -47,7 +46,7 @@ public:
     void reset() noexcept
     {
         state.reset();
-        thread_specific.clear();
+        current_thread_address = 0;
         guest_heap_cursor = 0;
         guest_heap_limit = 0;
     }
@@ -84,7 +83,7 @@ public:
     CpuState state{};
     GuestMemory memory;
     HleDispatcher hle;
-    std::unordered_map<std::uint32_t, std::uint32_t> thread_specific;
+    std::uint32_t current_thread_address{};
     std::uint32_t guest_heap_cursor{};
     std::uint32_t guest_heap_limit{};
 };
