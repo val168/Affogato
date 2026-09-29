@@ -73,6 +73,26 @@ public:
         return storage_from(address)[0];
     }
 
+    void read_bytes(std::uint32_t address, std::span<std::uint8_t> destination) const
+    {
+        if (destination.empty())
+        {
+            return;
+        }
+        validate_access(address, destination.size(), GuestMemoryAccess::read);
+        std::size_t copied = 0;
+        while (copied < destination.size())
+        {
+            const auto current = static_cast<std::uint32_t>(
+                static_cast<std::uint64_t>(address) + copied);
+            const auto source = storage_from(current);
+            const std::size_t count = std::min(source.size(), destination.size() - copied);
+            std::copy_n(source.begin(), count,
+                        destination.begin() + static_cast<std::ptrdiff_t>(copied));
+            copied += count;
+        }
+    }
+
     void write8(std::uint32_t address, std::uint8_t value)
     {
         validate_access(address, 1, GuestMemoryAccess::write);
@@ -93,6 +113,22 @@ public:
                         destination.begin());
             copied += count;
         }
+    }
+
+    // Guest ranges must not overlap, matching memcpy's contract. Both ranges
+    // are validated before the destination is modified.
+    void copy_bytes(std::uint32_t source, std::uint32_t destination, std::size_t length)
+    {
+        if (length == 0)
+        {
+            return;
+        }
+        validate_access(source, length, GuestMemoryAccess::read);
+        validate_access(destination, length, GuestMemoryAccess::write);
+
+        std::vector<std::uint8_t> temporary(length);
+        read_bytes(source, temporary);
+        write_bytes(destination, temporary);
     }
 
     void fill_bytes(std::uint32_t address, std::size_t length, std::uint8_t value)

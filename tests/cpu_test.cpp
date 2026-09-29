@@ -517,6 +517,9 @@ void guest_memory_tests()
     {
         assert(boundary_memory.read8(static_cast<std::uint32_t>(5 + i)) == block[i]);
     }
+    std::array<std::uint8_t, 6> boundary_read{};
+    boundary_memory.read_bytes(5U, boundary_read);
+    assert(boundary_read == block);
 
     assert(boundary_memory.read16_be(7) == 0x1213U);
     assert(boundary_memory.read32_be(6) == 0x11121314U);
@@ -1428,6 +1431,109 @@ void memset_hle_tests()
     assert(boundary_core.memory.read8(0x1FU) == 0xCCU);
 }
 
+void memcpy_hle_tests()
+{
+    EspressoCore core(0x20U);
+    register_coreinit_hle(core.hle);
+    core.memory.map_region(0x20U, 0x20U);
+    core.memory.fill_bytes(0U, 0x40U, 0xCCU);
+    const std::uint32_t memcpy_import = core.hle.bind_import("coreinit", "memcpy");
+    const auto invoke = [&](std::uint32_t destination, std::uint32_t source,
+                            std::uint32_t size, std::uint32_t return_address) {
+        core.state.cia = memcpy_import;
+        core.state.lr = return_address;
+        core.state.gpr[3] = destination;
+        core.state.gpr[4] = source;
+        core.state.gpr[5] = size;
+        assert(core.step() == StepResult::executed);
+        assert(core.state.cia == return_address);
+        assert(core.state.gpr[3] == destination);
+        assert(core.state.gpr[4] == source);
+        assert(core.state.gpr[5] == size);
+    };
+
+    // One-byte and unaligned multi-byte copies leave adjacent bytes alone.
+    core.memory.write8(1U, 0x5AU);
+    invoke(3U, 1U, 1U, 0x80U);
+    assert(core.memory.read8(2U) == 0xCCU);
+    assert(core.memory.read8(3U) == 0x5AU);
+    assert(core.memory.read8(4U) == 0xCCU);
+
+    const std::array<std::uint8_t, 5> unaligned_source{0x10U, 0x20U, 0x30U, 0x40U, 0x50U};
+    core.memory.write_bytes(7U, unaligned_source);
+    invoke(0x0DU, 7U, static_cast<std::uint32_t>(unaligned_source.size()), 0x84U);
+    std::array<std::uint8_t, 5> unaligned_result{};
+    core.memory.read_bytes(0x0DU, unaligned_result);
+    assert(unaligned_result == unaligned_source);
+    assert(core.memory.read8(0x0CU) == 0xCCU);
+    assert(core.memory.read8(0x12U) == 0xCCU);
+    std::array<std::uint8_t, 5> source_after_copy{};
+    core.memory.read_bytes(7U, source_after_copy);
+    assert(source_after_copy == unaligned_source);
+
+    // Source reads can span flat-to-sparse backing storage.
+    const std::array<std::uint8_t, 6> sparse_source{1U, 2U, 3U, 4U, 5U, 6U};
+    core.memory.write_bytes(0x1DU, sparse_source);
+    invoke(2U, 0x1DU, static_cast<std::uint32_t>(sparse_source.size()), 0x88U);
+    std::array<std::uint8_t, 6> sparse_source_result{};
+    core.memory.read_bytes(2U, sparse_source_result);
+    assert(sparse_source_result == sparse_source);
+    std::array<std::uint8_t, 6> sparse_source_unchanged{};
+    core.memory.read_bytes(0x1DU, sparse_source_unchanged);
+    assert(sparse_source_unchanged == sparse_source);
+
+    // Destination writes can independently span the flat-to-sparse boundary.
+    const std::array<std::uint8_t, 6> destination_source{0xA1U, 0xA2U, 0xA3U,
+                                                        0xA4U, 0xA5U, 0xA6U};
+    core.memory.write_bytes(0x13U, destination_source);
+    invoke(0x1DU, 0x13U, static_cast<std::uint32_t>(destination_source.size()), 0x8CU);
+    std::array<std::uint8_t, 6> cross_boundary_result{};
+    core.memory.read_bytes(0x1DU, cross_boundary_result);
+    assert(cross_boundary_result == destination_source);
+    assert(core.memory.read8(0x1CU) == 0xCCU);
+    assert(core.memory.read8(0x23U) == 0xCCU);
+    std::array<std::uint8_t, 6> destination_source_unchanged{};
+    core.memory.read_bytes(0x13U, destination_source_unchanged);
+    assert(destination_source_unchanged == destination_source);
+
+    // A zero-length call returns dst without touching either unmapped address.
+    invoke(0x40U, 0xFFFFFFFEU, 0U, 0x90U);
+
+    // Invalid source is diagnosed as a guest read fault and leaves dst intact.
+    core.state.cia = memcpy_import;
+    core.state.lr = 0x94U;
+    core.state.gpr[3] = 8U;
+    core.state.gpr[4] = 0x40U;
+    core.state.gpr[5] = 2U;
+    const std::array<std::uint8_t, 2> destination_before_source_fault{
+        core.memory.read8(8U), core.memory.read8(9U)};
+    const RunResult source_fault = core.run(1U);
+    assert(source_fault.reason == StopReason::memory_fault);
+    assert(source_fault.detail.find("read 2 byte(s)") != std::string::npos);
+    assert(source_fault.detail.find("0x00000040") != std::string::npos);
+    assert(core.memory.read8(8U) == destination_before_source_fault[0]);
+    assert(core.memory.read8(9U) == destination_before_source_fault[1]);
+    assert(core.state.gpr[3] == 8U);
+    assert(core.state.gpr[4] == 0x40U);
+    assert(core.state.gpr[5] == 2U);
+
+    // Invalid destination is validated before writes and is reported as write.
+    core.state.cia = memcpy_import;
+    core.state.lr = 0x98U;
+    core.state.gpr[3] = 0x40U;
+    core.state.gpr[4] = 0x13U;
+    core.state.gpr[5] = 2U;
+    const RunResult destination_fault = core.run(1U);
+    assert(destination_fault.reason == StopReason::memory_fault);
+    assert(destination_fault.detail.find("write 2 byte(s)") != std::string::npos);
+    assert(destination_fault.detail.find("0x00000040") != std::string::npos);
+    assert(core.memory.read8(0x13U) == destination_source[0]);
+    assert(core.memory.read8(0x14U) == destination_source[1]);
+    assert(core.state.gpr[3] == 0x40U);
+    assert(core.state.gpr[4] == 0x13U);
+    assert(core.state.gpr[5] == 2U);
+}
+
 void compare_and_conditional_branch_tests()
 {
     EspressoCore unsigned_compare_core(8);
@@ -1948,6 +2054,7 @@ int main(int argc, char* argv[])
     hle_dispatch_tests();
     guest_mutex_tests();
     memset_hle_tests();
+    memcpy_hle_tests();
     compare_and_conditional_branch_tests();
     load_store_tests();
     multiple_word_load_store_tests();
