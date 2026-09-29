@@ -5,6 +5,8 @@
 #include <bit>
 #include <cstdint>
 #include <exception>
+#include <iomanip>
+#include <sstream>
 
 namespace affogato::cpu::espresso
 {
@@ -133,11 +135,58 @@ void set_record_result(CpuState& state, std::uint32_t value)
     return base + static_cast<std::uint32_t>(displacement);
 }
 
+[[nodiscard]] std::string describe_memory_fault(
+    const GuestMemoryFault& fault,
+    std::uint32_t cia,
+    bool has_instruction_word,
+    std::uint32_t instruction_word,
+    const CpuState& state)
+{
+    std::ostringstream detail;
+    detail << (fault.access() == GuestMemoryAccess::read ? "read" : "write") << ' '
+           << std::dec << fault.width() << " byte(s) at guest address 0x"
+           << std::hex << std::uppercase << std::setw(8) << std::setfill('0')
+           << fault.address() << "; CIA 0x" << std::setw(8) << cia;
+    if (has_instruction_word)
+    {
+        detail << "; instruction 0x" << std::setw(8) << instruction_word;
+        const DecodedInstruction instruction = decode(instruction_word);
+        const bool indexed = instruction.opcode == Opcode::load_word_indexed ||
+            instruction.opcode == Opcode::store_word_indexed ||
+            instruction.opcode == Opcode::store_byte_indexed;
+        const bool memory_instruction = indexed ||
+            instruction.opcode == Opcode::load_word_zero ||
+            instruction.opcode == Opcode::load_word_update ||
+            instruction.opcode == Opcode::store_word ||
+            instruction.opcode == Opcode::store_word_update ||
+            instruction.opcode == Opcode::load_byte_zero ||
+            instruction.opcode == Opcode::load_byte_update ||
+            instruction.opcode == Opcode::store_byte ||
+            instruction.opcode == Opcode::store_byte_update ||
+            instruction.opcode == Opcode::load_halfword_zero ||
+            instruction.opcode == Opcode::store_halfword;
+        if (memory_instruction)
+        {
+            detail << "; rA=" << std::dec << static_cast<unsigned>(instruction.base)
+                   << " (0x" << std::hex << std::setw(8)
+                   << (instruction.base == 0 ? 0U : state.gpr[instruction.base]) << ')';
+            if (indexed)
+            {
+                detail << ", rB=" << std::dec << static_cast<unsigned>(instruction.source)
+                       << " (0x" << std::hex << std::setw(8)
+                       << state.gpr[instruction.source] << ')';
+            }
+        }
+    }
+    return detail.str();
+}
+
 }
 
 StepResult EspressoCore::step()
 {
     const std::uint32_t cia = state.cia;
+    current_instruction_word_fetched_ = false;
     switch (hle.dispatch(*this, cia))
     {
     case HleDispatchResult::executed:
@@ -149,6 +198,8 @@ StepResult EspressoCore::step()
     }
 
     const std::uint32_t instruction_word = memory.read32_be(cia);
+    current_instruction_word_ = instruction_word;
+    current_instruction_word_fetched_ = true;
     const DecodedInstruction instruction = decode(instruction_word);
 
     if (instruction.opcode == Opcode::unsupported)
@@ -566,6 +617,20 @@ RunResult EspressoCore::run(std::size_t max_steps)
         {
             step_result = step();
         }
+        catch (const GuestMemoryFault& fault)
+        {
+            result.reason = StopReason::memory_fault;
+            result.cia = state.cia;
+            result.has_instruction_word = current_instruction_word_fetched_;
+            if (result.has_instruction_word)
+            {
+                result.instruction_word = current_instruction_word_;
+            }
+            result.detail = describe_memory_fault(
+                fault, result.cia, result.has_instruction_word,
+                result.instruction_word, state);
+            return result;
+        }
         catch (const std::exception& error)
         {
             result.reason = StopReason::memory_fault;
@@ -578,6 +643,7 @@ RunResult EspressoCore::run(std::size_t max_steps)
             result.reason = StopReason::unsupported_instruction;
             result.cia = state.cia;
             result.instruction_word = memory.read32_be(state.cia);
+            result.has_instruction_word = true;
             return result;
         }
         if (step_result == StepResult::unimplemented_hle_call)

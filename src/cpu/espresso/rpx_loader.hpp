@@ -13,6 +13,8 @@ struct RpxLoadResult
 {
     std::uint32_t entry_point{};
     std::size_t loaded_sections{};
+    std::uint32_t sda_base{};
+    std::uint32_t sda2_base{};
 };
 
 // Loads allocatable sections of a static Wii U RPX through GuestMemory,

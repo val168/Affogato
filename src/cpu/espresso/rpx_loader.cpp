@@ -74,6 +74,8 @@ struct RpxFileInfo
 {
     std::uint32_t text_size{};
     std::uint32_t tramp_adjust{};
+    std::uint32_t sda_base{};
+    std::uint32_t sda2_base{};
     // Present in v4.2 FILEINFO, but Decaf's Cafe trampoline allocator does
     // not consume this field; keep it parsed without inventing semantics.
     std::uint32_t tramp_addition{};
@@ -699,6 +701,8 @@ RpxLoadResult load_rpx32_powerpc(EspressoCore& core, std::span<const std::uint8_
             }
             file_info.text_size = read32_be(file, section.offset + 4);
             file_info.tramp_adjust = read32_be(file, section.offset + 0x20);
+            file_info.sda_base = read32_be(file, section.offset + 0x24);
+            file_info.sda2_base = read32_be(file, section.offset + 0x28);
             file_info.tramp_addition = read32_be(file, section.offset + 0x48);
             has_file_info = true;
         }
@@ -989,7 +993,7 @@ RpxLoadResult load_rpx32_powerpc(EspressoCore& core, std::span<const std::uint8_
         }
     }
     core.state.cia = entry_point;
-    return {entry_point, loaded_count};
+    return {entry_point, loaded_count, file_info.sda_base, file_info.sda2_base};
 }
 
 }

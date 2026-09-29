@@ -31,6 +31,7 @@ struct RunResult
     StopReason reason{StopReason::instruction_limit};
     std::uint32_t cia{};
     std::uint32_t instruction_word{};
+    bool has_instruction_word{};
     std::string hle_call;
     std::string detail;
 };
@@ -86,6 +87,10 @@ public:
     std::uint32_t current_thread_address{};
     std::uint32_t guest_heap_cursor{};
     std::uint32_t guest_heap_limit{};
+
+private:
+    std::uint32_t current_instruction_word_{};
+    bool current_instruction_word_fetched_{};
 };
 
 }

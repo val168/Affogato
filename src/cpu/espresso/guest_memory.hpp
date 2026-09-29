@@ -10,6 +10,31 @@
 namespace affogato::cpu::espresso
 {
 
+enum class GuestMemoryAccess
+{
+    read,
+    write,
+};
+
+class GuestMemoryFault : public std::out_of_range
+{
+public:
+    GuestMemoryFault(std::uint32_t address, std::size_t width, GuestMemoryAccess access)
+        : std::out_of_range("guest memory access is outside mapped guest memory"),
+          address_(address), width_(width), access_(access)
+    {
+    }
+
+    [[nodiscard]] std::uint32_t address() const noexcept { return address_; }
+    [[nodiscard]] std::size_t width() const noexcept { return width_; }
+    [[nodiscard]] GuestMemoryAccess access() const noexcept { return access_; }
+
+private:
+    std::uint32_t address_;
+    std::size_t width_;
+    GuestMemoryAccess access_;
+};
+
 class GuestMemory
 {
 public:
@@ -44,19 +69,19 @@ public:
 
     [[nodiscard]] std::uint8_t read8(std::uint32_t address) const
     {
-        validate_access(address, 1);
+        validate_access(address, 1, GuestMemoryAccess::read);
         return storage_from(address)[0];
     }
 
     void write8(std::uint32_t address, std::uint8_t value)
     {
-        validate_access(address, 1);
+        validate_access(address, 1, GuestMemoryAccess::write);
         storage_from(address)[0] = value;
     }
 
     void write_bytes(std::uint32_t address, std::span<const std::uint8_t> values)
     {
-        validate_access(address, values.size());
+        validate_access(address, values.size(), GuestMemoryAccess::write);
         std::size_t copied = 0;
         while (copied < values.size())
         {
@@ -72,7 +97,7 @@ public:
 
     void zero_fill(std::uint32_t address, std::size_t length)
     {
-        validate_access(address, length);
+        validate_access(address, length, GuestMemoryAccess::write);
         std::size_t filled = 0;
         while (filled < length)
         {
@@ -87,7 +112,7 @@ public:
 
     [[nodiscard]] std::uint16_t read16_be(std::uint32_t address) const
     {
-        validate_access(address, sizeof(std::uint16_t));
+        validate_access(address, sizeof(std::uint16_t), GuestMemoryAccess::read);
         const auto high = static_cast<std::uint16_t>(read8(address));
         const auto low = static_cast<std::uint16_t>(read8(address + 1U));
         return static_cast<std::uint16_t>((high << 8U) | low);
@@ -95,7 +120,7 @@ public:
 
     [[nodiscard]] std::uint32_t read32_be(std::uint32_t address) const
     {
-        validate_access(address, sizeof(std::uint32_t));
+        validate_access(address, sizeof(std::uint32_t), GuestMemoryAccess::read);
         return (static_cast<std::uint32_t>(read8(address)) << 24U) |
                (static_cast<std::uint32_t>(read8(address + 1U)) << 16U) |
                (static_cast<std::uint32_t>(read8(address + 2U)) << 8U) |
@@ -104,14 +129,14 @@ public:
 
     void write16_be(std::uint32_t address, std::uint16_t value)
     {
-        validate_access(address, sizeof(std::uint16_t));
+        validate_access(address, sizeof(std::uint16_t), GuestMemoryAccess::write);
         write8(address, static_cast<std::uint8_t>(value >> 8U));
         write8(address + 1U, static_cast<std::uint8_t>(value));
     }
 
     void write32_be(std::uint32_t address, std::uint32_t value)
     {
-        validate_access(address, sizeof(std::uint32_t));
+        validate_access(address, sizeof(std::uint32_t), GuestMemoryAccess::write);
         write8(address, static_cast<std::uint8_t>(value >> 24U));
         write8(address + 1U, static_cast<std::uint8_t>(value >> 16U));
         write8(address + 2U, static_cast<std::uint8_t>(value >> 8U));
@@ -136,12 +161,15 @@ private:
         return address < other_end && other_address < end;
     }
 
-    void validate_access(std::uint32_t address, std::size_t width) const
+    void validate_access(
+        std::uint32_t address,
+        std::size_t width,
+        GuestMemoryAccess access) const
     {
         constexpr std::uint64_t guest_address_space_end = std::uint64_t{1} << 32U;
         if (width > guest_address_space_end - address)
         {
-            throw std::out_of_range("guest memory access exceeds the 32-bit address space");
+            throw GuestMemoryFault(address, width, access);
         }
 
         if (width == 0)
@@ -158,18 +186,26 @@ private:
                     return;
                 }
             }
-            throw std::out_of_range("guest memory access is outside mapped guest memory");
+            throw GuestMemoryFault(address, width, access);
         }
 
         std::uint64_t current = address;
         std::size_t remaining = width;
         while (remaining != 0)
         {
-            const auto segment = storage_from(static_cast<std::uint32_t>(current));
+            std::span<const std::uint8_t> segment;
+            try
+            {
+                segment = storage_from(static_cast<std::uint32_t>(current));
+            }
+            catch (const std::out_of_range&)
+            {
+                throw GuestMemoryFault(address, width, access);
+            }
             const std::size_t count = std::min(segment.size(), remaining);
             if (count == 0)
             {
-                throw std::out_of_range("guest memory access is outside mapped guest memory");
+                throw GuestMemoryFault(address, width, access);
             }
             current += count;
             remaining -= count;

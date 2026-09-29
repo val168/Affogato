@@ -27,6 +27,8 @@ cpu::espresso::RpxLoadResult Emulator::load_rpx(std::span<const std::uint8_t> fi
     }
 
     loaded_image_ = cpu::espresso::load_rpx32_powerpc(core_, file);
+    core_.state.gpr[2] = loaded_image_.sda2_base;
+    core_.state.gpr[13] = loaded_image_.sda_base;
     const std::uint32_t stack_start = static_cast<std::uint32_t>(
         (core_.memory.size() - guest_stack_top_reserve) & ~std::size_t{0xFU});
     const std::uint32_t stack_end = stack_start - guest_stack_size;

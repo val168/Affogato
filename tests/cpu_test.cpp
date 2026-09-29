@@ -97,6 +97,8 @@ struct RpxRelocationOptions
     std::uint32_t tramp_adjust{};
     std::uint32_t text_size{};
     std::uint32_t tramp_addition{};
+    std::uint32_t sda_base{};
+    std::uint32_t sda2_base{};
 };
 
 [[nodiscard]] std::vector<std::uint8_t> make_minimal_compressed_rpx(
@@ -228,6 +230,8 @@ struct RpxRelocationOptions
     set_be32(file, fileinfo_offset, 0xCAFE0402U);
     set_be32(file, fileinfo_offset + 4, relocation_options.text_size);
     set_be32(file, fileinfo_offset + 0x20, relocation_options.tramp_adjust);
+    set_be32(file, fileinfo_offset + 0x24, relocation_options.sda_base);
+    set_be32(file, fileinfo_offset + 0x28, relocation_options.sda2_base);
     set_be32(file, fileinfo_offset + 0x48, relocation_options.tramp_addition);
     return file;
 }
@@ -515,6 +519,20 @@ void guest_memory_tests()
 
 void interpreter_tests()
 {
+    EspressoCore fault_core(0x1000U);
+    fault_core.memory.write32_be(0, 0x80640000U); // lwz r3, 0(r4)
+    fault_core.state.gpr[4] = 0x3000U;
+    const RunResult fault_result = fault_core.run(1);
+    assert(fault_result.reason == StopReason::memory_fault);
+    assert(fault_result.cia == 0U);
+    assert(fault_result.has_instruction_word);
+    assert(fault_result.instruction_word == 0x80640000U);
+    assert(fault_result.detail.find("read 4 byte(s)") != std::string::npos);
+    assert(fault_result.detail.find("0x00003000") != std::string::npos);
+    assert(fault_result.detail.find("CIA 0x00000000") != std::string::npos);
+    assert(fault_result.detail.find("instruction 0x80640000") != std::string::npos);
+    assert(fault_result.detail.find("rA=4 (0x00003000)") != std::string::npos);
+
     EspressoCore import_table_core(0x20);
     import_table_core.memory.map_region(0xC0000000U, 0x200);
     const auto import_address =
@@ -726,6 +744,8 @@ void rpx_loader_tests()
 
     assert(load_result.entry_point == entry_point);
     assert(load_result.loaded_sections == 1);
+    assert(load_result.sda_base == 0U);
+    assert(load_result.sda2_base == 0U);
     assert(core.state.cia == entry_point);
     assert(core.memory.read32_be(entry_point) == 0x38630005U);
     assert(core.memory.read32_be(entry_point + 4) == 0x4E800020U);
@@ -874,8 +894,17 @@ void rpx_loader_tests()
     assert(core.state.cia == 0x80);
     assert(core.memory.read32_be(entry_point) == 0xAABBCCDDU);
 
+    RpxRelocationOptions sda_options;
+    sda_options.sda_base = 0x10008000U;
+    sda_options.sda2_base = 0x10009000U;
+    const auto sda_file = make_minimal_compressed_rpx(
+        entry_point, 16, {}, sda_options);
     affogato::Emulator session;
-    const auto session_image = session.load_rpx(file);
+    const auto session_image = session.load_rpx(sda_file);
+    assert(session_image.sda_base == sda_options.sda_base);
+    assert(session_image.sda2_base == sda_options.sda2_base);
+    assert(session.core().state.gpr[2] == sda_options.sda2_base);
+    assert(session.core().state.gpr[13] == sda_options.sda_base);
     const auto session_run = session.run(2);
     assert(session_image.entry_point == entry_point);
     assert(session_run.image.entry_point == entry_point);
@@ -931,6 +960,8 @@ void rpx_loader_tests()
 
     affogato::Emulator sparse_session(0x20000U);
     static_cast<void>(sparse_session.load_rpx(sparse_file));
+    assert(sparse_session.core().state.gpr[2] == 0U);
+    assert(sparse_session.core().state.gpr[13] == 0U);
     assert(sparse_session.core().state.gpr[1] == 0x1F000U);
     assert(sparse_session.core().current_thread_address == 0x1000U);
     assert(sparse_session.core().guest_heap_cursor > 0x1000U);
