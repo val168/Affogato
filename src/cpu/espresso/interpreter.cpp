@@ -166,6 +166,8 @@ void set_record_result(CpuState& state, std::uint32_t value)
             instruction.opcode == Opcode::store_byte_update ||
             instruction.opcode == Opcode::load_halfword_zero ||
             instruction.opcode == Opcode::store_halfword ||
+            instruction.opcode == Opcode::load_multiple_word ||
+            instruction.opcode == Opcode::store_multiple_word ||
             instruction.opcode == Opcode::load_single ||
             instruction.opcode == Opcode::store_single;
         if (memory_instruction)
@@ -212,9 +214,11 @@ void set_record_result(CpuState& state, std::uint32_t value)
     case Opcode::compare_unsigned_register: return "cmplw";
     case Opcode::conditional_branch: return "bc";
     case Opcode::load_word_zero: return "lwz";
+    case Opcode::load_multiple_word: return "lmw";
     case Opcode::load_word_update: return "lwzu";
     case Opcode::load_word_indexed: return "lwzx";
     case Opcode::store_word: return "stw";
+    case Opcode::store_multiple_word: return "stmw";
     case Opcode::store_word_indexed: return "stwx";
     case Opcode::store_byte_indexed: return "stbx";
     case Opcode::load_byte_zero: return "lbz";
@@ -269,6 +273,19 @@ void add_history_source(
     entry.opcode_name = opcode_name(instruction.opcode);
 
     const Opcode opcode = instruction.opcode;
+    if (opcode == Opcode::load_multiple_word || opcode == Opcode::store_multiple_word)
+    {
+        entry.has_register_range = true;
+        entry.range_first_register = opcode == Opcode::load_multiple_word
+            ? instruction.destination
+            : instruction.source;
+        entry.range_last_register = 31U;
+        entry.memory_base_register = instruction.base;
+        entry.memory_displacement = instruction.immediate;
+        entry.has_effective_address = true;
+        entry.effective_address = effective_address(state, instruction.base, instruction.immediate);
+        return entry;
+    }
     const bool store = opcode == Opcode::store_word || opcode == Opcode::store_word_update ||
         opcode == Opcode::store_word_indexed || opcode == Opcode::store_byte ||
         opcode == Opcode::store_byte_update || opcode == Opcode::store_byte_indexed ||
@@ -448,10 +465,20 @@ std::string format_instruction_history(const RunResult& result)
             text << "0x" << std::setw(8) << entry.instruction_word << ' ';
         }
         text << entry.opcode_name;
-        for (std::uint8_t i = 0; i < entry.source_count; ++i)
+        if (entry.has_register_range)
         {
-            text << " r" << std::dec << static_cast<unsigned>(entry.source_registers[i])
-                 << "=0x" << std::hex << std::setw(8) << entry.source_values[i];
+            text << " r" << std::dec << static_cast<unsigned>(entry.range_first_register)
+                 << "-r" << static_cast<unsigned>(entry.range_last_register) << ", "
+                 << entry.memory_displacement << "(r"
+                 << static_cast<unsigned>(entry.memory_base_register) << ')';
+        }
+        else
+        {
+            for (std::uint8_t i = 0; i < entry.source_count; ++i)
+            {
+                text << " r" << std::dec << static_cast<unsigned>(entry.source_registers[i])
+                     << "=0x" << std::hex << std::setw(8) << entry.source_values[i];
+            }
         }
         if (entry.has_fp_source)
         {
@@ -832,6 +859,18 @@ StepResult EspressoCore::step()
             memory.read32_be(effective_address(state, instruction.base, instruction.immediate));
         break;
 
+    case Opcode::load_multiple_word:
+    {
+        std::uint32_t address =
+            effective_address(state, instruction.base, instruction.immediate);
+        for (std::uint32_t reg = instruction.destination; reg < state.gpr.size(); ++reg)
+        {
+            state.gpr[reg] = memory.read32_be(address);
+            address += sizeof(std::uint32_t);
+        }
+        break;
+    }
+
     case Opcode::load_word_indexed:
     {
         const std::uint32_t base = instruction.base == 0 ? 0U : state.gpr[instruction.base];
@@ -855,6 +894,18 @@ StepResult EspressoCore::step()
             effective_address(state, instruction.base, instruction.immediate),
             state.gpr[instruction.destination]);
         break;
+
+    case Opcode::store_multiple_word:
+    {
+        std::uint32_t address =
+            effective_address(state, instruction.base, instruction.immediate);
+        for (std::uint32_t reg = instruction.source; reg < state.gpr.size(); ++reg)
+        {
+            memory.write32_be(address, state.gpr[reg]);
+            address += sizeof(std::uint32_t);
+        }
+        break;
+    }
 
     case Opcode::store_word_indexed:
     {

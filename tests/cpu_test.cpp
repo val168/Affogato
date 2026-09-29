@@ -470,6 +470,18 @@ void decoder_tests()
     assert(stwu.base == 1);
     assert(stwu.immediate == -16);
 
+    const DecodedInstruction stmw = decode(0xBFA1000CU); // stmw r29, 12(r1)
+    assert(stmw.opcode == Opcode::store_multiple_word);
+    assert(stmw.source == 29U);
+    assert(stmw.base == 1U);
+    assert(stmw.immediate == 12);
+
+    const DecodedInstruction lmw = decode(0xBBA1FFF4U); // lmw r29, -12(r1)
+    assert(lmw.opcode == Opcode::load_multiple_word);
+    assert(lmw.destination == 29U);
+    assert(lmw.base == 1U);
+    assert(lmw.immediate == -12);
+
     assert(decode(0U).opcode == Opcode::unsupported);
     assert(decode(0x9400FFF0U).opcode == Opcode::unsupported); // stwu with rA=0
 }
@@ -1561,6 +1573,123 @@ void load_store_tests()
     assert(store_byte_update_core.state.gpr[10] == 0x51U);
 }
 
+void multiple_word_load_store_tests()
+{
+    const auto encode_stmw = [](std::uint8_t first, std::uint8_t base,
+                                std::int16_t displacement) {
+        return 0xBC000000U |
+            (static_cast<std::uint32_t>(first) << 21U) |
+            (static_cast<std::uint32_t>(base) << 16U) |
+            static_cast<std::uint16_t>(displacement);
+    };
+    const auto encode_lmw = [](std::uint8_t first, std::uint8_t base,
+                               std::int16_t displacement) {
+        return 0xB8000000U |
+            (static_cast<std::uint32_t>(first) << 21U) |
+            (static_cast<std::uint32_t>(base) << 16U) |
+            static_cast<std::uint16_t>(displacement);
+    };
+
+    EspressoCore tail_store(0x200U);
+    tail_store.state.gpr[1] = 0x80U;
+    tail_store.state.gpr[29] = 0x11223344U;
+    tail_store.state.gpr[30] = 0x55667788U;
+    tail_store.state.gpr[31] = 0x99AABBCCU;
+    tail_store.memory.write32_be(0, 0xBFA1000CU); // stmw r29, 12(r1)
+    const RunResult tail_store_result = tail_store.run(1U);
+    assert(tail_store_result.reason == StopReason::instruction_limit);
+    assert(tail_store.state.gpr[1] == 0x80U);
+    assert(tail_store.memory.read32_be(0x8CU) == 0x11223344U);
+    assert(tail_store.memory.read32_be(0x90U) == 0x55667788U);
+    assert(tail_store.memory.read32_be(0x94U) == 0x99AABBCCU);
+    assert(tail_store.memory.read8(0x8CU) == 0x11U);
+    const std::string tail_store_trace = format_instruction_history(tail_store_result);
+    assert(tail_store_trace.find("stmw r29-r31, 12(r1) [0x0000008C]") !=
+           std::string::npos);
+
+    // Starting at r16 stores all sixteen remaining GPRs using a signed offset.
+    EspressoCore full_store(0x200U);
+    full_store.state.gpr[5] = 0x90U;
+    for (std::uint32_t reg = 16U; reg <= 31U; ++reg)
+    {
+        full_store.state.gpr[reg] = 0xA0000000U + reg;
+    }
+    full_store.memory.write32_be(0, encode_stmw(16U, 5U, -0x10));
+    assert(full_store.step() == StepResult::executed);
+    assert(full_store.state.gpr[5] == 0x90U);
+    for (std::uint32_t reg = 16U; reg <= 31U; ++reg)
+    {
+        assert(full_store.memory.read32_be(0x80U + (reg - 16U) * 4U) ==
+               0xA0000000U + reg);
+    }
+
+    // rA=0 supplies a zero base even when the architectural GPR0 has data.
+    EspressoCore zero_base_store(0x100U);
+    zero_base_store.state.gpr[0] = 0x70U;
+    zero_base_store.state.gpr[29] = 0x01020304U;
+    zero_base_store.state.gpr[30] = 0x05060708U;
+    zero_base_store.state.gpr[31] = 0x090A0B0CU;
+    zero_base_store.memory.write32_be(0, encode_stmw(29U, 0U, 0x40));
+    assert(zero_base_store.step() == StepResult::executed);
+    assert(zero_base_store.state.gpr[0] == 0x70U);
+    assert(zero_base_store.memory.read32_be(0x40U) == 0x01020304U);
+    assert(zero_base_store.memory.read32_be(0x44U) == 0x05060708U);
+    assert(zero_base_store.memory.read32_be(0x48U) == 0x090A0B0CU);
+
+    // Store, clobber, and load the same register range back.
+    EspressoCore round_trip(0x200U);
+    round_trip.state.gpr[1] = 0x80U;
+    round_trip.state.gpr[29] = 0xDEADBEEFU;
+    round_trip.state.gpr[30] = 0x12345678U;
+    round_trip.state.gpr[31] = 0xCAFEBABEU;
+    round_trip.memory.write32_be(0, encode_stmw(29U, 1U, 0x10));
+    round_trip.memory.write32_be(4, encode_lmw(29U, 1U, 0x10));
+    assert(round_trip.step() == StepResult::executed);
+    round_trip.state.gpr[29] = 0;
+    round_trip.state.gpr[30] = 0;
+    round_trip.state.gpr[31] = 0;
+    round_trip.state.cia = 4U;
+    assert(round_trip.step() == StepResult::executed);
+    assert(round_trip.state.gpr[29] == 0xDEADBEEFU);
+    assert(round_trip.state.gpr[30] == 0x12345678U);
+    assert(round_trip.state.gpr[31] == 0xCAFEBABEU);
+    assert(round_trip.state.gpr[1] == 0x80U);
+    const RunResult round_trip_result = round_trip.run(0U);
+    const std::string round_trip_trace = format_instruction_history(round_trip_result);
+    assert(round_trip_trace.find("stmw r29-r31, 16(r1) [0x00000090]") !=
+           std::string::npos);
+    assert(round_trip_trace.find("lmw r29-r31, 16(r1) [0x00000090]") !=
+           std::string::npos);
+
+    // The first transfer commits before a later word faults; the failing word
+    // is diagnosed at its own address and is not swallowed.
+    EspressoCore store_fault(0x20U);
+    store_fault.state.gpr[1] = 0x1CU;
+    store_fault.state.gpr[30] = 0xAABBCCDDU;
+    store_fault.state.gpr[31] = 0x11223344U;
+    store_fault.memory.write32_be(0, encode_stmw(30U, 1U, 0));
+    const RunResult store_fault_result = store_fault.run(1U);
+    assert(store_fault_result.reason == StopReason::memory_fault);
+    assert(store_fault_result.detail.find("write 4 byte(s)") != std::string::npos);
+    assert(store_fault_result.detail.find("0x00000020") != std::string::npos);
+    assert(store_fault.memory.read32_be(0x1CU) == 0xAABBCCDDU);
+    assert(!store_fault_result.instruction_history.back().completed);
+
+    EspressoCore load_fault(0x20U);
+    load_fault.state.gpr[1] = 0x1CU;
+    load_fault.state.gpr[30] = 0;
+    load_fault.state.gpr[31] = 0xFFFFFFFFU;
+    load_fault.memory.write32_be(0, encode_lmw(30U, 1U, 0));
+    load_fault.memory.write32_be(0x1CU, 0x76543210U);
+    const RunResult load_fault_result = load_fault.run(1U);
+    assert(load_fault_result.reason == StopReason::memory_fault);
+    assert(load_fault_result.detail.find("read 4 byte(s)") != std::string::npos);
+    assert(load_fault_result.detail.find("0x00000020") != std::string::npos);
+    assert(load_fault.state.gpr[30] == 0x76543210U);
+    assert(load_fault.state.gpr[31] == 0xFFFFFFFFU);
+    assert(!load_fault_result.instruction_history.back().completed);
+}
+
 void floating_point_load_tests()
 {
     const auto encode_lfs = [](std::uint8_t destination, std::uint8_t base,
@@ -1821,6 +1950,7 @@ int main(int argc, char* argv[])
     memset_hle_tests();
     compare_and_conditional_branch_tests();
     load_store_tests();
+    multiple_word_load_store_tests();
     function_call_and_stack_tests();
     return 0;
 }

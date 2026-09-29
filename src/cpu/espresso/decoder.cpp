@@ -324,6 +324,20 @@ DecodedInstruction decode(std::uint32_t raw) noexcept
         instruction.immediate = sign_extend(raw, 16);
         break;
 
+    case 46: // lmw
+        instruction.opcode = Opcode::load_multiple_word;
+        instruction.destination = static_cast<std::uint8_t>(field(raw, 21, 0x1FU));
+        instruction.base = static_cast<std::uint8_t>(field(raw, 16, 0x1FU));
+        instruction.immediate = sign_extend(raw, 16);
+        break;
+
+    case 47: // stmw
+        instruction.opcode = Opcode::store_multiple_word;
+        instruction.source = static_cast<std::uint8_t>(field(raw, 21, 0x1FU));
+        instruction.base = static_cast<std::uint8_t>(field(raw, 16, 0x1FU));
+        instruction.immediate = sign_extend(raw, 16);
+        break;
+
     case 48: // lfs
         instruction.opcode = Opcode::load_single;
         instruction.fp_register = static_cast<std::uint8_t>(field(raw, 21, 0x1FU));
