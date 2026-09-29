@@ -32,7 +32,10 @@ constexpr std::uint32_t section_rela = 4;
 constexpr std::uint32_t section_rpl_imports = 0x80000002;
 constexpr std::uint32_t section_rpl_fileinfo = 0x80000004;
 constexpr std::uint16_t symbol_section_absolute = 0xFFF1;
+constexpr std::uint16_t symbol_section_undefined = 0;
 constexpr std::uint8_t symbol_binding_weak = 2;
+constexpr std::uint8_t symbol_binding_global = 1;
+constexpr std::uint8_t symbol_type_object = 1;
 constexpr std::uint32_t rpl_loader_metadata_base = 0xC0000000U;
 constexpr std::uint32_t relocation_none = 0;
 constexpr std::uint32_t relocation_addr32 = 1;
@@ -274,14 +277,24 @@ void apply_relocations(
                 const bool zero_valued_weak_absolute =
                     symbol_section == symbol_section_absolute && binding == symbol_binding_weak &&
                     symbol_entry_value == 0;
-                if (symbol_section == 0 || zero_valued_weak_absolute)
+                const bool synthetic_undefined_symbol =
+                    symbol_section == symbol_section_undefined &&
+                    name == "$UNDEF" && symbol_entry_value == 0 &&
+                    binding == symbol_binding_global && symbol_type == symbol_type_object;
+                if (symbol_section == symbol_section_undefined || zero_valued_weak_absolute)
                 {
-                    if (binding != symbol_binding_weak)
+                    if (binding != symbol_binding_weak && !synthetic_undefined_symbol)
                     {
                         throw std::invalid_argument("RPX relocation references unresolved symbol '" +
                                                     name + "'");
                     }
-                    if (symbol_type == 2U || type == relocation_rel24) // STT_FUNC or call relocation
+                    if (synthetic_undefined_symbol)
+                    {
+                        // WUT elf2rpl emits this global object as a synthetic
+                        // zero-valued relocation symbol, not as a library import.
+                        symbol_value = 0;
+                    }
+                    else if (symbol_type == 2U || type == relocation_rel24) // STT_FUNC or call relocation
                     {
                         // Preserve a callable address for optional weak
                         // functions. Without an HLE registration this becomes

@@ -79,9 +79,20 @@ void set_be32(std::vector<std::uint8_t>& bytes, std::size_t offset, std::uint32_
     return file;
 }
 
+struct RpxRelocationSymbol
+{
+    std::string name{"$UNDEF"};
+    std::uint32_t value{};
+    std::uint8_t binding{1}; // STB_GLOBAL
+    std::uint8_t type{1}; // STT_OBJECT
+    std::uint16_t section{}; // SHN_UNDEF
+    std::int32_t addend{0x12345678};
+};
+
 [[nodiscard]] std::vector<std::uint8_t> make_minimal_compressed_rpx(
     std::uint32_t code_address = 0x02000000U,
-    std::size_t code_size = 12)
+    std::size_t code_size = 16,
+    const RpxRelocationSymbol& relocation_symbol = {})
 {
     constexpr std::size_t header_size = 52;
     constexpr std::size_t section_header_size = 40;
@@ -117,9 +128,15 @@ void set_be32(std::vector<std::uint8_t>& bytes, std::size_t offset, std::uint32_
     const std::size_t crcs_offset = names_offset + names.size();
     const std::size_t fileinfo_offset = crcs_offset + section_count * sizeof(std::uint32_t);
     const std::size_t symtab_offset = (fileinfo_offset + 0x60 + 3U) & ~std::size_t{3U};
-    const std::size_t strtab_offset = symtab_offset + 16;
-    const std::size_t rela_offset = (strtab_offset + 1U + 3U) & ~std::size_t{3U};
-    std::vector<std::uint8_t> file(rela_offset + 24, 0);
+    const std::size_t strtab_offset = symtab_offset + 32;
+    std::vector<std::uint8_t> symbol_strings{0};
+    symbol_strings.insert(symbol_strings.end(), relocation_symbol.name.begin(),
+                          relocation_symbol.name.end());
+    symbol_strings.push_back(0);
+    const std::size_t rela_offset =
+        (strtab_offset + symbol_strings.size() + 3U) & ~std::size_t{3U};
+    const std::size_t relocation_table_size = 3 * 12;
+    std::vector<std::uint8_t> file(rela_offset + relocation_table_size, 0);
 
     file[0] = 0x7F;
     file[1] = 'E';
@@ -162,9 +179,11 @@ void set_be32(std::vector<std::uint8_t>& bytes, std::size_t offset, std::uint32_
     set_section(3, 17, 0x80000003U, 0, 0, static_cast<std::uint32_t>(crcs_offset),
                 static_cast<std::uint32_t>(section_count * sizeof(std::uint32_t)), 4, 4);
     set_section(4, 27, 0x80000004U, 0, 0, static_cast<std::uint32_t>(fileinfo_offset), 0x60, 4, 0);
-    set_section(5, 41, 2, 0, 0, static_cast<std::uint32_t>(symtab_offset), 16, 4, 16, 6, 1);
-    set_section(6, 49, 3, 0, 0, static_cast<std::uint32_t>(strtab_offset), 1, 1, 0);
-    set_section(7, 57, 4, 0, 0, static_cast<std::uint32_t>(rela_offset), 24, 4, 12, 5, 1);
+    set_section(5, 41, 2, 0, 0, static_cast<std::uint32_t>(symtab_offset), 32, 4, 16, 6, 1);
+    set_section(6, 49, 3, 0, 0, static_cast<std::uint32_t>(strtab_offset),
+                static_cast<std::uint32_t>(symbol_strings.size()), 1, 0);
+    set_section(7, 57, 4, 0, 0, static_cast<std::uint32_t>(rela_offset),
+                static_cast<std::uint32_t>(relocation_table_size), 4, 12, 5, 1);
 
     set_be32(file, text_offset, static_cast<std::uint32_t>(code.size()));
     std::copy(compressed.begin(), compressed.end(), file.begin() + text_offset + inflated_size_prefix);
@@ -176,6 +195,18 @@ void set_be32(std::vector<std::uint8_t>& bytes, std::size_t offset, std::uint32_
     set_be32(file, rela_offset + 12, code_address + 10);
     set_be32(file, rela_offset + 16, 253);
     set_be32(file, rela_offset + 20, 0);
+    const std::size_t symbol_offset = symtab_offset + 16;
+    set_be32(file, symbol_offset, 1); // st_name
+    set_be32(file, symbol_offset + 4, relocation_symbol.value); // st_value
+    file[symbol_offset + 12] = static_cast<std::uint8_t>(
+        (relocation_symbol.binding << 4U) | relocation_symbol.type); // st_info
+    set_be16(file, symbol_offset + 14, relocation_symbol.section); // st_shndx
+    const std::size_t synthetic_relocation_offset = rela_offset + 24;
+    set_be32(file, synthetic_relocation_offset, code_address + 12); // r_offset
+    set_be32(file, synthetic_relocation_offset + 4, (1U << 8U) | 1U); // symbol 1, R_PPC_ADDR32
+    set_be32(file, synthetic_relocation_offset + 8,
+             static_cast<std::uint32_t>(relocation_symbol.addend)); // r_addend
+    std::copy(symbol_strings.begin(), symbol_strings.end(), file.begin() + strtab_offset);
     std::copy(names.begin(), names.end(), file.begin() + names_offset);
     set_be32(file, fileinfo_offset, 0xCAFE0402U);
     return file;
@@ -679,6 +710,33 @@ void rpx_loader_tests()
     assert(core.memory.read32_be(entry_point) == 0x38630005U);
     assert(core.memory.read32_be(entry_point + 4) == 0x4E800020U);
     assert(core.memory.read32_be(entry_point + 8) == 0xFDFFFFF6U);
+    assert(core.memory.read32_be(entry_point + 12) == 0x12345678U);
+
+    // A different strong SHN_UNDEF symbol is still an unresolved import.
+    const RpxRelocationSymbol unresolved_symbol{
+        "MissingStrongSymbol", 0, 1, 1, 0, 0x2468};
+    const std::vector<std::uint8_t> unresolved_file =
+        make_minimal_compressed_rpx(entry_point, 16, unresolved_symbol);
+    EspressoCore unresolved_core(static_cast<std::size_t>(entry_point) + 0x100U);
+    bool strong_undefined_rejected = false;
+    try
+    {
+        static_cast<void>(load_rpx32_powerpc(unresolved_core, unresolved_file));
+    }
+    catch (const std::invalid_argument& error)
+    {
+        strong_undefined_rejected =
+            std::string(error.what()).find("MissingStrongSymbol") != std::string::npos;
+    }
+    assert(strong_undefined_rejected);
+
+    // Undefined weak data symbols retain their prior zero-plus-addend behavior.
+    const RpxRelocationSymbol weak_symbol{"OptionalWeakData", 0, 2, 1, 0, 0x76543210};
+    const std::vector<std::uint8_t> weak_file =
+        make_minimal_compressed_rpx(entry_point, 16, weak_symbol);
+    EspressoCore weak_core(static_cast<std::size_t>(entry_point) + 0x100U);
+    static_cast<void>(load_rpx32_powerpc(weak_core, weak_file));
+    assert(weak_core.memory.read32_be(entry_point + 12) == 0x76543210U);
 
     core.state.gpr[3] = 37;
     core.state.lr = entry_point + 8;
@@ -797,8 +855,8 @@ void rpx_loader_tests()
         const std::string message = error.what();
         overflow_rejected = message.find("section 1") != std::string::npos &&
                             message.find("0xFFFFFFFC") != std::string::npos &&
-                            message.find("section size 0xC") != std::string::npos &&
-                            message.find("section end 0x100000008") != std::string::npos;
+                            message.find("section size 0x10") != std::string::npos &&
+                            message.find("section end 0x10000000C") != std::string::npos;
     }
     assert(overflow_rejected);
 }
