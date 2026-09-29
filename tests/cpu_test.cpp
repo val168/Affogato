@@ -519,6 +519,37 @@ void guest_memory_tests()
 
 void interpreter_tests()
 {
+    EspressoCore history_core(0x1000U);
+    history_core.memory.write32_be(0x00, 0x3C00FFFFU); // lis r0, -1
+    history_core.memory.write32_be(0x04, 0x6000AC30U); // ori r0, r0, 0xAC30
+    history_core.memory.write32_be(0x08, 0x7D06002EU); // lwzx r8, r6, r0
+    const RunResult history_result = history_core.run(4);
+    assert(history_result.reason == StopReason::memory_fault);
+    assert(history_result.instruction_history.size() == 3U);
+    assert(history_result.instruction_history[0].opcode_name == "addis");
+    assert(history_result.instruction_history[1].opcode_name == "ori");
+    assert(history_result.instruction_history[1].has_destination);
+    assert(history_result.instruction_history[1].destination_register == 0U);
+    assert(history_result.instruction_history[1].destination_value == 0xFFFFAC30U);
+    assert(history_result.instruction_history[2].opcode_name == "lwzx");
+    assert(history_result.instruction_history[2].source_count == 2U);
+    assert(history_result.instruction_history[2].source_registers[0] == 6U);
+    assert(history_result.instruction_history[2].source_registers[1] == 0U);
+    assert(history_result.instruction_history[2].source_values[1] == 0xFFFFAC30U);
+    assert(!history_result.instruction_history[2].completed);
+
+    EspressoCore ring_core(0x100U);
+    for (std::uint32_t i = 0; i < 35U; ++i)
+    {
+        ring_core.memory.write32_be(i * 4U, 0x38630001U); // addi r3, r3, 1
+    }
+    const RunResult ring_result = ring_core.run(35U);
+    assert(ring_result.reason == StopReason::instruction_limit);
+    assert(ring_result.instruction_history.size() == instruction_history_capacity);
+    assert(ring_result.instruction_history.front().cia == 12U);
+    assert(ring_result.instruction_history.back().cia == 136U);
+    assert(ring_core.state.gpr[3] == 35U);
+
     EspressoCore fault_core(0x1000U);
     fault_core.memory.write32_be(0, 0x80640000U); // lwz r3, 0(r4)
     fault_core.state.gpr[4] = 0x3000U;
@@ -593,6 +624,17 @@ void interpreter_tests()
 
 void integer_alu_tests()
 {
+    EspressoCore addic_zero_base_core(8);
+    addic_zero_base_core.state.gpr[0] = 0x10190000U;
+    addic_zero_base_core.memory.write32_be(0, 0x3000AC30U); // addic r0, r0, 0xAC30
+    const RunResult addic_zero_base_result = addic_zero_base_core.run(2);
+    assert(addic_zero_base_result.reason == StopReason::unsupported_instruction);
+    assert(addic_zero_base_core.state.gpr[0] == 0x1018AC30U);
+    assert(addic_zero_base_result.instruction_history[0].source_count == 1U);
+    assert(addic_zero_base_result.instruction_history[0].source_registers[0] == 0U);
+    assert(addic_zero_base_result.instruction_history[0].source_values[0] == 0x10190000U);
+    assert(addic_zero_base_result.instruction_history[0].destination_value == 0x1018AC30U);
+
     EspressoCore core(0x40);
     core.state.gpr[4] = 0xF0F00F0FU;
     core.state.gpr[5] = 0x0FF0FF00U;
@@ -1364,6 +1406,7 @@ int main(int argc, char* argv[])
                 break;
             }
             std::cout << " (guest r3=" << session_result.gpr3 << ")\n";
+            std::cout << affogato::cpu::espresso::format_instruction_history(execution) << '\n';
         }
         catch (const std::exception& error)
         {

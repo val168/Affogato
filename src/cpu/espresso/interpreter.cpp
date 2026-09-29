@@ -7,6 +7,7 @@
 #include <exception>
 #include <iomanip>
 #include <sstream>
+#include <utility>
 
 namespace affogato::cpu::espresso
 {
@@ -181,12 +182,269 @@ void set_record_result(CpuState& state, std::uint32_t value)
     return detail.str();
 }
 
+[[nodiscard]] const char* opcode_name(Opcode opcode) noexcept
+{
+    switch (opcode)
+    {
+    case Opcode::unsupported: return "unsupported";
+    case Opcode::addi: return "addi";
+    case Opcode::addis: return "addis";
+    case Opcode::add_immediate_carry: return "addic";
+    case Opcode::subtract_from_immediate_carry: return "subfic";
+    case Opcode::add: return "add";
+    case Opcode::subtract_from: return "subf";
+    case Opcode::ori: return "ori";
+    case Opcode::bitwise_or: return "or";
+    case Opcode::bitwise_and: return "and";
+    case Opcode::bitwise_and_complement: return "andc";
+    case Opcode::bitwise_xor: return "xor";
+    case Opcode::bitwise_equivalence: return "eqv";
+    case Opcode::and_immediate_record: return "andi.";
+    case Opcode::rotate_left_word_and_mask: return "rlwinm";
+    case Opcode::arithmetic_shift_right_immediate: return "srawi";
+    case Opcode::shift_left_word: return "slw";
+    case Opcode::branch: return "b";
+    case Opcode::compare_signed_immediate: return "cmpwi";
+    case Opcode::compare_signed_register: return "cmpw";
+    case Opcode::compare_unsigned_immediate: return "cmplwi";
+    case Opcode::compare_unsigned_register: return "cmplw";
+    case Opcode::conditional_branch: return "bc";
+    case Opcode::load_word_zero: return "lwz";
+    case Opcode::load_word_update: return "lwzu";
+    case Opcode::load_word_indexed: return "lwzx";
+    case Opcode::store_word: return "stw";
+    case Opcode::store_word_indexed: return "stwx";
+    case Opcode::store_byte_indexed: return "stbx";
+    case Opcode::load_byte_zero: return "lbz";
+    case Opcode::load_byte_update: return "lbzu";
+    case Opcode::store_byte: return "stb";
+    case Opcode::store_byte_update: return "stbu";
+    case Opcode::load_halfword_zero: return "lhz";
+    case Opcode::store_halfword: return "sth";
+    case Opcode::store_word_update: return "stwu";
+    case Opcode::move_from_link_register: return "mflr";
+    case Opcode::move_to_link_register: return "mtlr";
+    case Opcode::conditional_branch_to_link_register: return "bclr";
+    case Opcode::move_from_count_register: return "mfctr";
+    case Opcode::move_to_count_register: return "mtctr";
+    case Opcode::conditional_branch_to_count_register: return "bcctr";
+    }
+    return "unknown";
+}
+
+void add_history_source(
+    InstructionHistoryEntry& entry,
+    const CpuState& state,
+    std::uint8_t reg)
+{
+    for (std::uint8_t i = 0; i < entry.source_count; ++i)
+    {
+        if (entry.source_registers[i] == reg)
+        {
+            return;
+        }
+    }
+    if (entry.source_count < entry.source_registers.size())
+    {
+        const std::size_t index = entry.source_count++;
+        entry.source_registers[index] = reg;
+        entry.source_values[index] = state.gpr[reg];
+    }
+}
+
+[[nodiscard]] InstructionHistoryEntry make_history_entry(
+    const CpuState& state,
+    std::uint32_t cia,
+    std::uint32_t word,
+    const DecodedInstruction& instruction)
+{
+    InstructionHistoryEntry entry;
+    entry.cia = cia;
+    entry.instruction_word = word;
+    entry.has_instruction_word = true;
+    entry.opcode_name = opcode_name(instruction.opcode);
+
+    const Opcode opcode = instruction.opcode;
+    const bool indexed = opcode == Opcode::load_word_indexed ||
+        opcode == Opcode::store_word_indexed || opcode == Opcode::store_byte_indexed;
+    const bool store = opcode == Opcode::store_word || opcode == Opcode::store_word_update ||
+        opcode == Opcode::store_word_indexed || opcode == Opcode::store_byte ||
+        opcode == Opcode::store_byte_update || opcode == Opcode::store_byte_indexed ||
+        opcode == Opcode::store_halfword;
+
+    switch (opcode)
+    {
+    case Opcode::addi:
+    case Opcode::addis:
+    case Opcode::load_word_zero:
+    case Opcode::load_word_update:
+    case Opcode::load_byte_zero:
+    case Opcode::load_byte_update:
+    case Opcode::load_halfword_zero:
+    case Opcode::store_word:
+    case Opcode::store_word_update:
+    case Opcode::store_byte:
+    case Opcode::store_byte_update:
+    case Opcode::store_halfword:
+        if (instruction.base != 0)
+        {
+            add_history_source(entry, state, instruction.base);
+        }
+        break;
+    case Opcode::add_immediate_carry:
+    case Opcode::subtract_from_immediate_carry:
+    case Opcode::compare_signed_immediate:
+    case Opcode::compare_unsigned_immediate:
+        add_history_source(entry, state, instruction.base);
+        break;
+    case Opcode::ori:
+    case Opcode::and_immediate_record:
+    case Opcode::rotate_left_word_and_mask:
+    case Opcode::arithmetic_shift_right_immediate:
+        add_history_source(entry, state, instruction.source);
+        break;
+    case Opcode::add:
+    case Opcode::subtract_from:
+    case Opcode::bitwise_or:
+    case Opcode::bitwise_and:
+    case Opcode::bitwise_and_complement:
+    case Opcode::bitwise_xor:
+    case Opcode::bitwise_equivalence:
+    case Opcode::compare_signed_register:
+    case Opcode::compare_unsigned_register:
+        add_history_source(entry, state, instruction.base);
+        add_history_source(entry, state, instruction.source);
+        break;
+    case Opcode::shift_left_word:
+        add_history_source(entry, state, instruction.source);
+        add_history_source(entry, state, instruction.base);
+        break;
+    case Opcode::load_word_indexed:
+    case Opcode::store_word_indexed:
+    case Opcode::store_byte_indexed:
+        if (instruction.base != 0)
+        {
+            add_history_source(entry, state, instruction.base);
+        }
+        add_history_source(entry, state, instruction.source);
+        break;
+    case Opcode::move_to_link_register:
+    case Opcode::move_to_count_register:
+        add_history_source(entry, state, instruction.destination);
+        break;
+    default:
+        break;
+    }
+    if (store)
+    {
+        add_history_source(entry, state, instruction.destination);
+    }
+
+    switch (opcode)
+    {
+    case Opcode::addi:
+    case Opcode::addis:
+    case Opcode::add_immediate_carry:
+    case Opcode::subtract_from_immediate_carry:
+    case Opcode::add:
+    case Opcode::subtract_from:
+    case Opcode::ori:
+    case Opcode::bitwise_or:
+    case Opcode::bitwise_and:
+    case Opcode::bitwise_and_complement:
+    case Opcode::bitwise_xor:
+    case Opcode::bitwise_equivalence:
+    case Opcode::and_immediate_record:
+    case Opcode::rotate_left_word_and_mask:
+    case Opcode::arithmetic_shift_right_immediate:
+    case Opcode::shift_left_word:
+    case Opcode::load_word_zero:
+    case Opcode::load_word_update:
+    case Opcode::load_word_indexed:
+    case Opcode::load_byte_zero:
+    case Opcode::load_byte_update:
+    case Opcode::load_halfword_zero:
+    case Opcode::move_from_link_register:
+    case Opcode::move_from_count_register:
+        entry.has_destination = true;
+        entry.destination_register = instruction.destination;
+        break;
+    case Opcode::store_word_update:
+    case Opcode::store_byte_update:
+        entry.has_destination = true;
+        entry.destination_register = instruction.base;
+        break;
+    default:
+        break;
+    }
+    static_cast<void>(indexed);
+    return entry;
+}
+
+}
+
+void EspressoCore::append_instruction_history(InstructionHistoryEntry entry) noexcept
+{
+    instruction_history_[instruction_history_next_] = std::move(entry);
+    instruction_history_next_ = (instruction_history_next_ + 1U) % instruction_history_.size();
+    instruction_history_count_ = std::min(instruction_history_count_ + 1U,
+                                          instruction_history_.size());
+}
+
+std::vector<InstructionHistoryEntry> EspressoCore::instruction_history_snapshot() const
+{
+    std::vector<InstructionHistoryEntry> result;
+    result.reserve(instruction_history_count_);
+    const std::size_t first =
+        (instruction_history_next_ + instruction_history_.size() - instruction_history_count_) %
+        instruction_history_.size();
+    for (std::size_t i = 0; i < instruction_history_count_; ++i)
+    {
+        result.push_back(instruction_history_[(first + i) % instruction_history_.size()]);
+    }
+    return result;
+}
+
+std::string format_instruction_history(const RunResult& result)
+{
+    if (result.instruction_history.empty())
+    {
+        return {};
+    }
+    std::ostringstream text;
+    text << "Recent instructions (oldest first):";
+    for (const InstructionHistoryEntry& entry : result.instruction_history)
+    {
+        text << "\n  0x" << std::hex << std::uppercase << std::setw(8)
+             << std::setfill('0') << entry.cia << ": ";
+        if (entry.has_instruction_word)
+        {
+            text << "0x" << std::setw(8) << entry.instruction_word << ' ';
+        }
+        text << entry.opcode_name;
+        for (std::uint8_t i = 0; i < entry.source_count; ++i)
+        {
+            text << " r" << std::dec << static_cast<unsigned>(entry.source_registers[i])
+                 << "=0x" << std::hex << std::setw(8) << entry.source_values[i];
+        }
+        if (entry.has_destination)
+        {
+            text << " -> r" << std::dec << static_cast<unsigned>(entry.destination_register)
+                 << "=0x" << std::hex << std::setw(8) << entry.destination_value;
+        }
+        if (!entry.completed)
+        {
+            text << " [did not complete]";
+        }
+    }
+    return text.str();
 }
 
 StepResult EspressoCore::step()
 {
     const std::uint32_t cia = state.cia;
     current_instruction_word_fetched_ = false;
+    has_pending_history_entry_ = false;
     switch (hle.dispatch(*this, cia))
     {
     case HleDispatchResult::executed:
@@ -201,9 +459,13 @@ StepResult EspressoCore::step()
     current_instruction_word_ = instruction_word;
     current_instruction_word_fetched_ = true;
     const DecodedInstruction instruction = decode(instruction_word);
+    pending_history_entry_ = make_history_entry(state, cia, instruction_word, instruction);
+    has_pending_history_entry_ = true;
 
     if (instruction.opcode == Opcode::unsupported)
     {
+        append_instruction_history(std::move(pending_history_entry_));
+        has_pending_history_entry_ = false;
         return StepResult::unsupported_instruction;
     }
 
@@ -233,7 +495,8 @@ StepResult EspressoCore::step()
 
     case Opcode::add_immediate_carry:
     {
-        const std::uint32_t lhs = instruction.base == 0 ? 0U : state.gpr[instruction.base];
+        // Unlike addi/addis, addic reads GPR[RA] even when RA is zero.
+        const std::uint32_t lhs = state.gpr[instruction.base];
         const std::uint32_t rhs = static_cast<std::uint32_t>(instruction.immediate);
         const std::uint64_t sum = static_cast<std::uint64_t>(lhs) + rhs;
         const std::uint32_t value = static_cast<std::uint32_t>(sum);
@@ -601,6 +864,14 @@ StepResult EspressoCore::step()
         return StepResult::unsupported_instruction;
     }
 
+    pending_history_entry_.completed = true;
+    if (pending_history_entry_.has_destination)
+    {
+        pending_history_entry_.destination_value =
+            state.gpr[pending_history_entry_.destination_register];
+    }
+    append_instruction_history(std::move(pending_history_entry_));
+    has_pending_history_entry_ = false;
     state.cia = next_cia;
     return StepResult::executed;
 }
@@ -609,6 +880,9 @@ RunResult EspressoCore::run(std::size_t max_steps)
 {
     RunResult result{};
     result.cia = state.cia;
+    const auto include_history = [&]() {
+        result.instruction_history = instruction_history_snapshot();
+    };
 
     while (result.steps < max_steps)
     {
@@ -619,6 +893,11 @@ RunResult EspressoCore::run(std::size_t max_steps)
         }
         catch (const GuestMemoryFault& fault)
         {
+            if (has_pending_history_entry_)
+            {
+                append_instruction_history(std::move(pending_history_entry_));
+                has_pending_history_entry_ = false;
+            }
             result.reason = StopReason::memory_fault;
             result.cia = state.cia;
             result.has_instruction_word = current_instruction_word_fetched_;
@@ -629,13 +908,20 @@ RunResult EspressoCore::run(std::size_t max_steps)
             result.detail = describe_memory_fault(
                 fault, result.cia, result.has_instruction_word,
                 result.instruction_word, state);
+            include_history();
             return result;
         }
         catch (const std::exception& error)
         {
+            if (has_pending_history_entry_)
+            {
+                append_instruction_history(std::move(pending_history_entry_));
+                has_pending_history_entry_ = false;
+            }
             result.reason = StopReason::memory_fault;
             result.cia = state.cia;
             result.detail = error.what();
+            include_history();
             return result;
         }
         if (step_result == StepResult::unsupported_instruction)
@@ -644,6 +930,7 @@ RunResult EspressoCore::run(std::size_t max_steps)
             result.cia = state.cia;
             result.instruction_word = memory.read32_be(state.cia);
             result.has_instruction_word = true;
+            include_history();
             return result;
         }
         if (step_result == StepResult::unimplemented_hle_call)
@@ -651,6 +938,7 @@ RunResult EspressoCore::run(std::size_t max_steps)
             result.reason = StopReason::unimplemented_hle_call;
             result.cia = state.cia;
             result.hle_call = hle.last_unimplemented_call();
+            include_history();
             return result;
         }
 
@@ -659,6 +947,7 @@ RunResult EspressoCore::run(std::size_t max_steps)
 
     result.reason = StopReason::instruction_limit;
     result.cia = state.cia;
+    include_history();
     return result;
 }
 

@@ -5,7 +5,9 @@
 #include "cpu/espresso/hle_dispatcher.hpp"
 
 #include <cstddef>
+#include <array>
 #include <string>
+#include <vector>
 
 namespace affogato::cpu::espresso
 {
@@ -25,6 +27,23 @@ enum class StopReason
     memory_fault,
 };
 
+inline constexpr std::size_t instruction_history_capacity = 32;
+
+struct InstructionHistoryEntry
+{
+    std::uint32_t cia{};
+    std::uint32_t instruction_word{};
+    bool has_instruction_word{};
+    std::string opcode_name;
+    std::array<std::uint8_t, 3> source_registers{};
+    std::array<std::uint32_t, 3> source_values{};
+    std::uint8_t source_count{};
+    bool has_destination{};
+    std::uint8_t destination_register{};
+    std::uint32_t destination_value{};
+    bool completed{};
+};
+
 struct RunResult
 {
     std::size_t steps{};
@@ -34,6 +53,7 @@ struct RunResult
     bool has_instruction_word{};
     std::string hle_call;
     std::string detail;
+    std::vector<InstructionHistoryEntry> instruction_history;
 };
 
 class EspressoCore
@@ -50,6 +70,11 @@ public:
         current_thread_address = 0;
         guest_heap_cursor = 0;
         guest_heap_limit = 0;
+        instruction_history_ = {};
+        instruction_history_next_ = 0;
+        instruction_history_count_ = 0;
+        pending_history_entry_ = {};
+        has_pending_history_entry_ = false;
     }
 
     void configure_guest_heap(std::uint32_t begin, std::uint32_t end) noexcept
@@ -91,6 +116,16 @@ public:
 private:
     std::uint32_t current_instruction_word_{};
     bool current_instruction_word_fetched_{};
+    std::array<InstructionHistoryEntry, instruction_history_capacity> instruction_history_{};
+    std::size_t instruction_history_next_{};
+    std::size_t instruction_history_count_{};
+    InstructionHistoryEntry pending_history_entry_{};
+    bool has_pending_history_entry_{};
+
+    void append_instruction_history(InstructionHistoryEntry entry) noexcept;
+    [[nodiscard]] std::vector<InstructionHistoryEntry> instruction_history_snapshot() const;
 };
+
+[[nodiscard]] std::string format_instruction_history(const RunResult& result);
 
 }

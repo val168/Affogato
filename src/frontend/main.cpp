@@ -255,6 +255,9 @@ std::string format_result(const affogato::EmulatorRunResult& result)
         if (!result.execution.detail.empty()) text << "\nDetail: " << result.execution.detail;
         break;
     }
+    const std::string history =
+        affogato::cpu::espresso::format_instruction_history(result.execution);
+    if (!history.empty()) text << '\n' << history;
     if (result.gpr3 == 42)
     {
         text << "\nReturned value observed in r3: 42";
@@ -636,7 +639,15 @@ int run_frontend()
             message = worker.message;
         }
         ImGui::BeginChild("Diagnostics", ImVec2(0, 0), ImGuiChildFlags_Borders);
-        ImGui::TextWrapped("%s", message.empty() ? "Select and launch an RPX to see its result." : message.c_str());
+        std::string diagnostic_text = message.empty()
+            ? "Select and launch an RPX to see its result."
+            : std::move(message);
+        ImGui::InputTextMultiline(
+            "##launch-diagnostics",
+            diagnostic_text.data(),
+            diagnostic_text.size() + 1U,
+            ImVec2(-FLT_MIN, -FLT_MIN),
+            ImGuiInputTextFlags_ReadOnly | ImGuiInputTextFlags_WordWrap);
         ImGui::EndChild();
         ImGui::End();
 
