@@ -29,6 +29,7 @@ add_library(affogato_cpu STATIC
     src/cpu/espresso/decoder.cpp
     src/cpu/espresso/elf_loader.cpp
     src/cpu/espresso/hle_dispatcher.cpp
+    src/cpu/espresso/guest_mutex.cpp
     src/cpu/espresso/rpx_loader.cpp
     src/cpu/espresso/interpreter.cpp
     src/emulator.cpp

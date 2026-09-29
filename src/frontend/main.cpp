@@ -250,6 +250,10 @@ std::string format_result(const affogato::EmulatorRunResult& result)
     case StopReason::unimplemented_hle_call:
         text << "\nStopped: unimplemented HLE call " << result.execution.hle_call;
         break;
+    case StopReason::hle_error:
+        text << "\nStopped: HLE error";
+        if (!result.execution.detail.empty()) text << "\nDetail: " << result.execution.detail;
+        break;
     case StopReason::memory_fault:
         text << "\nStopped: memory fault";
         if (!result.execution.detail.empty()) text << "\nDetail: " << result.execution.detail;

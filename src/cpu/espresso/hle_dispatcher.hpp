@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <functional>
 #include <map>
+#include <stdexcept>
 #include <string>
 #include <utility>
 
@@ -10,6 +11,12 @@ namespace affogato::cpu::espresso
 {
 
 class EspressoCore;
+
+class HleExecutionError : public std::runtime_error
+{
+public:
+    using std::runtime_error::runtime_error;
+};
 
 enum class HleDispatchResult
 {

@@ -1,5 +1,6 @@
 #include "cpu/espresso/cafe_os_hle.hpp"
 
+#include "cpu/espresso/guest_mutex.hpp"
 #include "cpu/espresso/hle_dispatcher.hpp"
 #include "cpu/espresso/interpreter.hpp"
 
@@ -157,6 +158,77 @@ void register_coreinit_hle(HleDispatcher& dispatcher)
         [](EspressoCore&) {
             // Temporary single-thread counterpart to __ghsLock. It does not
             // provide mutual exclusion once multiple guest threads exist.
+        });
+    dispatcher.register_function(
+        "coreinit",
+        "__ghs_mtx_init",
+        [](EspressoCore& core) {
+            const std::uint32_t wrapper = core.state.gpr[3];
+            if (wrapper == 0)
+            {
+                throw HleExecutionError("__ghs_mtx_init received a null mutex wrapper");
+            }
+            static_cast<void>(core.memory.read32_be(wrapper));
+            const std::uint32_t mutex = allocate_guest_os_mutex(core);
+            if (mutex != 0)
+            {
+                core.memory.write32_be(wrapper, mutex);
+            }
+        });
+    dispatcher.register_function(
+        "coreinit",
+        "__ghs_mtx_lock",
+        [](EspressoCore& core) {
+            const std::uint32_t mutex = core.memory.read32_be(core.state.gpr[3]);
+            if (!lock_guest_os_mutex(core, mutex))
+            {
+                throw HleExecutionError(
+                    "__ghs_mtx_lock encountered another guest-thread owner; "
+                    "Affogato has no scheduler to wait for it");
+            }
+        });
+    dispatcher.register_function(
+        "coreinit",
+        "__ghs_mtx_unlock",
+        [](EspressoCore& core) {
+            const std::uint32_t mutex = core.memory.read32_be(core.state.gpr[3]);
+            unlock_guest_os_mutex(core, mutex);
+        });
+    dispatcher.register_function(
+        "coreinit",
+        "__ghs_mtx_dst",
+        [](EspressoCore& core) {
+            const std::uint32_t wrapper = core.state.gpr[3];
+            if (wrapper == 0)
+            {
+                throw HleExecutionError("__ghs_mtx_dst received a null mutex wrapper");
+            }
+            // The bump allocator cannot reclaim the OSMutex yet. Clear the
+            // wrapper so guest code no longer treats the object as live.
+            core.memory.write32_be(wrapper, 0);
+        });
+    dispatcher.register_function(
+        "coreinit",
+        "OSInitMutex",
+        [](EspressoCore& core) {
+            initialize_guest_os_mutex(core, core.state.gpr[3], core.state.gpr[4]);
+        });
+    dispatcher.register_function(
+        "coreinit",
+        "OSLockMutex",
+        [](EspressoCore& core) {
+            if (!lock_guest_os_mutex(core, core.state.gpr[3]))
+            {
+                throw HleExecutionError(
+                    "OSLockMutex encountered another guest-thread owner; "
+                    "Affogato has no scheduler to wait for it");
+            }
+        });
+    dispatcher.register_function(
+        "coreinit",
+        "OSUnlockMutex",
+        [](EspressoCore& core) {
+            unlock_guest_os_mutex(core, core.state.gpr[3]);
         });
     dispatcher.register_function(
         "coreinit",

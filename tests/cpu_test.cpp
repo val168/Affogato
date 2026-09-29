@@ -2,6 +2,7 @@
 #include "cpu/espresso/cafe_os_hle.hpp"
 #include "cpu/espresso/elf_loader.hpp"
 #include "cpu/espresso/guest_memory.hpp"
+#include "cpu/espresso/guest_mutex.hpp"
 #include "cpu/espresso/interpreter.hpp"
 #include "cpu/espresso/rpx_loader.hpp"
 #include "cpu_state_test.hpp"
@@ -1225,6 +1226,115 @@ void hle_dispatch_tests()
     assert(thread_core.memory.read32_be(thread_address + 0x5BCU) == thread_type_before);
 }
 
+void guest_mutex_tests()
+{
+    EspressoCore core(0x2000U);
+    register_coreinit_hle(core.hle);
+    core.configure_guest_heap(0x100U, 0x1800U);
+    constexpr std::uint32_t stack_start = 0x1F00U;
+    constexpr std::uint32_t stack_end = 0x0F00U;
+    const std::uint32_t thread =
+        initialize_default_guest_thread(core, stack_start, stack_end);
+    constexpr std::uint32_t wrapper = 0x40U;
+    constexpr std::uint32_t return_address = 0x80U;
+    const auto invoke = [&](std::uint32_t import, std::uint32_t argument) {
+        core.state.cia = import;
+        core.state.lr = return_address;
+        core.state.gpr[3] = argument;
+        assert(core.step() == StepResult::executed);
+        assert(core.state.cia == return_address);
+    };
+
+    const std::uint32_t initialize = core.hle.bind_import("coreinit", "__ghs_mtx_init");
+    const std::uint32_t lock = core.hle.bind_import("coreinit", "__ghs_mtx_lock");
+    const std::uint32_t unlock = core.hle.bind_import("coreinit", "__ghs_mtx_unlock");
+    const std::uint32_t destroy = core.hle.bind_import("coreinit", "__ghs_mtx_dst");
+    invoke(initialize, wrapper);
+
+    const std::uint32_t mutex = core.memory.read32_be(wrapper);
+    assert(mutex != 0);
+    assert((mutex & 7U) == 0);
+    assert(mutex == 0x7A0U);
+    assert(core.memory.read32_be(mutex) == os_mutex_tag);
+    assert(core.memory.read32_be(mutex + 0x04U) == 0);
+    assert(core.memory.read32_be(mutex + 0x0CU) == 0);
+    assert(core.memory.read32_be(mutex + 0x1CU) == 0);
+    assert(core.memory.read32_be(mutex + 0x20U) == 0);
+    assert(core.memory.read32_be(mutex + 0x24U) == 0);
+
+    invoke(lock, wrapper);
+    assert(core.memory.read32_be(mutex + 0x1CU) == thread);
+    assert(core.memory.read32_be(mutex + 0x20U) == 1U);
+    invoke(lock, wrapper);
+    assert(core.memory.read32_be(mutex + 0x1CU) == thread);
+    assert(core.memory.read32_be(mutex + 0x20U) == 2U);
+    invoke(unlock, wrapper);
+    assert(core.memory.read32_be(mutex + 0x1CU) == thread);
+    assert(core.memory.read32_be(mutex + 0x20U) == 1U);
+    invoke(unlock, wrapper);
+    assert(core.memory.read32_be(mutex + 0x1CU) == 0);
+    assert(core.memory.read32_be(mutex + 0x20U) == 0);
+
+    std::array<std::uint8_t, os_mutex_size> mutex_before_destroy{};
+    for (std::size_t index = 0; index < mutex_before_destroy.size(); ++index)
+    {
+        mutex_before_destroy[index] = core.memory.read8(
+            mutex + static_cast<std::uint32_t>(index));
+    }
+    invoke(destroy, wrapper);
+    assert(core.memory.read32_be(wrapper) == 0);
+    for (std::size_t index = 0; index < mutex_before_destroy.size(); ++index)
+    {
+        assert(core.memory.read8(mutex + static_cast<std::uint32_t>(index)) ==
+               mutex_before_destroy[index]);
+    }
+
+    // The public Cafe mutex calls share the same guest layout and state logic.
+    constexpr std::uint32_t direct_mutex = 0x900U;
+    const std::uint32_t os_init = core.hle.bind_import("coreinit", "OSInitMutex");
+    const std::uint32_t os_lock = core.hle.bind_import("coreinit", "OSLockMutex");
+    const std::uint32_t os_unlock = core.hle.bind_import("coreinit", "OSUnlockMutex");
+    core.state.cia = os_init;
+    core.state.lr = return_address;
+    core.state.gpr[3] = direct_mutex;
+    core.state.gpr[4] = 0x12345678U;
+    assert(core.step() == StepResult::executed);
+    assert(core.memory.read32_be(direct_mutex) == os_mutex_tag);
+    assert(core.memory.read32_be(direct_mutex + 4U) == 0x12345678U);
+    invoke(os_lock, direct_mutex);
+    assert(core.memory.read32_be(direct_mutex + 0x1CU) == thread);
+    invoke(os_unlock, direct_mutex);
+    assert(core.memory.read32_be(direct_mutex + 0x1CU) == 0);
+
+    // A foreign owner cannot be treated as acquired without a scheduler.
+    core.memory.write32_be(mutex + 0x1CU, 0xDEADBEEFU);
+    core.memory.write32_be(mutex + 0x20U, 1U);
+    core.state.cia = lock;
+    core.state.lr = return_address;
+    core.state.gpr[3] = wrapper;
+    core.memory.write32_be(wrapper, mutex);
+    const RunResult contention = core.run(1U);
+    assert(contention.reason == StopReason::hle_error);
+    assert(contention.detail.find("no scheduler") != std::string::npos);
+    assert(core.memory.read32_be(mutex + 0x1CU) == 0xDEADBEEFU);
+    assert(core.memory.read32_be(mutex + 0x20U) == 1U);
+
+    EspressoCore exhausted_core(0x200U);
+    register_coreinit_hle(exhausted_core.hle);
+    exhausted_core.configure_guest_heap(0x100U, 0x100U);
+    constexpr std::uint32_t failure_wrapper = 0x40U;
+    constexpr std::uint32_t sentinel = 0xAABBCCDDU;
+    exhausted_core.memory.write32_be(failure_wrapper, sentinel);
+    const std::uint32_t exhausted_init =
+        exhausted_core.hle.bind_import("coreinit", "__ghs_mtx_init");
+    exhausted_core.state.cia = exhausted_init;
+    exhausted_core.state.lr = return_address;
+    exhausted_core.state.gpr[3] = failure_wrapper;
+    assert(exhausted_core.step() == StepResult::executed);
+    assert(exhausted_core.state.cia == return_address);
+    assert(exhausted_core.memory.read32_be(failure_wrapper) == sentinel);
+}
+
 void compare_and_conditional_branch_tests()
 {
     EspressoCore unsigned_compare_core(8);
@@ -1597,6 +1707,9 @@ int main(int argc, char* argv[])
             case StopReason::unimplemented_hle_call:
                 std::cout << "unimplemented HLE " << execution.hle_call;
                 break;
+            case StopReason::hle_error:
+                std::cout << "HLE error: " << execution.detail;
+                break;
             case StopReason::memory_fault:
                 std::cout << "guest memory fault: " << execution.detail;
                 break;
@@ -1623,6 +1736,7 @@ int main(int argc, char* argv[])
     elf_loader_tests();
     rpx_loader_tests();
     hle_dispatch_tests();
+    guest_mutex_tests();
     compare_and_conditional_branch_tests();
     load_store_tests();
     function_call_and_stack_tests();

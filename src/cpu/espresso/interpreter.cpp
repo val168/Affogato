@@ -1003,6 +1003,19 @@ RunResult EspressoCore::run(std::size_t max_steps)
             include_history();
             return result;
         }
+        catch (const HleExecutionError& error)
+        {
+            if (has_pending_history_entry_)
+            {
+                append_instruction_history(std::move(pending_history_entry_));
+                has_pending_history_entry_ = false;
+            }
+            result.reason = StopReason::hle_error;
+            result.cia = state.cia;
+            result.detail = error.what();
+            include_history();
+            return result;
+        }
         catch (const std::exception& error)
         {
             if (has_pending_history_entry_)

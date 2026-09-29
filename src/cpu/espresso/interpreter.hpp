@@ -24,6 +24,7 @@ enum class StopReason
     instruction_limit,
     unsupported_instruction,
     unimplemented_hle_call,
+    hle_error,
     memory_fault,
 };
 
