@@ -39,6 +39,8 @@ struct InstructionHistoryEntry
     std::array<std::uint8_t, 3> source_registers{};
     std::array<std::uint32_t, 3> source_values{};
     std::uint8_t source_count{};
+    bool has_immediate{};
+    std::int32_t immediate{};
     bool has_destination{};
     std::uint8_t destination_register{};
     std::uint32_t destination_value{};

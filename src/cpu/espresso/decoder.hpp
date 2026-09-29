@@ -8,6 +8,7 @@ namespace affogato::cpu::espresso
 enum class Opcode
 {
     unsupported,
+    multiply_low_immediate,
     addi,
     addis,
     add_immediate_carry,
@@ -72,7 +73,7 @@ struct DecodedInstruction
     std::uint8_t mask_begin{};
     std::uint8_t mask_end{};
 
-    // Signed for addi/addis and branch displacement; unsigned for logical ops.
+    // Signed for immediate arithmetic and branch displacement; unsigned for logical ops.
     std::int32_t immediate{};
     bool absolute{};
     bool link{};

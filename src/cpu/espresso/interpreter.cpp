@@ -190,6 +190,8 @@ void set_record_result(CpuState& state, std::uint32_t value)
 {
     switch (opcode)
     {
+    case Opcode::multiply_low_immediate:
+        return "mulli";
     case Opcode::unsupported: return "unsupported";
     case Opcode::addi: return "addi";
     case Opcode::addis: return "addis";
@@ -271,6 +273,11 @@ void add_history_source(
     entry.instruction_word = word;
     entry.has_instruction_word = true;
     entry.opcode_name = opcode_name(instruction.opcode);
+    if (instruction.opcode == Opcode::multiply_low_immediate)
+    {
+        entry.has_immediate = true;
+        entry.immediate = instruction.immediate;
+    }
 
     const Opcode opcode = instruction.opcode;
     if (opcode == Opcode::load_multiple_word || opcode == Opcode::store_multiple_word)
@@ -314,6 +321,10 @@ void add_history_source(
 
     switch (opcode)
     {
+    case Opcode::multiply_low_immediate:
+        // Unlike D-form address calculations, mulli reads GPR[RA] even for RA=0.
+        add_history_source(entry, state, instruction.base);
+        break;
     case Opcode::addi:
     case Opcode::addis:
     case Opcode::load_word_zero:
@@ -382,6 +393,7 @@ void add_history_source(
 
     switch (opcode)
     {
+    case Opcode::multiply_low_immediate:
     case Opcode::addi:
     case Opcode::addis:
     case Opcode::add_immediate_carry:
@@ -480,6 +492,10 @@ std::string format_instruction_history(const RunResult& result)
                      << "=0x" << std::hex << std::setw(8) << entry.source_values[i];
             }
         }
+        if (entry.has_immediate)
+        {
+            text << " imm=" << std::dec << entry.immediate;
+        }
         if (entry.has_fp_source)
         {
             const double value = std::bit_cast<double>(entry.fp_source_value);
@@ -564,6 +580,15 @@ StepResult EspressoCore::step()
 
     switch (instruction.opcode)
     {
+    case Opcode::multiply_low_immediate:
+    {
+        const std::int64_t lhs = std::bit_cast<std::int32_t>(state.gpr[instruction.base]);
+        const std::int64_t rhs = instruction.immediate;
+        const std::uint32_t result = static_cast<std::uint32_t>(lhs * rhs);
+        state.gpr[instruction.destination] = result;
+        break;
+    }
+
     case Opcode::addi:
     {
         const std::uint32_t base =

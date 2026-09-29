@@ -239,6 +239,12 @@ struct RpxRelocationOptions
 
 void decoder_tests()
 {
+    const DecodedInstruction mulli = decode(0x1D8B000CU); // mulli r12, r11, 12
+    assert(mulli.opcode == Opcode::multiply_low_immediate);
+    assert(mulli.destination == 12U);
+    assert(mulli.base == 11U);
+    assert(mulli.immediate == 12);
+
     const DecodedInstruction addi = decode(0x3860002AU); // addi r3, r0, 42
     assert(addi.opcode == Opcode::addi);
     assert(addi.destination == 3);
@@ -661,6 +667,48 @@ void interpreter_tests()
 
 void integer_alu_tests()
 {
+    const auto run_mulli = [](std::uint8_t destination, std::uint8_t source,
+                              std::uint32_t input, std::int16_t immediate)
+    {
+        EspressoCore mulli_core(8);
+        constexpr std::uint32_t initial_cr = 0xA5C36987U;
+        constexpr std::uint32_t initial_xer = 0xE0000000U;
+        mulli_core.state.gpr[source] = input;
+        mulli_core.state.cr = initial_cr;
+        mulli_core.state.xer = initial_xer;
+        const std::uint32_t word = 0x1C000000U |
+            (static_cast<std::uint32_t>(destination) << 21U) |
+            (static_cast<std::uint32_t>(source) << 16U) |
+            static_cast<std::uint16_t>(immediate);
+        mulli_core.memory.write32_be(0, word);
+
+        const RunResult result = mulli_core.run(1);
+        assert(result.steps == 1U);
+        assert(result.reason == StopReason::instruction_limit);
+        assert(mulli_core.state.cia == 4U);
+        assert(mulli_core.state.cr == initial_cr);
+        assert(mulli_core.state.xer == initial_xer);
+        assert(result.instruction_history.size() == 1U);
+        assert(result.instruction_history[0].has_destination);
+        assert(result.instruction_history[0].destination_register == destination);
+        return mulli_core.state.gpr[destination];
+    };
+
+    assert(run_mulli(3, 4, 7U, 3) == 21U); // positive * positive
+    assert(run_mulli(3, 4, 0xFFFFFFF9U, 3) == 0xFFFFFFEBU); // negative * positive
+    assert(run_mulli(3, 4, 7U, -3) == 0xFFFFFFEBU); // positive * negative
+    assert(run_mulli(3, 4, 0xFFFFFFF9U, -3) == 21U); // negative * negative
+    assert(run_mulli(3, 4, 0U, -123) == 0U);
+    assert(run_mulli(12, 0, 9U, 4) == 36U); // RA=0 reads the real GPR0 value
+    assert(run_mulli(3, 4, 0x40000000U, 4) == 0U); // low 32 bits of 2^32
+    assert(run_mulli(6, 6, 5U, -2) == 0xFFFFFFF6U); // destination aliases source
+
+    EspressoCore mulli_trace_core(8);
+    mulli_trace_core.memory.write32_be(0, 0x1D8B000CU);
+    const RunResult mulli_trace = mulli_trace_core.run(1);
+    assert(format_instruction_history(mulli_trace).find(
+        "mulli r11=0x00000000 imm=12 -> r12=0x00000000") != std::string::npos);
+
     EspressoCore addic_zero_base_core(8);
     addic_zero_base_core.state.gpr[0] = 0x10190000U;
     addic_zero_base_core.memory.write32_be(0, 0x3000AC30U); // addic r0, r0, 0xAC30

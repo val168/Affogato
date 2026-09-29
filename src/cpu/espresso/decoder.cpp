@@ -33,6 +33,13 @@ DecodedInstruction decode(std::uint32_t raw) noexcept
 
     switch (field(raw, 26, 0x3FU))
     {
+    case 7: // mulli
+        instruction.opcode = Opcode::multiply_low_immediate;
+        instruction.destination = static_cast<std::uint8_t>(field(raw, 21, 0x1FU));
+        instruction.base = static_cast<std::uint8_t>(field(raw, 16, 0x1FU));
+        instruction.immediate = sign_extend(raw, 16);
+        break;
+
     case 8: // subfic
         instruction.opcode = Opcode::subtract_from_immediate_carry;
         instruction.destination = static_cast<std::uint8_t>(field(raw, 21, 0x1FU));
