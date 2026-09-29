@@ -40,6 +40,7 @@ struct InstructionHistoryEntry
     std::array<std::uint32_t, 3> source_values{};
     std::uint8_t source_count{};
     bool has_immediate{};
+    bool immediate_hex{};
     std::int32_t immediate{};
     bool has_destination{};
     std::uint8_t destination_register{};

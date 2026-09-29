@@ -239,6 +239,18 @@ struct RpxRelocationOptions
 
 void decoder_tests()
 {
+    const DecodedInstruction xori = decode(0x68AC0001U); // xori r12, r5, 1
+    assert(xori.opcode == Opcode::xor_immediate);
+    assert(xori.destination == 12U);
+    assert(xori.source == 5U);
+    assert(xori.immediate == 1);
+
+    const DecodedInstruction xoris = decode(0x6CACFFFFU); // xoris r12, r5, 0xFFFF
+    assert(xoris.opcode == Opcode::xor_immediate_shifted);
+    assert(xoris.destination == 12U);
+    assert(xoris.source == 5U);
+    assert(xoris.immediate == 0xFFFF);
+
     const DecodedInstruction mulli = decode(0x1D8B000CU); // mulli r12, r11, 12
     assert(mulli.opcode == Opcode::multiply_low_immediate);
     assert(mulli.destination == 12U);
@@ -667,6 +679,60 @@ void interpreter_tests()
 
 void integer_alu_tests()
 {
+    const auto run_xor_immediate = [](bool shifted, std::uint8_t destination,
+                                      std::uint8_t source, std::uint32_t input,
+                                      std::uint16_t immediate)
+    {
+        EspressoCore xor_core(8);
+        constexpr std::uint32_t initial_cr = 0xA5C36987U;
+        constexpr std::uint32_t initial_xer = 0xE0000000U;
+        xor_core.state.gpr[source] = input;
+        xor_core.state.cr = initial_cr;
+        xor_core.state.xer = initial_xer;
+        const std::uint32_t primary_opcode = shifted ? 27U : 26U;
+        const std::uint32_t word = (primary_opcode << 26U) |
+            (static_cast<std::uint32_t>(source) << 21U) |
+            (static_cast<std::uint32_t>(destination) << 16U) | immediate;
+        xor_core.memory.write32_be(0, word);
+
+        const RunResult result = xor_core.run(1);
+        assert(result.steps == 1U);
+        assert(result.reason == StopReason::instruction_limit);
+        assert(xor_core.state.cia == 4U);
+        assert(xor_core.state.cr == initial_cr);
+        assert(xor_core.state.xer == initial_xer);
+        assert(result.instruction_history.size() == 1U);
+        return xor_core.state.gpr[destination];
+    };
+
+    assert(run_xor_immediate(false, 12, 5, 0U, 1U) == 1U); // zero source
+    assert(run_xor_immediate(false, 12, 5, 0xF0F0F0F0U, 0x00FFU) ==
+           0xF0F0F00FU); // nonzero source
+    assert(run_xor_immediate(false, 12, 5, 0x12345678U, 0U) == 0x12345678U);
+    assert(run_xor_immediate(false, 12, 5, 0U, 0xFFFFU) == 0x0000FFFFU);
+    assert(run_xor_immediate(false, 6, 6, 0x12345678U, 0x00FFU) ==
+           0x12345687U); // destination aliases source
+    assert(run_xor_immediate(false, 12, 0, 0xA5A5A5A5U, 0xFFFFU) ==
+           0xA5A55A5AU); // source r0 reads the actual GPR0
+    assert(run_xor_immediate(true, 12, 5, 0x12345678U, 0xFFFFU) ==
+           0xEDCB5678U);
+    assert(run_xor_immediate(true, 12, 5, 0x12345678U, 0x0001U) ==
+           0x12355678U); // xoris only changes the immediate's upper-word portion
+
+    EspressoCore xori_trace_core(8);
+    xori_trace_core.memory.write32_be(0, 0x68AC0001U);
+    xori_trace_core.state.gpr[5] = 0U;
+    const RunResult xori_trace = xori_trace_core.run(1);
+    assert(format_instruction_history(xori_trace).find(
+        "xori r5=0x00000000 imm=0x0001 -> r12=0x00000001") != std::string::npos);
+
+    EspressoCore xoris_trace_core(8);
+    xoris_trace_core.memory.write32_be(0, 0x6CACFFFFU);
+    xoris_trace_core.state.gpr[5] = 0x12345678U;
+    const RunResult xoris_trace = xoris_trace_core.run(1);
+    assert(format_instruction_history(xoris_trace).find(
+        "xoris r5=0x12345678 imm=0xFFFF -> r12=0xEDCB5678") != std::string::npos);
+
     const auto run_mulli = [](std::uint8_t destination, std::uint8_t source,
                               std::uint32_t input, std::int16_t immediate)
     {

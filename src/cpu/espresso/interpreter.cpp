@@ -200,6 +200,8 @@ void set_record_result(CpuState& state, std::uint32_t value)
     case Opcode::add: return "add";
     case Opcode::subtract_from: return "subf";
     case Opcode::ori: return "ori";
+    case Opcode::xor_immediate: return "xori";
+    case Opcode::xor_immediate_shifted: return "xoris";
     case Opcode::bitwise_or: return "or";
     case Opcode::bitwise_and: return "and";
     case Opcode::bitwise_and_complement: return "andc";
@@ -278,6 +280,13 @@ void add_history_source(
         entry.has_immediate = true;
         entry.immediate = instruction.immediate;
     }
+    else if (instruction.opcode == Opcode::xor_immediate ||
+             instruction.opcode == Opcode::xor_immediate_shifted)
+    {
+        entry.has_immediate = true;
+        entry.immediate_hex = true;
+        entry.immediate = instruction.immediate;
+    }
 
     const Opcode opcode = instruction.opcode;
     if (opcode == Opcode::load_multiple_word || opcode == Opcode::store_multiple_word)
@@ -349,6 +358,8 @@ void add_history_source(
         add_history_source(entry, state, instruction.base);
         break;
     case Opcode::ori:
+    case Opcode::xor_immediate:
+    case Opcode::xor_immediate_shifted:
     case Opcode::and_immediate_record:
     case Opcode::rotate_left_word_and_mask:
     case Opcode::arithmetic_shift_right_immediate:
@@ -401,6 +412,8 @@ void add_history_source(
     case Opcode::add:
     case Opcode::subtract_from:
     case Opcode::ori:
+    case Opcode::xor_immediate:
+    case Opcode::xor_immediate_shifted:
     case Opcode::bitwise_or:
     case Opcode::bitwise_and:
     case Opcode::bitwise_and_complement:
@@ -494,7 +507,16 @@ std::string format_instruction_history(const RunResult& result)
         }
         if (entry.has_immediate)
         {
-            text << " imm=" << std::dec << entry.immediate;
+            text << " imm=";
+            if (entry.immediate_hex)
+            {
+                text << "0x" << std::hex << std::setw(4)
+                     << static_cast<std::uint32_t>(entry.immediate);
+            }
+            else
+            {
+                text << std::dec << entry.immediate;
+            }
         }
         if (entry.has_fp_source)
         {
@@ -676,6 +698,17 @@ StepResult EspressoCore::step()
             state.gpr[instruction.source] |
             static_cast<std::uint32_t>(instruction.immediate);
         break;
+
+    case Opcode::xor_immediate:
+    case Opcode::xor_immediate_shifted:
+    {
+        const std::uint32_t immediate = static_cast<std::uint32_t>(instruction.immediate);
+        const std::uint32_t operand = instruction.opcode == Opcode::xor_immediate_shifted
+            ? immediate << 16U
+            : immediate;
+        state.gpr[instruction.destination] = state.gpr[instruction.source] ^ operand;
+        break;
+    }
 
     case Opcode::bitwise_or:
     case Opcode::bitwise_and:

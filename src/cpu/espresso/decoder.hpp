@@ -9,6 +9,8 @@ enum class Opcode
 {
     unsupported,
     multiply_low_immediate,
+    xor_immediate,
+    xor_immediate_shifted,
     addi,
     addis,
     add_immediate_carry,
@@ -61,7 +63,7 @@ struct DecodedInstruction
     Opcode opcode{Opcode::unsupported};
     std::uint32_t raw{};
 
-    // D-form instructions use destination/base. ori uses source/destination.
+    // D-form instructions use destination/base. Logical immediates use source/destination.
     std::uint8_t destination{};
     std::uint8_t source{};
     std::uint8_t fp_register{};

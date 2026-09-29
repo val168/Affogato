@@ -78,6 +78,16 @@ DecodedInstruction decode(std::uint32_t raw) noexcept
         instruction.immediate = static_cast<std::int32_t>(field(raw, 0, 0xFFFFU));
         break;
 
+    case 26: // xori
+    case 27: // xoris
+        instruction.opcode = field(raw, 26, 0x3FU) == 26
+            ? Opcode::xor_immediate
+            : Opcode::xor_immediate_shifted;
+        instruction.source = static_cast<std::uint8_t>(field(raw, 21, 0x1FU));
+        instruction.destination = static_cast<std::uint8_t>(field(raw, 16, 0x1FU));
+        instruction.immediate = static_cast<std::int32_t>(field(raw, 0, 0xFFFFU));
+        break;
+
     case 18: // b / bl
         instruction.opcode = Opcode::branch;
         instruction.immediate = sign_extend(raw & 0x03FFFFFCU, 26);
