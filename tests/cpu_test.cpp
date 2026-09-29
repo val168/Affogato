@@ -15,8 +15,10 @@
 #include <fstream>
 #include <iostream>
 #include <iterator>
+#include <optional>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -103,17 +105,26 @@ struct RpxRelocationOptions
     std::uint32_t sda2_base{};
 };
 
+struct RpxImportOptions
+{
+    std::string library{"coreinit"};
+    std::uint32_t section_address{0xC0000000U};
+    std::uint32_t slot_offset{20U};
+};
+
 [[nodiscard]] std::vector<std::uint8_t> make_minimal_compressed_rpx(
     std::uint32_t code_address = 0x02000000U,
     std::size_t code_size = 16,
     const RpxRelocationSymbol& relocation_symbol = {},
-    const RpxRelocationOptions& relocation_options = {})
+    const RpxRelocationOptions& relocation_options = {},
+    const std::optional<RpxImportOptions>& import_options = std::nullopt)
 {
     constexpr std::size_t header_size = 52;
     constexpr std::size_t section_header_size = 40;
-    constexpr std::size_t section_count = 8;
+    const std::size_t section_count = import_options ? 9U : 8U;
     constexpr std::size_t section_table_offset = header_size;
-    constexpr std::size_t text_offset = 384;
+    const std::size_t text_offset =
+        (header_size + section_count * section_header_size + 15U) & ~std::size_t{15U};
     assert(code_size >= relocation_options.offset + 4);
     std::vector<std::uint8_t> code(code_size, 0);
     code[0] = 0x38;
@@ -136,11 +147,16 @@ struct RpxRelocationOptions
     assert(status == Z_OK);
     compressed.resize(compressed_size);
 
-    const std::array<std::uint8_t, 68> names{
+    const std::array<std::uint8_t, 68> base_names{
         '\0', '.', 't', 'e', 'x', 't', '\0', '.', 's', 'h', 's', 't', 'r', 't', 'a', 'b', '\0',
         '.', 'r', 'p', 'l', '_', 'c', 'r', 'c', 's', '\0', '.', 'r', 'p', 'l', '_', 'f', 'i', 'l', 'e', 'i', 'n', 'f', 'o', '\0',
         '.', 's', 'y', 'm', 't', 'a', 'b', '\0', '.', 's', 't', 'r', 't', 'a', 'b', '\0',
         '.', 'r', 'e', 'l', 'a', '.', 't', 'e', 'x', 't', '\0'};
+    std::vector<std::uint8_t> names(base_names.begin(), base_names.end());
+    constexpr std::string_view import_section_name = ".dimport_coreinit";
+    const std::uint32_t import_section_name_offset = static_cast<std::uint32_t>(names.size());
+    names.insert(names.end(), import_section_name.begin(), import_section_name.end());
+    names.push_back(0);
     constexpr std::size_t inflated_size_prefix = 4;
     const std::size_t text_size = inflated_size_prefix + compressed.size();
     const std::size_t names_offset = text_offset + text_size;
@@ -155,7 +171,10 @@ struct RpxRelocationOptions
     const std::size_t rela_offset =
         (strtab_offset + symbol_strings.size() + 3U) & ~std::size_t{3U};
     const std::size_t relocation_table_size = 3 * 12;
-    std::vector<std::uint8_t> file(rela_offset + relocation_table_size, 0);
+    constexpr std::size_t import_table_size = 24;
+    const std::size_t import_offset = rela_offset + relocation_table_size;
+    std::vector<std::uint8_t> file(
+        import_offset + (import_options ? import_table_size : 0U), 0);
 
     file[0] = 0x7F;
     file[1] = 'E';
@@ -203,6 +222,28 @@ struct RpxRelocationOptions
                 static_cast<std::uint32_t>(symbol_strings.size()), 1, 0);
     set_section(7, 57, 4, 0, 0, static_cast<std::uint32_t>(rela_offset),
                 static_cast<std::uint32_t>(relocation_table_size), 4, 12, 5, 1);
+    if (import_options)
+    {
+        if (import_options->slot_offset > import_table_size - sizeof(std::uint32_t) ||
+            import_options->slot_offset < 8U + import_options->library.size() + 1U)
+        {
+            throw std::invalid_argument("synthetic RPX import slot overlaps its library name");
+        }
+        set_section(8, import_section_name_offset, 0x80000002U, 0x2U,
+                    import_options->section_address, static_cast<std::uint32_t>(import_offset),
+                    static_cast<std::uint32_t>(import_table_size), 4, 0);
+        const std::size_t library_name_offset = import_offset + 8U;
+        std::copy(import_options->library.begin(), import_options->library.end(),
+                  file.begin() + static_cast<std::ptrdiff_t>(library_name_offset));
+        const std::size_t symbol_offset = symtab_offset + 16;
+        set_be32(file, symbol_offset + 4,
+                 import_options->section_address + import_options->slot_offset);
+        set_be16(file, symbol_offset + 14, 8U);
+    }
+    else
+    {
+        set_section(8, import_section_name_offset, 0, 0, 0, 0, 0, 1, 0);
+    }
 
     set_be32(file, text_offset, static_cast<std::uint32_t>(code.size()));
     std::copy(compressed.begin(), compressed.end(), file.begin() + text_offset + inflated_size_prefix);
@@ -989,6 +1030,79 @@ void elf_loader_tests()
 
 void rpx_loader_tests()
 {
+    constexpr std::uint32_t imported_data_slot = 0xC0000014U;
+    const RpxImportOptions import_options{};
+    const RpxRelocationSymbol imported_data_symbol{
+        "TestData", imported_data_slot, 1, 1, 8, 0};
+    const auto imported_data_file = make_minimal_compressed_rpx(
+        0x02000000U, 16, imported_data_symbol, {}, import_options);
+    EspressoCore imported_data_core(0x1000U);
+    imported_data_core.hle.register_data(
+        "coreinit", "TestData", 4, 4,
+        [](GuestMemory& memory, std::uint32_t address) {
+            memory.write32_be(address, 0xA1B2C3D4U);
+        });
+    static_cast<void>(load_rpx32_powerpc(imported_data_core, imported_data_file));
+    const auto imported_data_address =
+        imported_data_core.hle.data_address("coreinit", "TestData");
+    assert(imported_data_address.has_value());
+    assert(*imported_data_address >= HleDispatcher::first_data_address);
+    assert(*imported_data_address + 4U <= HleDispatcher::data_address_limit);
+    assert(imported_data_core.memory.read32_be(0x0200000CU) == *imported_data_address);
+    assert(imported_data_core.memory.read32_be(imported_data_slot) == *imported_data_address);
+    assert(imported_data_core.memory.read32_be(*imported_data_address) == 0xA1B2C3D4U);
+
+    const RpxRelocationSymbol imported_function_symbol{
+        "TestFunction", imported_data_slot, 1, 2, 8, 0};
+    const auto imported_function_file = make_minimal_compressed_rpx(
+        0x02000000U, 16, imported_function_symbol, {}, import_options);
+    EspressoCore imported_function_core(0x1000U);
+    imported_function_core.hle.register_function(
+        "coreinit", "TestFunction", [](EspressoCore& core) { core.state.gpr[3] = 42U; });
+    static_cast<void>(load_rpx32_powerpc(imported_function_core, imported_function_file));
+    const std::uint32_t function_address =
+        imported_function_core.hle.bind_import("coreinit", "TestFunction");
+    assert(imported_function_core.memory.read32_be(0x0200000CU) == function_address);
+    assert(imported_function_core.memory.read32_be(imported_data_slot) == function_address);
+    imported_function_core.state.cia = function_address;
+    imported_function_core.state.lr = 0x80U;
+    assert(imported_function_core.step() == StepResult::executed);
+    assert(imported_function_core.state.gpr[3] == 42U);
+    assert(imported_function_core.state.cia == 0x80U);
+
+    const RpxRelocationSymbol unregistered_data_symbol{
+        "UnregisteredData", imported_data_slot, 1, 1, 8, 0};
+    const auto unregistered_data_file = make_minimal_compressed_rpx(
+        0x02000000U, 16, unregistered_data_symbol, {}, import_options);
+    EspressoCore unregistered_data_core(0x1000U);
+    static_cast<void>(load_rpx32_powerpc(unregistered_data_core, unregistered_data_file));
+    const std::uint32_t fallback_import_address =
+        unregistered_data_core.hle.bind_import("coreinit", "UnregisteredData");
+    assert(unregistered_data_core.memory.read32_be(0x0200000CU) == imported_data_slot);
+    assert(unregistered_data_core.memory.read32_be(imported_data_slot) == fallback_import_address);
+
+    EspressoCore reserved_section_core(0x1000U);
+    bool reserved_data_section_rejected = false;
+    try
+    {
+        const auto reserved_file = make_minimal_compressed_rpx(
+            HleDispatcher::first_data_address);
+        static_cast<void>(load_rpx32_powerpc(reserved_section_core, reserved_file));
+    }
+    catch (const std::invalid_argument& error)
+    {
+        reserved_data_section_rejected =
+            std::string(error.what()).find("reserved HLE data address range") !=
+            std::string::npos;
+    }
+    assert(reserved_data_section_rejected);
+
+    EspressoCore reserved_heap_core(0x04010000U);
+    static_cast<void>(load_rpx32_powerpc(
+        reserved_heap_core, make_minimal_compressed_rpx()));
+    assert(reserved_heap_core.guest_heap_limit <= HleDispatcher::first_data_address ||
+           reserved_heap_core.guest_heap_cursor >= HleDispatcher::data_address_limit);
+
     const std::vector<std::uint8_t> file = make_minimal_compressed_rpx();
     constexpr std::uint32_t entry_point = 0x02000000U;
     EspressoCore core(static_cast<std::size_t>(entry_point) + 0x100U);
@@ -1277,6 +1391,49 @@ void hle_dispatch_tests()
 {
     EspressoCore core(0x100);
     register_coreinit_hle(core.hle);
+
+    const auto iob = core.hle.bind_data_import("coreinit", "_iob", core.memory);
+    const auto iob_lock = core.hle.bind_data_import("coreinit", "_iob_lock", core.memory);
+    const auto fopen_max =
+        core.hle.bind_data_import("coreinit", "__gh_FOPEN_MAX", core.memory);
+    assert(iob && iob_lock && fopen_max);
+    assert((*iob % 8U) == 0);
+    assert(*iob_lock - *iob == 20U * 0x10U);
+    assert(*fopen_max - *iob_lock == 21U * sizeof(std::uint32_t));
+    assert(core.hle.bind_data_import("coreinit", "_iob", core.memory) == iob);
+    assert(core.memory.read32_be(*iob) == 0U);
+    assert(core.memory.read32_be(*iob + 4U) == 0U);
+    assert(core.memory.read32_be(*iob + 8U) == 0U);
+    assert(core.memory.read32_be(*iob + 0x0CU) == (1U << 2U));
+    assert(core.memory.read32_be(*iob + 0x1CU) == ((1U << 18U) | (1U << 1U)));
+    assert(core.memory.read32_be(*iob + 0x2CU) == ((2U << 18U) | (1U << 1U)));
+    for (std::uint32_t index = 0; index < 21U; ++index)
+    {
+        assert(core.memory.read32_be(*iob_lock + index * 4U) == 0U);
+    }
+    assert(core.memory.read16_be(*fopen_max) == 20U);
+
+    const std::uint32_t flock_ptr = core.hle.bind_import("coreinit", "__ghs_flock_ptr");
+    const auto flock_index = [&](std::uint32_t index, std::uint32_t expected_index) {
+        core.state.cia = flock_ptr;
+        core.state.lr = 0x70U;
+        core.state.gpr[3] = *iob + index * 0x10U;
+        assert(core.step() == StepResult::executed);
+        assert(core.state.gpr[3] == *iob_lock + expected_index * 4U);
+        assert(core.state.cia == 0x70U);
+    };
+    flock_index(0U, 0U);
+    flock_index(1U, 1U);
+    flock_index(2U, 2U);
+    flock_index(20U, 20U);
+    flock_index(30U, 20U);
+
+    core.state.cia = flock_ptr;
+    core.state.lr = 0x74U;
+    core.state.gpr[3] = *iob + 1U;
+    const RunResult misaligned_iob_result = core.run(1);
+    assert(misaligned_iob_result.reason == StopReason::hle_error);
+    assert(misaligned_iob_result.detail.find("misaligned pointer") != std::string::npos);
 
     const std::uint32_t ghs_lock = core.hle.bind_import("coreinit", "__ghsLock");
     const std::uint32_t ghs_unlock = core.hle.bind_import("coreinit", "__ghsUnlock");

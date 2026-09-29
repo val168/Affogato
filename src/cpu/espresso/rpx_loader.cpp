@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <iomanip>
+#include <optional>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -38,6 +39,7 @@ constexpr std::uint16_t symbol_section_undefined = 0;
 constexpr std::uint8_t symbol_binding_weak = 2;
 constexpr std::uint8_t symbol_binding_global = 1;
 constexpr std::uint8_t symbol_type_object = 1;
+constexpr std::uint8_t symbol_type_function = 2;
 constexpr std::uint32_t rpl_loader_metadata_base = 0xC0000000U;
 constexpr std::uint32_t relocation_none = 0;
 constexpr std::uint32_t relocation_addr32 = 1;
@@ -163,6 +165,8 @@ struct TrampolineAllocator
 {
     const std::uint64_t end = static_cast<std::uint64_t>(address) + trampoline_size;
     if (end > guest_address_space_end ||
+        (address < HleDispatcher::data_address_limit &&
+         end > HleDispatcher::first_data_address) ||
         (address < HleDispatcher::import_address_limit &&
          end > HleDispatcher::first_import_address))
     {
@@ -475,7 +479,7 @@ void apply_relocations(
                         // zero-valued relocation symbol, not as a library import.
                         symbol_value = 0;
                     }
-                    else if (symbol_type == 2U || type == relocation_rel24) // STT_FUNC or call relocation
+                    else if (symbol_type == symbol_type_function || type == relocation_rel24)
                     {
                         // Preserve a callable address for optional weak
                         // functions. Without an HLE registration this becomes
@@ -489,8 +493,17 @@ void apply_relocations(
                          sections[symbol_section].type == section_rpl_imports)
                 {
                     const std::string library = import_library_name(file, sections[symbol_section]);
-                    const std::uint32_t import_address = core.hle.bind_import(library, name);
-                    symbol_value = symbol_type == 2U ? import_address : symbol_entry_value;
+                    std::optional<std::uint32_t> data_address;
+                    if (symbol_type == symbol_type_object)
+                    {
+                        data_address = core.hle.bind_data_import(library, name, core.memory);
+                    }
+                    const std::uint32_t import_address = data_address.has_value()
+                        ? *data_address
+                        : core.hle.bind_import(library, name);
+                    symbol_value = symbol_type == symbol_type_function
+                        ? import_address
+                        : data_address.value_or(symbol_entry_value);
                     LoadedSection& import_table = loaded[symbol_section];
                     if (symbol_entry_value < import_table.address ||
                         symbol_entry_value - import_table.address > import_table.contents.size() ||
@@ -837,6 +850,11 @@ RpxLoadResult load_rpx32_powerpc(EspressoCore& core, std::span<const std::uint8_
         {
             throw std::invalid_argument("RPX section overlaps the reserved HLE import address range");
         }
+        if (section.address < HleDispatcher::data_address_limit &&
+            section_end > HleDispatcher::first_data_address)
+        {
+            throw std::invalid_argument("RPX section overlaps the reserved HLE data address range");
+        }
     }
 
     std::vector<LoadedSection> trampolines;
@@ -934,6 +952,9 @@ RpxLoadResult load_rpx32_powerpc(EspressoCore& core, std::span<const std::uint8_
         add_occupied_range(
             HleDispatcher::first_import_address,
             HleDispatcher::import_address_limit - HleDispatcher::first_import_address);
+        add_occupied_range(
+            HleDispatcher::first_data_address,
+            HleDispatcher::data_address_limit - HleDispatcher::first_data_address);
         std::sort(occupied_ranges.begin(), occupied_ranges.end());
 
         std::uint64_t selected_begin = 0;

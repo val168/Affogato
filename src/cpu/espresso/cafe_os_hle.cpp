@@ -4,6 +4,7 @@
 #include "cpu/espresso/hle_dispatcher.hpp"
 #include "cpu/espresso/interpreter.hpp"
 
+#include <algorithm>
 #include <stdexcept>
 
 namespace affogato::cpu::espresso
@@ -232,6 +233,38 @@ void register_coreinit_hle(HleDispatcher& dispatcher)
         });
     dispatcher.register_function(
         "coreinit",
+        "__ghs_flock_ptr",
+        [](EspressoCore& core) {
+            constexpr std::uint32_t iob_entry_size = 0x10U;
+            constexpr std::uint32_t iob_count = 20U;
+            constexpr std::uint32_t lock_count = 21U;
+            const auto iob_base = core.hle.bind_data_import("coreinit", "_iob", core.memory);
+            const auto lock_base =
+                core.hle.bind_data_import("coreinit", "_iob_lock", core.memory);
+            if (!iob_base || !lock_base)
+            {
+                throw HleExecutionError(
+                    "__ghs_flock_ptr requires registered coreinit::_iob and coreinit::_iob_lock data exports");
+            }
+
+            const std::uint32_t iob = core.state.gpr[3];
+            if (iob < *iob_base)
+            {
+                throw HleExecutionError(
+                    "__ghs_flock_ptr received a pointer below the coreinit::_iob array");
+            }
+            const std::uint32_t delta = iob - *iob_base;
+            if (delta < iob_count * iob_entry_size && delta % iob_entry_size != 0)
+            {
+                throw HleExecutionError(
+                    "__ghs_flock_ptr received a misaligned pointer inside coreinit::_iob");
+            }
+
+            const std::uint32_t index = std::min(delta / iob_entry_size, lock_count - 1U);
+            core.state.gpr[3] = *lock_base + index * sizeof(std::uint32_t);
+        });
+    dispatcher.register_function(
+        "coreinit",
         "OSInitMutex",
         [](EspressoCore& core) {
             initialize_guest_os_mutex(core, core.state.gpr[3], core.state.gpr[4]);
@@ -301,6 +334,32 @@ void register_coreinit_hle(HleDispatcher& dispatcher)
         [](EspressoCore& core) {
             // Affogato has no Cafe debugger/GDB transport yet.
             core.state.gpr[3] = 0;
+        });
+
+    dispatcher.register_data(
+        "coreinit",
+        "_iob",
+        20U * 0x10U,
+        8U,
+        [](GuestMemory& memory, std::uint32_t address) {
+            constexpr std::uint32_t info_offset = 0x0CU;
+            constexpr std::uint32_t readable = 1U << 2U;
+            constexpr std::uint32_t writable = 1U << 1U;
+            constexpr std::uint32_t channel_shift = 18U;
+            memory.write32_be(address + info_offset, readable);
+            memory.write32_be(address + 0x10U + info_offset,
+                               writable | (1U << channel_shift));
+            memory.write32_be(address + 0x20U + info_offset,
+                               writable | (2U << channel_shift));
+        });
+    dispatcher.register_data("coreinit", "_iob_lock", 21U * sizeof(std::uint32_t), 4U);
+    dispatcher.register_data(
+        "coreinit",
+        "__gh_FOPEN_MAX",
+        sizeof(std::uint16_t),
+        alignof(std::uint16_t),
+        [](GuestMemory& memory, std::uint32_t address) {
+            memory.write16_be(address, 20U);
         });
 }
 
