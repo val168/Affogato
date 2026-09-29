@@ -166,7 +166,8 @@ void set_record_result(CpuState& state, std::uint32_t value)
             instruction.opcode == Opcode::store_byte_update ||
             instruction.opcode == Opcode::load_halfword_zero ||
             instruction.opcode == Opcode::store_halfword ||
-            instruction.opcode == Opcode::load_single;
+            instruction.opcode == Opcode::load_single ||
+            instruction.opcode == Opcode::store_single;
         if (memory_instruction)
         {
             detail << "; rA=" << std::dec << static_cast<unsigned>(instruction.base)
@@ -230,6 +231,7 @@ void set_record_result(CpuState& state, std::uint32_t value)
     case Opcode::move_to_count_register: return "mtctr";
     case Opcode::conditional_branch_to_count_register: return "bcctr";
     case Opcode::load_single: return "lfs";
+    case Opcode::store_single: return "stfs";
     }
     return "unknown";
 }
@@ -272,7 +274,7 @@ void add_history_source(
         opcode == Opcode::store_byte_update || opcode == Opcode::store_byte_indexed ||
         opcode == Opcode::store_halfword;
 
-    if (opcode == Opcode::load_single)
+    if (opcode == Opcode::load_single || opcode == Opcode::store_single)
     {
         if (instruction.base != 0)
         {
@@ -280,8 +282,17 @@ void add_history_source(
         }
         entry.has_effective_address = true;
         entry.effective_address = effective_address(state, instruction.base, instruction.immediate);
+    }
+    if (opcode == Opcode::load_single)
+    {
         entry.has_fp_destination = true;
-        entry.fp_destination_register = instruction.destination;
+        entry.fp_destination_register = instruction.fp_register;
+    }
+    else if (opcode == Opcode::store_single)
+    {
+        entry.has_fp_source = true;
+        entry.fp_source_register = instruction.fp_register;
+        entry.fp_source_value = state.fpr[instruction.fp_register];
     }
 
     switch (opcode)
@@ -383,6 +394,8 @@ void add_history_source(
         break;
     case Opcode::load_single:
         break;
+    case Opcode::store_single:
+        break;
     case Opcode::store_word_update:
     case Opcode::store_byte_update:
         entry.has_destination = true;
@@ -440,6 +453,13 @@ std::string format_instruction_history(const RunResult& result)
             text << " r" << std::dec << static_cast<unsigned>(entry.source_registers[i])
                  << "=0x" << std::hex << std::setw(8) << entry.source_values[i];
         }
+        if (entry.has_fp_source)
+        {
+            const double value = std::bit_cast<double>(entry.fp_source_value);
+            text << " f" << std::dec << static_cast<unsigned>(entry.fp_source_register)
+                 << '=' << std::setprecision(17) << value << " [0x" << std::hex
+                 << std::setw(16) << entry.fp_source_value << ']';
+        }
         if (entry.has_effective_address)
         {
             text << " [0x" << std::hex << std::setw(8) << entry.effective_address << ']';
@@ -469,6 +489,11 @@ std::string format_instruction_history(const RunResult& result)
             {
                 text << " (not written)";
             }
+        }
+        if (entry.has_stored_single_value && entry.completed)
+        {
+            text << " -> mem32=0x" << std::hex << std::setw(8)
+                 << entry.stored_single_value;
         }
         if (!entry.completed)
         {
@@ -899,7 +924,20 @@ StepResult EspressoCore::step()
         const std::uint32_t single_bits = memory.read32_be(address);
         const float single_value = std::bit_cast<float>(single_bits);
         const double double_value = static_cast<double>(single_value);
-        state.fpr[instruction.destination] = std::bit_cast<std::uint64_t>(double_value);
+        state.fpr[instruction.fp_register] = std::bit_cast<std::uint64_t>(double_value);
+        break;
+    }
+
+    case Opcode::store_single:
+    {
+        const std::uint32_t address =
+            effective_address(state, instruction.base, instruction.immediate);
+        const double double_value = std::bit_cast<double>(state.fpr[instruction.fp_register]);
+        const float single_value = static_cast<float>(double_value);
+        const std::uint32_t single_bits = std::bit_cast<std::uint32_t>(single_value);
+        memory.write32_be(address, single_bits);
+        pending_history_entry_.has_stored_single_value = true;
+        pending_history_entry_.stored_single_value = single_bits;
         break;
     }
 

@@ -423,9 +423,15 @@ void decoder_tests()
 
     const DecodedInstruction lfs = decode(0xC1AC0004U); // lfs f13, 4(r12)
     assert(lfs.opcode == Opcode::load_single);
-    assert(lfs.destination == 13);
+    assert(lfs.fp_register == 13);
     assert(lfs.base == 12);
     assert(lfs.immediate == 4);
+
+    const DecodedInstruction stfs = decode(0xD1ACF060U); // stfs f13, -4000(r12)
+    assert(stfs.opcode == Opcode::store_single);
+    assert(stfs.fp_register == 13);
+    assert(stfs.base == 12);
+    assert(stfs.immediate == -4000);
 
     const DecodedInstruction mflr = decode(0x7C0802A6U); // mflr r0
     assert(mflr.opcode == Opcode::move_from_link_register);
@@ -1395,6 +1401,81 @@ void floating_point_load_tests()
         "lfs r12=0x00001000 [0x00001004] -> f13 (not written)") != std::string::npos);
 }
 
+void floating_point_store_tests()
+{
+    const auto encode_stfs = [](std::uint8_t source, std::uint8_t base,
+                                std::int16_t displacement) {
+        return 0xD0000000U |
+            (static_cast<std::uint32_t>(source) << 21U) |
+            (static_cast<std::uint32_t>(base) << 16U) |
+            static_cast<std::uint16_t>(displacement);
+    };
+
+    EspressoCore positive_core(0x200U);
+    positive_core.state.gpr[4] = 0x100U;
+    positive_core.state.fpr[13] = 0x400A000000000000ULL; // 3.25
+    positive_core.memory.write32_be(0, encode_stfs(13, 4, 4));
+    const RunResult positive_result = positive_core.run(1);
+    assert(positive_result.reason == StopReason::instruction_limit);
+    assert(positive_core.memory.read32_be(0x104U) == 0x40500000U);
+    assert(positive_core.memory.read8(0x104U) == 0x40U);
+    assert(positive_core.memory.read8(0x105U) == 0x50U);
+    assert(positive_core.memory.read8(0x106U) == 0x00U);
+    assert(positive_core.memory.read8(0x107U) == 0x00U);
+    assert(positive_core.state.fpr[13] == 0x400A000000000000ULL);
+    const std::string positive_trace = format_instruction_history(positive_result);
+    assert(positive_trace.find(
+        "stfs r4=0x00000100 f13=3.25 [0x400A000000000000] "
+        "[0x00000104] -> mem32=0x40500000") != std::string::npos);
+
+    // Negative D-form displacement and negative finite source.
+    EspressoCore negative_core(0x200U);
+    negative_core.state.gpr[12] = 0x120U;
+    negative_core.state.fpr[7] = 0xC002000000000000ULL; // -2.25
+    negative_core.memory.write32_be(0, encode_stfs(7, 12, -4));
+    assert(negative_core.step() == StepResult::executed);
+    assert(negative_core.memory.read32_be(0x11CU) == 0xC0100000U);
+    assert(negative_core.state.fpr[7] == 0xC002000000000000ULL);
+
+    // rA == 0 addresses from zero; positive zero stores four zero bytes.
+    EspressoCore zero_core(0x100U);
+    zero_core.state.fpr[2] = 0U;
+    zero_core.memory.write32_be(0, encode_stfs(2, 0, 0x80));
+    assert(zero_core.step() == StepResult::executed);
+    assert(zero_core.memory.read32_be(0x80U) == 0U);
+    assert(zero_core.state.fpr[2] == 0U);
+
+    // Loading a single and storing it again preserves the original -pi bits.
+    EspressoCore round_trip_core(0x200U);
+    round_trip_core.state.gpr[12] = 0x100U;
+    round_trip_core.memory.write32_be(0, 0xC1AC0004U); // lfs f13, 4(r12)
+    round_trip_core.memory.write32_be(4, encode_stfs(13, 12, -4));
+    round_trip_core.memory.write32_be(0x104U, 0xC0490FDBU);
+    const RunResult round_trip_result = round_trip_core.run(2);
+    assert(round_trip_result.reason == StopReason::instruction_limit);
+    assert(round_trip_core.memory.read32_be(0xFCU) == 0xC0490FDBU);
+    assert(round_trip_core.state.fpr[13] == 0xC00921FB60000000ULL);
+
+    // A failed write reports the address/width and retains source FPR details.
+    EspressoCore fault_core(0x100U);
+    fault_core.state.gpr[12] = 0x1000U;
+    fault_core.state.fpr[13] = 0xC00921FB60000000ULL;
+    fault_core.memory.write32_be(0, 0xD1AC0000U); // stfs f13, 0(r12)
+    const RunResult fault = fault_core.run(1);
+    assert(fault.reason == StopReason::memory_fault);
+    assert(fault.detail.find("write 4 byte(s)") != std::string::npos);
+    assert(fault.detail.find("0x00001000") != std::string::npos);
+    assert(fault.instruction_history.size() == 1U);
+    const InstructionHistoryEntry& failed_stfs = fault.instruction_history.front();
+    assert(failed_stfs.opcode_name == "stfs");
+    assert(failed_stfs.has_fp_source);
+    assert(failed_stfs.fp_source_register == 13U);
+    assert(failed_stfs.fp_source_value == 0xC00921FB60000000ULL);
+    assert(!failed_stfs.completed);
+    assert(!failed_stfs.has_stored_single_value);
+    assert(fault_core.state.fpr[13] == 0xC00921FB60000000ULL);
+}
+
 void function_call_and_stack_tests()
 {
     EspressoCore link_branch_core(0x20);
@@ -1499,6 +1580,7 @@ int main(int argc, char* argv[])
     integer_alu_tests();
     leaf_function_abi_tests();
     floating_point_load_tests();
+    floating_point_store_tests();
     elf_loader_tests();
     rpx_loader_tests();
     hle_dispatch_tests();

@@ -50,6 +50,7 @@ enum class Opcode
     move_to_count_register,
     conditional_branch_to_count_register,
     load_single,
+    store_single,
 };
 
 struct DecodedInstruction
@@ -60,6 +61,7 @@ struct DecodedInstruction
     // D-form instructions use destination/base. ori uses source/destination.
     std::uint8_t destination{};
     std::uint8_t source{};
+    std::uint8_t fp_register{};
     std::uint8_t base{};
     std::uint8_t cr_field{};
     std::uint8_t branch_options{};
