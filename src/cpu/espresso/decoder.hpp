@@ -49,6 +49,7 @@ enum class Opcode
     move_from_count_register,
     move_to_count_register,
     conditional_branch_to_count_register,
+    load_single,
 };
 
 struct DecodedInstruction

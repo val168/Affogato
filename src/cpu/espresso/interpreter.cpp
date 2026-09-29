@@ -165,7 +165,8 @@ void set_record_result(CpuState& state, std::uint32_t value)
             instruction.opcode == Opcode::store_byte ||
             instruction.opcode == Opcode::store_byte_update ||
             instruction.opcode == Opcode::load_halfword_zero ||
-            instruction.opcode == Opcode::store_halfword;
+            instruction.opcode == Opcode::store_halfword ||
+            instruction.opcode == Opcode::load_single;
         if (memory_instruction)
         {
             detail << "; rA=" << std::dec << static_cast<unsigned>(instruction.base)
@@ -228,6 +229,7 @@ void set_record_result(CpuState& state, std::uint32_t value)
     case Opcode::move_from_count_register: return "mfctr";
     case Opcode::move_to_count_register: return "mtctr";
     case Opcode::conditional_branch_to_count_register: return "bcctr";
+    case Opcode::load_single: return "lfs";
     }
     return "unknown";
 }
@@ -265,12 +267,22 @@ void add_history_source(
     entry.opcode_name = opcode_name(instruction.opcode);
 
     const Opcode opcode = instruction.opcode;
-    const bool indexed = opcode == Opcode::load_word_indexed ||
-        opcode == Opcode::store_word_indexed || opcode == Opcode::store_byte_indexed;
     const bool store = opcode == Opcode::store_word || opcode == Opcode::store_word_update ||
         opcode == Opcode::store_word_indexed || opcode == Opcode::store_byte ||
         opcode == Opcode::store_byte_update || opcode == Opcode::store_byte_indexed ||
         opcode == Opcode::store_halfword;
+
+    if (opcode == Opcode::load_single)
+    {
+        if (instruction.base != 0)
+        {
+            add_history_source(entry, state, instruction.base);
+        }
+        entry.has_effective_address = true;
+        entry.effective_address = effective_address(state, instruction.base, instruction.immediate);
+        entry.has_fp_destination = true;
+        entry.fp_destination_register = instruction.destination;
+    }
 
     switch (opcode)
     {
@@ -369,6 +381,8 @@ void add_history_source(
         entry.has_destination = true;
         entry.destination_register = instruction.destination;
         break;
+    case Opcode::load_single:
+        break;
     case Opcode::store_word_update:
     case Opcode::store_byte_update:
         entry.has_destination = true;
@@ -377,7 +391,6 @@ void add_history_source(
     default:
         break;
     }
-    static_cast<void>(indexed);
     return entry;
 }
 
@@ -427,10 +440,35 @@ std::string format_instruction_history(const RunResult& result)
             text << " r" << std::dec << static_cast<unsigned>(entry.source_registers[i])
                  << "=0x" << std::hex << std::setw(8) << entry.source_values[i];
         }
+        if (entry.has_effective_address)
+        {
+            text << " [0x" << std::hex << std::setw(8) << entry.effective_address << ']';
+        }
         if (entry.has_destination)
         {
             text << " -> r" << std::dec << static_cast<unsigned>(entry.destination_register)
-                 << "=0x" << std::hex << std::setw(8) << entry.destination_value;
+                 << (entry.completed
+                         ? "=0x"
+                         : " (not written)");
+            if (entry.completed)
+            {
+                text << std::hex << std::setw(8) << entry.destination_value;
+            }
+        }
+        if (entry.has_fp_destination)
+        {
+            text << " -> f" << std::dec
+                 << static_cast<unsigned>(entry.fp_destination_register);
+            if (entry.completed)
+            {
+                const double value = std::bit_cast<double>(entry.fp_destination_value);
+                text << '=' << std::setprecision(17) << value << " [0x" << std::hex
+                     << std::setw(16) << entry.fp_destination_value << ']';
+            }
+            else
+            {
+                text << " (not written)";
+            }
         }
         if (!entry.completed)
         {
@@ -854,6 +892,17 @@ StepResult EspressoCore::step()
             memory.read16_be(effective_address(state, instruction.base, instruction.immediate));
         break;
 
+    case Opcode::load_single:
+    {
+        const std::uint32_t address =
+            effective_address(state, instruction.base, instruction.immediate);
+        const std::uint32_t single_bits = memory.read32_be(address);
+        const float single_value = std::bit_cast<float>(single_bits);
+        const double double_value = static_cast<double>(single_value);
+        state.fpr[instruction.destination] = std::bit_cast<std::uint64_t>(double_value);
+        break;
+    }
+
     case Opcode::store_halfword:
         memory.write16_be(
             effective_address(state, instruction.base, instruction.immediate),
@@ -869,6 +918,11 @@ StepResult EspressoCore::step()
     {
         pending_history_entry_.destination_value =
             state.gpr[pending_history_entry_.destination_register];
+    }
+    if (pending_history_entry_.has_fp_destination)
+    {
+        pending_history_entry_.fp_destination_value =
+            state.fpr[pending_history_entry_.fp_destination_register];
     }
     append_instruction_history(std::move(pending_history_entry_));
     has_pending_history_entry_ = false;

@@ -421,6 +421,12 @@ void decoder_tests()
     assert(sth.opcode == Opcode::store_halfword);
     assert(sth.destination == 3);
 
+    const DecodedInstruction lfs = decode(0xC1AC0004U); // lfs f13, 4(r12)
+    assert(lfs.opcode == Opcode::load_single);
+    assert(lfs.destination == 13);
+    assert(lfs.base == 12);
+    assert(lfs.immediate == 4);
+
     const DecodedInstruction mflr = decode(0x7C0802A6U); // mflr r0
     assert(mflr.opcode == Opcode::move_from_link_register);
     assert(mflr.destination == 0);
@@ -1319,6 +1325,76 @@ void load_store_tests()
     assert(store_byte_update_core.state.gpr[10] == 0x51U);
 }
 
+void floating_point_load_tests()
+{
+    const auto encode_lfs = [](std::uint8_t destination, std::uint8_t base,
+                               std::int16_t displacement) {
+        return 0xC0000000U |
+            (static_cast<std::uint32_t>(destination) << 21U) |
+            (static_cast<std::uint32_t>(base) << 16U) |
+            static_cast<std::uint16_t>(displacement);
+    };
+
+    EspressoCore core(0x200U);
+    core.state.gpr[12] = 0x100U;
+    core.memory.write8(0x104U, 0x3FU);
+    core.memory.write8(0x105U, 0xC0U);
+    core.memory.write8(0x106U, 0x00U);
+    core.memory.write8(0x107U, 0x00U); // Big-endian 1.5f.
+    core.memory.write32_be(0, 0xC1AC0004U);
+    const RunResult positive_result = core.run(1);
+    assert(positive_result.reason == StopReason::instruction_limit);
+    assert(core.state.fpr[13] == 0x3FF8000000000000ULL);
+    assert(core.state.fpr[12] == 0U);
+    const std::string positive_trace = format_instruction_history(positive_result);
+    assert(positive_trace.find(
+        "lfs r12=0x00000100 [0x00000104] -> f13=1.5 [0x3FF8000000000000]") !=
+        std::string::npos);
+
+    // A negative single value and negative D-form displacement.
+    core.state.cia = 4U;
+    core.state.gpr[12] = 0x120U;
+    core.memory.write32_be(0x11CU, 0xC0100000U); // -2.25f
+    core.memory.write32_be(4, encode_lfs(7, 12, -4));
+    assert(core.step() == StepResult::executed);
+    assert(core.state.fpr[7] == 0xC002000000000000ULL);
+
+    // rA == 0 uses address zero as the base, and +0 remains exactly zero.
+    core.state.cia = 8U;
+    core.memory.write32_be(0x80U, 0U);
+    core.memory.write32_be(8, encode_lfs(2, 0, 0x80));
+    assert(core.step() == StepResult::executed);
+    assert(core.state.fpr[2] == 0U);
+    assert(core.state.fpr[13] == 0x3FF8000000000000ULL);
+
+    // Reset clears all architectural FPR bits deterministically.
+    core.state.fpr[31] = 0xFFFFFFFFFFFFFFFFULL;
+    core.state.reset();
+    for (const std::uint64_t value : core.state.fpr)
+    {
+        assert(value == 0U);
+    }
+
+    EspressoCore fault_core(0x100U);
+    fault_core.memory.write32_be(0, 0xC1AC0004U);
+    fault_core.state.gpr[12] = 0x1000U;
+    const RunResult fault = fault_core.run(1);
+    assert(fault.reason == StopReason::memory_fault);
+    assert(fault.detail.find("read 4 byte(s)") != std::string::npos);
+    assert(fault.detail.find("0x00001004") != std::string::npos);
+    assert(fault.instruction_history.size() == 1U);
+    const InstructionHistoryEntry& failed_lfs = fault.instruction_history.front();
+    assert(failed_lfs.opcode_name == "lfs");
+    assert(failed_lfs.has_effective_address);
+    assert(failed_lfs.effective_address == 0x1004U);
+    assert(failed_lfs.has_fp_destination);
+    assert(failed_lfs.fp_destination_register == 13U);
+    assert(!failed_lfs.completed);
+    const std::string trace = format_instruction_history(fault);
+    assert(trace.find(
+        "lfs r12=0x00001000 [0x00001004] -> f13 (not written)") != std::string::npos);
+}
+
 void function_call_and_stack_tests()
 {
     EspressoCore link_branch_core(0x20);
@@ -1422,6 +1498,7 @@ int main(int argc, char* argv[])
     interpreter_tests();
     integer_alu_tests();
     leaf_function_abi_tests();
+    floating_point_load_tests();
     elf_loader_tests();
     rpx_loader_tests();
     hle_dispatch_tests();

@@ -324,6 +324,13 @@ DecodedInstruction decode(std::uint32_t raw) noexcept
         instruction.immediate = sign_extend(raw, 16);
         break;
 
+    case 48: // lfs
+        instruction.opcode = Opcode::load_single;
+        instruction.destination = static_cast<std::uint8_t>(field(raw, 21, 0x1FU));
+        instruction.base = static_cast<std::uint8_t>(field(raw, 16, 0x1FU));
+        instruction.immediate = sign_extend(raw, 16);
+        break;
+
     default:
         break;
     }

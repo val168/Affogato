@@ -41,6 +41,11 @@ struct InstructionHistoryEntry
     bool has_destination{};
     std::uint8_t destination_register{};
     std::uint32_t destination_value{};
+    bool has_effective_address{};
+    std::uint32_t effective_address{};
+    bool has_fp_destination{};
+    std::uint8_t fp_destination_register{};
+    std::uint64_t fp_destination_value{};
     bool completed{};
 };
 
