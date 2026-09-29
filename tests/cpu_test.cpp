@@ -1080,6 +1080,45 @@ void hle_dispatch_tests()
     EspressoCore core(0x100);
     register_coreinit_hle(core.hle);
 
+    const std::uint32_t ghs_lock = core.hle.bind_import("coreinit", "__ghsLock");
+    const std::uint32_t ghs_unlock = core.hle.bind_import("coreinit", "__ghsUnlock");
+    for (std::size_t index = 0; index < core.state.gpr.size(); ++index)
+    {
+        core.state.gpr[index] = 0x10203040U + static_cast<std::uint32_t>(index);
+        core.state.fpr[index] = 0xA0B0C0D000000000ULL + index;
+    }
+    core.state.cr = 0x12345678U;
+    core.state.xer = 0x23456789U;
+    core.state.ctr = 0x3456789AU;
+    core.state.lr = 0x456789ABU;
+    const auto gpr_before_ghs_calls = core.state.gpr;
+    const auto fpr_before_ghs_calls = core.state.fpr;
+    const std::uint32_t cr_before_ghs_calls = core.state.cr;
+    const std::uint32_t xer_before_ghs_calls = core.state.xer;
+    const std::uint32_t ctr_before_ghs_calls = core.state.ctr;
+
+    core.state.cia = ghs_lock;
+    core.state.lr = 0x60U;
+    assert(core.step() == StepResult::executed);
+    assert(core.state.cia == 0x60U);
+    assert(core.state.gpr == gpr_before_ghs_calls);
+    assert(core.state.fpr == fpr_before_ghs_calls);
+    assert(core.state.cr == cr_before_ghs_calls);
+    assert(core.state.xer == xer_before_ghs_calls);
+    assert(core.state.ctr == ctr_before_ghs_calls);
+    assert(core.state.lr == 0x60U);
+
+    core.state.cia = ghs_unlock;
+    core.state.lr = 0x64U;
+    assert(core.step() == StepResult::executed);
+    assert(core.state.cia == 0x64U);
+    assert(core.state.gpr == gpr_before_ghs_calls);
+    assert(core.state.fpr == fpr_before_ghs_calls);
+    assert(core.state.cr == cr_before_ghs_calls);
+    assert(core.state.xer == xer_before_ghs_calls);
+    assert(core.state.ctr == ctr_before_ghs_calls);
+    assert(core.state.lr == 0x64U);
+
     const std::uint32_t debugger_check =
         core.hle.bind_import("coreinit", "OSIsDebuggerInitialized");
     core.state.cia = debugger_check;

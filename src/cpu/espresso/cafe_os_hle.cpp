@@ -145,6 +145,21 @@ void register_coreinit_hle(HleDispatcher& dispatcher)
         });
     dispatcher.register_function(
         "coreinit",
+        "__ghsLock",
+        [](EspressoCore&) {
+            // Cafe conceptually acquires a global Green Hills runtime lock.
+            // This paired no-op is only valid while Affogato runs one guest
+            // thread; replace it with guest synchronization if threading lands.
+        });
+    dispatcher.register_function(
+        "coreinit",
+        "__ghsUnlock",
+        [](EspressoCore&) {
+            // Temporary single-thread counterpart to __ghsLock. It does not
+            // provide mutual exclusion once multiple guest threads exist.
+        });
+    dispatcher.register_function(
+        "coreinit",
         "OSGetThreadSpecific",
         [](EspressoCore& core) {
             constexpr std::uint32_t specific_slot_count = 16U;
