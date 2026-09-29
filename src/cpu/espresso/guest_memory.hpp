@@ -95,8 +95,12 @@ public:
         }
     }
 
-    void zero_fill(std::uint32_t address, std::size_t length)
+    void fill_bytes(std::uint32_t address, std::size_t length, std::uint8_t value)
     {
+        if (length == 0)
+        {
+            return;
+        }
         validate_access(address, length, GuestMemoryAccess::write);
         std::size_t filled = 0;
         while (filled < length)
@@ -105,9 +109,14 @@ public:
                 static_cast<std::uint64_t>(address) + filled);
             auto destination = storage_from(current);
             const std::size_t count = std::min(destination.size(), length - filled);
-            std::fill_n(destination.begin(), count, std::uint8_t{});
+            std::fill_n(destination.begin(), count, value);
             filled += count;
         }
+    }
+
+    void zero_fill(std::uint32_t address, std::size_t length)
+    {
+        fill_bytes(address, length, 0);
     }
 
     [[nodiscard]] std::uint16_t read16_be(std::uint32_t address) const

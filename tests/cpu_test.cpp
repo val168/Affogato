@@ -518,6 +518,15 @@ void guest_memory_tests()
     boundary_memory.zero_fill(6, 4);
     assert(boundary_memory.read32_be(6) == 0U);
 
+    boundary_memory.fill_bytes(6, 4, 0x5AU);
+    assert(boundary_memory.read8(5) == 0x10U);
+    for (std::uint32_t address = 6; address < 10; ++address)
+    {
+        assert(boundary_memory.read8(address) == 0x5AU);
+    }
+    assert(boundary_memory.read8(10) == 0x15U);
+    boundary_memory.fill_bytes(0xFFFFFFFFU, 0, 0xFFU);
+
     bool overlapping_mapping_rejected = false;
     try
     {
@@ -1335,6 +1344,78 @@ void guest_mutex_tests()
     assert(exhausted_core.memory.read32_be(failure_wrapper) == sentinel);
 }
 
+void memset_hle_tests()
+{
+    EspressoCore zero_core(0x20U);
+    register_coreinit_hle(zero_core.hle);
+    const std::uint32_t zero_memset = zero_core.hle.bind_import("coreinit", "memset");
+    zero_core.memory.fill_bytes(0, zero_core.memory.size(), 0xA5U);
+    zero_core.state.cia = zero_memset;
+    zero_core.state.lr = 0x80U;
+    zero_core.state.gpr[3] = 4U;
+    zero_core.state.gpr[4] = 0x100U;
+    zero_core.state.gpr[5] = 4U;
+    assert(zero_core.step() == StepResult::executed);
+    assert(zero_core.state.cia == 0x80U);
+    assert(zero_core.state.gpr[3] == 4U);
+    assert(zero_core.state.gpr[4] == 0x100U);
+    assert(zero_core.state.gpr[5] == 4U);
+    assert(zero_core.memory.read8(3U) == 0xA5U);
+    for (std::uint32_t address = 4U; address < 8U; ++address)
+    {
+        assert(zero_core.memory.read8(address) == 0U);
+    }
+    assert(zero_core.memory.read8(8U) == 0xA5U);
+
+    EspressoCore boundary_core(0x10U);
+    register_coreinit_hle(boundary_core.hle);
+    boundary_core.memory.map_region(0x10U, 0x10U);
+    boundary_core.memory.fill_bytes(0U, 0x20U, 0xCCU);
+    const std::uint32_t boundary_memset = boundary_core.hle.bind_import("coreinit", "memset");
+    boundary_core.state.cia = boundary_memset;
+    boundary_core.state.lr = 0x84U;
+    boundary_core.state.gpr[3] = 0x0EU;
+    boundary_core.state.gpr[4] = 0x1ABU;
+    boundary_core.state.gpr[5] = 5U;
+    assert(boundary_core.step() == StepResult::executed);
+    assert(boundary_core.state.cia == 0x84U);
+    assert(boundary_core.state.gpr[3] == 0x0EU);
+    assert(boundary_core.state.gpr[4] == 0x1ABU);
+    assert(boundary_core.state.gpr[5] == 5U);
+    assert(boundary_core.memory.read8(0x0DU) == 0xCCU);
+    for (std::uint32_t address = 0x0EU; address < 0x13U; ++address)
+    {
+        assert(boundary_core.memory.read8(address) == 0xABU);
+    }
+    assert(boundary_core.memory.read8(0x13U) == 0xCCU);
+
+    // A zero-byte operation returns the destination without validating or
+    // touching that otherwise-unmapped address.
+    boundary_core.state.cia = boundary_memset;
+    boundary_core.state.lr = 0x88U;
+    boundary_core.state.gpr[3] = 0x20U;
+    boundary_core.state.gpr[4] = 0xDEADBEEFU;
+    boundary_core.state.gpr[5] = 0U;
+    assert(boundary_core.step() == StepResult::executed);
+    assert(boundary_core.state.cia == 0x88U);
+    assert(boundary_core.state.gpr[3] == 0x20U);
+    assert(boundary_core.state.gpr[4] == 0xDEADBEEFU);
+    assert(boundary_core.state.gpr[5] == 0U);
+
+    // Invalid nonempty ranges surface through the normal runtime memory-fault
+    // result, without changing the return register or mapped neighbor bytes.
+    boundary_core.state.cia = boundary_memset;
+    boundary_core.state.lr = 0x8CU;
+    boundary_core.state.gpr[3] = 0x20U;
+    boundary_core.state.gpr[4] = 0x77U;
+    boundary_core.state.gpr[5] = 1U;
+    const RunResult fault = boundary_core.run(1U);
+    assert(fault.reason == StopReason::memory_fault);
+    assert(fault.detail.find("write 1 byte(s)") != std::string::npos);
+    assert(fault.detail.find("0x00000020") != std::string::npos);
+    assert(boundary_core.memory.read8(0x1FU) == 0xCCU);
+}
+
 void compare_and_conditional_branch_tests()
 {
     EspressoCore unsigned_compare_core(8);
@@ -1737,6 +1818,7 @@ int main(int argc, char* argv[])
     rpx_loader_tests();
     hle_dispatch_tests();
     guest_mutex_tests();
+    memset_hle_tests();
     compare_and_conditional_branch_tests();
     load_store_tests();
     function_call_and_stack_tests();

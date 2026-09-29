@@ -122,6 +122,19 @@ void register_coreinit_hle(HleDispatcher& dispatcher)
         });
     dispatcher.register_function(
         "coreinit",
+        "memset",
+        [](EspressoCore& core) {
+            const std::uint32_t destination = core.state.gpr[3];
+            const std::uint8_t value = static_cast<std::uint8_t>(core.state.gpr[4]);
+            const std::uint32_t size = core.state.gpr[5];
+            if (size != 0)
+            {
+                core.memory.fill_bytes(destination, size, value);
+            }
+            core.state.gpr[3] = destination;
+        });
+    dispatcher.register_function(
+        "coreinit",
         "OSFastMutex_Init",
         [](EspressoCore& core) {
             constexpr std::uint32_t fast_mutex_size = 0x2CU;
