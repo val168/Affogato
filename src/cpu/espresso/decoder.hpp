@@ -18,6 +18,7 @@ enum class Opcode
     subtract_from_immediate_carry,
     add,
     subtract_from,
+    subtract_from_carrying,
     ori,
     bitwise_or,
     bitwise_and,

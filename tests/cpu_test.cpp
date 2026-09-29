@@ -346,6 +346,14 @@ void decoder_tests()
     assert(subf.base == 4);
     assert(subf.source == 5);
 
+    const DecodedInstruction subfc = decode(0x7C6C5810U); // subfc r3, r12, r11
+    assert(subfc.opcode == Opcode::subtract_from_carrying);
+    assert(subfc.destination == 3);
+    assert(subfc.base == 12);
+    assert(subfc.source == 11);
+    assert(!subfc.record);
+    assert(decode(0x7C6C5C10U).opcode == Opcode::unsupported); // subfco remains unsupported
+
     const DecodedInstruction ori = decode(0x60631234U); // ori r3, r3, 0x1234
     assert(ori.opcode == Opcode::ori);
     assert(ori.source == 3);
@@ -740,6 +748,64 @@ void interpreter_tests()
 
 void integer_alu_tests()
 {
+    constexpr std::uint32_t xer_ca = 0x20000000U;
+    const auto run_subfc = [xer_ca](std::uint8_t destination, std::uint8_t ra, std::uint8_t rb,
+                              std::uint32_t a, std::uint32_t b, bool record = false)
+    {
+        EspressoCore subfc_core(8);
+        constexpr std::uint32_t initial_cr = 0x12345678U;
+        constexpr std::uint32_t initial_xer = 0xA00000A5U;
+        subfc_core.state.gpr[ra] = a;
+        subfc_core.state.gpr[rb] = b;
+        subfc_core.state.cr = initial_cr;
+        subfc_core.state.xer = initial_xer;
+        const std::uint32_t word = (31U << 26U) |
+            (static_cast<std::uint32_t>(destination) << 21U) |
+            (static_cast<std::uint32_t>(ra) << 16U) |
+            (static_cast<std::uint32_t>(rb) << 11U) | (8U << 1U) |
+            static_cast<std::uint32_t>(record);
+        subfc_core.memory.write32_be(0, word);
+        const RunResult result = subfc_core.run(1);
+        assert(result.steps == 1U);
+        assert(result.reason == StopReason::instruction_limit);
+        assert(subfc_core.state.cia == 4U);
+        const std::uint32_t expected = b - a;
+        const bool expected_ca = b >= a;
+        assert(subfc_core.state.gpr[destination] == expected);
+        assert(((subfc_core.state.xer & xer_ca) != 0) == expected_ca);
+        assert((subfc_core.state.xer & ~xer_ca) == (initial_xer & ~xer_ca));
+        if (record)
+        {
+            const std::uint32_t cr0 = expected == 0U ? 0x3U
+                : (expected & 0x80000000U) != 0 ? 0x9U : 0x5U;
+            assert(subfc_core.state.cr == ((initial_cr & 0x0FFFFFFFU) | (cr0 << 28U)));
+        }
+        else
+        {
+            assert(subfc_core.state.cr == initial_cr);
+        }
+        return std::pair{expected, result};
+    };
+
+    assert(run_subfc(3, 12, 11, 3U, 5U).first == 2U);
+    assert(run_subfc(3, 12, 11, 5U, 3U).first == 0xFFFFFFFEU);
+    assert(run_subfc(3, 12, 11, 5U, 5U).first == 0U);
+    assert(run_subfc(3, 12, 11, 1U, 0U).first == 0xFFFFFFFFU);
+    assert(run_subfc(3, 12, 11, 0U, 0xFFFFFFFFU).first == 0xFFFFFFFFU);
+    assert(run_subfc(12, 12, 11, 3U, 5U).first == 2U); // destination aliases rA
+    assert(run_subfc(11, 12, 11, 3U, 5U).first == 2U); // destination aliases rB
+    const auto subfc_record = run_subfc(3, 12, 11, 0U, 0U, true);
+    assert(subfc_record.first == 0U);
+    assert(subfc_record.second.instruction_history[0].has_carry_result);
+    assert(subfc_record.second.instruction_history[0].carry_result);
+
+    EspressoCore subfc_trace_core(8);
+    subfc_trace_core.memory.write32_be(0, 0x7C6C5810U);
+    const RunResult subfc_trace = subfc_trace_core.run(1);
+    assert(format_instruction_history(subfc_trace).find(
+        "subfc r12=0x00000000 r11=0x00000000 -> r3=0x00000000 CA=1")
+        != std::string::npos);
+
     const auto run_rlwimi = [](std::uint8_t destination, std::uint8_t source,
                                std::uint32_t source_value, std::uint32_t old_destination,
                                std::uint8_t shift, std::uint8_t mask_begin,

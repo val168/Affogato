@@ -45,6 +45,8 @@ struct InstructionHistoryEntry
     bool has_destination{};
     std::uint8_t destination_register{};
     std::uint32_t destination_value{};
+    bool has_carry_result{};
+    bool carry_result{};
     bool has_old_destination{};
     std::uint8_t old_destination_register{};
     std::uint32_t old_destination_value{};

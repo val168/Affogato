@@ -199,6 +199,7 @@ void set_record_result(CpuState& state, std::uint32_t value)
     case Opcode::subtract_from_immediate_carry: return "subfic";
     case Opcode::add: return "add";
     case Opcode::subtract_from: return "subf";
+    case Opcode::subtract_from_carrying: return "subfc";
     case Opcode::ori: return "ori";
     case Opcode::xor_immediate: return "xori";
     case Opcode::xor_immediate_shifted: return "xoris";
@@ -387,6 +388,7 @@ void add_history_source(
         break;
     case Opcode::add:
     case Opcode::subtract_from:
+    case Opcode::subtract_from_carrying:
     case Opcode::bitwise_or:
     case Opcode::bitwise_and:
     case Opcode::bitwise_and_complement:
@@ -431,6 +433,7 @@ void add_history_source(
     case Opcode::subtract_from_immediate_carry:
     case Opcode::add:
     case Opcode::subtract_from:
+    case Opcode::subtract_from_carrying:
     case Opcode::ori:
     case Opcode::xor_immediate:
     case Opcode::xor_immediate_shifted:
@@ -574,6 +577,10 @@ std::string format_instruction_history(const RunResult& result)
                 text << std::hex << std::setw(8) << entry.destination_value;
             }
         }
+        if (entry.has_carry_result)
+        {
+            text << " CA=" << (entry.carry_result ? '1' : '0');
+        }
         if (entry.has_fp_destination)
         {
             text << " -> f" << std::dec
@@ -622,6 +629,10 @@ StepResult EspressoCore::step()
     current_instruction_word_fetched_ = true;
     const DecodedInstruction instruction = decode(instruction_word);
     pending_history_entry_ = make_history_entry(state, cia, instruction_word, instruction);
+    if (instruction.opcode == Opcode::subtract_from_carrying)
+    {
+        pending_history_entry_.has_carry_result = true;
+    }
     has_pending_history_entry_ = true;
 
     if (instruction.opcode == Opcode::unsupported)
@@ -720,6 +731,27 @@ StepResult EspressoCore::step()
         const std::uint32_t result =
             state.gpr[instruction.source] - state.gpr[instruction.base];
         state.gpr[instruction.destination] = result;
+        if (instruction.record)
+        {
+            set_record_result(state, result);
+        }
+        break;
+    }
+
+    case Opcode::subtract_from_carrying:
+    {
+        const std::uint32_t minuend = state.gpr[instruction.source];
+        const std::uint32_t subtrahend = state.gpr[instruction.base];
+        const std::uint32_t result = minuend - subtrahend;
+        state.gpr[instruction.destination] = result;
+        if (minuend >= subtrahend)
+        {
+            state.xer |= xer_carry_mask;
+        }
+        else
+        {
+            state.xer &= ~xer_carry_mask;
+        }
         if (instruction.record)
         {
             set_record_result(state, result);
@@ -1126,6 +1158,10 @@ StepResult EspressoCore::step()
     {
         pending_history_entry_.destination_value =
             state.gpr[pending_history_entry_.destination_register];
+    }
+    if (pending_history_entry_.has_carry_result)
+    {
+        pending_history_entry_.carry_result = (state.xer & xer_carry_mask) != 0;
     }
     if (pending_history_entry_.has_fp_destination)
     {
