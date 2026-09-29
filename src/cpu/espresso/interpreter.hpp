@@ -45,6 +45,13 @@ struct InstructionHistoryEntry
     bool has_destination{};
     std::uint8_t destination_register{};
     std::uint32_t destination_value{};
+    bool has_old_destination{};
+    std::uint8_t old_destination_register{};
+    std::uint32_t old_destination_value{};
+    bool has_rotate_fields{};
+    std::uint8_t rotate_shift{};
+    std::uint8_t rotate_mask_begin{};
+    std::uint8_t rotate_mask_end{};
     bool has_effective_address{};
     std::uint32_t effective_address{};
     bool has_register_range{};

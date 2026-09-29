@@ -210,6 +210,7 @@ void set_record_result(CpuState& state, std::uint32_t value)
     case Opcode::bitwise_equivalence: return "eqv";
     case Opcode::and_immediate_record: return "andi.";
     case Opcode::rotate_left_word_and_mask: return "rlwinm";
+    case Opcode::rotate_left_word_and_mask_insert: return "rlwimi";
     case Opcode::arithmetic_shift_right_immediate: return "srawi";
     case Opcode::shift_left_word: return "slw";
     case Opcode::branch: return "b";
@@ -276,7 +277,9 @@ void add_history_source(
     entry.instruction_word = word;
     entry.has_instruction_word = true;
     entry.opcode_name = opcode_name(instruction.opcode);
-    if (instruction.opcode == Opcode::count_leading_zeros && instruction.record)
+    if ((instruction.opcode == Opcode::count_leading_zeros ||
+         instruction.opcode == Opcode::rotate_left_word_and_mask_insert ||
+         instruction.opcode == Opcode::rotate_left_word_and_mask) && instruction.record)
     {
         entry.opcode_name += '.';
     }
@@ -291,6 +294,16 @@ void add_history_source(
         entry.has_immediate = true;
         entry.immediate_hex = true;
         entry.immediate = instruction.immediate;
+    }
+    if (instruction.opcode == Opcode::rotate_left_word_and_mask_insert)
+    {
+        entry.has_old_destination = true;
+        entry.old_destination_register = instruction.destination;
+        entry.old_destination_value = state.gpr[instruction.destination];
+        entry.has_rotate_fields = true;
+        entry.rotate_shift = instruction.shift;
+        entry.rotate_mask_begin = instruction.mask_begin;
+        entry.rotate_mask_end = instruction.mask_end;
     }
 
     const Opcode opcode = instruction.opcode;
@@ -368,6 +381,7 @@ void add_history_source(
     case Opcode::count_leading_zeros:
     case Opcode::and_immediate_record:
     case Opcode::rotate_left_word_and_mask:
+    case Opcode::rotate_left_word_and_mask_insert:
     case Opcode::arithmetic_shift_right_immediate:
         add_history_source(entry, state, instruction.source);
         break;
@@ -428,6 +442,7 @@ void add_history_source(
     case Opcode::bitwise_equivalence:
     case Opcode::and_immediate_record:
     case Opcode::rotate_left_word_and_mask:
+    case Opcode::rotate_left_word_and_mask_insert:
     case Opcode::arithmetic_shift_right_immediate:
     case Opcode::shift_left_word:
     case Opcode::load_word_zero:
@@ -524,6 +539,18 @@ std::string format_instruction_history(const RunResult& result)
             {
                 text << std::dec << entry.immediate;
             }
+        }
+        if (entry.has_old_destination)
+        {
+            text << " old-r" << std::dec
+                 << static_cast<unsigned>(entry.old_destination_register) << "=0x"
+                 << std::hex << std::setw(8) << entry.old_destination_value;
+        }
+        if (entry.has_rotate_fields)
+        {
+            text << " sh=" << std::dec << static_cast<unsigned>(entry.rotate_shift)
+                 << " mb=" << static_cast<unsigned>(entry.rotate_mask_begin)
+                 << " me=" << static_cast<unsigned>(entry.rotate_mask_end);
         }
         if (entry.has_fp_source)
         {
@@ -766,6 +793,21 @@ StepResult EspressoCore::step()
             state.gpr[instruction.source], static_cast<int>(instruction.shift));
         const std::uint32_t result =
             rotated & rotate_mask(instruction.mask_begin, instruction.mask_end);
+        state.gpr[instruction.destination] = result;
+        if (instruction.record)
+        {
+            set_record_result(state, result);
+        }
+        break;
+    }
+
+    case Opcode::rotate_left_word_and_mask_insert:
+    {
+        const std::uint32_t old_destination = state.gpr[instruction.destination];
+        const std::uint32_t rotated = std::rotl(
+            state.gpr[instruction.source], static_cast<int>(instruction.shift));
+        const std::uint32_t mask = rotate_mask(instruction.mask_begin, instruction.mask_end);
+        const std::uint32_t result = (rotated & mask) | (old_destination & ~mask);
         state.gpr[instruction.destination] = result;
         if (instruction.record)
         {

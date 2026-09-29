@@ -403,6 +403,15 @@ void decoder_tests()
     assert(rlwinm.mask_begin == 0);
     assert(rlwinm.mask_end == 26);
 
+    const DecodedInstruction rlwimi = decode(0x53CC3632U);
+    assert(rlwimi.opcode == Opcode::rotate_left_word_and_mask_insert);
+    assert(rlwimi.source == 30);
+    assert(rlwimi.destination == 12);
+    assert(rlwimi.shift == 6);
+    assert(rlwimi.mask_begin == 24);
+    assert(rlwimi.mask_end == 25);
+    assert(!rlwimi.record);
+
     const DecodedInstruction srawi = decode(0x7C691670U); // srawi r9, r3, 2
     assert(srawi.opcode == Opcode::arithmetic_shift_right_immediate);
     assert(srawi.source == 3);
@@ -731,6 +740,58 @@ void interpreter_tests()
 
 void integer_alu_tests()
 {
+    const auto run_rlwimi = [](std::uint8_t destination, std::uint8_t source,
+                               std::uint32_t source_value, std::uint32_t old_destination,
+                               std::uint8_t shift, std::uint8_t mask_begin,
+                               std::uint8_t mask_end, bool record = false)
+    {
+        EspressoCore rotate_core(8);
+        constexpr std::uint32_t initial_cr = 0x12345678U;
+        constexpr std::uint32_t initial_xer = 0xE0000000U;
+        rotate_core.state.gpr[source] = source_value;
+        rotate_core.state.gpr[destination] = old_destination;
+        rotate_core.state.cr = initial_cr;
+        rotate_core.state.xer = initial_xer;
+        const std::uint32_t word = (20U << 26U) |
+            (static_cast<std::uint32_t>(source) << 21U) |
+            (static_cast<std::uint32_t>(destination) << 16U) |
+            (static_cast<std::uint32_t>(shift) << 11U) |
+            (static_cast<std::uint32_t>(mask_begin) << 6U) |
+            (static_cast<std::uint32_t>(mask_end) << 1U) | static_cast<std::uint32_t>(record);
+        rotate_core.memory.write32_be(0, word);
+        const RunResult result = rotate_core.run(1);
+        assert(result.steps == 1U);
+        assert(result.reason == StopReason::instruction_limit);
+        assert(rotate_core.state.cia == 4U);
+        assert(rotate_core.state.xer == initial_xer);
+        assert(result.instruction_history.size() == 1U);
+        assert(result.instruction_history[0].has_old_destination);
+        assert(result.instruction_history[0].old_destination_value == old_destination);
+        const std::uint32_t expected_cr = record
+            ? ((initial_cr & 0x0FFFFFFFU) | 0x50000000U)
+            : initial_cr;
+        assert(rotate_core.state.cr == expected_cr);
+        return std::pair{rotate_core.state.gpr[destination], result};
+    };
+
+    // MB=24..25 selects bits 6..7 after rotating the source left by six.
+    const auto sample_rlwimi = run_rlwimi(12, 30, 3U, 0x1234563FU, 6, 24, 25);
+    assert(sample_rlwimi.first == 0x123456FFU);
+    assert((sample_rlwimi.second.instruction_history[0].instruction_word == 0x53CC3632U));
+    assert(format_instruction_history(sample_rlwimi.second).find(
+        "rlwimi r30=0x00000003 old-r12=0x1234563F sh=6 mb=24 me=25 -> r12=0x123456FF")
+        != std::string::npos);
+    assert(run_rlwimi(3, 4, 0xFFFFFFFFU, 0U, 0, 24, 25).first == 0x000000C0U);
+
+    assert(run_rlwimi(3, 4, 0U, 0xDEADBEEFU, 0, 24, 31).first == 0xDEADBE00U);
+    assert(run_rlwimi(5, 5, 0xAAAAAAAAU, 0xAAAAAAAAU, 1, 31, 31).first ==
+           0xAAAAAAABU); // aliased source reads the original register value
+    assert(run_rlwimi(3, 4, 1U, 0U, 31, 0, 0).first == 0x80000000U);
+    assert(run_rlwimi(3, 4, 0x80000001U, 0x0F0000F0U, 0, 28, 3).first ==
+           0x8F0000F1U); // wrapping mask
+    const auto record_rlwimi = run_rlwimi(12, 30, 3U, 0x1234563FU, 6, 24, 25, true);
+    assert(record_rlwimi.first == 0x123456FFU);
+
     const auto run_cntlzw = [](std::uint32_t input, std::uint8_t destination,
                                std::uint8_t source, bool record,
                                std::uint32_t initial_cr, std::uint32_t initial_xer)

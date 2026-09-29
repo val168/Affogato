@@ -61,8 +61,11 @@ DecodedInstruction decode(std::uint32_t raw) noexcept
         instruction.immediate = sign_extend(raw, 16);
         break;
 
+    case 20: // rlwimi
     case 21: // rlwinm
-        instruction.opcode = Opcode::rotate_left_word_and_mask;
+        instruction.opcode = field(raw, 26, 0x3FU) == 20
+            ? Opcode::rotate_left_word_and_mask_insert
+            : Opcode::rotate_left_word_and_mask;
         instruction.source = static_cast<std::uint8_t>(field(raw, 21, 0x1FU));
         instruction.destination = static_cast<std::uint8_t>(field(raw, 16, 0x1FU));
         instruction.shift = static_cast<std::uint8_t>(field(raw, 11, 0x1FU));

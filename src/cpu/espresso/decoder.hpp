@@ -26,6 +26,7 @@ enum class Opcode
     bitwise_equivalence,
     and_immediate_record,
     rotate_left_word_and_mask,
+    rotate_left_word_and_mask_insert,
     arithmetic_shift_right_immediate,
     shift_left_word,
     branch,
