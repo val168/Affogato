@@ -21,6 +21,7 @@
 #include <stdexcept>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -28,6 +29,8 @@ namespace
 {
 
 namespace fs = std::filesystem;
+const char* current_stage = "startup";
+bool sdl_initialized = false;
 
 struct Game
 {
@@ -39,6 +42,17 @@ std::string path_utf8(const fs::path& path)
 {
     const auto encoded = path.u8string();
     return {reinterpret_cast<const char*>(encoded.data()), encoded.size()};
+}
+
+fs::path path_from_utf8(std::string_view text)
+{
+    std::u8string encoded;
+    encoded.reserve(text.size());
+    for (const unsigned char byte : text)
+    {
+        encoded.push_back(static_cast<char8_t>(byte));
+    }
+    return fs::path(encoded);
 }
 
 std::string lower_ascii(std::string value)
@@ -59,7 +73,7 @@ std::vector<fs::path> load_folders(const fs::path& config_file)
     {
         if (!line.empty())
         {
-            folders.push_back(fs::u8path(line));
+            folders.push_back(path_from_utf8(line));
         }
     }
     return folders;
@@ -99,7 +113,7 @@ std::vector<Game> discover_games(const std::vector<fs::path>& roots)
                 it.increment(error);
                 continue;
             }
-            if (it->is_regular_file(error) && lower_ascii(it->path().extension().string()) == ".rpx")
+            if (it->is_regular_file(error) && lower_ascii(path_utf8(it->path().extension())) == ".rpx")
             {
                 candidates.push_back(it->path());
             }
@@ -117,13 +131,13 @@ std::vector<Game> discover_games(const std::vector<fs::path>& roots)
             continue;
         }
         const fs::path& candidate = candidates[i];
-        if (lower_ascii(candidate.parent_path().filename().string()) == "code")
+        if (lower_ascii(path_utf8(candidate.parent_path().filename())) == "code")
         {
             const fs::path title_dir = candidate.parent_path().parent_path();
             std::vector<std::size_t> group;
             for (std::size_t j = i; j < candidates.size(); ++j)
             {
-                if (lower_ascii(candidates[j].parent_path().filename().string()) == "code" &&
+                if (lower_ascii(path_utf8(candidates[j].parent_path().filename())) == "code" &&
                     candidates[j].parent_path().parent_path() == title_dir)
                 {
                     consumed[j] = true;
@@ -132,10 +146,10 @@ std::vector<Game> discover_games(const std::vector<fs::path>& roots)
             }
             if (!group.empty())
             {
-                const std::string expected = lower_ascii(title_dir.filename().string());
+                const std::string expected = lower_ascii(path_utf8(title_dir.filename()));
                 const auto rank = [&](std::size_t index)
                 {
-                    const std::string stem = lower_ascii(candidates[index].stem().string());
+                    const std::string stem = lower_ascii(path_utf8(candidates[index].stem()));
                     return stem == expected ? 0 : (stem == "main" ? 1 : 2);
                 };
                 const auto best = *std::min_element(group.begin(), group.end(), [&](auto a, auto b)
@@ -143,16 +157,17 @@ std::vector<Game> discover_games(const std::vector<fs::path>& roots)
                     if (rank(a) != rank(b)) return rank(a) < rank(b);
                     return candidates[a].filename() < candidates[b].filename();
                 });
-                const std::string label = title_dir.filename().string().empty()
-                    ? candidates[best].stem().string()
-                    : title_dir.filename().string();
+                const std::string title_directory = path_utf8(title_dir.filename());
+                const std::string label = title_directory.empty()
+                    ? path_utf8(candidates[best].stem())
+                    : title_directory;
                 games.push_back({label, candidates[best]});
             }
         }
         else
         {
             consumed[i] = true;
-            games.push_back({candidate.stem().string(), candidate});
+            games.push_back({path_utf8(candidate.stem()), candidate});
         }
     }
 
@@ -257,54 +272,75 @@ void launch_game(const fs::path& path, WorkerResult& worker, std::thread& thread
 
 struct FolderSelection
 {
-    std::vector<fs::path>* folders{};
-    bool* library_dirty{};
+    std::mutex mutex;
+    std::vector<std::string> pending_paths;
 };
 
 void SDLCALL folder_selected(void* userdata, const char* const* filelist, int)
 {
     auto* selection = static_cast<FolderSelection*>(userdata);
-    auto& folders = *selection->folders;
     if (filelist == nullptr || filelist[0] == nullptr) return;
-    for (const char* item = filelist[0]; item != nullptr; ++item)
+    try
     {
-        const fs::path path = fs::u8path(item);
-        std::error_code error;
-        const fs::path canonical = fs::weakly_canonical(path, error);
-        const fs::path& chosen = error ? path : canonical;
-        if (std::find(folders.begin(), folders.end(), chosen) == folders.end())
+        std::lock_guard lock(selection->mutex);
+        for (const char* item = filelist[0]; item != nullptr; ++item)
         {
-            folders.push_back(chosen);
-            *selection->library_dirty = true;
+            selection->pending_paths.emplace_back(item);
         }
+    }
+    catch (...)
+    {
+        // Exceptions must never escape an SDL callback (which may run on a
+        // platform-owned thread). Any queued selections remain usable.
+    }
+}
+
+void report_fatal_error(const char* message) noexcept
+{
+    try
+    {
+        std::ofstream log("AffogatoFrontend.log", std::ios::app);
+        log << "Affogato frontend failure\n"
+            << "Stage: " << current_stage << '\n'
+            << "Error: " << message << "\n\n";
+    }
+    catch (...)
+    {
+    }
+
+    std::cerr << "Affogato frontend failed during " << current_stage
+              << ": " << message << '\n'
+              << "Details were appended to AffogatoFrontend.log in the current directory.\n";
+    if (sdl_initialized)
+    {
+        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Affogato error", message, nullptr);
     }
 }
 
 } // namespace
 
-int main()
+int run_frontend()
 {
+    current_stage = "SDL initialization";
     if (!SDL_Init(SDL_INIT_VIDEO))
     {
-        std::cerr << "SDL initialization failed: " << SDL_GetError() << '\n';
-        return 1;
+        throw std::runtime_error(std::string("SDL initialization failed: ") + SDL_GetError());
     }
+    sdl_initialized = true;
+
+    current_stage = "window creation";
     const float scale = SDL_GetDisplayContentScale(SDL_GetPrimaryDisplay());
     SDL_Window* window = SDL_CreateWindow("Affogato", static_cast<int>(1050 * scale),
         static_cast<int>(720 * scale), SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
     if (window == nullptr)
     {
-        std::cerr << "Window creation failed: " << SDL_GetError() << '\n';
-        SDL_Quit();
-        return 1;
+        throw std::runtime_error(std::string("Window creation failed: ") + SDL_GetError());
     }
     SDL_Renderer* renderer = SDL_CreateRenderer(window, nullptr);
     if (renderer == nullptr)
     {
-        std::cerr << "Renderer creation failed: " << SDL_GetError() << '\n';
         SDL_DestroyWindow(window);
-        SDL_Quit();
-        return 1;
+        throw std::runtime_error(std::string("Renderer creation failed: ") + SDL_GetError());
     }
 
     IMGUI_CHECKVERSION();
@@ -316,15 +352,17 @@ int main()
     ImGui_ImplSDL3_InitForSDLRenderer(window, renderer);
     ImGui_ImplSDLRenderer3_Init(renderer);
 
+    current_stage = "loading saved game folders";
     char* preference_path = SDL_GetPrefPath("Affogato", "Affogato");
     const fs::path config_file = preference_path != nullptr
         ? fs::path(preference_path) / "game_folders.txt"
         : fs::temp_directory_path() / "affogato_game_folders.txt";
     SDL_free(preference_path);
     std::vector<fs::path> folders = load_folders(config_file);
+    current_stage = "initial game library scan";
     std::vector<Game> games = discover_games(folders);
     bool library_dirty = false;
-    FolderSelection folder_selection{&folders, &library_dirty};
+    FolderSelection folder_selection;
     std::optional<std::size_t> selected_game;
     WorkerResult worker;
     std::thread launch_thread;
@@ -340,6 +378,42 @@ int main()
                 (event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED && event.window.windowID == SDL_GetWindowID(window)))
                 done = true;
         }
+
+        // SDL may invoke the folder dialog callback on a worker thread. Move
+        // its UTF-8 results to the main thread before touching library state
+        // or filesystem paths.
+        std::vector<std::string> pending_paths;
+        {
+            std::lock_guard lock(folder_selection.mutex);
+            pending_paths.swap(folder_selection.pending_paths);
+        }
+        for (const std::string& selected_path : pending_paths)
+        {
+            current_stage = "converting a selected game folder path";
+            try
+            {
+                const fs::path path = path_from_utf8(selected_path);
+                std::error_code error;
+                const fs::path canonical = fs::weakly_canonical(path, error);
+                const fs::path& chosen = error ? path : canonical;
+                if (std::find(folders.begin(), folders.end(), chosen) == folders.end())
+                {
+                    folders.push_back(chosen);
+                    library_dirty = true;
+                }
+            }
+            catch (const fs::filesystem_error& error)
+            {
+                std::lock_guard lock(worker.mutex);
+                worker.message = std::string("Could not add game folder: ") + error.what();
+            }
+            catch (const std::exception& error)
+            {
+                std::lock_guard lock(worker.mutex);
+                worker.message = std::string("Could not add game folder: ") + error.what();
+            }
+        }
+
         ImGui_ImplSDLRenderer3_NewFrame();
         ImGui_ImplSDL3_NewFrame();
         ImGui::NewFrame();
@@ -429,10 +503,12 @@ int main()
 
         if (library_dirty)
         {
+            current_stage = "scanning the game library";
             games = discover_games(folders);
             library_dirty = false;
             save_folders(config_file, folders);
         }
+        current_stage = "rendering the frontend";
         ImGui::Render();
         const ImGuiIO& io = ImGui::GetIO();
         SDL_SetRenderScale(renderer, io.DisplayFramebufferScale.x, io.DisplayFramebufferScale.y);
@@ -442,6 +518,7 @@ int main()
         SDL_RenderPresent(renderer);
     }
 
+    current_stage = "saving game folders and shutting down";
     save_folders(config_file, folders);
     if (launch_thread.joinable()) launch_thread.join();
     ImGui_ImplSDLRenderer3_Shutdown();
@@ -451,4 +528,21 @@ int main()
     SDL_DestroyWindow(window);
     SDL_Quit();
     return 0;
+}
+
+int main()
+{
+    try
+    {
+        return run_frontend();
+    }
+    catch (const std::exception& error)
+    {
+        report_fatal_error(error.what());
+    }
+    catch (...)
+    {
+        report_fatal_error("Unknown non-standard exception.");
+    }
+    return 1;
 }
