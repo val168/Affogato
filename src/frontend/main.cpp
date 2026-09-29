@@ -16,6 +16,7 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <stdexcept>
@@ -178,6 +179,56 @@ std::vector<Game> discover_games(const std::vector<fs::path>& roots)
     return games;
 }
 
+struct LibraryScan
+{
+    std::mutex mutex;
+    bool running{};
+    bool result_ready{};
+    std::vector<Game> games;
+    std::string error;
+};
+
+void start_library_scan(
+    const std::vector<fs::path>& roots,
+    LibraryScan& scan,
+    std::jthread& thread)
+{
+    if (thread.joinable())
+    {
+        thread.join();
+    }
+    {
+        std::lock_guard lock(scan.mutex);
+        scan.running = true;
+        scan.result_ready = false;
+        scan.error.clear();
+    }
+
+    thread = std::jthread([roots, &scan]
+    {
+        std::vector<Game> discovered;
+        std::string error;
+        try
+        {
+            discovered = discover_games(roots);
+        }
+        catch (const std::exception& exception)
+        {
+            error = exception.what();
+        }
+        catch (...)
+        {
+            error = "Unknown error while scanning game folders.";
+        }
+
+        std::lock_guard lock(scan.mutex);
+        scan.games = std::move(discovered);
+        scan.error = std::move(error);
+        scan.running = false;
+        scan.result_ready = true;
+    });
+}
+
 std::string format_result(const affogato::EmulatorRunResult& result)
 {
     using affogato::cpu::espresso::StopReason;
@@ -218,7 +269,7 @@ struct WorkerResult
     std::atomic_bool running{};
 };
 
-void launch_game(const fs::path& path, WorkerResult& worker, std::thread& thread)
+void launch_game(const fs::path& path, WorkerResult& worker, std::jthread& thread)
 {
     if (worker.running.exchange(true))
     {
@@ -229,7 +280,7 @@ void launch_game(const fs::path& path, WorkerResult& worker, std::thread& thread
         std::lock_guard lock(worker.mutex);
         worker.message = "Loading " + path_utf8(path) + " ...";
     }
-    thread = std::thread([path, &worker]
+    thread = std::jthread([path, &worker]
     {
         std::string message;
         try
@@ -274,24 +325,70 @@ struct FolderSelection
 {
     std::mutex mutex;
     std::vector<std::string> pending_paths;
+    std::string pending_error;
+};
+
+struct FolderDialogRequest
+{
+    std::shared_ptr<FolderSelection> selection;
 };
 
 void SDLCALL folder_selected(void* userdata, const char* const* filelist, int)
 {
-    auto* selection = static_cast<FolderSelection*>(userdata);
-    if (filelist == nullptr || filelist[0] == nullptr) return;
+    std::unique_ptr<FolderDialogRequest> request(static_cast<FolderDialogRequest*>(userdata));
+    if (!request || !request->selection) return;
+
+    const auto selection = request->selection;
     try
     {
-        std::lock_guard lock(selection->mutex);
-        for (const char* item = filelist[0]; item != nullptr; ++item)
+        if (filelist == nullptr)
         {
-            selection->pending_paths.emplace_back(item);
+            const char* detail = SDL_GetError();
+            std::lock_guard lock(selection->mutex);
+            selection->pending_error = "Folder picker failed";
+            if (detail != nullptr && detail[0] != '\0')
+            {
+                selection->pending_error += ": ";
+                selection->pending_error += detail;
+            }
+            return;
+        }
+
+        // SDL gives us a NULL-terminated array of UTF-8 path pointers. Copy
+        // each complete path while the callback's temporary strings exist.
+        std::vector<std::string> copied_paths;
+        for (const char* const* item = filelist; *item != nullptr; ++item)
+        {
+            copied_paths.emplace_back(*item);
+        }
+
+        std::lock_guard lock(selection->mutex);
+        for (std::string& path : copied_paths)
+        {
+            selection->pending_paths.push_back(std::move(path));
+        }
+    }
+    catch (const std::exception& exception)
+    {
+        try
+        {
+            std::lock_guard lock(selection->mutex);
+            selection->pending_error = std::string("Could not copy folder dialog result: ") + exception.what();
+        }
+        catch (...)
+        {
         }
     }
     catch (...)
     {
-        // Exceptions must never escape an SDL callback (which may run on a
-        // platform-owned thread). Any queued selections remain usable.
+        try
+        {
+            std::lock_guard lock(selection->mutex);
+            selection->pending_error = "Unknown error while copying folder dialog result.";
+        }
+        catch (...)
+        {
+        }
     }
 }
 
@@ -360,12 +457,16 @@ int run_frontend()
     SDL_free(preference_path);
     std::vector<fs::path> folders = load_folders(config_file);
     current_stage = "initial game library scan";
-    std::vector<Game> games = discover_games(folders);
     bool library_dirty = false;
-    FolderSelection folder_selection;
+    std::vector<Game> games;
+    std::string library_error;
+    LibraryScan library_scan;
+    std::jthread library_scan_thread;
+    start_library_scan(folders, library_scan, library_scan_thread);
+    const auto folder_selection = std::make_shared<FolderSelection>();
     std::optional<std::size_t> selected_game;
     WorkerResult worker;
-    std::thread launch_thread;
+    std::jthread launch_thread;
     bool grid_view = false;
     bool done = false;
     while (!done)
@@ -383,9 +484,16 @@ int run_frontend()
         // its UTF-8 results to the main thread before touching library state
         // or filesystem paths.
         std::vector<std::string> pending_paths;
+        std::string dialog_error;
         {
-            std::lock_guard lock(folder_selection.mutex);
-            pending_paths.swap(folder_selection.pending_paths);
+            std::lock_guard lock(folder_selection->mutex);
+            pending_paths.swap(folder_selection->pending_paths);
+            dialog_error.swap(folder_selection->pending_error);
+        }
+        if (!dialog_error.empty())
+        {
+            std::lock_guard lock(worker.mutex);
+            worker.message = std::move(dialog_error);
         }
         for (const std::string& selected_path : pending_paths)
         {
@@ -414,6 +522,28 @@ int run_frontend()
             }
         }
 
+        bool scan_running = false;
+        {
+            std::lock_guard lock(library_scan.mutex);
+            if (library_scan.result_ready)
+            {
+                games = std::move(library_scan.games);
+                library_error = std::move(library_scan.error);
+                library_scan.result_ready = false;
+                selected_game.reset();
+            }
+            scan_running = library_scan.running;
+        }
+        if (library_dirty && !scan_running)
+        {
+            current_stage = "starting a game library scan";
+            library_error.clear();
+            start_library_scan(folders, library_scan, library_scan_thread);
+            library_dirty = false;
+            save_folders(config_file, folders);
+            scan_running = true;
+        }
+
         ImGui_ImplSDLRenderer3_NewFrame();
         ImGui_ImplSDL3_NewFrame();
         ImGui::NewFrame();
@@ -425,7 +555,8 @@ int run_frontend()
 
         if (ImGui::Button("Add Game Folder"))
         {
-            SDL_ShowOpenFolderDialog(folder_selected, &folder_selection, window, nullptr, true);
+            auto* request = new FolderDialogRequest{folder_selection};
+            SDL_ShowOpenFolderDialog(folder_selected, request, window, nullptr, true);
         }
         ImGui::SameLine();
         if (ImGui::Button("List View")) grid_view = false;
@@ -433,10 +564,17 @@ int run_frontend()
         if (ImGui::Button("Grid View")) grid_view = true;
         ImGui::SameLine();
         ImGui::Text("%zu titles", games.size());
+        if (scan_running)
+        {
+            ImGui::SameLine();
+            ImGui::TextDisabled("Scanning folders...");
+        }
         ImGui::Separator();
 
         ImGui::BeginChild("GameList", ImVec2(0, ImGui::GetContentRegionAvail().y * 0.60f), ImGuiChildFlags_Borders);
-        if (games.empty()) ImGui::TextWrapped("No RPX titles found. Add a folder containing an extracted Wii U title or RPX.");
+        if (!library_error.empty()) ImGui::TextWrapped("Library scan failed: %s", library_error.c_str());
+        else if (games.empty() && !scan_running) ImGui::TextWrapped("No RPX titles found. Add a folder containing an extracted Wii U title or RPX.");
+        else if (games.empty()) ImGui::TextWrapped("Scanning added folders for RPX titles...");
         else if (!grid_view)
         {
             for (std::size_t i = 0; i < games.size(); ++i)
@@ -501,13 +639,6 @@ int run_frontend()
         ImGui::EndChild();
         ImGui::End();
 
-        if (library_dirty)
-        {
-            current_stage = "scanning the game library";
-            games = discover_games(folders);
-            library_dirty = false;
-            save_folders(config_file, folders);
-        }
         current_stage = "rendering the frontend";
         ImGui::Render();
         const ImGuiIO& io = ImGui::GetIO();
@@ -520,6 +651,7 @@ int run_frontend()
 
     current_stage = "saving game folders and shutting down";
     save_folders(config_file, folders);
+    if (library_scan_thread.joinable()) library_scan_thread.join();
     if (launch_thread.joinable()) launch_thread.join();
     ImGui_ImplSDLRenderer3_Shutdown();
     ImGui_ImplSDL3_Shutdown();
