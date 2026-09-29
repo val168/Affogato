@@ -31,6 +31,7 @@ constexpr std::uint32_t section_dynsym = 11;
 constexpr std::uint32_t section_rela = 4;
 constexpr std::uint32_t section_rpl_imports = 0x80000002;
 constexpr std::uint32_t section_rpl_fileinfo = 0x80000004;
+constexpr std::uint32_t trampoline_size = 16;
 constexpr std::uint16_t symbol_section_absolute = 0xFFF1;
 constexpr std::uint16_t symbol_section_undefined = 0;
 constexpr std::uint8_t symbol_binding_weak = 2;
@@ -67,6 +68,180 @@ struct LoadedSection
     bool executable{};
     std::vector<std::uint8_t> contents;
 };
+
+struct RpxFileInfo
+{
+    std::uint32_t text_size{};
+    std::uint32_t tramp_adjust{};
+    // Present in v4.2 FILEINFO, but Decaf's Cafe trampoline allocator does
+    // not consume this field; keep it parsed without inventing semantics.
+    std::uint32_t tramp_addition{};
+};
+
+struct TrampolineAllocator
+{
+    std::uint64_t pre_begin{};
+    std::uint64_t pre_cursor{};
+    std::size_t pre_slots{};
+    std::uint64_t post_cursor{};
+    std::uint64_t post_end{};
+    std::size_t post_slots{};
+};
+
+[[nodiscard]] std::uint64_t align_up_16(std::uint64_t value)
+{
+    return (value + 15U) & ~std::uint64_t{15U};
+}
+
+[[nodiscard]] TrampolineAllocator make_trampoline_allocator(
+    const RpxFileInfo& file_info,
+    const std::vector<LoadedSection>& loaded)
+{
+    std::uint64_t text_begin = guest_address_space_end;
+    std::uint64_t text_end = 0;
+    for (const LoadedSection& section : loaded)
+    {
+        if (section.contents.empty() || !section.executable ||
+            section.address >= rpl_loader_metadata_base)
+        {
+            continue;
+        }
+        text_begin = std::min<std::uint64_t>(text_begin, section.address);
+        text_end = std::max<std::uint64_t>(
+            text_end, static_cast<std::uint64_t>(section.address) + section.contents.size());
+    }
+
+    if (text_begin == guest_address_space_end || text_begin < file_info.tramp_adjust)
+    {
+        return {};
+    }
+
+    const std::uint64_t reservation_begin = text_begin - file_info.tramp_adjust;
+    const std::uint64_t reservation_end = reservation_begin + file_info.text_size;
+    if (file_info.text_size < file_info.tramp_adjust ||
+        reservation_end > guest_address_space_end || text_end > reservation_end)
+    {
+        return {};
+    }
+
+    const std::uint64_t pre_end = text_begin & ~std::uint64_t{15U};
+    const std::uint64_t post_begin = align_up_16(text_end);
+    TrampolineAllocator allocator;
+    allocator.pre_begin = reservation_begin;
+    allocator.pre_cursor = pre_end;
+    if (pre_end >= reservation_begin)
+    {
+        allocator.pre_slots = static_cast<std::size_t>(
+            (pre_end - reservation_begin) / trampoline_size);
+    }
+    allocator.post_cursor = post_begin;
+    allocator.post_end = reservation_end;
+    if (reservation_end >= post_begin)
+    {
+        allocator.post_slots = static_cast<std::size_t>(
+            (reservation_end - post_begin) / trampoline_size);
+    }
+    return allocator;
+}
+
+[[nodiscard]] bool ranges_overlap(
+    std::uint64_t address,
+    std::uint64_t size,
+    std::uint64_t other_address,
+    std::uint64_t other_size)
+{
+    return address < other_address + other_size && other_address < address + size;
+}
+
+[[nodiscard]] bool trampoline_slot_available(
+    std::uint32_t address,
+    const std::vector<LoadedSection>& loaded,
+    const std::vector<LoadedSection>& trampolines)
+{
+    const std::uint64_t end = static_cast<std::uint64_t>(address) + trampoline_size;
+    if (end > guest_address_space_end ||
+        (address < HleDispatcher::import_address_limit &&
+         end > HleDispatcher::first_import_address))
+    {
+        return false;
+    }
+    const auto overlaps_section = [address](const LoadedSection& section) {
+        return !section.contents.empty() && ranges_overlap(
+            address, trampoline_size, section.address, section.contents.size());
+    };
+    return std::none_of(loaded.begin(), loaded.end(), overlaps_section) &&
+           std::none_of(trampolines.begin(), trampolines.end(), overlaps_section);
+}
+
+[[nodiscard]] std::uint32_t allocate_trampoline(
+    TrampolineAllocator& allocator,
+    std::uint32_t target_address,
+    const std::vector<LoadedSection>& loaded,
+    const std::vector<LoadedSection>& trampolines)
+{
+    const auto in_rel24_range = [target_address](std::uint32_t address) {
+        const std::int64_t displacement = static_cast<std::int64_t>(address) - target_address;
+        return (displacement & 3) == 0 && displacement >= -0x02000000LL &&
+               displacement <= 0x01FFFFFCLL;
+    };
+
+    while (allocator.post_slots != 0)
+    {
+        const std::uint64_t candidate = allocator.post_cursor;
+        allocator.post_cursor += trampoline_size;
+        --allocator.post_slots;
+        if (candidate + trampoline_size > allocator.post_end ||
+            candidate > UINT32_MAX || !in_rel24_range(static_cast<std::uint32_t>(candidate)))
+        {
+            break;
+        }
+        if (trampoline_slot_available(static_cast<std::uint32_t>(candidate), loaded, trampolines))
+        {
+            return static_cast<std::uint32_t>(candidate);
+        }
+    }
+
+    while (allocator.pre_slots != 0)
+    {
+        if (allocator.pre_cursor < allocator.pre_begin + trampoline_size)
+        {
+            break;
+        }
+        allocator.pre_cursor -= trampoline_size;
+        --allocator.pre_slots;
+        const std::uint64_t candidate = allocator.pre_cursor;
+        if (!in_rel24_range(static_cast<std::uint32_t>(candidate)))
+        {
+            break;
+        }
+        if (trampoline_slot_available(static_cast<std::uint32_t>(candidate), loaded, trampolines))
+        {
+            return static_cast<std::uint32_t>(candidate);
+        }
+    }
+
+    throw std::invalid_argument(
+        "RPX REL24 relocation has no reachable free FILEINFO trampoline slot");
+}
+
+void write_trampoline(std::vector<std::uint8_t>& bytes, std::uint32_t target)
+{
+    const std::array<std::uint32_t, 4> instructions{
+        0x3D600000U | (target >> 16U), // lis r11, target@h
+        0x616B0000U | (target & 0xFFFFU), // ori r11, r11, target@l
+        0x7D6903A6U, // mtctr r11
+        0x4E800420U, // bctr
+    };
+    bytes.resize(trampoline_size);
+    for (std::size_t i = 0; i < instructions.size(); ++i)
+    {
+        const std::uint32_t instruction = instructions[i];
+        bytes[i * 4] = static_cast<std::uint8_t>(instruction >> 24U);
+        bytes[i * 4 + 1] = static_cast<std::uint8_t>(instruction >> 16U);
+        bytes[i * 4 + 2] = static_cast<std::uint8_t>(instruction >> 8U);
+        bytes[i * 4 + 3] = static_cast<std::uint8_t>(instruction);
+    }
+}
 
 [[nodiscard]] std::string section_range_error(
     std::size_t index,
@@ -204,8 +379,11 @@ void apply_relocations(
     EspressoCore& core,
     std::span<const std::uint8_t> file,
     const std::vector<Section>& sections,
-    std::vector<LoadedSection>& loaded)
+    std::vector<LoadedSection>& loaded,
+    const RpxFileInfo& file_info,
+    std::vector<LoadedSection>& trampolines)
 {
+    TrampolineAllocator trampoline_allocator = make_trampoline_allocator(file_info, loaded);
     for (const Section& relocation_section : sections)
     {
         if (relocation_section.type != section_rela)
@@ -385,21 +563,54 @@ void apply_relocations(
                 {
                     throw std::invalid_argument("RPX REL24 relocation is outside its target section");
                 }
-                const std::int64_t displacement = static_cast<std::int64_t>(value) - target_address;
-                if ((displacement & 3) != 0 || displacement < -0x02000000LL || displacement > 0x01FFFFFCLL)
+                if ((target_address & 3U) != 0 || (value & 3U) != 0)
                 {
                     throw std::invalid_argument("RPX REL24 relocation for '" + relocation_symbol +
                                                 "' at " + std::to_string(target_address) +
                                                 " to " + std::to_string(value) + " (symbol " +
                                                 std::to_string(symbol_value) + ", addend " +
                                                 std::to_string(addend) + ")" +
-                                                " is unaligned or out of range");
+                                                " is unaligned");
                 }
                 const std::uint32_t instruction =
                     (static_cast<std::uint32_t>(target[patch_offset]) << 24U) |
                     (static_cast<std::uint32_t>(target[patch_offset + 1]) << 16U) |
                     (static_cast<std::uint32_t>(target[patch_offset + 2]) << 8U) |
                     target[patch_offset + 3];
+                std::int64_t displacement = static_cast<std::int64_t>(value) - target_address;
+                if (displacement < -0x02000000LL || displacement > 0x01FFFFFCLL)
+                {
+                    if ((instruction & 2U) != 0)
+                    {
+                        throw std::invalid_argument(
+                            "RPX out-of-range REL24 with AA set cannot use a relative trampoline");
+                    }
+                    std::uint32_t trampoline_address = 0;
+                    try
+                    {
+                        trampoline_address = allocate_trampoline(
+                            trampoline_allocator, target_address, loaded, trampolines);
+                    }
+                    catch (const std::invalid_argument& error)
+                    {
+                        throw std::invalid_argument(
+                            "RPX REL24 relocation for '" + relocation_symbol + "' at " +
+                            std::to_string(target_address) + " to " + std::to_string(value) +
+                            " (symbol " + std::to_string(symbol_value) + ", addend " +
+                            std::to_string(addend) + "): " + error.what());
+                    }
+
+                    LoadedSection trampoline;
+                    trampoline.address = trampoline_address;
+                    trampoline.executable = true;
+                    write_trampoline(trampoline.contents, value);
+                    trampolines.push_back(std::move(trampoline));
+                    displacement = static_cast<std::int64_t>(trampoline_address) - target_address;
+                }
+                if (displacement < -0x02000000LL || displacement > 0x01FFFFFCLL)
+                {
+                    throw std::invalid_argument("RPX REL24 trampoline is outside branch range");
+                }
                 const std::uint32_t patched = (instruction & 0xFC000003U) |
                     (static_cast<std::uint32_t>(displacement) & 0x03FFFFFCU);
                 target[patch_offset] = static_cast<std::uint8_t>(patched >> 24U);
@@ -452,6 +663,7 @@ RpxLoadResult load_rpx32_powerpc(EspressoCore& core, std::span<const std::uint8_
 
     std::vector<Section> sections(section_count);
     bool has_file_info = false;
+    RpxFileInfo file_info;
     for (std::size_t i = 0; i < sections.size(); ++i)
     {
         const std::size_t offset = section_table_offset + i * section_entry_size;
@@ -471,15 +683,22 @@ RpxLoadResult load_rpx32_powerpc(EspressoCore& core, std::span<const std::uint8_
         const Section& section = sections[i];
         if (section.type == section_rpl_fileinfo)
         {
-            if (section.size < 4)
+            if (has_file_info)
             {
-                throw std::invalid_argument("RPX FILEINFO section is truncated");
+                throw std::invalid_argument("RPX contains multiple Cafe FILEINFO sections");
+            }
+            if (section.size < 0x60)
+            {
+                throw std::invalid_argument("RPX v4.2 FILEINFO section is truncated");
             }
             require_range(file, section.offset, section.size);
             if (read32_be(file, section.offset) != 0xCAFE0402U)
             {
                 throw std::invalid_argument("RPX FILEINFO section has an invalid Cafe magic");
             }
+            file_info.text_size = read32_be(file, section.offset + 4);
+            file_info.tramp_adjust = read32_be(file, section.offset + 0x20);
+            file_info.tramp_addition = read32_be(file, section.offset + 0x48);
             has_file_info = true;
         }
         if (section.type == section_rpl_imports && section.size != 0)
@@ -615,7 +834,8 @@ RpxLoadResult load_rpx32_powerpc(EspressoCore& core, std::span<const std::uint8_
         }
     }
 
-    apply_relocations(core, file, sections, loaded);
+    std::vector<LoadedSection> trampolines;
+    apply_relocations(core, file, sections, loaded, file_info, trampolines);
     std::uint64_t highest_flat_guest_address = 0;
     bool has_flat_sections = false;
     for (std::size_t i = 0; i < loaded.size(); ++i)
@@ -640,6 +860,45 @@ RpxLoadResult load_rpx32_powerpc(EspressoCore& core, std::span<const std::uint8_
                     highest_flat_guest_address,
                     std::min<std::uint64_t>(section_end, core.memory.size()));
             }
+        }
+    }
+    for (const LoadedSection& trampoline : trampolines)
+    {
+        const std::uint64_t section_end =
+            static_cast<std::uint64_t>(trampoline.address) + trampoline.contents.size();
+        if (section_end > core.memory.size())
+        {
+            const std::uint64_t sparse_begin =
+                std::max<std::uint64_t>(trampoline.address, core.memory.size());
+            try
+            {
+                core.memory.map_region(
+                    static_cast<std::uint32_t>(sparse_begin),
+                    static_cast<std::size_t>(section_end - sparse_begin));
+            }
+            catch (const std::invalid_argument& error)
+            {
+                throw std::invalid_argument(
+                    "RPX REL24 trampoline at " + std::to_string(trampoline.address) +
+                    " could not be mapped: " + error.what());
+            }
+        }
+        try
+        {
+            core.memory.write_bytes(trampoline.address, trampoline.contents);
+        }
+        catch (const std::out_of_range& error)
+        {
+            throw std::invalid_argument(
+                "RPX REL24 trampoline at " + std::to_string(trampoline.address) +
+                " is not backed by guest memory: " + error.what());
+        }
+        if (trampoline.address < core.memory.size())
+        {
+            has_flat_sections = true;
+            highest_flat_guest_address = std::max(
+                highest_flat_guest_address,
+                std::min<std::uint64_t>(section_end, core.memory.size()));
         }
     }
     const std::uint64_t heap_begin =

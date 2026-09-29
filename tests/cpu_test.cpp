@@ -89,17 +89,28 @@ struct RpxRelocationSymbol
     std::int32_t addend{0x12345678};
 };
 
+struct RpxRelocationOptions
+{
+    std::uint32_t type{1};
+    std::uint32_t offset{12};
+    std::uint32_t branch_instruction{0x48000001U}; // bl
+    std::uint32_t tramp_adjust{};
+    std::uint32_t text_size{};
+    std::uint32_t tramp_addition{};
+};
+
 [[nodiscard]] std::vector<std::uint8_t> make_minimal_compressed_rpx(
     std::uint32_t code_address = 0x02000000U,
     std::size_t code_size = 16,
-    const RpxRelocationSymbol& relocation_symbol = {})
+    const RpxRelocationSymbol& relocation_symbol = {},
+    const RpxRelocationOptions& relocation_options = {})
 {
     constexpr std::size_t header_size = 52;
     constexpr std::size_t section_header_size = 40;
     constexpr std::size_t section_count = 8;
     constexpr std::size_t section_table_offset = header_size;
     constexpr std::size_t text_offset = 384;
-    assert(code_size >= 12);
+    assert(code_size >= relocation_options.offset + 4);
     std::vector<std::uint8_t> code(code_size, 0);
     code[0] = 0x38;
     code[1] = 0x63;
@@ -109,6 +120,10 @@ struct RpxRelocationSymbol
     code[5] = 0x80;
     code[6] = 0x00;
     code[7] = 0x20; // blr
+    if (relocation_options.type == 10)
+    {
+        set_be32(code, relocation_options.offset, relocation_options.branch_instruction);
+    }
 
     uLongf compressed_size = compressBound(code.size());
     std::vector<std::uint8_t> compressed(compressed_size);
@@ -202,13 +217,18 @@ struct RpxRelocationSymbol
         (relocation_symbol.binding << 4U) | relocation_symbol.type); // st_info
     set_be16(file, symbol_offset + 14, relocation_symbol.section); // st_shndx
     const std::size_t synthetic_relocation_offset = rela_offset + 24;
-    set_be32(file, synthetic_relocation_offset, code_address + 12); // r_offset
-    set_be32(file, synthetic_relocation_offset + 4, (1U << 8U) | 1U); // symbol 1, R_PPC_ADDR32
+    set_be32(file, synthetic_relocation_offset,
+             code_address + relocation_options.offset); // r_offset
+    set_be32(file, synthetic_relocation_offset + 4,
+             (1U << 8U) | relocation_options.type); // symbol 1, relocation type
     set_be32(file, synthetic_relocation_offset + 8,
              static_cast<std::uint32_t>(relocation_symbol.addend)); // r_addend
     std::copy(symbol_strings.begin(), symbol_strings.end(), file.begin() + strtab_offset);
     std::copy(names.begin(), names.end(), file.begin() + names_offset);
     set_be32(file, fileinfo_offset, 0xCAFE0402U);
+    set_be32(file, fileinfo_offset + 4, relocation_options.text_size);
+    set_be32(file, fileinfo_offset + 0x20, relocation_options.tramp_adjust);
+    set_be32(file, fileinfo_offset + 0x48, relocation_options.tramp_addition);
     return file;
 }
 
@@ -737,6 +757,96 @@ void rpx_loader_tests()
     EspressoCore weak_core(static_cast<std::size_t>(entry_point) + 0x100U);
     static_cast<void>(load_rpx32_powerpc(weak_core, weak_file));
     assert(weak_core.memory.read32_be(entry_point + 12) == 0x76543210U);
+
+    constexpr std::uint32_t branch_site = 0x0200000CU;
+    const RpxRelocationSymbol nearby_target{
+        "NearbyTarget", 0x02001000U, 1, 1, 0xFFF1, 0};
+    RpxRelocationOptions direct_options;
+    direct_options.type = 10; // R_PPC_REL24
+    direct_options.branch_instruction = 0x48000003U; // b with AA and LK set
+    const auto direct_file = make_minimal_compressed_rpx(
+        entry_point, 16, nearby_target, direct_options);
+    EspressoCore direct_core(0x1000U);
+    static_cast<void>(load_rpx32_powerpc(direct_core, direct_file));
+    const std::uint32_t direct_branch = direct_core.memory.read32_be(branch_site);
+    assert((direct_branch & 3U) == 3U); // AA and LK survive the direct patch.
+    assert((direct_branch & 0x03FFFFFCU) == 0x00000FF4U);
+
+    const auto assert_trampoline = [](const EspressoCore& trampoline_core,
+                                      std::uint32_t trampoline_address,
+                                      std::uint32_t branch_instruction,
+                                      std::uint32_t branch_site_address,
+                                      std::uint32_t absolute_target) {
+        const std::uint32_t encoded_displacement = branch_instruction & 0x03FFFFFCU;
+        const std::int32_t displacement = static_cast<std::int32_t>(
+            (encoded_displacement & 0x02000000U) != 0
+                ? (encoded_displacement | 0xFC000000U)
+                : encoded_displacement);
+        assert(static_cast<std::uint32_t>(branch_site_address + displacement) ==
+               trampoline_address);
+        assert((branch_instruction & 1U) == 1U); // The source branch remains a link.
+        assert(trampoline_core.memory.read32_be(trampoline_address) ==
+               (0x3D600000U | (absolute_target >> 16U)));
+        assert(trampoline_core.memory.read32_be(trampoline_address + 4U) ==
+               (0x616B0000U | (absolute_target & 0xFFFFU)));
+        assert(trampoline_core.memory.read32_be(trampoline_address + 8U) == 0x7D6903A6U);
+        assert(trampoline_core.memory.read32_be(trampoline_address + 12U) == 0x4E800420U);
+    };
+
+    RpxRelocationOptions positive_options;
+    positive_options.type = 10;
+    positive_options.tramp_adjust = 0x40;
+    positive_options.text_size = 0x200;
+    const RpxRelocationSymbol positive_far_target{
+        "PositiveFarTarget", 0x08000000U, 1, 1, 0xFFF1, 0};
+    const auto positive_file = make_minimal_compressed_rpx(
+        entry_point, 16, positive_far_target, positive_options);
+    EspressoCore positive_core(0x1000U);
+    static_cast<void>(load_rpx32_powerpc(positive_core, positive_file));
+    constexpr std::uint32_t post_trampoline = entry_point + 16U;
+    const std::uint32_t positive_branch = positive_core.memory.read32_be(branch_site);
+    assert_trampoline(positive_core, post_trampoline, positive_branch, branch_site, 0x08000000U);
+
+    const RpxRelocationSymbol negative_far_target{
+        "NegativeFarTarget", 0U, 1, 1, 0xFFF1, 0};
+    RpxRelocationOptions negative_options = positive_options;
+    negative_options.text_size = 0x50; // No post buffer; exercise Cafe's pre-buffer path.
+    const auto negative_file = make_minimal_compressed_rpx(
+        entry_point, 16, negative_far_target, negative_options);
+    EspressoCore negative_core(0x1000U);
+    static_cast<void>(load_rpx32_powerpc(negative_core, negative_file));
+    constexpr std::uint32_t pre_trampoline = entry_point - 16U;
+    const std::uint32_t negative_branch = negative_core.memory.read32_be(branch_site);
+    assert_trampoline(negative_core, pre_trampoline, negative_branch, branch_site, 0U);
+
+    const RpxRelocationSymbol undefined_rel24{"$UNDEF", 0, 1, 1, 0, 0};
+    const auto undefined_rel24_file = make_minimal_compressed_rpx(
+        entry_point, 16, undefined_rel24, positive_options);
+    EspressoCore undefined_rel24_core(0x1000U);
+    static_cast<void>(load_rpx32_powerpc(undefined_rel24_core, undefined_rel24_file));
+    const std::uint32_t undefined_branch =
+        undefined_rel24_core.memory.read32_be(branch_site);
+    assert_trampoline(
+        undefined_rel24_core, post_trampoline, undefined_branch, branch_site, 0U);
+
+    RpxRelocationOptions exhausted_options;
+    exhausted_options.type = 10;
+    exhausted_options.text_size = 16;
+    const auto exhausted_file = make_minimal_compressed_rpx(
+        entry_point, 16, positive_far_target, exhausted_options);
+    EspressoCore exhausted_core(0x1000U);
+    bool trampoline_exhaustion_reported = false;
+    try
+    {
+        static_cast<void>(load_rpx32_powerpc(exhausted_core, exhausted_file));
+    }
+    catch (const std::invalid_argument& error)
+    {
+        trampoline_exhaustion_reported =
+            std::string(error.what()).find("no reachable free FILEINFO trampoline slot") !=
+            std::string::npos;
+    }
+    assert(trampoline_exhaustion_reported);
 
     core.state.gpr[3] = 37;
     core.state.lr = entry_point + 8;
