@@ -17,6 +17,7 @@
 #include <iterator>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <zlib.h>
@@ -239,6 +240,16 @@ struct RpxRelocationOptions
 
 void decoder_tests()
 {
+    const DecodedInstruction cntlzw = decode(0x7D8C0034U); // cntlzw r12, r12
+    assert(cntlzw.opcode == Opcode::count_leading_zeros);
+    assert(cntlzw.source == 12U);
+    assert(cntlzw.destination == 12U);
+    assert(!cntlzw.record);
+
+    const DecodedInstruction cntlzw_dot = decode(0x7D8C0035U); // cntlzw. r12, r12
+    assert(cntlzw_dot.opcode == Opcode::count_leading_zeros);
+    assert(cntlzw_dot.record);
+
     const DecodedInstruction xori = decode(0x68AC0001U); // xori r12, r5, 1
     assert(xori.opcode == Opcode::xor_immediate);
     assert(xori.destination == 12U);
@@ -679,6 +690,54 @@ void interpreter_tests()
 
 void integer_alu_tests()
 {
+    const auto run_cntlzw = [](std::uint32_t input, std::uint8_t destination,
+                               std::uint8_t source, bool record,
+                               std::uint32_t initial_cr, std::uint32_t initial_xer)
+    {
+        EspressoCore cntlzw_core(8);
+        cntlzw_core.state.gpr[source] = input;
+        cntlzw_core.state.cr = initial_cr;
+        cntlzw_core.state.xer = initial_xer;
+        const std::uint32_t word = 0x7C000034U |
+            (static_cast<std::uint32_t>(source) << 21U) |
+            (static_cast<std::uint32_t>(destination) << 16U) |
+            static_cast<std::uint32_t>(record);
+        cntlzw_core.memory.write32_be(0, word);
+        const RunResult result = cntlzw_core.run(1);
+        assert(result.steps == 1U);
+        assert(result.reason == StopReason::instruction_limit);
+        assert(cntlzw_core.state.cia == 4U);
+        assert(cntlzw_core.state.xer == initial_xer);
+        assert(result.instruction_history.size() == 1U);
+        return std::pair{cntlzw_core.state.gpr[destination], cntlzw_core.state.cr};
+    };
+
+    constexpr std::uint32_t initial_cr = 0x12345678U;
+    constexpr std::uint32_t initial_xer = 0x80000000U;
+    assert((run_cntlzw(0x80000000U, 12, 5, false, initial_cr, initial_xer) ==
+            std::pair{0U, initial_cr}));
+    assert((run_cntlzw(0x40000000U, 12, 5, false, initial_cr, initial_xer) ==
+            std::pair{1U, initial_cr}));
+    assert((run_cntlzw(0x00000001U, 12, 5, false, initial_cr, initial_xer) ==
+            std::pair{31U, initial_cr}));
+    assert((run_cntlzw(0x00000000U, 12, 5, false, initial_cr, initial_xer) ==
+            std::pair{32U, initial_cr}));
+    assert((run_cntlzw(0x00100000U, 12, 5, false, initial_cr, initial_xer) ==
+            std::pair{11U, initial_cr}));
+    assert((run_cntlzw(0x00000001U, 12, 12, false, initial_cr, initial_xer) ==
+            std::pair{31U, initial_cr})); // source == destination
+    assert((run_cntlzw(0x00000001U, 7, 5, false, initial_cr, initial_xer) ==
+            std::pair{31U, initial_cr})); // separate source and destination
+    assert((run_cntlzw(0x00000001U, 12, 5, true, initial_cr, initial_xer) ==
+            std::pair{31U, 0x52345678U})); // positive result and XER[SO]
+
+    EspressoCore cntlzw_trace_core(8);
+    cntlzw_trace_core.memory.write32_be(0, 0x7D8C0034U);
+    cntlzw_trace_core.state.gpr[12] = 1U;
+    const RunResult cntlzw_trace = cntlzw_trace_core.run(1);
+    assert(format_instruction_history(cntlzw_trace).find(
+        "cntlzw r12=0x00000001 -> r12=0x0000001F") != std::string::npos);
+
     const auto run_xor_immediate = [](bool shifted, std::uint8_t destination,
                                       std::uint8_t source, std::uint32_t input,
                                       std::uint16_t immediate)

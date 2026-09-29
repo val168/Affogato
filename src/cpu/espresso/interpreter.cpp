@@ -202,6 +202,7 @@ void set_record_result(CpuState& state, std::uint32_t value)
     case Opcode::ori: return "ori";
     case Opcode::xor_immediate: return "xori";
     case Opcode::xor_immediate_shifted: return "xoris";
+    case Opcode::count_leading_zeros: return "cntlzw";
     case Opcode::bitwise_or: return "or";
     case Opcode::bitwise_and: return "and";
     case Opcode::bitwise_and_complement: return "andc";
@@ -275,6 +276,10 @@ void add_history_source(
     entry.instruction_word = word;
     entry.has_instruction_word = true;
     entry.opcode_name = opcode_name(instruction.opcode);
+    if (instruction.opcode == Opcode::count_leading_zeros && instruction.record)
+    {
+        entry.opcode_name += '.';
+    }
     if (instruction.opcode == Opcode::multiply_low_immediate)
     {
         entry.has_immediate = true;
@@ -360,6 +365,7 @@ void add_history_source(
     case Opcode::ori:
     case Opcode::xor_immediate:
     case Opcode::xor_immediate_shifted:
+    case Opcode::count_leading_zeros:
     case Opcode::and_immediate_record:
     case Opcode::rotate_left_word_and_mask:
     case Opcode::arithmetic_shift_right_immediate:
@@ -414,6 +420,7 @@ void add_history_source(
     case Opcode::ori:
     case Opcode::xor_immediate:
     case Opcode::xor_immediate_shifted:
+    case Opcode::count_leading_zeros:
     case Opcode::bitwise_or:
     case Opcode::bitwise_and:
     case Opcode::bitwise_and_complement:
@@ -698,6 +705,18 @@ StepResult EspressoCore::step()
             state.gpr[instruction.source] |
             static_cast<std::uint32_t>(instruction.immediate);
         break;
+
+    case Opcode::count_leading_zeros:
+    {
+        const std::uint32_t result = static_cast<std::uint32_t>(
+            std::countl_zero(state.gpr[instruction.source]));
+        state.gpr[instruction.destination] = result;
+        if (instruction.record)
+        {
+            set_record_result(state, result);
+        }
+        break;
+    }
 
     case Opcode::xor_immediate:
     case Opcode::xor_immediate_shifted:

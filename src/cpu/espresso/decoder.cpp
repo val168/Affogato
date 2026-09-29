@@ -156,7 +156,14 @@ DecodedInstruction decode(std::uint32_t raw) noexcept
     case 31: // X-form arithmetic, logical, and compare instructions
     {
         const std::uint32_t extended_opcode = field(raw, 1, 0x3FFU);
-        if (extended_opcode == 339 || extended_opcode == 467)
+        if (extended_opcode == 26) // cntlzw
+        {
+            instruction.opcode = Opcode::count_leading_zeros;
+            instruction.source = static_cast<std::uint8_t>(field(raw, 21, 0x1FU));
+            instruction.destination = static_cast<std::uint8_t>(field(raw, 16, 0x1FU));
+            instruction.record = (raw & 1U) != 0;
+        }
+        else if (extended_opcode == 339 || extended_opcode == 467)
         {
             // The SPR number is split into two five-bit fields in reverse
             // order: the encoded rA field contains SPR[0:4].

@@ -11,6 +11,7 @@ enum class Opcode
     multiply_low_immediate,
     xor_immediate,
     xor_immediate_shifted,
+    count_leading_zeros,
     addi,
     addis,
     add_immediate_carry,
