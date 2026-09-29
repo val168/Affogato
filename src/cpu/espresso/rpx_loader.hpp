@@ -15,8 +15,9 @@ struct RpxLoadResult
     std::size_t loaded_sections{};
 };
 
-// Loads the allocatable sections of a static Wii U RPX into the current flat
-// guest address space. Sections using Cafe's deflate flag are inflated first.
+// Loads allocatable sections of a static Wii U RPX through GuestMemory,
+// retaining flat backing where possible and using sparse mappings elsewhere.
+// Sections using Cafe's deflate flag are inflated first.
 // Modules with unresolved library imports or unsupported relocations fail
 // explicitly through named HLE trampolines; function and data import tables
 // receive those trampoline addresses so unresolved calls stop diagnostically.

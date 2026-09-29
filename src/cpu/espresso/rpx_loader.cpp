@@ -4,6 +4,8 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <iomanip>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -41,6 +43,7 @@ constexpr std::uint32_t relocation_addr16_hi = 5;
 constexpr std::uint32_t relocation_addr16_ha = 6;
 constexpr std::uint32_t relocation_rel24 = 10;
 constexpr std::size_t max_inflated_section_size = 64U * 1024U * 1024U;
+constexpr std::uint64_t guest_address_space_end = std::uint64_t{1} << 32U;
 
 struct Section
 {
@@ -61,6 +64,20 @@ struct LoadedSection
     bool executable{};
     std::vector<std::uint8_t> contents;
 };
+
+[[nodiscard]] std::string section_range_error(
+    std::size_t index,
+    std::uint32_t address,
+    std::uint64_t size,
+    std::uint64_t end,
+    const char* reason)
+{
+    std::ostringstream message;
+    message << "RPX section " << index << ' ' << reason << " (guest address 0x"
+            << std::hex << std::uppercase << address << ", section size 0x" << size
+            << ", section end 0x" << end << ')';
+    return message.str();
+}
 
 void require_range(std::span<const std::uint8_t> bytes, std::size_t offset, std::size_t size)
 {
@@ -478,23 +495,68 @@ RpxLoadResult load_rpx32_powerpc(EspressoCore& core, std::span<const std::uint8_
         const Section& section = sections[i];
         const bool import_section = section.type == section_rpl_imports;
         if ((section.flags & section_alloc) == 0 || section.size == 0 ||
-            section.type == section_rpl_fileinfo ||
-            (section.address >= rpl_loader_metadata_base && !import_section))
+            section.type == section_rpl_fileinfo)
         {
             continue;
         }
         LoadedSection& destination = loaded[i];
         destination.address = section.address;
         destination.executable = (section.flags & section_execute) != 0;
+
+        if ((section.flags & section_deflated) == 0)
+        {
+            const std::uint64_t declared_end =
+                static_cast<std::uint64_t>(destination.address) + section.size;
+            if (declared_end > guest_address_space_end)
+            {
+                throw std::invalid_argument(section_range_error(
+                    i, destination.address, section.size, declared_end,
+                    "exceeds the 32-bit guest address space"));
+            }
+            if (destination.address < rpl_loader_metadata_base &&
+                declared_end > rpl_loader_metadata_base)
+            {
+                throw std::invalid_argument(section_range_error(
+                    i, destination.address, section.size, declared_end,
+                    "overlaps reserved RPL loader metadata"));
+            }
+        }
+        if ((section.flags & section_deflated) == 0 &&
+            destination.address >= rpl_loader_metadata_base && !import_section)
+        {
+            const std::uint64_t declared_end =
+                static_cast<std::uint64_t>(destination.address) + section.size;
+            throw std::invalid_argument(section_range_error(
+                i, destination.address, section.size, declared_end,
+                "uses the reserved RPL loader metadata range"));
+        }
+
         destination.contents = read_section(file, section);
         const std::uint64_t end = static_cast<std::uint64_t>(destination.address) + destination.contents.size();
-        if (end > (std::uint64_t{1} << 32U) ||
-            (destination.address < rpl_loader_metadata_base &&
-             (destination.address > core.memory.size() ||
-              destination.contents.size() > core.memory.size() - destination.address)) ||
-            (destination.address >= rpl_loader_metadata_base && !import_section))
+        if (end > guest_address_space_end)
         {
-            throw std::invalid_argument("RPX section lies outside the current flat guest memory");
+            throw std::invalid_argument(section_range_error(
+                i, destination.address, destination.contents.size(), end,
+                "exceeds the 32-bit guest address space"));
+        }
+        if (destination.address < rpl_loader_metadata_base &&
+            end > rpl_loader_metadata_base)
+        {
+            throw std::invalid_argument(section_range_error(
+                i, destination.address, destination.contents.size(), end,
+                "overlaps reserved RPL loader metadata"));
+        }
+        if (destination.address >= rpl_loader_metadata_base && !import_section)
+        {
+            throw std::invalid_argument(section_range_error(
+                i, destination.address, destination.contents.size(), end,
+                "uses the reserved RPL loader metadata range"));
+        }
+        if (destination.address < core.memory.size() && end > core.memory.size())
+        {
+            throw std::invalid_argument(section_range_error(
+                i, destination.address, destination.contents.size(), end,
+                "partially overlaps the flat guest-memory boundary"));
         }
         if (destination.executable && entry_point >= destination.address &&
             static_cast<std::uint64_t>(entry_point) < end)
@@ -502,6 +564,32 @@ RpxLoadResult load_rpx32_powerpc(EspressoCore& core, std::span<const std::uint8_
             entry_is_executable = true;
         }
         ++loaded_count;
+    }
+
+    for (std::size_t i = 0; i < loaded.size(); ++i)
+    {
+        if (loaded[i].contents.empty())
+        {
+            continue;
+        }
+        const std::uint64_t first_end =
+            static_cast<std::uint64_t>(loaded[i].address) + loaded[i].contents.size();
+        for (std::size_t j = i + 1; j < loaded.size(); ++j)
+        {
+            if (loaded[j].contents.empty())
+            {
+                continue;
+            }
+            const std::uint64_t second_end =
+                static_cast<std::uint64_t>(loaded[j].address) + loaded[j].contents.size();
+            if (loaded[i].address < second_end && loaded[j].address < first_end)
+            {
+                throw std::invalid_argument(
+                    section_range_error(i, loaded[i].address, loaded[i].contents.size(), first_end,
+                                        "overlaps another allocated RPX section") +
+                    " (section " + std::to_string(j) + ")");
+            }
+        }
     }
     if (loaded_count == 0 || (entry_point & 3U) != 0 || !entry_is_executable)
     {
@@ -524,29 +612,32 @@ RpxLoadResult load_rpx32_powerpc(EspressoCore& core, std::span<const std::uint8_
     }
 
     apply_relocations(core, file, sections, loaded);
-    std::uint64_t highest_guest_address = 0;
+    std::uint64_t highest_flat_guest_address = 0;
+    bool has_flat_sections = false;
     for (std::size_t i = 0; i < loaded.size(); ++i)
     {
         if (!loaded[i].contents.empty())
         {
-            if (loaded[i].address >= rpl_loader_metadata_base)
+            if (loaded[i].address >= core.memory.size())
             {
                 core.memory.map_region(loaded[i].address, loaded[i].contents.size());
             }
             core.memory.write_bytes(loaded[i].address, loaded[i].contents);
-            if (loaded[i].address < rpl_loader_metadata_base)
+            if (loaded[i].address < core.memory.size())
             {
-                highest_guest_address = std::max(
-                    highest_guest_address,
+                has_flat_sections = true;
+                highest_flat_guest_address = std::max(
+                    highest_flat_guest_address,
                     static_cast<std::uint64_t>(loaded[i].address) + loaded[i].contents.size());
             }
         }
     }
-    const std::uint64_t heap_begin = (highest_guest_address + 0xFFFU) & ~std::uint64_t{0xFFFU};
+    const std::uint64_t heap_begin =
+        (highest_flat_guest_address + 0xFFFU) & ~std::uint64_t{0xFFFU};
     const std::uint64_t heap_limit = core.memory.size() > 0x10000U
         ? core.memory.size() - 0x10000U
         : 0U;
-    if (heap_begin < heap_limit && heap_limit <= UINT32_MAX)
+    if (has_flat_sections && heap_begin < heap_limit && heap_limit <= UINT32_MAX)
     {
         core.configure_guest_heap(
             static_cast<std::uint32_t>(heap_begin), static_cast<std::uint32_t>(heap_limit));

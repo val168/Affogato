@@ -15,6 +15,7 @@
 #include <iostream>
 #include <iterator>
 #include <stdexcept>
+#include <string>
 #include <vector>
 
 #include <zlib.h>
@@ -78,9 +79,9 @@ void set_be32(std::vector<std::uint8_t>& bytes, std::size_t offset, std::uint32_
     return file;
 }
 
-[[nodiscard]] std::vector<std::uint8_t> make_minimal_compressed_rpx()
+[[nodiscard]] std::vector<std::uint8_t> make_minimal_compressed_rpx(
+    std::uint32_t code_address = 0x02000000U)
 {
-    constexpr std::uint32_t code_address = 0x02000000U;
     constexpr std::size_t header_size = 52;
     constexpr std::size_t section_header_size = 40;
     constexpr std::size_t section_count = 8;
@@ -674,6 +675,86 @@ void rpx_loader_tests()
     assert(session_run.image.entry_point == entry_point);
     assert(session_run.execution.reason == StopReason::instruction_limit);
     assert(session_run.gpr3 == 5U);
+
+    // Allocated sections outside the flat backing vector use GuestMemory's
+    // sparse map without changing their guest-visible addresses or bytes.
+    constexpr std::uint32_t sparse_entry = 0x20000000U;
+    const std::vector<std::uint8_t> sparse_file =
+        make_minimal_compressed_rpx(sparse_entry);
+    EspressoCore sparse_core(0x1000U);
+    const RpxLoadResult sparse_result = load_rpx32_powerpc(sparse_core, sparse_file);
+    assert(sparse_result.entry_point == sparse_entry);
+    assert(sparse_result.loaded_sections == 1);
+    assert(sparse_core.state.cia == sparse_entry);
+    assert(sparse_core.memory.read32_be(sparse_entry) == 0x38630005U);
+    assert(sparse_core.memory.read32_be(sparse_entry + 4) == 0x4E800020U);
+
+    affogato::Emulator sparse_session(0x20000U);
+    static_cast<void>(sparse_session.load_rpx(sparse_file));
+    assert(sparse_session.core().state.gpr[1] == 0x1F000U);
+    assert(sparse_session.core().guest_heap_cursor == 0U);
+
+    // A loaded RPX section may not overwrite another section, whether the
+    // address belongs to flat memory or a sparse mapping.
+    std::vector<std::uint8_t> overlapping_file = sparse_file;
+    constexpr std::size_t section_table_offset = 52;
+    constexpr std::size_t section_header_size = 40;
+    constexpr std::size_t rela_section_index = 7;
+    const std::size_t rela_section_header =
+        section_table_offset + rela_section_index * section_header_size;
+    set_be32(overlapping_file, rela_section_header + 8, 0x2U); // SHF_ALLOC
+    set_be32(overlapping_file, rela_section_header + 12, sparse_entry);
+    bool overlap_rejected = false;
+    try
+    {
+        EspressoCore overlapping_core(0x1000U);
+        static_cast<void>(load_rpx32_powerpc(overlapping_core, overlapping_file));
+    }
+    catch (const std::invalid_argument& error)
+    {
+        overlap_rejected = std::string(error.what()).find("overlaps another allocated") !=
+                           std::string::npos;
+    }
+    assert(overlap_rejected);
+
+    // A section crossing the end of flat memory cannot be represented by the
+    // current contiguous-access GuestMemory interface and is rejected.
+    constexpr std::uint32_t boundary_entry = 0x1000U;
+    const std::vector<std::uint8_t> boundary_file =
+        make_minimal_compressed_rpx(boundary_entry);
+    EspressoCore boundary_core(boundary_entry + 4U);
+    bool boundary_rejected = false;
+    try
+    {
+        static_cast<void>(load_rpx32_powerpc(boundary_core, boundary_file));
+    }
+    catch (const std::invalid_argument& error)
+    {
+        boundary_rejected = std::string(error.what()).find("flat guest-memory boundary") !=
+                            std::string::npos;
+    }
+    assert(boundary_rejected);
+
+    // Reject a section whose end would wrap beyond the 32-bit address space,
+    // and include all useful range details in the diagnostic.
+    constexpr std::uint32_t overflowing_entry = 0xFFFFFFFCU;
+    const std::vector<std::uint8_t> overflowing_file =
+        make_minimal_compressed_rpx(overflowing_entry);
+    EspressoCore overflowing_core(0x1000U);
+    bool overflow_rejected = false;
+    try
+    {
+        static_cast<void>(load_rpx32_powerpc(overflowing_core, overflowing_file));
+    }
+    catch (const std::invalid_argument& error)
+    {
+        const std::string message = error.what();
+        overflow_rejected = message.find("section 1") != std::string::npos &&
+                            message.find("0xFFFFFFFC") != std::string::npos &&
+                            message.find("section size 0xC") != std::string::npos &&
+                            message.find("section end 0x100000008") != std::string::npos;
+    }
+    assert(overflow_rejected);
 }
 
 void hle_dispatch_tests()
