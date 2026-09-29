@@ -503,10 +503,10 @@ RpxLoadResult load_rpx32_powerpc(EspressoCore& core, std::span<const std::uint8_
         destination.address = section.address;
         destination.executable = (section.flags & section_execute) != 0;
 
+        const std::uint64_t declared_end =
+            static_cast<std::uint64_t>(destination.address) + section.size;
         if ((section.flags & section_deflated) == 0)
         {
-            const std::uint64_t declared_end =
-                static_cast<std::uint64_t>(destination.address) + section.size;
             if (declared_end > guest_address_space_end)
             {
                 throw std::invalid_argument(section_range_error(
@@ -520,17 +520,13 @@ RpxLoadResult load_rpx32_powerpc(EspressoCore& core, std::span<const std::uint8_
                     i, destination.address, section.size, declared_end,
                     "overlaps reserved RPL loader metadata"));
             }
+            if (destination.address >= rpl_loader_metadata_base && !import_section)
+            {
+                // Cafe's high-address loader metadata is not mapped as a
+                // regular section. Validate its range before excluding it.
+                continue;
+            }
         }
-        if ((section.flags & section_deflated) == 0 &&
-            destination.address >= rpl_loader_metadata_base && !import_section)
-        {
-            const std::uint64_t declared_end =
-                static_cast<std::uint64_t>(destination.address) + section.size;
-            throw std::invalid_argument(section_range_error(
-                i, destination.address, section.size, declared_end,
-                "uses the reserved RPL loader metadata range"));
-        }
-
         destination.contents = read_section(file, section);
         const std::uint64_t end = static_cast<std::uint64_t>(destination.address) + destination.contents.size();
         if (end > guest_address_space_end)
@@ -548,15 +544,10 @@ RpxLoadResult load_rpx32_powerpc(EspressoCore& core, std::span<const std::uint8_
         }
         if (destination.address >= rpl_loader_metadata_base && !import_section)
         {
-            throw std::invalid_argument(section_range_error(
-                i, destination.address, destination.contents.size(), end,
-                "uses the reserved RPL loader metadata range"));
-        }
-        if (destination.address < core.memory.size() && end > core.memory.size())
-        {
-            throw std::invalid_argument(section_range_error(
-                i, destination.address, destination.contents.size(), end,
-                "partially overlaps the flat guest-memory boundary"));
+            // Deflated metadata needs its inflated guest size checked before
+            // it can safely be excluded from normal section loading.
+            destination.contents.clear();
+            continue;
         }
         if (destination.executable && entry_point >= destination.address &&
             static_cast<std::uint64_t>(entry_point) < end)
@@ -618,9 +609,15 @@ RpxLoadResult load_rpx32_powerpc(EspressoCore& core, std::span<const std::uint8_
     {
         if (!loaded[i].contents.empty())
         {
-            if (loaded[i].address >= core.memory.size())
+            const std::uint64_t section_end =
+                static_cast<std::uint64_t>(loaded[i].address) + loaded[i].contents.size();
+            if (section_end > core.memory.size())
             {
-                core.memory.map_region(loaded[i].address, loaded[i].contents.size());
+                const std::uint64_t sparse_begin =
+                    std::max<std::uint64_t>(loaded[i].address, core.memory.size());
+                core.memory.map_region(
+                    static_cast<std::uint32_t>(sparse_begin),
+                    static_cast<std::size_t>(section_end - sparse_begin));
             }
             core.memory.write_bytes(loaded[i].address, loaded[i].contents);
             if (loaded[i].address < core.memory.size())
@@ -628,7 +625,7 @@ RpxLoadResult load_rpx32_powerpc(EspressoCore& core, std::span<const std::uint8_
                 has_flat_sections = true;
                 highest_flat_guest_address = std::max(
                     highest_flat_guest_address,
-                    static_cast<std::uint64_t>(loaded[i].address) + loaded[i].contents.size());
+                    std::min<std::uint64_t>(section_end, core.memory.size()));
             }
         }
     }

@@ -622,9 +622,10 @@ int run_frontend()
         {
             ImGui::Text("Selected: %s", games[*selected_game].title.c_str());
             ImGui::SameLine();
-            if (worker.running) ImGui::BeginDisabled();
+            const bool launch_in_progress = worker.running.load();
+            ImGui::BeginDisabled(launch_in_progress);
             if (ImGui::Button("Launch")) launch_game(games[*selected_game].rpx_path, worker, launch_thread);
-            if (worker.running) ImGui::EndDisabled();
+            ImGui::EndDisabled();
         }
         if (worker.running) ImGui::SameLine();
         if (worker.running) ImGui::Text("Running RPX...");

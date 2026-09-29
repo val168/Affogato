@@ -80,18 +80,24 @@ void set_be32(std::vector<std::uint8_t>& bytes, std::size_t offset, std::uint32_
 }
 
 [[nodiscard]] std::vector<std::uint8_t> make_minimal_compressed_rpx(
-    std::uint32_t code_address = 0x02000000U)
+    std::uint32_t code_address = 0x02000000U,
+    std::size_t code_size = 12)
 {
     constexpr std::size_t header_size = 52;
     constexpr std::size_t section_header_size = 40;
     constexpr std::size_t section_count = 8;
     constexpr std::size_t section_table_offset = header_size;
     constexpr std::size_t text_offset = 384;
-    const std::array<std::uint8_t, 12> code{
-        0x38, 0x63, 0x00, 0x05, // addi r3, r3, 5
-        0x4E, 0x80, 0x00, 0x20, // blr
-        0, 0, 0, 0, // GHS relocation test slot
-    };
+    assert(code_size >= 12);
+    std::vector<std::uint8_t> code(code_size, 0);
+    code[0] = 0x38;
+    code[1] = 0x63;
+    code[2] = 0x00;
+    code[3] = 0x05; // addi r3, r3, 5
+    code[4] = 0x4E;
+    code[5] = 0x80;
+    code[6] = 0x00;
+    code[7] = 0x20; // blr
 
     uLongf compressed_size = compressBound(code.size());
     std::vector<std::uint8_t> compressed(compressed_size);
@@ -422,6 +428,38 @@ void guest_memory_tests()
     assert(memory.read32_be(0xC0000018U) == 0x03F00024U);
     memory.zero_fill(0xC0000018U, 4);
     assert(memory.read32_be(0xC0000018U) == 0);
+
+    GuestMemory boundary_memory(8);
+    boundary_memory.map_region(8, 8);
+    const std::array<std::uint8_t, 6> block{0x10, 0x11, 0x12, 0x13, 0x14, 0x15};
+    boundary_memory.write_bytes(5, block);
+    for (std::size_t i = 0; i < block.size(); ++i)
+    {
+        assert(boundary_memory.read8(static_cast<std::uint32_t>(5 + i)) == block[i]);
+    }
+
+    assert(boundary_memory.read16_be(7) == 0x1213U);
+    assert(boundary_memory.read32_be(6) == 0x11121314U);
+
+    boundary_memory.write16_be(7, 0xA1B2U);
+    assert(boundary_memory.read8(7) == 0xA1U);
+    assert(boundary_memory.read8(8) == 0xB2U);
+    boundary_memory.write32_be(6, 0xC3D4E5F6U);
+    assert(boundary_memory.read32_be(6) == 0xC3D4E5F6U);
+
+    boundary_memory.zero_fill(6, 4);
+    assert(boundary_memory.read32_be(6) == 0U);
+
+    bool overlapping_mapping_rejected = false;
+    try
+    {
+        boundary_memory.map_region(12, 4);
+    }
+    catch (const std::invalid_argument&)
+    {
+        overlapping_mapping_rejected = true;
+    }
+    assert(overlapping_mapping_rejected);
 }
 
 void interpreter_tests()
@@ -689,6 +727,22 @@ void rpx_loader_tests()
     assert(sparse_core.memory.read32_be(sparse_entry) == 0x38630005U);
     assert(sparse_core.memory.read32_be(sparse_entry + 4) == 0x4E800020U);
 
+    constexpr std::uint32_t wind_waker_section_address = 0x10000000U;
+    constexpr std::size_t flat_memory_size = 0x10100000U;
+    constexpr std::size_t wind_waker_section_size = 0x18C0C0U;
+    const std::vector<std::uint8_t> boundary_section_file = make_minimal_compressed_rpx(
+        wind_waker_section_address, wind_waker_section_size);
+    EspressoCore boundary_section_core(flat_memory_size);
+    const RpxLoadResult boundary_section_result =
+        load_rpx32_powerpc(boundary_section_core, boundary_section_file);
+    assert(boundary_section_result.entry_point == wind_waker_section_address);
+    assert(boundary_section_core.state.cia == wind_waker_section_address);
+    assert(boundary_section_core.memory.read32_be(0x100FFFFEU) == 0U);
+    assert(boundary_section_core.memory.read32_be(0x10100000U) == 0U);
+    assert(boundary_section_core.memory.read32_be(
+               wind_waker_section_address + static_cast<std::uint32_t>(wind_waker_section_size) - 4U) ==
+           0U);
+
     affogato::Emulator sparse_session(0x20000U);
     static_cast<void>(sparse_session.load_rpx(sparse_file));
     assert(sparse_session.core().state.gpr[1] == 0x1F000U);
@@ -717,23 +771,15 @@ void rpx_loader_tests()
     }
     assert(overlap_rejected);
 
-    // A section crossing the end of flat memory cannot be represented by the
-    // current contiguous-access GuestMemory interface and is rejected.
+    // An RPX section may start in flat memory and continue into sparse memory.
     constexpr std::uint32_t boundary_entry = 0x1000U;
     const std::vector<std::uint8_t> boundary_file =
         make_minimal_compressed_rpx(boundary_entry);
     EspressoCore boundary_core(boundary_entry + 4U);
-    bool boundary_rejected = false;
-    try
-    {
-        static_cast<void>(load_rpx32_powerpc(boundary_core, boundary_file));
-    }
-    catch (const std::invalid_argument& error)
-    {
-        boundary_rejected = std::string(error.what()).find("flat guest-memory boundary") !=
-                            std::string::npos;
-    }
-    assert(boundary_rejected);
+    const RpxLoadResult boundary_result = load_rpx32_powerpc(boundary_core, boundary_file);
+    assert(boundary_result.entry_point == boundary_entry);
+    assert(boundary_core.memory.read32_be(boundary_entry) == 0x38630005U);
+    assert(boundary_core.memory.read32_be(boundary_entry + 4U) == 0x4E800020U);
 
     // Reject a section whose end would wrap beyond the 32-bit address space,
     // and include all useful range details in the diagnostic.
