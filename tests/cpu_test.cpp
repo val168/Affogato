@@ -354,6 +354,14 @@ void decoder_tests()
     assert(!subfc.record);
     assert(decode(0x7C6C5C10U).opcode == Opcode::unsupported); // subfco remains unsupported
 
+    const DecodedInstruction mullw = decode(0x7FDFF1D6U); // mullw r30, r31, r30
+    assert(mullw.opcode == Opcode::multiply_low_word);
+    assert(mullw.destination == 30);
+    assert(mullw.base == 31);
+    assert(mullw.source == 30);
+    assert(!mullw.record);
+    assert(decode(0x7FDFF5D6U).opcode == Opcode::unsupported); // mullwo remains unsupported
+
     const DecodedInstruction ori = decode(0x60631234U); // ori r3, r3, 0x1234
     assert(ori.opcode == Opcode::ori);
     assert(ori.source == 3);
@@ -748,6 +756,67 @@ void interpreter_tests()
 
 void integer_alu_tests()
 {
+    const auto run_mullw = [](std::uint8_t destination, std::uint8_t ra, std::uint8_t rb,
+                              std::uint32_t a, std::uint32_t b, bool record = false)
+    {
+        EspressoCore multiply_core(8);
+        constexpr std::uint32_t initial_cr = 0x12345678U;
+        constexpr std::uint32_t initial_xer = 0xA00000A5U;
+        multiply_core.state.gpr[ra] = a;
+        multiply_core.state.gpr[rb] = b;
+        multiply_core.state.cr = initial_cr;
+        multiply_core.state.xer = initial_xer;
+        const std::uint32_t word = (31U << 26U) |
+            (static_cast<std::uint32_t>(destination) << 21U) |
+            (static_cast<std::uint32_t>(ra) << 16U) |
+            (static_cast<std::uint32_t>(rb) << 11U) | (235U << 1U) |
+            static_cast<std::uint32_t>(record);
+        multiply_core.memory.write32_be(0, word);
+        const RunResult result = multiply_core.run(1);
+        assert(result.steps == 1U);
+        assert(result.reason == StopReason::instruction_limit);
+        assert(multiply_core.state.cia == 4U);
+        const std::int64_t product =
+            static_cast<std::int64_t>(std::bit_cast<std::int32_t>(a)) *
+            static_cast<std::int64_t>(std::bit_cast<std::int32_t>(b));
+        const std::uint32_t expected = static_cast<std::uint32_t>(product);
+        assert(multiply_core.state.gpr[destination] == expected);
+        assert(multiply_core.state.xer == initial_xer);
+        if (record)
+        {
+            const std::uint32_t cr0 = expected == 0U ? 0x3U
+                : (expected & 0x80000000U) != 0 ? 0x9U : 0x5U;
+            assert(multiply_core.state.cr == ((initial_cr & 0x0FFFFFFFU) | (cr0 << 28U)));
+        }
+        else
+        {
+            assert(multiply_core.state.cr == initial_cr);
+        }
+        return std::pair{expected, result};
+    };
+
+    assert(run_mullw(30, 31, 30, 2U, 0x100U).first == 0x200U);
+    assert(run_mullw(3, 4, 5, 7U, 9U).first == 63U); // positive * positive
+    assert(run_mullw(3, 4, 5, 0xFFFFFFFEU, 3U).first == 0xFFFFFFFAU);
+    assert(run_mullw(3, 4, 5, 0xFFFFFFFEU, 0xFFFFFFFDU).first == 6U);
+    assert(run_mullw(3, 4, 5, 0U, 0x87654321U).first == 0U);
+    assert(run_mullw(3, 4, 5, 0x40000000U, 4U).first == 0U); // low-word truncation
+    assert(run_mullw(4, 4, 5, 7U, 3U).first == 21U); // rD aliases rA
+    assert(run_mullw(5, 4, 5, 7U, 3U).first == 21U); // rD aliases rB
+    assert(run_mullw(6, 0, 4, 6U, 7U).first == 42U); // r0 is a normal source
+    const auto mullw_record = run_mullw(3, 4, 5, 0x100U, 2U, true);
+    assert(mullw_record.first == 0x200U);
+    assert(mullw_record.second.instruction_history[0].opcode_name == "mullw.");
+
+    EspressoCore mullw_trace_core(8);
+    mullw_trace_core.memory.write32_be(0, 0x7FDFF1D6U);
+    mullw_trace_core.state.gpr[31] = 2U;
+    mullw_trace_core.state.gpr[30] = 0x100U;
+    const RunResult mullw_trace = mullw_trace_core.run(1);
+    assert(format_instruction_history(mullw_trace).find(
+        "mullw r31=0x00000002 r30=0x00000100 -> r30=0x00000200")
+        != std::string::npos);
+
     constexpr std::uint32_t xer_ca = 0x20000000U;
     const auto run_subfc = [xer_ca](std::uint8_t destination, std::uint8_t ra, std::uint8_t rb,
                               std::uint32_t a, std::uint32_t b, bool record = false)

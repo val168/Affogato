@@ -9,6 +9,7 @@ enum class Opcode
 {
     unsupported,
     multiply_low_immediate,
+    multiply_low_word,
     xor_immediate,
     xor_immediate_shifted,
     count_leading_zeros,
