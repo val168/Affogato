@@ -4,6 +4,7 @@
 #include "cpu/espresso/guest_memory.hpp"
 #include "cpu/espresso/guest_mutex.hpp"
 #include "cpu/espresso/interpreter.hpp"
+#include "cpu/espresso/nn_olv_hle.hpp"
 #include "cpu/espresso/rpx_loader.hpp"
 #include "cpu_state_test.hpp"
 #include "emulator.hpp"
@@ -1849,6 +1850,117 @@ void hle_dispatch_tests()
     assert(thread_core.memory.read32_be(thread_address + 0x5BCU) == thread_type_before);
 }
 
+void nn_olv_hle_tests()
+{
+    constexpr std::string_view library = "nn_olv.rpl";
+    constexpr std::string_view symbol = "__ct__Q3_2nn3olv18DownloadedPostDataFv";
+    constexpr std::uint32_t first_object = 0x100U;
+    constexpr std::uint32_t return_address = 0x80U;
+    constexpr std::uint8_t untouched = 0xA5U;
+
+    EspressoCore adjacent_core(downloaded_post_data_size * 2U + 0x1000U);
+    register_nn_olv_hle(adjacent_core.hle);
+    const std::uint32_t constructor = adjacent_core.hle.bind_import(
+        std::string(library), std::string(symbol));
+    const std::uint32_t second_object = first_object + downloaded_post_data_size;
+    adjacent_core.memory.fill_bytes(
+        first_object, downloaded_post_data_size * 2U, untouched);
+
+    const auto construct = [&](EspressoCore& core, std::uint32_t self) {
+        core.state.cia = constructor;
+        core.state.lr = return_address;
+        core.state.gpr[3] = self;
+        assert(core.step() == StepResult::executed);
+        assert(core.state.cia == return_address);
+        assert(core.state.gpr[3] == self);
+    };
+
+    construct(adjacent_core, first_object);
+    for (std::uint32_t offset = 0; offset < downloaded_data_base_size; ++offset)
+    {
+        assert(adjacent_core.memory.read8(first_object + offset) == 0U);
+    }
+    assert(adjacent_core.memory.read32_be(
+        first_object + downloaded_data_base_vtable_offset) == 0U);
+    assert(adjacent_core.memory.read32_be(
+        first_object + downloaded_post_data_community_id_offset) == 0U);
+    assert(adjacent_core.memory.read32_be(
+        first_object + downloaded_post_data_empathy_count_offset) == 0U);
+    assert(adjacent_core.memory.read32_be(
+        first_object + downloaded_post_data_comment_count_offset) == 0U);
+    for (std::uint32_t offset = downloaded_post_data_initialized_size;
+         offset < downloaded_post_data_size; ++offset)
+    {
+        assert(adjacent_core.memory.read8(first_object + offset) == untouched);
+    }
+    for (std::uint32_t offset = 0; offset < downloaded_post_data_size; ++offset)
+    {
+        assert(adjacent_core.memory.read8(second_object + offset) == untouched);
+    }
+
+    construct(adjacent_core, second_object);
+    assert(adjacent_core.memory.read32_be(
+        second_object + downloaded_data_base_vtable_offset) == 0U);
+    assert(adjacent_core.memory.read32_be(
+        second_object + downloaded_post_data_community_id_offset) == 0U);
+    assert(adjacent_core.memory.read32_be(
+        second_object + downloaded_post_data_empathy_count_offset) == 0U);
+    assert(adjacent_core.memory.read32_be(
+        second_object + downloaded_post_data_comment_count_offset) == 0U);
+    for (std::uint32_t offset = downloaded_post_data_initialized_size;
+         offset < downloaded_post_data_size; ++offset)
+    {
+        assert(adjacent_core.memory.read8(second_object + offset) == untouched);
+    }
+
+    EspressoCore allocating_core(downloaded_post_data_size + 0x1000U);
+    register_nn_olv_hle(allocating_core.hle);
+    const std::uint32_t allocating_constructor = allocating_core.hle.bind_import(
+        std::string(library), std::string(symbol));
+    allocating_core.configure_guest_heap(
+        first_object, first_object + downloaded_post_data_size);
+    allocating_core.memory.fill_bytes(first_object, downloaded_post_data_size, untouched);
+    allocating_core.state.cia = allocating_constructor;
+    allocating_core.state.lr = return_address;
+    allocating_core.state.gpr[3] = 0U;
+    assert(allocating_core.step() == StepResult::executed);
+    assert(allocating_core.state.gpr[3] == first_object);
+    assert((allocating_core.state.gpr[3] & 7U) == 0U);
+    assert(allocating_core.guest_heap_cursor == first_object + downloaded_post_data_size);
+    assert(allocating_core.memory.read32_be(
+        first_object + downloaded_post_data_comment_count_offset) == 0U);
+    for (std::uint32_t offset = downloaded_post_data_initialized_size;
+         offset < downloaded_post_data_size; ++offset)
+    {
+        assert(allocating_core.memory.read8(first_object + offset) == untouched);
+    }
+
+    EspressoCore allocation_failure_core(0x100U);
+    register_nn_olv_hle(allocation_failure_core.hle);
+    const std::uint32_t failed_constructor = allocation_failure_core.hle.bind_import(
+        std::string(library), std::string(symbol));
+    allocation_failure_core.configure_guest_heap(0x20U, 0x20U);
+    allocation_failure_core.state.cia = failed_constructor;
+    allocation_failure_core.state.lr = return_address;
+    allocation_failure_core.state.gpr[3] = 0U;
+    assert(allocation_failure_core.step() == StepResult::executed);
+    assert(allocation_failure_core.state.gpr[3] == 0U);
+    assert(allocation_failure_core.state.cia == return_address);
+
+    EspressoCore invalid_memory_core(0x100U);
+    register_nn_olv_hle(invalid_memory_core.hle);
+    const std::uint32_t invalid_constructor = invalid_memory_core.hle.bind_import(
+        std::string(library), std::string(symbol));
+    invalid_memory_core.state.cia = invalid_constructor;
+    invalid_memory_core.state.lr = return_address;
+    invalid_memory_core.state.gpr[3] = 0x100U;
+    const RunResult invalid_result = invalid_memory_core.run(1U);
+    assert(invalid_result.reason == StopReason::memory_fault);
+    assert(invalid_result.detail.find("write") != std::string::npos);
+    assert(invalid_result.detail.find("0x00000100") != std::string::npos);
+    assert(invalid_memory_core.state.gpr[3] == 0x100U);
+}
+
 void guest_mutex_tests()
 {
     EspressoCore core(0x2000U);
@@ -2793,6 +2905,7 @@ int main(int argc, char* argv[])
     elf_loader_tests();
     rpx_loader_tests();
     hle_dispatch_tests();
+    nn_olv_hle_tests();
     guest_mutex_tests();
     memset_hle_tests();
     memcpy_hle_tests();

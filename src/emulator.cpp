@@ -1,6 +1,7 @@
 #include "emulator.hpp"
 
 #include "cpu/espresso/cafe_os_hle.hpp"
+#include "cpu/espresso/nn_olv_hle.hpp"
 
 #include <stdexcept>
 #include <utility>
@@ -12,6 +13,7 @@ Emulator::Emulator(std::size_t guest_memory_size)
     : core_(guest_memory_size)
 {
     cpu::espresso::register_coreinit_hle(core_.hle);
+    cpu::espresso::register_nn_olv_hle(core_.hle);
 }
 
 cpu::espresso::RpxLoadResult Emulator::load_rpx(std::span<const std::uint8_t> file)

@@ -48,6 +48,11 @@ public:
         return bytes_.size();
     }
 
+    void validate_write_range(std::uint32_t address, std::size_t width) const
+    {
+        validate_access(address, width, GuestMemoryAccess::write);
+    }
+
     void map_region(std::uint32_t address, std::size_t size)
     {
         constexpr std::uint64_t guest_address_space_end = std::uint64_t{1} << 32U;
