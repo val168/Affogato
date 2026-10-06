@@ -363,6 +363,13 @@ void decoder_tests()
     assert(!mullw.record);
     assert(decode(0x7FDFF5D6U).opcode == Opcode::unsupported); // mullwo remains unsupported
 
+    const DecodedInstruction neg = decode(0x7D6A00D0U); // neg r11, r10
+    assert(neg.opcode == Opcode::negate);
+    assert(neg.destination == 11);
+    assert(neg.source == 10);
+    assert(!neg.record);
+    assert(decode(0x7D6A04D0U).opcode == Opcode::unsupported); // nego remains unsupported
+
     const DecodedInstruction ori = decode(0x60631234U); // ori r3, r3, 0x1234
     assert(ori.opcode == Opcode::ori);
     assert(ori.source == 3);
@@ -763,6 +770,58 @@ void interpreter_tests()
 
 void integer_alu_tests()
 {
+    const auto run_neg = [](std::uint8_t destination, std::uint8_t source,
+                            std::uint32_t input, bool record = false)
+    {
+        EspressoCore neg_core(8);
+        constexpr std::uint32_t initial_cr = 0x12345678U;
+        constexpr std::uint32_t initial_xer = 0xA00000A5U;
+        neg_core.state.gpr[source] = input;
+        neg_core.state.cr = initial_cr;
+        neg_core.state.xer = initial_xer;
+        const std::uint32_t word = (31U << 26U) |
+            (static_cast<std::uint32_t>(destination) << 21U) |
+            (static_cast<std::uint32_t>(source) << 16U) | (104U << 1U) |
+            static_cast<std::uint32_t>(record);
+        neg_core.memory.write32_be(0, word);
+        const RunResult result = neg_core.run(1U);
+        assert(result.steps == 1U);
+        assert(result.reason == StopReason::instruction_limit);
+        assert(neg_core.state.cia == 4U);
+        const std::uint32_t expected = 0U - input;
+        assert(neg_core.state.gpr[destination] == expected);
+        assert(neg_core.state.xer == initial_xer);
+        if (record)
+        {
+            const std::uint32_t cr0 = expected == 0U ? 0x3U
+                : (expected & 0x80000000U) != 0 ? 0x9U : 0x5U;
+            assert(neg_core.state.cr == ((initial_cr & 0x0FFFFFFFU) | (cr0 << 28U)));
+        }
+        else
+        {
+            assert(neg_core.state.cr == initial_cr);
+        }
+        return std::pair{expected, result};
+    };
+
+    assert(run_neg(11, 10, 0U).first == 0U);
+    assert(run_neg(11, 10, 1U).first == 0xFFFFFFFFU);
+    assert(run_neg(11, 10, 0x20U).first == 0xFFFFFFE0U);
+    assert(run_neg(11, 10, 0xFFFFFFFFU).first == 1U);
+    assert(run_neg(11, 10, 0x80000000U).first == 0x80000000U);
+    assert(run_neg(9, 9, 0x20U).first == 0xFFFFFFE0U); // destination aliases source
+    assert(run_neg(5, 0, 0x20U).first == 0xFFFFFFE0U); // r0 is a normal GPR source
+    const auto neg_record = run_neg(11, 10, 0x20U, true);
+    assert(neg_record.first == 0xFFFFFFE0U);
+    assert(neg_record.second.instruction_history[0].opcode_name == "neg.");
+
+    EspressoCore neg_trace_core(8);
+    neg_trace_core.memory.write32_be(0, 0x7D6A00D0U);
+    neg_trace_core.state.gpr[10] = 0x20U;
+    const RunResult neg_trace = neg_trace_core.run(1U);
+    assert(format_instruction_history(neg_trace).find(
+        "neg r10=0x00000020 -> r11=0xFFFFFFE0") != std::string::npos);
+
     const auto run_mullw = [](std::uint8_t destination, std::uint8_t ra, std::uint8_t rb,
                               std::uint32_t a, std::uint32_t b, bool record = false)
     {

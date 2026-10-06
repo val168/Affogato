@@ -20,6 +20,7 @@ enum class Opcode
     add,
     subtract_from,
     subtract_from_carrying,
+    negate,
     ori,
     bitwise_or,
     bitwise_and,

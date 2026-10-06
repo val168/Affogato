@@ -202,6 +202,7 @@ void set_record_result(CpuState& state, std::uint32_t value)
     case Opcode::add: return "add";
     case Opcode::subtract_from: return "subf";
     case Opcode::subtract_from_carrying: return "subfc";
+    case Opcode::negate: return "neg";
     case Opcode::ori: return "ori";
     case Opcode::xor_immediate: return "xori";
     case Opcode::xor_immediate_shifted: return "xoris";
@@ -283,6 +284,7 @@ void add_history_source(
     entry.opcode_name = opcode_name(instruction.opcode);
     if ((instruction.opcode == Opcode::multiply_low_word ||
          instruction.opcode == Opcode::count_leading_zeros ||
+         instruction.opcode == Opcode::negate ||
          instruction.opcode == Opcode::rotate_left_word_and_mask_insert ||
          instruction.opcode == Opcode::rotate_left_word_and_mask) && instruction.record)
     {
@@ -406,6 +408,9 @@ void add_history_source(
         add_history_source(entry, state, instruction.base);
         add_history_source(entry, state, instruction.source);
         break;
+    case Opcode::negate:
+        add_history_source(entry, state, instruction.source);
+        break;
     case Opcode::shift_left_word:
         add_history_source(entry, state, instruction.source);
         add_history_source(entry, state, instruction.base);
@@ -442,6 +447,7 @@ void add_history_source(
     case Opcode::subtract_from:
     case Opcode::subtract_from_carrying:
     case Opcode::multiply_low_word:
+    case Opcode::negate:
     case Opcode::ori:
     case Opcode::xor_immediate:
     case Opcode::xor_immediate_shifted:
@@ -671,6 +677,18 @@ StepResult EspressoCore::step()
         const std::int64_t rhs = std::bit_cast<std::int32_t>(state.gpr[instruction.source]);
         const std::int64_t product = lhs * rhs;
         const std::uint32_t result = static_cast<std::uint32_t>(product);
+        state.gpr[instruction.destination] = result;
+        if (instruction.record)
+        {
+            set_record_result(state, result);
+        }
+        break;
+    }
+
+    case Opcode::negate:
+    {
+        const std::uint32_t source = state.gpr[instruction.source];
+        const std::uint32_t result = 0U - source;
         state.gpr[instruction.destination] = result;
         if (instruction.record)
         {
