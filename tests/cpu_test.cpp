@@ -2038,6 +2038,66 @@ void nn_olv_hle_tests()
     assert(invalid_topic_core.state.gpr[3] == partially_mapped_topic);
     assert(invalid_topic_core.memory.read32_be(partially_mapped_topic) ==
            0x6B6B6B6BU);
+
+    constexpr std::string_view list_param_symbol =
+        "__ct__Q3_2nn3olv25DownloadPostDataListParamFv";
+    constexpr std::uint32_t list_param_object = 0x1000U;
+    constexpr std::uint32_t adjacent_list_param =
+        list_param_object + download_post_data_list_param_size;
+    constexpr std::uint8_t list_param_sentinel = 0xD3U;
+
+    EspressoCore list_param_core(
+        list_param_object + 2U * download_post_data_list_param_size + 0x1000U);
+    register_nn_olv_hle(list_param_core.hle);
+    const std::uint32_t list_param_constructor = list_param_core.hle.bind_import(
+        std::string(library), std::string(list_param_symbol));
+    list_param_core.memory.fill_bytes(
+        list_param_object - 1U,
+        2U * download_post_data_list_param_size + 2U,
+        list_param_sentinel);
+    list_param_core.state.cia = list_param_constructor;
+    list_param_core.state.lr = return_address;
+    list_param_core.state.gpr[3] = list_param_object;
+    assert(list_param_core.step() == StepResult::executed);
+    assert(list_param_core.state.cia == return_address);
+    assert(list_param_core.state.gpr[3] == list_param_object);
+    assert(list_param_core.memory.read8(list_param_object - 1U) ==
+           list_param_sentinel);
+    for (std::uint32_t offset = 0; offset < download_post_data_list_param_size; ++offset)
+    {
+        assert(list_param_core.memory.read8(list_param_object + offset) == 0U);
+    }
+    for (std::uint32_t offset = 0; offset < download_post_data_list_param_size; ++offset)
+    {
+        assert(list_param_core.memory.read8(adjacent_list_param + offset) ==
+               list_param_sentinel);
+    }
+    assert(list_param_core.memory.read8(
+        adjacent_list_param + download_post_data_list_param_size) == list_param_sentinel);
+
+    EspressoCore invalid_list_param_core(0x2000U);
+    register_nn_olv_hle(invalid_list_param_core.hle);
+    const std::uint32_t invalid_list_param_constructor =
+        invalid_list_param_core.hle.bind_import(
+            std::string(library), std::string(list_param_symbol));
+    constexpr std::uint32_t partially_mapped_list_param = 0x1800U;
+    invalid_list_param_core.memory.fill_bytes(
+        partially_mapped_list_param,
+        0x2000U - partially_mapped_list_param,
+        list_param_sentinel);
+    invalid_list_param_core.state.cia = invalid_list_param_constructor;
+    invalid_list_param_core.state.lr = return_address;
+    invalid_list_param_core.state.gpr[3] = partially_mapped_list_param;
+    const RunResult invalid_list_param_result = invalid_list_param_core.run(1U);
+    assert(invalid_list_param_result.reason == StopReason::memory_fault);
+    assert(invalid_list_param_result.detail.find("write") != std::string::npos);
+    assert(invalid_list_param_result.detail.find("0x00001800") != std::string::npos);
+    assert(invalid_list_param_core.state.gpr[3] == partially_mapped_list_param);
+    for (std::uint32_t address = partially_mapped_list_param;
+         address < 0x2000U; ++address)
+    {
+        assert(invalid_list_param_core.memory.read8(address) == list_param_sentinel);
+    }
 }
 
 void guest_mutex_tests()

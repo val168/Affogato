@@ -21,6 +21,11 @@ void initialize_downloaded_topic_data(GuestMemory& memory, std::uint32_t self)
     memory.write32_be(self + downloaded_topic_data_community_id_offset, 0U);
 }
 
+void initialize_download_post_data_list_param(GuestMemory& memory, std::uint32_t self)
+{
+    memory.zero_fill(self, download_post_data_list_param_size);
+}
+
 void register_nn_olv_hle(HleDispatcher& dispatcher)
 {
     dispatcher.register_function(
@@ -71,6 +76,15 @@ void register_nn_olv_hle(HleDispatcher& dispatcher)
             }
 
             initialize_downloaded_topic_data(core.memory, self);
+            core.state.gpr[3] = self;
+        });
+
+    dispatcher.register_function(
+        "nn_olv.rpl",
+        "__ct__Q3_2nn3olv25DownloadPostDataListParamFv",
+        [](EspressoCore& core) {
+            const std::uint32_t self = core.state.gpr[3];
+            initialize_download_post_data_list_param(core.memory, self);
             core.state.gpr[3] = self;
         });
 }

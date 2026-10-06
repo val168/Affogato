@@ -19,6 +19,7 @@ inline constexpr std::uint32_t downloaded_topic_data_size = 0x1000U;
 inline constexpr std::uint32_t downloaded_topic_data_unk1_offset = 0x000U;
 inline constexpr std::uint32_t downloaded_topic_data_community_id_offset = 0x004U;
 inline constexpr std::uint32_t downloaded_topic_data_initialized_size = 0x008U;
+inline constexpr std::uint32_t download_post_data_list_param_size = 0x1000U;
 
 // Initializes only the DownloadedDataBase subobject; its GHS vtable remains
 // zero until Affogato has a real guest-visible RTTI/vtable implementation.
@@ -26,6 +27,9 @@ void initialize_downloaded_data_base(GuestMemory& memory, std::uint32_t self);
 
 // Initializes only the two currently documented DownloadedTopicData fields.
 void initialize_downloaded_topic_data(GuestMemory& memory, std::uint32_t self);
+
+// The Cafe constructor clears the complete parameter object.
+void initialize_download_post_data_list_param(GuestMemory& memory, std::uint32_t self);
 
 void register_nn_olv_hle(HleDispatcher& dispatcher);
 
