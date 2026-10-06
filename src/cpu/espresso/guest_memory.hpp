@@ -193,6 +193,16 @@ public:
         write8(address + 3U, static_cast<std::uint8_t>(value));
     }
 
+    void write64_be(std::uint32_t address, std::uint64_t value)
+    {
+        validate_access(address, sizeof(std::uint64_t), GuestMemoryAccess::write);
+        for (std::uint32_t byte = 0; byte < sizeof(std::uint64_t); ++byte)
+        {
+            const unsigned shift = static_cast<unsigned>((7U - byte) * 8U);
+            write8(address + byte, static_cast<std::uint8_t>(value >> shift));
+        }
+    }
+
 private:
     struct MappedRegion
     {

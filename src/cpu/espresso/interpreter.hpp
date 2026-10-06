@@ -69,6 +69,8 @@ struct InstructionHistoryEntry
     std::uint64_t fp_source_value{};
     bool has_stored_single_value{};
     std::uint32_t stored_single_value{};
+    bool has_stored_double_value{};
+    std::uint64_t stored_double_value{};
     bool completed{};
 };
 

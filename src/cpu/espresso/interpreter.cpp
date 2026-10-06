@@ -171,7 +171,8 @@ void set_record_result(CpuState& state, std::uint32_t value)
             instruction.opcode == Opcode::store_multiple_word ||
             instruction.opcode == Opcode::load_single ||
             instruction.opcode == Opcode::store_single ||
-            instruction.opcode == Opcode::store_single_update;
+            instruction.opcode == Opcode::store_single_update ||
+            instruction.opcode == Opcode::store_double;
         if (memory_instruction)
         {
             detail << "; rA=" << std::dec << static_cast<unsigned>(instruction.base)
@@ -249,6 +250,7 @@ void set_record_result(CpuState& state, std::uint32_t value)
     case Opcode::load_single: return "lfs";
     case Opcode::store_single: return "stfs";
     case Opcode::store_single_update: return "stfsu";
+    case Opcode::store_double: return "stfd";
     }
     return "unknown";
 }
@@ -335,7 +337,7 @@ void add_history_source(
         opcode == Opcode::store_halfword;
 
     if (opcode == Opcode::load_single || opcode == Opcode::store_single ||
-        opcode == Opcode::store_single_update ||
+        opcode == Opcode::store_single_update || opcode == Opcode::store_double ||
         opcode == Opcode::load_halfword_algebraic)
     {
         if (instruction.base != 0)
@@ -350,7 +352,8 @@ void add_history_source(
         entry.has_fp_destination = true;
         entry.fp_destination_register = instruction.fp_register;
     }
-    else if (opcode == Opcode::store_single || opcode == Opcode::store_single_update)
+    else if (opcode == Opcode::store_single || opcode == Opcode::store_single_update ||
+             opcode == Opcode::store_double)
     {
         entry.has_fp_source = true;
         entry.fp_source_register = instruction.fp_register;
@@ -623,6 +626,11 @@ std::string format_instruction_history(const RunResult& result)
         {
             text << " -> mem32=0x" << std::hex << std::setw(8)
                  << entry.stored_single_value;
+        }
+        if (entry.has_stored_double_value && entry.completed)
+        {
+            text << " -> mem64=0x" << std::hex << std::setw(16)
+                 << entry.stored_double_value;
         }
         if (!entry.completed)
         {
@@ -1204,6 +1212,17 @@ StepResult EspressoCore::step()
         {
             state.gpr[instruction.base] = address;
         }
+        break;
+    }
+
+    case Opcode::store_double:
+    {
+        const std::uint32_t address =
+            effective_address(state, instruction.base, instruction.immediate);
+        const std::uint64_t value = state.fpr[instruction.fp_register];
+        memory.write64_be(address, value);
+        pending_history_entry_.has_stored_double_value = true;
+        pending_history_entry_.stored_double_value = value;
         break;
     }
 

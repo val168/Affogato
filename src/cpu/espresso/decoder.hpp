@@ -63,6 +63,7 @@ enum class Opcode
     load_single,
     store_single,
     store_single_update,
+    store_double,
 };
 
 struct DecodedInstruction
