@@ -1959,6 +1959,85 @@ void nn_olv_hle_tests()
     assert(invalid_result.detail.find("write") != std::string::npos);
     assert(invalid_result.detail.find("0x00000100") != std::string::npos);
     assert(invalid_memory_core.state.gpr[3] == 0x100U);
+
+    constexpr std::string_view topic_symbol =
+        "__ct__Q3_2nn3olv19DownloadedTopicDataFv";
+    constexpr std::uint32_t topic_object = 0x200U;
+    constexpr std::uint8_t topic_sentinel = 0x6BU;
+
+    EspressoCore topic_core(downloaded_topic_data_size + 0x1000U);
+    register_nn_olv_hle(topic_core.hle);
+    const std::uint32_t topic_constructor = topic_core.hle.bind_import(
+        std::string(library), std::string(topic_symbol));
+    topic_core.memory.fill_bytes(topic_object, downloaded_topic_data_size, topic_sentinel);
+    topic_core.state.cia = topic_constructor;
+    topic_core.state.lr = return_address;
+    topic_core.state.gpr[3] = topic_object;
+    assert(topic_core.step() == StepResult::executed);
+    assert(topic_core.state.cia == return_address);
+    assert(topic_core.state.gpr[3] == topic_object);
+    assert(topic_core.memory.read32_be(
+        topic_object + downloaded_topic_data_unk1_offset) == 0U);
+    assert(topic_core.memory.read32_be(
+        topic_object + downloaded_topic_data_community_id_offset) == 0U);
+    for (std::uint32_t offset = downloaded_topic_data_initialized_size;
+         offset < downloaded_topic_data_size; ++offset)
+    {
+        assert(topic_core.memory.read8(topic_object + offset) == topic_sentinel);
+    }
+
+    EspressoCore topic_allocating_core(downloaded_topic_data_size + 0x1000U);
+    register_nn_olv_hle(topic_allocating_core.hle);
+    const std::uint32_t allocating_topic_constructor =
+        topic_allocating_core.hle.bind_import(
+            std::string(library), std::string(topic_symbol));
+    topic_allocating_core.configure_guest_heap(
+        topic_object, topic_object + downloaded_topic_data_size);
+    topic_allocating_core.state.cia = allocating_topic_constructor;
+    topic_allocating_core.state.lr = return_address;
+    topic_allocating_core.state.gpr[3] = 0U;
+    assert(topic_allocating_core.step() == StepResult::executed);
+    const std::uint32_t allocated_topic = topic_allocating_core.state.gpr[3];
+    assert(allocated_topic == topic_object);
+    assert(allocated_topic != 0U);
+    assert((allocated_topic & 7U) == 0U);
+    assert(topic_allocating_core.guest_heap_cursor ==
+           topic_object + downloaded_topic_data_size);
+    assert(topic_allocating_core.memory.read32_be(
+        allocated_topic + downloaded_topic_data_unk1_offset) == 0U);
+    assert(topic_allocating_core.memory.read32_be(
+        allocated_topic + downloaded_topic_data_community_id_offset) == 0U);
+
+    EspressoCore topic_allocation_failure_core(0x100U);
+    register_nn_olv_hle(topic_allocation_failure_core.hle);
+    const std::uint32_t failed_topic_constructor =
+        topic_allocation_failure_core.hle.bind_import(
+            std::string(library), std::string(topic_symbol));
+    topic_allocation_failure_core.configure_guest_heap(0x20U, 0x20U);
+    topic_allocation_failure_core.state.cia = failed_topic_constructor;
+    topic_allocation_failure_core.state.lr = return_address;
+    topic_allocation_failure_core.state.gpr[3] = 0U;
+    assert(topic_allocation_failure_core.step() == StepResult::executed);
+    assert(topic_allocation_failure_core.state.gpr[3] == 0U);
+    assert(topic_allocation_failure_core.state.cia == return_address);
+
+    EspressoCore invalid_topic_core(0x100U);
+    register_nn_olv_hle(invalid_topic_core.hle);
+    const std::uint32_t invalid_topic_constructor = invalid_topic_core.hle.bind_import(
+        std::string(library), std::string(topic_symbol));
+    constexpr std::uint32_t partially_mapped_topic = 0xFCU;
+    invalid_topic_core.memory.fill_bytes(
+        partially_mapped_topic, 4U, topic_sentinel);
+    invalid_topic_core.state.cia = invalid_topic_constructor;
+    invalid_topic_core.state.lr = return_address;
+    invalid_topic_core.state.gpr[3] = partially_mapped_topic;
+    const RunResult invalid_topic_result = invalid_topic_core.run(1U);
+    assert(invalid_topic_result.reason == StopReason::memory_fault);
+    assert(invalid_topic_result.detail.find("write") != std::string::npos);
+    assert(invalid_topic_result.detail.find("0x000000FC") != std::string::npos);
+    assert(invalid_topic_core.state.gpr[3] == partially_mapped_topic);
+    assert(invalid_topic_core.memory.read32_be(partially_mapped_topic) ==
+           0x6B6B6B6BU);
 }
 
 void guest_mutex_tests()
