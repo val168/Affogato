@@ -62,6 +62,7 @@ enum class Opcode
     conditional_branch_to_count_register,
     load_single,
     store_single,
+    store_single_update,
 };
 
 struct DecodedInstruction

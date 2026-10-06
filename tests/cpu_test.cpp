@@ -543,6 +543,13 @@ void decoder_tests()
     assert(stfs.base == 12);
     assert(stfs.immediate == -4000);
 
+    const DecodedInstruction stfsu = decode(0xD5ABF504U); // stfsu f13, -2812(r11)
+    assert(stfsu.opcode == Opcode::store_single_update);
+    assert(stfsu.fp_register == 13);
+    assert(stfsu.base == 11);
+    assert(stfsu.immediate == -2812);
+    assert(decode(0xD4000000U).opcode == Opcode::unsupported); // stfsu with rA=0
+
     const DecodedInstruction mflr = decode(0x7C0802A6U); // mflr r0
     assert(mflr.opcode == Opcode::move_from_link_register);
     assert(mflr.destination == 0);
@@ -2531,6 +2538,13 @@ void floating_point_store_tests()
             (static_cast<std::uint32_t>(base) << 16U) |
             static_cast<std::uint16_t>(displacement);
     };
+    const auto encode_stfsu = [](std::uint8_t source, std::uint8_t base,
+                                 std::int16_t displacement) {
+        return 0xD4000000U |
+            (static_cast<std::uint32_t>(source) << 21U) |
+            (static_cast<std::uint32_t>(base) << 16U) |
+            static_cast<std::uint16_t>(displacement);
+    };
 
     EspressoCore positive_core(0x200U);
     positive_core.state.gpr[4] = 0x100U;
@@ -2595,6 +2609,77 @@ void floating_point_store_tests()
     assert(!failed_stfs.completed);
     assert(!failed_stfs.has_stored_single_value);
     assert(fault_core.state.fpr[13] == 0xC00921FB60000000ULL);
+
+    // stfsu shares stfs's binary64-to-binary32 conversion and updates RA only
+    // after the guest-memory store completes.
+    EspressoCore update_positive(0x200U);
+    update_positive.state.gpr[11] = 0x100U;
+    update_positive.state.fpr[13] = 0x400A000000000000ULL; // 3.25
+    update_positive.state.cr = 0x12345678U;
+    update_positive.state.xer = 0xA00000A5U;
+    update_positive.memory.write32_be(0, encode_stfsu(13, 11, 4));
+    const RunResult update_positive_result = update_positive.run(1U);
+    assert(update_positive_result.reason == StopReason::instruction_limit);
+    assert(update_positive.memory.read32_be(0x104U) == 0x40500000U);
+    assert(update_positive.memory.read8(0x104U) == 0x40U);
+    assert(update_positive.memory.read8(0x105U) == 0x50U);
+    assert(update_positive.state.gpr[11] == 0x104U);
+    assert(update_positive.state.fpr[13] == 0x400A000000000000ULL);
+    assert(update_positive.state.cr == 0x12345678U);
+    assert(update_positive.state.xer == 0xA00000A5U);
+    const InstructionHistoryEntry& update_history =
+        update_positive_result.instruction_history.front();
+    assert(update_history.opcode_name == "stfsu");
+    assert(update_history.has_effective_address && update_history.effective_address == 0x104U);
+    assert(update_history.has_fp_source && update_history.fp_source_register == 13U);
+    assert(update_history.fp_source_value == 0x400A000000000000ULL);
+    assert(update_history.has_stored_single_value &&
+           update_history.stored_single_value == 0x40500000U);
+    assert(update_history.has_destination && update_history.destination_register == 11U);
+    assert(update_history.destination_value == 0x104U);
+    assert(format_instruction_history(update_positive_result).find(
+        "stfsu r11=0x00000100 f13=3.25 [0x400A000000000000] "
+        "[0x00000104] -> r11=0x00000104 -> mem32=0x40500000") != std::string::npos);
+
+    EspressoCore update_negative(0x200U);
+    update_negative.state.gpr[12] = 0x120U;
+    update_negative.state.fpr[7] = 0xC002000000000000ULL; // -2.25
+    update_negative.memory.write32_be(0, encode_stfsu(7, 12, -4));
+    assert(update_negative.step() == StepResult::executed);
+    assert(update_negative.memory.read32_be(0x11CU) == 0xC0100000U);
+    assert(update_negative.state.gpr[12] == 0x11CU);
+    assert(update_negative.state.fpr[7] == 0xC002000000000000ULL);
+
+    EspressoCore update_zero(0x100U);
+    update_zero.state.gpr[4] = 0x40U;
+    update_zero.state.fpr[2] = 0U;
+    update_zero.memory.write32_be(0, encode_stfsu(2, 4, 8));
+    assert(update_zero.step() == StepResult::executed);
+    assert(update_zero.memory.read32_be(0x48U) == 0U);
+    assert(update_zero.state.gpr[4] == 0x48U);
+
+    EspressoCore update_zero_base(0x100U);
+    update_zero_base.state.fpr[13] = 0x4000000000000000ULL;
+    update_zero_base.memory.write32_be(0, encode_stfsu(13, 0, 0x40));
+    const RunResult rejected_zero_base = update_zero_base.run(1U);
+    assert(rejected_zero_base.reason == StopReason::unsupported_instruction);
+    assert(update_zero_base.memory.read32_be(0x40U) == 0U);
+    assert(update_zero_base.state.gpr[0] == 0U);
+
+    EspressoCore update_fault(0x100U);
+    update_fault.state.gpr[11] = 0x100U;
+    update_fault.state.fpr[13] = 0U;
+    update_fault.memory.write32_be(0, encode_stfsu(13, 11, 0));
+    const RunResult update_fault_result = update_fault.run(1U);
+    assert(update_fault_result.reason == StopReason::memory_fault);
+    assert(update_fault_result.detail.find("write 4 byte(s)") != std::string::npos);
+    assert(update_fault.state.gpr[11] == 0x100U); // failed store did not update RA
+    const InstructionHistoryEntry& failed_update =
+        update_fault_result.instruction_history.front();
+    assert(failed_update.opcode_name == "stfsu");
+    assert(failed_update.has_effective_address && failed_update.effective_address == 0x100U);
+    assert(failed_update.has_fp_source && failed_update.fp_source_register == 13U);
+    assert(!failed_update.completed && !failed_update.has_stored_single_value);
 }
 
 void function_call_and_stack_tests()

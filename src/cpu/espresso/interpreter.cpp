@@ -170,7 +170,8 @@ void set_record_result(CpuState& state, std::uint32_t value)
             instruction.opcode == Opcode::load_multiple_word ||
             instruction.opcode == Opcode::store_multiple_word ||
             instruction.opcode == Opcode::load_single ||
-            instruction.opcode == Opcode::store_single;
+            instruction.opcode == Opcode::store_single ||
+            instruction.opcode == Opcode::store_single_update;
         if (memory_instruction)
         {
             detail << "; rA=" << std::dec << static_cast<unsigned>(instruction.base)
@@ -247,6 +248,7 @@ void set_record_result(CpuState& state, std::uint32_t value)
     case Opcode::conditional_branch_to_count_register: return "bcctr";
     case Opcode::load_single: return "lfs";
     case Opcode::store_single: return "stfs";
+    case Opcode::store_single_update: return "stfsu";
     }
     return "unknown";
 }
@@ -333,6 +335,7 @@ void add_history_source(
         opcode == Opcode::store_halfword;
 
     if (opcode == Opcode::load_single || opcode == Opcode::store_single ||
+        opcode == Opcode::store_single_update ||
         opcode == Opcode::load_halfword_algebraic)
     {
         if (instruction.base != 0)
@@ -347,7 +350,7 @@ void add_history_source(
         entry.has_fp_destination = true;
         entry.fp_destination_register = instruction.fp_register;
     }
-    else if (opcode == Opcode::store_single)
+    else if (opcode == Opcode::store_single || opcode == Opcode::store_single_update)
     {
         entry.has_fp_source = true;
         entry.fp_source_register = instruction.fp_register;
@@ -368,6 +371,7 @@ void add_history_source(
     case Opcode::load_byte_update:
     case Opcode::load_halfword_zero:
     case Opcode::load_halfword_algebraic:
+    case Opcode::store_single_update:
     case Opcode::store_word:
     case Opcode::store_word_update:
     case Opcode::store_byte:
@@ -477,6 +481,10 @@ void add_history_source(
     case Opcode::load_single:
         break;
     case Opcode::store_single:
+        break;
+    case Opcode::store_single_update:
+        entry.has_destination = true;
+        entry.destination_register = instruction.base;
         break;
     case Opcode::store_word_update:
     case Opcode::store_byte_update:
@@ -1182,6 +1190,7 @@ StepResult EspressoCore::step()
     }
 
     case Opcode::store_single:
+    case Opcode::store_single_update:
     {
         const std::uint32_t address =
             effective_address(state, instruction.base, instruction.immediate);
@@ -1191,6 +1200,10 @@ StepResult EspressoCore::step()
         memory.write32_be(address, single_bits);
         pending_history_entry_.has_stored_single_value = true;
         pending_history_entry_.stored_single_value = single_bits;
+        if (instruction.opcode == Opcode::store_single_update)
+        {
+            state.gpr[instruction.base] = address;
+        }
         break;
     }
 
