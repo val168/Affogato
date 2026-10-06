@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cassert>
 #include <cstdint>
 #include <fstream>
@@ -512,6 +513,12 @@ void decoder_tests()
     const DecodedInstruction lhz = decode(0xA0A10002U); // lhz r5, 2(r1)
     assert(lhz.opcode == Opcode::load_halfword_zero);
     assert(lhz.destination == 5);
+
+    const DecodedInstruction lha = decode(0xA98A0000U); // lha r12, 0(r10)
+    assert(lha.opcode == Opcode::load_halfword_algebraic);
+    assert(lha.destination == 12);
+    assert(lha.base == 10);
+    assert(lha.immediate == 0);
 
     const DecodedInstruction sth = decode(0xB0610006U); // sth r3, 6(r1)
     assert(sth.opcode == Opcode::store_halfword);
@@ -2205,6 +2212,70 @@ void load_store_tests()
     assert(store_byte_update_core.state.gpr[10] == 0x51U);
 }
 
+void load_halfword_algebraic_tests()
+{
+    const auto run_lha = [](std::uint8_t destination, std::uint8_t base,
+                            std::uint32_t base_value, std::int16_t displacement,
+                            std::uint32_t address, std::uint16_t memory_value)
+    {
+        EspressoCore core(0x200U);
+        constexpr std::uint32_t expected_cr = 0x12345678U;
+        constexpr std::uint32_t expected_xer = 0xA00000A5U;
+        core.state.gpr[base] = base_value;
+        core.state.cr = expected_cr;
+        core.state.xer = expected_xer;
+        const std::uint32_t instruction = 0xA8000000U |
+            (static_cast<std::uint32_t>(destination) << 21U) |
+            (static_cast<std::uint32_t>(base) << 16U) |
+            static_cast<std::uint16_t>(displacement);
+        core.memory.write32_be(0, instruction);
+        core.memory.write16_be(address, memory_value);
+        const RunResult result = core.run(1U);
+        assert(result.steps == 1U);
+        assert(result.reason == StopReason::instruction_limit);
+        assert(core.state.cia == 4U);
+        const std::int16_t signed_value = std::bit_cast<std::int16_t>(memory_value);
+        const std::uint32_t expected = static_cast<std::uint32_t>(
+            static_cast<std::int32_t>(signed_value));
+        assert(core.state.gpr[destination] == expected);
+        assert(core.state.cr == expected_cr);
+        assert(core.state.xer == expected_xer);
+        assert(result.instruction_history.size() == 1U);
+        assert(result.instruction_history[0].opcode_name == "lha");
+        assert(result.instruction_history[0].has_effective_address);
+        assert(result.instruction_history[0].effective_address == address);
+        return std::pair{expected, result};
+    };
+
+    assert(run_lha(12, 10, 0x80U, 0, 0x80U, 0x0000U).first == 0x00000000U);
+    assert(run_lha(12, 10, 0x80U, 0, 0x80U, 0x0001U).first == 0x00000001U);
+    assert(run_lha(12, 10, 0x80U, 0, 0x80U, 0x7FFFU).first == 0x00007FFFU);
+    assert(run_lha(12, 10, 0x80U, 0, 0x80U, 0x8000U).first == 0xFFFF8000U);
+    const auto all_ones = run_lha(12, 10, 0x80U, 0, 0x80U, 0xFFFFU);
+    assert(all_ones.first == 0xFFFFFFFFU);
+    assert(format_instruction_history(all_ones.second).find(
+        "lha r10=0x00000080 [0x00000080] -> r12=0xFFFFFFFF") != std::string::npos);
+
+    assert(run_lha(12, 10, 0x70U, 0x10, 0x80U, 0x1234U).first == 0x1234U);
+    assert(run_lha(12, 10, 0x90U, -0x10, 0x80U, 0xFFFFU).first == 0xFFFFFFFFU);
+    assert(run_lha(12, 0, 0x40U, 0x80, 0x80U, 0x8000U).first == 0xFFFF8000U);
+
+    // The EA is captured from the original base before writing an aliased rD.
+    assert(run_lha(10, 10, 0x40U, 0, 0x40U, 0x8000U).first == 0xFFFF8000U);
+
+    EspressoCore fault_core(0x100U);
+    fault_core.state.gpr[10] = 0x100U;
+    fault_core.memory.write32_be(0, 0xA98A0000U);
+    const RunResult fault = fault_core.run(1U);
+    assert(fault.reason == StopReason::memory_fault);
+    assert(fault.detail.find("read 2 byte(s)") != std::string::npos);
+    assert(fault.detail.find("0x00000100") != std::string::npos);
+    assert(fault.instruction_history.size() == 1U);
+    assert(fault.instruction_history[0].has_effective_address);
+    assert(fault.instruction_history[0].effective_address == 0x100U);
+    assert(!fault.instruction_history[0].completed);
+}
+
 void multiple_word_load_store_tests()
 {
     const auto encode_stmw = [](std::uint8_t first, std::uint8_t base,
@@ -2583,6 +2654,7 @@ int main(int argc, char* argv[])
     memcpy_hle_tests();
     compare_and_conditional_branch_tests();
     load_store_tests();
+    load_halfword_algebraic_tests();
     multiple_word_load_store_tests();
     function_call_and_stack_tests();
     return 0;

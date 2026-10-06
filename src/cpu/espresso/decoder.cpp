@@ -360,6 +360,13 @@ DecodedInstruction decode(std::uint32_t raw) noexcept
         instruction.immediate = sign_extend(raw, 16);
         break;
 
+    case 42: // lha
+        instruction.opcode = Opcode::load_halfword_algebraic;
+        instruction.destination = static_cast<std::uint8_t>(field(raw, 21, 0x1FU));
+        instruction.base = static_cast<std::uint8_t>(field(raw, 16, 0x1FU));
+        instruction.immediate = sign_extend(raw, 16);
+        break;
+
     case 44: // sth
         instruction.opcode = Opcode::store_halfword;
         instruction.destination = static_cast<std::uint8_t>(field(raw, 21, 0x1FU));

@@ -50,6 +50,7 @@ enum class Opcode
     store_byte,
     store_byte_update,
     load_halfword_zero,
+    load_halfword_algebraic,
     store_halfword,
     store_word_update,
     move_from_link_register,
