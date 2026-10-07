@@ -557,6 +557,14 @@ void decoder_tests()
     assert(sth.opcode == Opcode::store_halfword);
     assert(sth.destination == 3);
 
+    const DecodedInstruction sthu = decode(0xB7E80002U); // sthu r31, 2(r8)
+    assert(sthu.opcode == Opcode::store_halfword_update);
+    assert(sthu.destination == 31U);
+    assert(sthu.base == 8U);
+    assert(sthu.immediate == 2);
+    assert(decode(0xB7E8FFFEU).immediate == -2);
+    assert(decode(0xB7E00002U).opcode == Opcode::unsupported); // update RA=0 is invalid
+
     const DecodedInstruction lfs = decode(0xC1AC0004U); // lfs f13, 4(r12)
     assert(lfs.opcode == Opcode::load_single);
     assert(lfs.fp_register == 13);
@@ -4121,6 +4129,109 @@ void load_store_tests()
     assert(store_byte_update_core.state.gpr[10] == 0x51U);
 }
 
+void store_halfword_update_tests()
+{
+    const auto encode_sthu = [](std::uint8_t source, std::uint8_t base,
+                                std::int16_t displacement) {
+        return 0xB4000000U |
+            (static_cast<std::uint32_t>(source) << 21U) |
+            (static_cast<std::uint32_t>(base) << 16U) |
+            static_cast<std::uint16_t>(displacement);
+    };
+
+    constexpr std::uint32_t original_cr = 0xA5C36E91U;
+    constexpr std::uint32_t original_xer = 0x800000A5U;
+    constexpr std::uint32_t original_lr = 0x12345678U;
+    constexpr std::uint32_t original_ctr = 0x87654321U;
+
+    EspressoCore normal(0x200U);
+    normal.state.gpr[8] = 0x80U;
+    normal.state.gpr[31] = 0x1234ABCDU;
+    normal.state.gpr[7] = 0xDEADBEEFU;
+    normal.state.cr = original_cr;
+    normal.state.xer = original_xer;
+    normal.state.lr = original_lr;
+    normal.state.ctr = original_ctr;
+    normal.memory.write8(0x83U, 0x5AU);
+    normal.memory.write8(0x86U, 0xA5U);
+    normal.memory.write32_be(0U, encode_sthu(31U, 8U, 4));
+    const RunResult normal_result = normal.run(1U);
+    assert(normal_result.reason == StopReason::instruction_limit);
+    assert(normal.state.gpr[8] == 0x84U);
+    assert(normal.memory.read16_be(0x84U) == 0xABCDU);
+    assert(normal.memory.read8(0x84U) == 0xABU);
+    assert(normal.memory.read8(0x85U) == 0xCDU);
+    assert(normal.memory.read8(0x83U) == 0x5AU);
+    assert(normal.memory.read8(0x86U) == 0xA5U);
+    assert(normal.state.gpr[31] == 0x1234ABCDU);
+    assert(normal.state.gpr[7] == 0xDEADBEEFU);
+    assert(normal.state.cr == original_cr);
+    assert(normal.state.xer == original_xer);
+    assert(normal.state.lr == original_lr);
+    assert(normal.state.ctr == original_ctr);
+
+    const InstructionHistoryEntry& history = normal_result.instruction_history.front();
+    assert(history.opcode_name == "sthu");
+    assert(history.source_count == 2U);
+    assert(history.source_registers[0] == 8U && history.source_values[0] == 0x80U);
+    assert(history.source_registers[1] == 31U && history.source_values[1] == 0x1234ABCDU);
+    assert(history.has_effective_address && history.effective_address == 0x84U);
+    assert(history.has_destination && history.destination_register == 8U);
+    assert(history.destination_value == 0x84U);
+    assert(history.has_stored_halfword_value && history.stored_halfword_value == 0xABCDU);
+    assert(format_instruction_history(normal_result).find(
+        "sthu r8=0x00000080 r31=0x1234ABCD [0x00000084] -> r8=0x00000084 -> mem16=0xABCD") !=
+        std::string::npos);
+
+    // The source/base alias must use the old GPR value for both the address and value.
+    // Use a mapped low address for the observable aliasing store.
+    EspressoCore mapped_alias(0x200U);
+    mapped_alias.state.gpr[8] = 0x80U;
+    mapped_alias.memory.write32_be(0U, encode_sthu(8U, 8U, 2));
+    assert(mapped_alias.step() == StepResult::executed);
+    assert(mapped_alias.memory.read16_be(0x82U) == 0x0080U);
+    assert(mapped_alias.state.gpr[8] == 0x82U);
+
+    // Signed negative displacement is applied before updating the base.
+    EspressoCore negative(0x200U);
+    negative.state.gpr[4] = 0x100U;
+    negative.state.gpr[5] = 0xFEDCABCDU;
+    negative.memory.write32_be(0U, encode_sthu(5U, 4U, -2));
+    assert(negative.step() == StepResult::executed);
+    assert(negative.memory.read16_be(0xFEU) == 0xABCDU);
+    assert(negative.state.gpr[4] == 0xFEU);
+
+    // Exact Wind Waker address is sparse-backed, not a multi-gigabyte flat allocation.
+    EspressoCore wind_waker(0x100U);
+    wind_waker.memory.map_region(0x1046C000U, 0x1000U);
+    wind_waker.state.gpr[8] = 0x1046C22AU;
+    wind_waker.state.gpr[31] = 0U;
+    wind_waker.memory.write32_be(0U, 0xB7E80002U);
+    assert(wind_waker.step() == StepResult::executed);
+    assert(wind_waker.memory.read16_be(0x1046C22CU) == 0U);
+    assert(wind_waker.state.gpr[8] == 0x1046C22CU);
+
+    // A crossing-range failure validates both bytes before writing and leaves RA unchanged.
+    EspressoCore fault(0x100U);
+    fault.state.gpr[8] = 0xFDU;
+    fault.state.gpr[31] = 0x1234ABCDU;
+    fault.memory.write8(0xFFU, 0xA5U);
+    fault.memory.write32_be(0U, 0xB7E80002U);
+    const RunResult fault_result = fault.run(1U);
+    assert(fault_result.reason == StopReason::memory_fault);
+    assert(fault_result.detail.find("write 2 byte(s)") != std::string::npos);
+    assert(fault_result.detail.find("0x000000FF") != std::string::npos);
+    assert(fault.state.gpr[8] == 0xFDU);
+    assert(fault.memory.read8(0xFFU) == 0xA5U);
+    assert(fault_result.instruction_history.size() == 1U);
+    const InstructionHistoryEntry& failed = fault_result.instruction_history.front();
+    assert(failed.opcode_name == "sthu");
+    assert(failed.has_effective_address && failed.effective_address == 0xFFU);
+    assert(!failed.completed);
+    assert(!failed.has_stored_halfword_value);
+    assert(failed.has_destination && failed.destination_register == 8U);
+}
+
 void load_halfword_algebraic_tests()
 {
     const auto run_lha = [](std::uint8_t destination, std::uint8_t base,
@@ -5105,6 +5216,7 @@ int main(int argc, char* argv[])
     floating_subtract_double_tests();
     floating_round_to_single_tests();
     load_store_tests();
+    store_halfword_update_tests();
     load_halfword_algebraic_tests();
     multiple_word_load_store_tests();
     function_call_and_stack_tests();

@@ -403,6 +403,7 @@ void set_record_result(CpuState& state, std::uint32_t value)
             instruction.opcode == Opcode::load_halfword_zero ||
             instruction.opcode == Opcode::load_halfword_algebraic ||
             instruction.opcode == Opcode::store_halfword ||
+            instruction.opcode == Opcode::store_halfword_update ||
             instruction.opcode == Opcode::load_multiple_word ||
             instruction.opcode == Opcode::store_multiple_word ||
             instruction.opcode == Opcode::load_single ||
@@ -487,6 +488,7 @@ void set_record_result(CpuState& state, std::uint32_t value)
     case Opcode::load_halfword_zero: return "lhz";
     case Opcode::load_halfword_algebraic: return "lha";
     case Opcode::store_halfword: return "sth";
+    case Opcode::store_halfword_update: return "sthu";
     case Opcode::store_word_update: return "stwu";
     case Opcode::move_from_link_register: return "mflr";
     case Opcode::move_to_link_register: return "mtlr";
@@ -640,13 +642,13 @@ void add_history_source(
     const bool store = opcode == Opcode::store_word || opcode == Opcode::store_word_update ||
         opcode == Opcode::store_word_indexed || opcode == Opcode::store_byte ||
         opcode == Opcode::store_byte_update || opcode == Opcode::store_byte_indexed ||
-        opcode == Opcode::store_halfword;
+        opcode == Opcode::store_halfword || opcode == Opcode::store_halfword_update;
 
     if (opcode == Opcode::load_single || opcode == Opcode::load_single_update ||
         opcode == Opcode::load_double ||
         opcode == Opcode::store_single ||
         opcode == Opcode::store_single_update || opcode == Opcode::store_double ||
-        opcode == Opcode::load_halfword_algebraic)
+        opcode == Opcode::load_halfword_algebraic || opcode == Opcode::store_halfword_update)
     {
         if (instruction.base != 0)
         {
@@ -689,6 +691,7 @@ void add_history_source(
     case Opcode::store_byte:
     case Opcode::store_byte_update:
     case Opcode::store_halfword:
+    case Opcode::store_halfword_update:
         if (instruction.base != 0)
         {
             add_history_source(entry, state, instruction.base);
@@ -806,6 +809,7 @@ void add_history_source(
         break;
     case Opcode::store_word_update:
     case Opcode::store_byte_update:
+    case Opcode::store_halfword_update:
         entry.has_destination = true;
         entry.destination_register = instruction.base;
         break;
@@ -1066,6 +1070,11 @@ std::string format_instruction_history(const RunResult& result)
         {
             text << " -> mem64=0x" << std::hex << std::setw(16)
                  << entry.stored_double_value;
+        }
+        if (entry.has_stored_halfword_value && entry.completed)
+        {
+            text << " -> mem16=0x" << std::hex << std::setw(4)
+                 << entry.stored_halfword_value;
         }
         if (!entry.completed)
         {
@@ -2178,6 +2187,20 @@ StepResult EspressoCore::step()
             effective_address(state, instruction.base, instruction.immediate),
             static_cast<std::uint16_t>(state.gpr[instruction.destination]));
         break;
+
+    case Opcode::store_halfword_update:
+    {
+        const std::uint32_t old_base = state.gpr[instruction.base];
+        const std::uint32_t source = state.gpr[instruction.destination];
+        const std::uint32_t address =
+            old_base + static_cast<std::uint32_t>(instruction.immediate);
+        const std::uint16_t value = static_cast<std::uint16_t>(source);
+        memory.write16_be(address, value);
+        state.gpr[instruction.base] = address;
+        pending_history_entry_.has_stored_halfword_value = true;
+        pending_history_entry_.stored_halfword_value = value;
+        break;
+    }
 
     case Opcode::unsupported:
         return StepResult::unsupported_instruction;

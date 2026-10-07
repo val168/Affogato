@@ -62,6 +62,7 @@ enum class Opcode
     load_halfword_zero,
     load_halfword_algebraic,
     store_halfword,
+    store_halfword_update,
     store_word_update,
     move_from_link_register,
     move_to_link_register,
