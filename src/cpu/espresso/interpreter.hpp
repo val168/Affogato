@@ -93,8 +93,11 @@ struct InstructionHistoryEntry
     std::uint8_t fp_arithmetic_destination{};
     std::uint8_t fp_arithmetic_source_a{};
     std::uint8_t fp_arithmetic_source_b{};
+    bool has_fp_arithmetic_source_c{};
+    std::uint8_t fp_arithmetic_source_c{};
     std::uint64_t fp_arithmetic_a_raw{};
     std::uint64_t fp_arithmetic_b_raw{};
+    std::uint64_t fp_arithmetic_c_raw{};
     std::uint64_t fp_arithmetic_result_raw{};
     std::uint32_t fp_arithmetic_single_bits{};
     bool completed{};

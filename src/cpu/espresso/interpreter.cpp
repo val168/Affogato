@@ -50,7 +50,8 @@ constexpr std::uint64_t binary64_infinity_bits = 0x7FF0000000000000ULL;
 }
 
 constexpr std::uint32_t implemented_invalid_masks =
-    fpscr::vxsnan_mask | fpscr::vxzdz_mask | fpscr::vxidi_mask | fpscr::vxisi_mask;
+    fpscr::vxsnan_mask | fpscr::vxzdz_mask | fpscr::vximz_mask |
+    fpscr::vxidi_mask | fpscr::vxisi_mask;
 
 void update_fpscr_summaries(CpuState& state) noexcept
 {
@@ -369,6 +370,7 @@ void set_record_result(CpuState& state, std::uint32_t value)
     case Opcode::floating_compare_unordered: return "fcmpu";
     case Opcode::floating_divide_single: return "fdivs";
     case Opcode::floating_add_single: return "fadds";
+    case Opcode::floating_multiply_add_single: return "fmadds";
     case Opcode::compare_signed_immediate: return "cmpwi";
     case Opcode::compare_signed_register: return "cmpw";
     case Opcode::compare_unsigned_immediate: return "cmplwi";
@@ -492,7 +494,8 @@ void add_history_source(
         entry.fp_compare_b_raw = state.fpr[instruction.fp_compare_b];
         return entry;
     }
-    if (opcode == Opcode::floating_divide_single || opcode == Opcode::floating_add_single)
+    if (opcode == Opcode::floating_divide_single || opcode == Opcode::floating_add_single ||
+        opcode == Opcode::floating_multiply_add_single)
     {
         entry.has_fp_arithmetic = true;
         entry.fp_arithmetic_destination = instruction.fp_register;
@@ -500,6 +503,12 @@ void add_history_source(
         entry.fp_arithmetic_source_b = instruction.fp_source_b;
         entry.fp_arithmetic_a_raw = state.fpr[instruction.fp_source_a];
         entry.fp_arithmetic_b_raw = state.fpr[instruction.fp_source_b];
+        if (opcode == Opcode::floating_multiply_add_single)
+        {
+            entry.has_fp_arithmetic_source_c = true;
+            entry.fp_arithmetic_source_c = instruction.fp_source_c;
+            entry.fp_arithmetic_c_raw = state.fpr[instruction.fp_source_c];
+        }
         return entry;
     }
     if (opcode == Opcode::load_multiple_word || opcode == Opcode::store_multiple_word)
@@ -791,7 +800,16 @@ std::string format_instruction_history(const RunResult& result)
                 text << " [0x" << std::hex << std::setw(16) << raw << ']';
             };
             print_operand(entry.fp_arithmetic_source_a, entry.fp_arithmetic_a_raw);
-            print_operand(entry.fp_arithmetic_source_b, entry.fp_arithmetic_b_raw);
+            if (entry.has_fp_arithmetic_source_c)
+            {
+                // PowerPC FMA assembly order is frA, frC, frB.
+                print_operand(entry.fp_arithmetic_source_c, entry.fp_arithmetic_c_raw);
+                print_operand(entry.fp_arithmetic_source_b, entry.fp_arithmetic_b_raw);
+            }
+            else
+            {
+                print_operand(entry.fp_arithmetic_source_b, entry.fp_arithmetic_b_raw);
+            }
             if (entry.has_fp_arithmetic_result)
             {
                 const double value = std::bit_cast<double>(entry.fp_arithmetic_result_raw);
@@ -1442,6 +1460,93 @@ StepResult EspressoCore::step()
         const double a = std::bit_cast<double>(a_raw);
         const double b = std::bit_cast<double>(b_raw);
         const double exact_result = a + b;
+        const float single_result = static_cast<float>(exact_result);
+        const double extended_result = static_cast<double>(single_result);
+        const std::uint32_t single_bits = std::bit_cast<std::uint32_t>(single_result);
+        const bool inexact = extended_result != exact_result;
+        const bool rounded_up = inexact &&
+            std::fabs(extended_result) > std::fabs(exact_result);
+
+        // TODO: add exact FPSCR OX/UX behavior when broader FP exceptions are modeled.
+        commit_result(single_bits, inexact, rounded_up);
+        break;
+    }
+
+    case Opcode::floating_multiply_add_single:
+    {
+        // Snapshot all PS0 inputs before writing; frD may alias any source.
+        const std::uint64_t a_raw = state.fpr[instruction.fp_source_a];
+        const std::uint64_t b_raw = state.fpr[instruction.fp_source_b];
+        const std::uint64_t c_raw = state.fpr[instruction.fp_source_c];
+        const auto commit_result = [&](std::uint32_t single_bits,
+                                       bool inexact,
+                                       bool rounded_up) {
+            const float single_result = std::bit_cast<float>(single_bits);
+            const double extended_result = static_cast<double>(single_result);
+            const std::uint64_t raw_result = std::bit_cast<std::uint64_t>(extended_result);
+            state.fpr[instruction.fp_register] = raw_result;
+            state.fpr_ps1[instruction.fp_register] = raw_result;
+            set_single_arithmetic_result_status(state, single_bits, inexact, rounded_up);
+            pending_history_entry_.has_fp_arithmetic_result = true;
+            pending_history_entry_.fp_arithmetic_result_raw = raw_result;
+            pending_history_entry_.fp_arithmetic_single_bits = single_bits;
+        };
+        const auto commit_quiet_nan = [&](std::uint64_t nan_source) {
+            commit_result(quiet_nan_single_bits(nan_source), false, false);
+        };
+        const auto signal_invalid = [&](std::uint32_t subexception,
+                                        std::uint64_t nan_source) {
+            raise_fpscr_exception(state, subexception);
+            if ((state.fpscr & fpscr::ve_mask) == 0U)
+            {
+                commit_quiet_nan(nan_source);
+            }
+        };
+
+        if (is_binary64_signaling_nan(a_raw) || is_binary64_signaling_nan(b_raw) ||
+            is_binary64_signaling_nan(c_raw))
+        {
+            const std::uint64_t signaling_source = is_binary64_signaling_nan(a_raw)
+                ? a_raw
+                : is_binary64_signaling_nan(c_raw) ? c_raw : b_raw;
+            signal_invalid(fpscr::vxsnan_mask, signaling_source);
+            break;
+        }
+        if (is_binary64_nan(a_raw) || is_binary64_nan(c_raw) || is_binary64_nan(b_raw))
+        {
+            const std::uint64_t nan_source = is_binary64_nan(a_raw) ? a_raw
+                : is_binary64_nan(c_raw) ? c_raw : b_raw;
+            commit_quiet_nan(nan_source);
+            break;
+        }
+
+        const bool a_zero = is_binary64_zero(a_raw);
+        const bool c_zero = is_binary64_zero(c_raw);
+        const bool a_infinity = is_binary64_infinity(a_raw);
+        const bool c_infinity = is_binary64_infinity(c_raw);
+        if ((a_infinity && c_zero) || (a_zero && c_infinity))
+        {
+            signal_invalid(fpscr::vximz_mask, 0U);
+            break;
+        }
+
+        const bool product_is_infinite = a_infinity || c_infinity;
+        const bool b_infinity = is_binary64_infinity(b_raw);
+        const bool product_is_negative =
+            ((a_raw ^ c_raw) & binary64_sign_mask) != 0U;
+        const bool b_is_negative = (b_raw & binary64_sign_mask) != 0U;
+        if (product_is_infinite && b_infinity && product_is_negative != b_is_negative)
+        {
+            signal_invalid(fpscr::vxisi_mask, 0U);
+            break;
+        }
+
+        const double a = std::bit_cast<double>(a_raw);
+        const double c = std::bit_cast<double>(c_raw);
+        const double b = std::bit_cast<double>(b_raw);
+        // TODO: Espresso's single-FMA multiply path has reduced operand precision
+        // (Decaf/Dolphin roundForMultiply/Force25Bit); model it without float casts.
+        const double exact_result = std::fma(a, c, b);
         const float single_result = static_cast<float>(exact_result);
         const double extended_result = static_cast<double>(single_result);
         const std::uint32_t single_bits = std::bit_cast<std::uint32_t>(single_result);
