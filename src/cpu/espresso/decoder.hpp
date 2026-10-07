@@ -40,6 +40,7 @@ enum class Opcode
     compare_unsigned_register,
     floating_compare_unordered,
     floating_divide_single,
+    floating_add_single,
     conditional_branch,
     load_word_zero,
     load_multiple_word,

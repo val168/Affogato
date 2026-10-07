@@ -468,11 +468,13 @@ DecodedInstruction decode(std::uint32_t raw) noexcept
         instruction.immediate = sign_extend(raw, 16);
         break;
 
-    case 59: // fdivs; frC is reserved here and Rc is unsupported
-        if (field(raw, 1, 0x1FU) == 18U &&
+    case 59: // Single-precision A-form arithmetic; frC is reserved, Rc unsupported
+        if ((field(raw, 1, 0x1FU) == 18U || field(raw, 1, 0x1FU) == 21U) &&
             field(raw, 6, 0x1FU) == 0U && (raw & 1U) == 0U)
         {
-            instruction.opcode = Opcode::floating_divide_single;
+            instruction.opcode = field(raw, 1, 0x1FU) == 18U
+                ? Opcode::floating_divide_single
+                : Opcode::floating_add_single;
             instruction.fp_register = static_cast<std::uint8_t>(field(raw, 21, 0x1FU));
             instruction.fp_source_a = static_cast<std::uint8_t>(field(raw, 16, 0x1FU));
             instruction.fp_source_b = static_cast<std::uint8_t>(field(raw, 11, 0x1FU));
