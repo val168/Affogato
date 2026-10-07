@@ -177,6 +177,17 @@ public:
                static_cast<std::uint32_t>(read8(address + 3U));
     }
 
+    [[nodiscard]] std::uint64_t read64_be(std::uint32_t address) const
+    {
+        validate_access(address, sizeof(std::uint64_t), GuestMemoryAccess::read);
+        std::uint64_t value = 0;
+        for (std::uint32_t byte = 0; byte < sizeof(std::uint64_t); ++byte)
+        {
+            value = (value << 8U) | read8(address + byte);
+        }
+        return value;
+    }
+
     void write16_be(std::uint32_t address, std::uint16_t value)
     {
         validate_access(address, sizeof(std::uint16_t), GuestMemoryAccess::write);

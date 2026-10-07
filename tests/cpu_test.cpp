@@ -538,6 +538,12 @@ void decoder_tests()
     assert(lfs.base == 12);
     assert(lfs.immediate == 4);
 
+    const DecodedInstruction lfd = decode(0xCBE10010U); // lfd f31, 16(r1)
+    assert(lfd.opcode == Opcode::load_double);
+    assert(lfd.fp_register == 31U);
+    assert(lfd.base == 1U);
+    assert(lfd.immediate == 16);
+
     const DecodedInstruction stfs = decode(0xD1ACF060U); // stfs f13, -4000(r12)
     assert(stfs.opcode == Opcode::store_single);
     assert(stfs.fp_register == 13);
@@ -670,6 +676,7 @@ void guest_memory_tests()
     std::array<std::uint8_t, 8> actual_double_bytes{};
     double_boundary_memory.read_bytes(4U, actual_double_bytes);
     assert(actual_double_bytes == expected_double_bytes);
+    assert(double_boundary_memory.read64_be(4U) == 0x0123456789ABCDEFULL);
 
     GuestMemory failed_double_memory(4U);
     failed_double_memory.fill_bytes(0U, 4U, 0xA5U);
@@ -687,6 +694,17 @@ void guest_memory_tests()
     for (std::uint32_t address = 0; address < 4U; ++address)
     {
         assert(failed_double_memory.read8(address) == 0xA5U);
+    }
+    try
+    {
+        static_cast<void>(failed_double_memory.read64_be(0U));
+        assert(false);
+    }
+    catch (const GuestMemoryFault& fault)
+    {
+        assert(fault.address() == 0U);
+        assert(fault.width() == 8U);
+        assert(fault.access() == GuestMemoryAccess::read);
     }
 
     boundary_memory.zero_fill(6, 4);
@@ -2830,6 +2848,98 @@ void floating_point_load_tests()
         "lfs r12=0x00001000 [0x00001004] -> f13 (not written)") != std::string::npos);
 }
 
+void floating_point_double_load_tests()
+{
+    const auto encode_lfd = [](std::uint8_t destination, std::uint8_t base,
+                               std::int16_t displacement) {
+        return 0xC8000000U |
+            (static_cast<std::uint32_t>(destination) << 21U) |
+            (static_cast<std::uint32_t>(base) << 16U) |
+            static_cast<std::uint16_t>(displacement);
+    };
+
+    constexpr std::uint32_t expected_cr = 0x12345678U;
+    constexpr std::uint32_t expected_xer = 0xA00000A5U;
+    constexpr std::uint32_t base = 0x80U;
+    constexpr std::uint32_t address = 0x90U;
+    const std::array<std::uint64_t, 7> raw_values{
+        0x0000000000000000ULL, // +0.0
+        0x8000000000000000ULL, // -0.0
+        0x3FF4000000000000ULL, // +1.25
+        0xBFFE000000000000ULL, // -1.875
+        0x7FF0000000000000ULL, // +infinity
+        0xFFF0000000000000ULL, // -infinity
+        0x7FF8123456789ABCULL, // NaN payload
+    };
+
+    const DecodedInstruction wind_waker_lfd = decode(0xCBE10010U);
+    assert(wind_waker_lfd.opcode == Opcode::load_double);
+    assert(wind_waker_lfd.fp_register == 31U);
+    assert(wind_waker_lfd.base == 1U);
+    assert(wind_waker_lfd.immediate == 16);
+
+    for (const std::uint64_t raw : raw_values)
+    {
+        EspressoCore core(0x200U);
+        core.state.gpr[1] = base;
+        core.state.fpr[31] = 0xDEADBEEF01234567ULL;
+        core.state.fpr_ps1[31] = 0xCAFEBABE76543210ULL;
+        core.state.cr = expected_cr;
+        core.state.xer = expected_xer;
+        core.memory.write64_be(address, raw);
+        core.memory.write32_be(0U, encode_lfd(31U, 1U, 16));
+
+        const RunResult result = core.run(1U);
+        assert(result.reason == StopReason::instruction_limit);
+        assert(core.state.fpr[31] == raw);
+        assert(core.state.fpr_ps1[31] == 0xCAFEBABE76543210ULL);
+        assert(core.state.gpr[1] == base);
+        assert(core.state.cr == expected_cr);
+        assert(core.state.xer == expected_xer);
+
+        const InstructionHistoryEntry& history = result.instruction_history.front();
+        assert(history.opcode_name == "lfd");
+        assert(history.has_fp_destination && history.fp_destination_register == 31U);
+        assert(history.fp_destination_value == raw);
+        assert(history.has_effective_address && history.effective_address == address);
+        assert(format_instruction_history(result).find(
+            "lfd r1=0x00000080 [0x00000090] -> f31=") != std::string::npos);
+    }
+
+    EspressoCore negative_displacement(0x200U);
+    negative_displacement.state.gpr[3] = 0xA0U;
+    negative_displacement.memory.write64_be(0x90U, 0x0123456789ABCDEFULL);
+    negative_displacement.memory.write32_be(0U, encode_lfd(5U, 3U, -16));
+    assert(negative_displacement.step() == StepResult::executed);
+    assert(negative_displacement.state.fpr[5] == 0x0123456789ABCDEFULL);
+    assert(negative_displacement.state.gpr[3] == 0xA0U);
+
+    EspressoCore zero_base(0x100U);
+    zero_base.state.gpr[0] = 0x40U;
+    zero_base.memory.write64_be(0x40U, 0xFEDCBA9876543210ULL);
+    zero_base.memory.write32_be(0U, encode_lfd(2U, 0U, 0x40));
+    assert(zero_base.step() == StepResult::executed);
+    assert(zero_base.state.fpr[2] == 0xFEDCBA9876543210ULL);
+    assert(zero_base.state.gpr[0] == 0x40U);
+
+    EspressoCore fault_core(0x100U);
+    constexpr std::uint32_t fault_address = 0xFCU;
+    fault_core.state.gpr[1] = fault_address;
+    fault_core.state.fpr[31] = 0x1111222233334444ULL;
+    fault_core.state.fpr_ps1[31] = 0xAAAABBBBCCCCDDDDULL;
+    fault_core.memory.write32_be(0U, encode_lfd(31U, 1U, 0));
+    const RunResult fault = fault_core.run(1U);
+    assert(fault.reason == StopReason::memory_fault);
+    assert(fault.detail.find("read 8 byte(s)") != std::string::npos);
+    assert(fault.detail.find("0x000000FC") != std::string::npos);
+    assert(fault_core.state.fpr[31] == 0x1111222233334444ULL);
+    assert(fault_core.state.fpr_ps1[31] == 0xAAAABBBBCCCCDDDDULL);
+    assert(fault.instruction_history.size() == 1U);
+    assert(fault.instruction_history.front().has_effective_address);
+    assert(fault.instruction_history.front().effective_address == fault_address);
+    assert(!fault.instruction_history.front().completed);
+}
+
 void floating_point_store_tests()
 {
     const auto encode_stfs = [](std::uint8_t source, std::uint8_t base,
@@ -3346,6 +3456,7 @@ int main(int argc, char* argv[])
     integer_alu_tests();
     leaf_function_abi_tests();
     floating_point_load_tests();
+    floating_point_double_load_tests();
     floating_point_store_tests();
     floating_point_double_store_tests();
     paired_single_merge10_tests();

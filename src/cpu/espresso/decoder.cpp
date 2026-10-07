@@ -412,6 +412,13 @@ DecodedInstruction decode(std::uint32_t raw) noexcept
         instruction.immediate = sign_extend(raw, 16);
         break;
 
+    case 50: // lfd
+        instruction.opcode = Opcode::load_double;
+        instruction.fp_register = static_cast<std::uint8_t>(field(raw, 21, 0x1FU));
+        instruction.base = static_cast<std::uint8_t>(field(raw, 16, 0x1FU));
+        instruction.immediate = sign_extend(raw, 16);
+        break;
+
     case 52: // stfs
         instruction.opcode = Opcode::store_single;
         instruction.fp_register = static_cast<std::uint8_t>(field(raw, 21, 0x1FU));
