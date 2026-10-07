@@ -406,6 +406,7 @@ void set_record_result(CpuState& state, std::uint32_t value)
             instruction.opcode == Opcode::store_halfword_update ||
             instruction.opcode == Opcode::load_multiple_word ||
             instruction.opcode == Opcode::load_string_word_immediate ||
+            instruction.opcode == Opcode::store_string_word_immediate ||
             instruction.opcode == Opcode::store_multiple_word ||
             instruction.opcode == Opcode::load_single ||
             instruction.opcode == Opcode::load_single_update ||
@@ -478,6 +479,7 @@ void set_record_result(CpuState& state, std::uint32_t value)
     case Opcode::load_word_zero: return "lwz";
     case Opcode::load_multiple_word: return "lmw";
     case Opcode::load_string_word_immediate: return "lswi";
+    case Opcode::store_string_word_immediate: return "stswi";
     case Opcode::load_word_update: return "lwzu";
     case Opcode::load_word_indexed: return "lwzx";
     case Opcode::store_word: return "stw";
@@ -642,21 +644,30 @@ void add_history_source(
         entry.effective_address = effective_address(state, instruction.base, instruction.immediate);
         return entry;
     }
-    if (opcode == Opcode::load_string_word_immediate)
+    if (opcode == Opcode::load_string_word_immediate ||
+        opcode == Opcode::store_string_word_immediate)
     {
-        entry.has_string_load = true;
-        entry.string_load_base_register = instruction.base;
-        entry.string_load_base_value = instruction.base == 0 ? 0U : state.gpr[instruction.base];
-        entry.string_load_byte_count = instruction.string_byte_count == 0
+        const bool store = opcode == Opcode::store_string_word_immediate;
+        entry.has_string_transfer = true;
+        entry.string_transfer_store = store;
+        entry.string_transfer_first_register = store ? instruction.source : instruction.destination;
+        entry.string_transfer_base_register = instruction.base;
+        entry.string_transfer_base_value = instruction.base == 0 ? 0U : state.gpr[instruction.base];
+        entry.string_transfer_byte_count = instruction.string_byte_count == 0
             ? 32U : instruction.string_byte_count;
-        entry.string_load_register_count = static_cast<std::uint8_t>(
-            (entry.string_load_byte_count + 3U) / 4U);
+        entry.string_transfer_register_count = static_cast<std::uint8_t>(
+            (entry.string_transfer_byte_count + 3U) / 4U);
         entry.has_effective_address = true;
-        entry.effective_address = entry.string_load_base_value;
-        for (std::uint8_t i = 0; i < entry.string_load_register_count; ++i)
+        entry.effective_address = entry.string_transfer_base_value;
+        for (std::uint8_t i = 0; i < entry.string_transfer_register_count; ++i)
         {
-            entry.string_load_registers[i] = static_cast<std::uint8_t>(
-                (instruction.destination + i) & 31U);
+            const std::uint8_t reg = static_cast<std::uint8_t>(
+                (entry.string_transfer_first_register + i) & 31U);
+            entry.string_transfer_registers[i] = reg;
+            if (store)
+            {
+                entry.string_transfer_register_values[i] = state.gpr[reg];
+            }
         }
         return entry;
     }
@@ -888,13 +899,25 @@ std::string format_instruction_history(const RunResult& result)
                  << entry.memory_displacement << "(r"
                  << static_cast<unsigned>(entry.memory_base_register) << ')';
         }
-        else if (entry.has_string_load)
+        else if (entry.has_string_transfer)
         {
-            text << " r" << std::dec << static_cast<unsigned>(entry.string_load_registers[0])
-                 << ",r" << static_cast<unsigned>(entry.string_load_base_register) << ','
-                 << static_cast<unsigned>(entry.string_load_byte_count)
-                 << " r" << static_cast<unsigned>(entry.string_load_base_register)
-                 << "=0x" << std::hex << std::setw(8) << entry.string_load_base_value;
+            text << " r" << std::dec
+                 << static_cast<unsigned>(entry.string_transfer_first_register)
+                 << ",r" << static_cast<unsigned>(entry.string_transfer_base_register) << ','
+                 << static_cast<unsigned>(entry.string_transfer_byte_count);
+            if (entry.string_transfer_store)
+            {
+                for (std::uint8_t i = 0; i < entry.string_transfer_register_count; ++i)
+                {
+                    text << " r" << std::dec
+                         << static_cast<unsigned>(entry.string_transfer_registers[i])
+                         << "=0x" << std::hex << std::setw(8)
+                         << entry.string_transfer_register_values[i];
+                }
+            }
+            text << " r" << std::dec
+                 << static_cast<unsigned>(entry.string_transfer_base_register)
+                 << "=0x" << std::hex << std::setw(8) << entry.string_transfer_base_value;
         }
         else
         {
@@ -1060,14 +1083,28 @@ std::string format_instruction_history(const RunResult& result)
         {
             text << " [0x" << std::hex << std::setw(8) << entry.effective_address << ']';
         }
-        if (entry.has_string_load && entry.completed)
+        if (entry.has_string_transfer && entry.completed && !entry.string_transfer_store)
         {
             text << " ->";
-            for (std::uint8_t i = 0; i < entry.string_load_register_count; ++i)
+            for (std::uint8_t i = 0; i < entry.string_transfer_register_count; ++i)
             {
                 text << " r" << std::dec
-                     << static_cast<unsigned>(entry.string_load_registers[i])
-                     << "=0x" << std::hex << std::setw(8) << entry.string_load_values[i];
+                     << static_cast<unsigned>(entry.string_transfer_registers[i])
+                     << "=0x" << std::hex << std::setw(8)
+                     << entry.string_transfer_register_values[i];
+            }
+        }
+        if (entry.has_string_transfer && entry.completed && entry.string_transfer_store)
+        {
+            text << " -> mem=";
+            for (std::uint8_t i = 0; i < entry.string_transfer_byte_count; ++i)
+            {
+                if (i != 0)
+                {
+                    text << ' ';
+                }
+                text << std::hex << std::setw(2)
+                     << static_cast<unsigned>(entry.string_transfer_bytes[i]);
             }
         }
         if (entry.has_destination)
@@ -2074,6 +2111,28 @@ StepResult EspressoCore::step()
         break;
     }
 
+    case Opcode::store_string_word_immediate:
+    {
+        const std::uint32_t address = instruction.base == 0
+            ? 0U : state.gpr[instruction.base];
+        const std::size_t byte_count = instruction.string_byte_count == 0
+            ? 32U : instruction.string_byte_count;
+        std::array<std::uint8_t, 32> bytes{};
+        for (std::size_t i = 0; i < byte_count; ++i)
+        {
+            const std::uint32_t reg =
+                (instruction.source + static_cast<std::uint32_t>(i / 4U)) & 31U;
+            const unsigned shift = static_cast<unsigned>(24U - (i % 4U) * 8U);
+            bytes[i] = static_cast<std::uint8_t>(state.gpr[reg] >> shift);
+        }
+
+        // Validate and commit the entire output span as one guest write.
+        memory.write_bytes(address, std::span<const std::uint8_t>(bytes).first(byte_count));
+        std::copy_n(bytes.begin(), byte_count,
+                    pending_history_entry_.string_transfer_bytes.begin());
+        break;
+    }
+
     case Opcode::load_word_indexed:
     {
         const std::uint32_t base = instruction.base == 0 ? 0U : state.gpr[instruction.base];
@@ -2286,12 +2345,13 @@ StepResult EspressoCore::step()
     }
 
     pending_history_entry_.completed = true;
-    if (pending_history_entry_.has_string_load)
+    if (pending_history_entry_.has_string_transfer &&
+        !pending_history_entry_.string_transfer_store)
     {
-        for (std::uint8_t i = 0; i < pending_history_entry_.string_load_register_count; ++i)
+        for (std::uint8_t i = 0; i < pending_history_entry_.string_transfer_register_count; ++i)
         {
-            pending_history_entry_.string_load_values[i] =
-                state.gpr[pending_history_entry_.string_load_registers[i]];
+            pending_history_entry_.string_transfer_register_values[i] =
+                state.gpr[pending_history_entry_.string_transfer_registers[i]];
         }
     }
     if (pending_history_entry_.has_destination)

@@ -4608,7 +4608,16 @@ void load_string_word_immediate_tests()
         zero_count.state.gpr[reg] = 0xA5000000U + reg;
     }
     zero_count.state.gpr[4] = 0x80U;
+    const auto zero_count_original_gprs = zero_count.state.gpr;
     assert(zero_count.step() == StepResult::executed);
+    for (std::uint32_t reg = 0; reg < 32U; ++reg)
+    {
+        const bool loaded = ((reg - 28U) & 31U) < 8U;
+        if (!loaded)
+        {
+            assert(zero_count.state.gpr[reg] == zero_count_original_gprs[reg]);
+        }
+    }
     for (std::uint32_t i = 0; i < 8U; ++i)
     {
         const std::uint32_t expected = ((i * 4U + 1U) << 24U) |
@@ -4698,6 +4707,160 @@ void load_string_word_immediate_tests()
     const std::string fault_trace = format_instruction_history(fault_result);
     assert(fault_trace.find("lswi r8,r4,5 r4=0x000000FE [0x000000FE]") !=
            std::string::npos);
+}
+
+void store_string_word_immediate_tests()
+{
+    const auto encode_stswi = [](std::uint8_t source, std::uint8_t base,
+                                 std::uint8_t byte_count) {
+        return 0x7C0005AAU |
+            (static_cast<std::uint32_t>(source) << 21U) |
+            (static_cast<std::uint32_t>(base) << 16U) |
+            (static_cast<std::uint32_t>(byte_count & 0x1FU) << 11U);
+    };
+
+    constexpr std::uint32_t wind_waker_word = 0x7D0725AAU;
+    const DecodedInstruction decoded = decode(wind_waker_word);
+    assert(decoded.opcode == Opcode::store_string_word_immediate);
+    assert(decoded.source == 8U);
+    assert(decoded.base == 7U);
+    assert(decoded.string_byte_count == 4U);
+    assert(((wind_waker_word >> 1U) & 0x3FFU) == 725U);
+    assert(decode(wind_waker_word | 1U).opcode == Opcode::unsupported);
+
+    // Wind Waker stores r8's most-significant byte first, preserving both GPRs.
+    EspressoCore wind_waker(0x100U);
+    wind_waker.state.gpr[7] = 0x80U;
+    wind_waker.state.gpr[8] = 0x80U;
+    const auto initial_gprs = wind_waker.state.gpr;
+    wind_waker.memory.write32_be(0U, wind_waker_word);
+    assert(wind_waker.step() == StepResult::executed);
+    assert(wind_waker.memory.read32_be(0x80U) == 0x00000080U);
+    assert(wind_waker.state.gpr == initial_gprs);
+    const RunResult wind_waker_result = wind_waker.run(0U);
+    const std::string wind_waker_trace = format_instruction_history(wind_waker_result);
+    assert(wind_waker_trace.find(
+        "stswi r8,r7,4 r8=0x00000080 r7=0x00000080 [0x00000080] -> mem=00 00 00 80") !=
+        std::string::npos);
+
+    const std::array<std::uint8_t, 4> expected_prefix{0xAAU, 0xBBU, 0xCCU, 0xDDU};
+    for (std::uint8_t count = 1U; count <= 4U; ++count)
+    {
+        EspressoCore partial(0x100U);
+        partial.state.gpr[8] = 0xAABBCCDDU;
+        partial.state.gpr[4] = 0x80U;
+        partial.memory.write32_be(0U, encode_stswi(8U, 4U, count));
+        assert(partial.step() == StepResult::executed);
+        for (std::uint8_t i = 0; i < count; ++i)
+        {
+            assert(partial.memory.read8(0x80U + i) == expected_prefix[i]);
+        }
+        assert(partial.state.gpr[8] == 0xAABBCCDDU);
+        assert(partial.state.gpr[4] == 0x80U);
+    }
+
+    EspressoCore multiple(0x100U);
+    multiple.state.gpr[4] = 0x80U;
+    multiple.state.gpr[8] = 0x11223344U;
+    multiple.state.gpr[9] = 0x55667788U;
+    multiple.memory.write32_be(0U, encode_stswi(8U, 4U, 5U));
+    assert(multiple.step() == StepResult::executed);
+    assert(multiple.memory.read8(0x80U) == 0x11U);
+    assert(multiple.memory.read8(0x81U) == 0x22U);
+    assert(multiple.memory.read8(0x82U) == 0x33U);
+    assert(multiple.memory.read8(0x83U) == 0x44U);
+    assert(multiple.memory.read8(0x84U) == 0x55U);
+
+    EspressoCore wraps(0x100U);
+    wraps.state.gpr[31] = 0x11223344U;
+    wraps.state.gpr[0] = 0x55667788U;
+    wraps.state.gpr[4] = 0x80U;
+    wraps.memory.write32_be(0U, encode_stswi(31U, 4U, 8U));
+    assert(wraps.step() == StepResult::executed);
+    assert(wraps.memory.read64_be(0x80U) == 0x1122334455667788ULL);
+
+    // NB=0 stores exactly 32 bytes from eight GPRs, wrapping at r31.
+    EspressoCore zero_count(0x100U);
+    zero_count.state.gpr[4] = 0x80U;
+    for (std::uint32_t reg = 0; reg < 32U; ++reg)
+    {
+        zero_count.state.gpr[reg] = 0x10203040U + reg;
+    }
+    zero_count.state.gpr[4] = 0x80U;
+    const auto zero_count_gprs = zero_count.state.gpr;
+    zero_count.memory.write32_be(0U, encode_stswi(28U, 4U, 0U));
+    assert(zero_count.step() == StepResult::executed);
+    for (std::uint32_t i = 0; i < 8U; ++i)
+    {
+        const std::uint32_t reg = (28U + i) & 31U;
+        assert(zero_count.memory.read32_be(0x80U + i * 4U) == zero_count_gprs[reg]);
+    }
+    assert(zero_count.state.gpr == zero_count_gprs);
+
+    // rA=0 uses address zero even when GPR0 is nonzero.
+    EspressoCore zero_base(0x100U);
+    zero_base.state.cia = 0x40U;
+    zero_base.state.gpr[0] = 0x80U;
+    zero_base.state.gpr[8] = 0xCAFEBABEU;
+    zero_base.memory.write32_be(0x40U, encode_stswi(8U, 0U, 4U));
+    assert(zero_base.step() == StepResult::executed);
+    assert(zero_base.memory.read32_be(0U) == 0xCAFEBABEU);
+    assert(zero_base.state.gpr[0] == 0x80U);
+
+    // Source/base aliasing uses the original GPR value for both purposes.
+    EspressoCore alias(0x100U);
+    alias.state.gpr[7] = 0x80U;
+    alias.memory.write32_be(0U, encode_stswi(7U, 7U, 4U));
+    assert(alias.step() == StepResult::executed);
+    assert(alias.memory.read32_be(0x80U) == 0x00000080U);
+    assert(alias.state.gpr[7] == 0x80U);
+
+    // A valid write spans the last two flat bytes and the adjacent sparse map.
+    EspressoCore crossing(0x100U);
+    crossing.memory.map_region(0x100U, 0x20U);
+    crossing.state.gpr[4] = 0xFEU;
+    crossing.state.gpr[8] = 0x10203040U;
+    crossing.memory.write32_be(0U, encode_stswi(8U, 4U, 4U));
+    assert(crossing.step() == StepResult::executed);
+    assert(crossing.memory.read32_be(0xFEU) == 0x10203040U);
+
+    // No partial write occurs when a requested byte range reaches unmapped memory.
+    EspressoCore fault(0x100U);
+    fault.state.cia = 0x40U;
+    fault.state.gpr[4] = 0xFEU;
+    fault.state.gpr[8] = 0xAABBCCDDU;
+    fault.state.gpr[9] = 0x11223344U;
+    fault.state.cr = 0x12345678U;
+    fault.state.xer = 0xA00000A5U;
+    fault.state.lr = 0x55667788U;
+    fault.state.ctr = 0x99AABBCCU;
+    fault.state.fpscr = 0xCAFEBABEU;
+    fault.state.fpr[2] = 0x0123456789ABCDEFULL;
+    fault.state.fpr_ps1[2] = 0xFEDCBA9876543210ULL;
+    fault.memory.write8(0xFEU, 0x5AU);
+    fault.memory.write8(0xFFU, 0xA5U);
+    const auto fault_gprs = fault.state.gpr;
+    fault.memory.write32_be(0x40U, encode_stswi(8U, 4U, 5U));
+    const RunResult fault_result = fault.run(1U);
+    assert(fault_result.reason == StopReason::memory_fault);
+    assert(fault_result.cia == 0x40U);
+    assert(fault_result.detail.find("write 5 byte(s)") != std::string::npos);
+    assert(fault_result.detail.find("0x000000FE") != std::string::npos);
+    assert(fault.state.gpr == fault_gprs);
+    assert(fault.state.cr == 0x12345678U);
+    assert(fault.state.xer == 0xA00000A5U);
+    assert(fault.state.lr == 0x55667788U);
+    assert(fault.state.ctr == 0x99AABBCCU);
+    assert(fault.state.fpscr == 0xCAFEBABEU);
+    assert(fault.state.fpr[2] == 0x0123456789ABCDEFULL);
+    assert(fault.state.fpr_ps1[2] == 0xFEDCBA9876543210ULL);
+    assert(fault.memory.read8(0xFEU) == 0x5AU);
+    assert(fault.memory.read8(0xFFU) == 0xA5U);
+    assert(fault_result.instruction_history.size() == 1U);
+    assert(fault_result.instruction_history[0].opcode_name == "stswi");
+    assert(fault_result.instruction_history[0].has_effective_address);
+    assert(fault_result.instruction_history[0].effective_address == 0xFEU);
+    assert(!fault_result.instruction_history[0].completed);
 }
 
 void floating_point_load_tests()
@@ -5508,6 +5671,7 @@ int main(int argc, char* argv[])
     load_halfword_algebraic_tests();
     multiple_word_load_store_tests();
     load_string_word_immediate_tests();
+    store_string_word_immediate_tests();
     function_call_and_stack_tests();
     return 0;
 }

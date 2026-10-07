@@ -173,10 +173,19 @@ DecodedInstruction decode(std::uint32_t raw) noexcept
     case 31: // X-form arithmetic, logical, and compare instructions
     {
         const std::uint32_t extended_opcode = field(raw, 1, 0x3FFU);
-        if (extended_opcode == 597U && (raw & 1U) == 0U) // lswi
+        if ((extended_opcode == 597U || extended_opcode == 725U) && (raw & 1U) == 0U)
         {
-            instruction.opcode = Opcode::load_string_word_immediate;
-            instruction.destination = static_cast<std::uint8_t>(field(raw, 21, 0x1FU));
+            instruction.opcode = extended_opcode == 597U
+                ? Opcode::load_string_word_immediate
+                : Opcode::store_string_word_immediate;
+            if (instruction.opcode == Opcode::load_string_word_immediate)
+            {
+                instruction.destination = static_cast<std::uint8_t>(field(raw, 21, 0x1FU));
+            }
+            else
+            {
+                instruction.source = static_cast<std::uint8_t>(field(raw, 21, 0x1FU));
+            }
             instruction.base = static_cast<std::uint8_t>(field(raw, 16, 0x1FU));
             instruction.string_byte_count = static_cast<std::uint8_t>(field(raw, 11, 0x1FU));
         }

@@ -51,6 +51,7 @@ enum class Opcode
     load_word_zero,
     load_multiple_word,
     load_string_word_immediate,
+    store_string_word_immediate,
     load_word_update,
     load_word_indexed,
     store_word,
