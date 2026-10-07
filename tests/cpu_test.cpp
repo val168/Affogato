@@ -557,6 +557,15 @@ void decoder_tests()
     assert(stfd.base == 1U);
     assert(stfd.immediate == 16);
 
+    const DecodedInstruction ps_merge10 = decode(0x13FFFCA0U);
+    assert(ps_merge10.opcode == Opcode::paired_single_merge10);
+    assert(ps_merge10.fp_register == 31U);
+    assert(ps_merge10.fp_source_a == 31U);
+    assert(ps_merge10.fp_source_b == 31U);
+    assert(((0x13FFFCA0U >> 1U) & 0x3FFU) == 592U);
+    assert((0x13FFFCA0U & 1U) == 0U);
+    assert(decode(0x13FFFCA1U).opcode == Opcode::unsupported);
+
     const DecodedInstruction mflr = decode(0x7C0802A6U); // mflr r0
     assert(mflr.opcode == Opcode::move_from_link_register);
     assert(mflr.destination == 0);
@@ -2763,6 +2772,7 @@ void floating_point_load_tests()
     const RunResult positive_result = core.run(1);
     assert(positive_result.reason == StopReason::instruction_limit);
     assert(core.state.fpr[13] == 0x3FF8000000000000ULL);
+    assert(core.state.fpr_ps1[13] == 0x3FF8000000000000ULL);
     assert(core.state.fpr[12] == 0U);
     const std::string positive_trace = format_instruction_history(positive_result);
     assert(positive_trace.find(
@@ -2776,6 +2786,7 @@ void floating_point_load_tests()
     core.memory.write32_be(4, encode_lfs(7, 12, -4));
     assert(core.step() == StepResult::executed);
     assert(core.state.fpr[7] == 0xC002000000000000ULL);
+    assert(core.state.fpr_ps1[7] == 0xC002000000000000ULL);
 
     // rA == 0 uses address zero as the base, and +0 remains exactly zero.
     core.state.cia = 8U;
@@ -2783,12 +2794,18 @@ void floating_point_load_tests()
     core.memory.write32_be(8, encode_lfs(2, 0, 0x80));
     assert(core.step() == StepResult::executed);
     assert(core.state.fpr[2] == 0U);
+    assert(core.state.fpr_ps1[2] == 0U);
     assert(core.state.fpr[13] == 0x3FF8000000000000ULL);
 
     // Reset clears all architectural FPR bits deterministically.
     core.state.fpr[31] = 0xFFFFFFFFFFFFFFFFULL;
+    core.state.fpr_ps1[31] = 0x123456789ABCDEF0ULL;
     core.state.reset();
     for (const std::uint64_t value : core.state.fpr)
+    {
+        assert(value == 0U);
+    }
+    for (const std::uint64_t value : core.state.fpr_ps1)
     {
         assert(value == 0U);
     }
@@ -2833,6 +2850,7 @@ void floating_point_store_tests()
     EspressoCore positive_core(0x200U);
     positive_core.state.gpr[4] = 0x100U;
     positive_core.state.fpr[13] = 0x400A000000000000ULL; // 3.25
+    positive_core.state.fpr_ps1[13] = 0x7FF8123456789ABCULL;
     positive_core.memory.write32_be(0, encode_stfs(13, 4, 4));
     const RunResult positive_result = positive_core.run(1);
     assert(positive_result.reason == StopReason::instruction_limit);
@@ -2842,6 +2860,7 @@ void floating_point_store_tests()
     assert(positive_core.memory.read8(0x106U) == 0x00U);
     assert(positive_core.memory.read8(0x107U) == 0x00U);
     assert(positive_core.state.fpr[13] == 0x400A000000000000ULL);
+    assert(positive_core.state.fpr_ps1[13] == 0x7FF8123456789ABCULL);
     const std::string positive_trace = format_instruction_history(positive_result);
     assert(positive_trace.find(
         "stfs r4=0x00000100 f13=3.25 [0x400A000000000000] "
@@ -2851,10 +2870,12 @@ void floating_point_store_tests()
     EspressoCore negative_core(0x200U);
     negative_core.state.gpr[12] = 0x120U;
     negative_core.state.fpr[7] = 0xC002000000000000ULL; // -2.25
+    negative_core.state.fpr_ps1[7] = 0xFEDCBA9876543210ULL;
     negative_core.memory.write32_be(0, encode_stfs(7, 12, -4));
     assert(negative_core.step() == StepResult::executed);
     assert(negative_core.memory.read32_be(0x11CU) == 0xC0100000U);
     assert(negative_core.state.fpr[7] == 0xC002000000000000ULL);
+    assert(negative_core.state.fpr_ps1[7] == 0xFEDCBA9876543210ULL);
 
     // rA == 0 addresses from zero; positive zero stores four zero bytes.
     EspressoCore zero_core(0x100U);
@@ -2874,11 +2895,13 @@ void floating_point_store_tests()
     assert(round_trip_result.reason == StopReason::instruction_limit);
     assert(round_trip_core.memory.read32_be(0xFCU) == 0xC0490FDBU);
     assert(round_trip_core.state.fpr[13] == 0xC00921FB60000000ULL);
+    assert(round_trip_core.state.fpr_ps1[13] == 0xC00921FB60000000ULL);
 
     // A failed write reports the address/width and retains source FPR details.
     EspressoCore fault_core(0x100U);
     fault_core.state.gpr[12] = 0x1000U;
     fault_core.state.fpr[13] = 0xC00921FB60000000ULL;
+    fault_core.state.fpr_ps1[13] = 0x0123456789ABCDEFULL;
     fault_core.memory.write32_be(0, 0xD1AC0000U); // stfs f13, 0(r12)
     const RunResult fault = fault_core.run(1);
     assert(fault.reason == StopReason::memory_fault);
@@ -2893,12 +2916,14 @@ void floating_point_store_tests()
     assert(!failed_stfs.completed);
     assert(!failed_stfs.has_stored_single_value);
     assert(fault_core.state.fpr[13] == 0xC00921FB60000000ULL);
+    assert(fault_core.state.fpr_ps1[13] == 0x0123456789ABCDEFULL);
 
     // stfsu shares stfs's binary64-to-binary32 conversion and updates RA only
     // after the guest-memory store completes.
     EspressoCore update_positive(0x200U);
     update_positive.state.gpr[11] = 0x100U;
     update_positive.state.fpr[13] = 0x400A000000000000ULL; // 3.25
+    update_positive.state.fpr_ps1[13] = 0x7FF8123456789ABCULL;
     update_positive.state.cr = 0x12345678U;
     update_positive.state.xer = 0xA00000A5U;
     update_positive.memory.write32_be(0, encode_stfsu(13, 11, 4));
@@ -2909,6 +2934,7 @@ void floating_point_store_tests()
     assert(update_positive.memory.read8(0x105U) == 0x50U);
     assert(update_positive.state.gpr[11] == 0x104U);
     assert(update_positive.state.fpr[13] == 0x400A000000000000ULL);
+    assert(update_positive.state.fpr_ps1[13] == 0x7FF8123456789ABCULL);
     assert(update_positive.state.cr == 0x12345678U);
     assert(update_positive.state.xer == 0xA00000A5U);
     const InstructionHistoryEntry& update_history =
@@ -2928,19 +2954,23 @@ void floating_point_store_tests()
     EspressoCore update_negative(0x200U);
     update_negative.state.gpr[12] = 0x120U;
     update_negative.state.fpr[7] = 0xC002000000000000ULL; // -2.25
+    update_negative.state.fpr_ps1[7] = 0xFEDCBA9876543210ULL;
     update_negative.memory.write32_be(0, encode_stfsu(7, 12, -4));
     assert(update_negative.step() == StepResult::executed);
     assert(update_negative.memory.read32_be(0x11CU) == 0xC0100000U);
     assert(update_negative.state.gpr[12] == 0x11CU);
     assert(update_negative.state.fpr[7] == 0xC002000000000000ULL);
+    assert(update_negative.state.fpr_ps1[7] == 0xFEDCBA9876543210ULL);
 
     EspressoCore update_zero(0x100U);
     update_zero.state.gpr[4] = 0x40U;
     update_zero.state.fpr[2] = 0U;
+    update_zero.state.fpr_ps1[2] = 0x8000000000000000ULL;
     update_zero.memory.write32_be(0, encode_stfsu(2, 4, 8));
     assert(update_zero.step() == StepResult::executed);
     assert(update_zero.memory.read32_be(0x48U) == 0U);
     assert(update_zero.state.gpr[4] == 0x48U);
+    assert(update_zero.state.fpr_ps1[2] == 0x8000000000000000ULL);
 
     EspressoCore update_zero_base(0x100U);
     update_zero_base.state.fpr[13] = 0x4000000000000000ULL;
@@ -2994,6 +3024,7 @@ void floating_point_double_store_tests()
         constexpr std::uint32_t expected_xer = 0xA00000A5U;
         core.state.gpr[1] = base_before;
         core.state.fpr[31] = raw;
+        core.state.fpr_ps1[31] = 0xDEADBEEF01234567ULL;
         core.state.cr = expected_cr;
         core.state.xer = expected_xer;
         core.memory.write32_be(0U, encode_stfd(31U, 1U, 8));
@@ -3002,6 +3033,7 @@ void floating_point_double_store_tests()
         assert(result.reason == StopReason::instruction_limit);
         assert(core.state.gpr[1] == base_before);
         assert(core.state.fpr[31] == raw);
+        assert(core.state.fpr_ps1[31] == 0xDEADBEEF01234567ULL);
         assert(core.state.cr == expected_cr);
         assert(core.state.xer == expected_xer);
         for (std::uint32_t byte = 0; byte < 8U; ++byte)
@@ -3089,6 +3121,122 @@ void floating_point_double_store_tests()
     assert(fault_core.state.gpr[1] == fault_address);
     assert(fault_core.state.fpr[31] == 0x7FF8123456789ABCULL);
 
+}
+
+void paired_single_merge10_tests()
+{
+    const auto encode_ps_merge10 = [](std::uint8_t destination, std::uint8_t source_a,
+                                      std::uint8_t source_b, bool record = false) {
+        return 0x10000000U |
+            (static_cast<std::uint32_t>(destination) << 21U) |
+            (static_cast<std::uint32_t>(source_a) << 16U) |
+            (static_cast<std::uint32_t>(source_b) << 11U) |
+            (592U << 1U) | static_cast<std::uint32_t>(record);
+    };
+
+    constexpr std::uint32_t expected_cr = 0x12345678U;
+    constexpr std::uint32_t expected_xer = 0xA00000A5U;
+
+    // Distinct source and destination registers prove the lane selection.
+    EspressoCore distinct(4U);
+    distinct.state.fpr[5] = 0x5000000000000000ULL;
+    distinct.state.fpr_ps1[5] = 0x5100000000000000ULL;
+    distinct.state.fpr[9] = 0x9000000000000000ULL;
+    distinct.state.fpr_ps1[9] = 0x9100000000000000ULL;
+    distinct.state.fpr[3] = 0x3000000000000000ULL;
+    distinct.state.fpr_ps1[3] = 0x3100000000000000ULL;
+    distinct.state.cr = expected_cr;
+    distinct.state.xer = expected_xer;
+    distinct.memory.write32_be(0U, encode_ps_merge10(3U, 5U, 9U));
+    const RunResult distinct_result = distinct.run(1U);
+    assert(distinct_result.reason == StopReason::instruction_limit);
+    assert(distinct.state.fpr[3] == 0x5100000000000000ULL);
+    assert(distinct.state.fpr_ps1[3] == 0x9000000000000000ULL);
+    assert(distinct.state.fpr[5] == 0x5000000000000000ULL);
+    assert(distinct.state.fpr_ps1[5] == 0x5100000000000000ULL);
+    assert(distinct.state.fpr[9] == 0x9000000000000000ULL);
+    assert(distinct.state.fpr_ps1[9] == 0x9100000000000000ULL);
+    assert(distinct.state.cr == expected_cr);
+    assert(distinct.state.xer == expected_xer);
+    const InstructionHistoryEntry& distinct_history =
+        distinct_result.instruction_history.front();
+    assert(distinct_history.opcode_name == "ps_merge10");
+    assert(distinct_history.has_paired_fp_state);
+    assert(distinct_history.paired_fp_destination_register == 3U);
+    assert(distinct_history.paired_fp_source_a_register == 5U);
+    assert(distinct_history.paired_fp_source_b_register == 9U);
+    assert(distinct_history.paired_fp_source_a_ps0 == 0x5000000000000000ULL);
+    assert(distinct_history.paired_fp_source_a_ps1 == 0x5100000000000000ULL);
+    assert(distinct_history.paired_fp_source_b_ps0 == 0x9000000000000000ULL);
+    assert(distinct_history.paired_fp_source_b_ps1 == 0x9100000000000000ULL);
+    assert(distinct_history.paired_fp_destination_ps0 == 0x5100000000000000ULL);
+    assert(distinct_history.paired_fp_destination_ps1 == 0x9000000000000000ULL);
+    const std::string trace = format_instruction_history(distinct_result);
+    assert(trace.find(
+        "ps_merge10 fA=f5{ps0=0x5000000000000000,ps1=0x5100000000000000} "
+        "fB=f9{ps0=0x9000000000000000,ps1=0x9100000000000000} "
+        "-> f3{ps0=0x5100000000000000,ps1=0x9000000000000000}") !=
+        std::string::npos);
+
+    // Destination aliases frA: source lane values must be read before writes.
+    EspressoCore aliases_a(4U);
+    aliases_a.state.fpr[5] = 0x5000000000000000ULL;
+    aliases_a.state.fpr_ps1[5] = 0x5100000000000000ULL;
+    aliases_a.state.fpr[9] = 0x9000000000000000ULL;
+    aliases_a.memory.write32_be(0U, encode_ps_merge10(5U, 5U, 9U));
+    assert(aliases_a.step() == StepResult::executed);
+    assert(aliases_a.state.fpr[5] == 0x5100000000000000ULL);
+    assert(aliases_a.state.fpr_ps1[5] == 0x9000000000000000ULL);
+
+    // Destination aliases frB.
+    EspressoCore aliases_b(4U);
+    aliases_b.state.fpr[5] = 0x5000000000000000ULL;
+    aliases_b.state.fpr_ps1[5] = 0x5100000000000000ULL;
+    aliases_b.state.fpr[9] = 0x9000000000000000ULL;
+    aliases_b.state.fpr_ps1[9] = 0x9100000000000000ULL;
+    aliases_b.memory.write32_be(0U, encode_ps_merge10(9U, 5U, 9U));
+    assert(aliases_b.step() == StepResult::executed);
+    assert(aliases_b.state.fpr[9] == 0x5100000000000000ULL);
+    assert(aliases_b.state.fpr_ps1[9] == 0x9000000000000000ULL);
+
+    // Same source register, distinct destination.
+    EspressoCore same_sources(4U);
+    same_sources.state.fpr[5] = 0x5000000000000000ULL;
+    same_sources.state.fpr_ps1[5] = 0x5100000000000000ULL;
+    same_sources.memory.write32_be(0U, encode_ps_merge10(3U, 5U, 5U));
+    assert(same_sources.step() == StepResult::executed);
+    assert(same_sources.state.fpr[3] == 0x5100000000000000ULL);
+    assert(same_sources.state.fpr_ps1[3] == 0x5000000000000000ULL);
+
+    // Wind Waker's all-aliased form swaps the two raw lanes.
+    EspressoCore all_alias(4U);
+    all_alias.state.fpr[31] = 0x1111111111111111ULL;
+    all_alias.state.fpr_ps1[31] = 0x2222222222222222ULL;
+    all_alias.state.cr = expected_cr;
+    all_alias.state.xer = expected_xer;
+    all_alias.memory.write32_be(0U, 0x13FFFCA0U);
+    const RunResult all_alias_result = all_alias.run(1U);
+    assert(all_alias_result.reason == StopReason::instruction_limit);
+    assert(all_alias.state.fpr[31] == 0x2222222222222222ULL);
+    assert(all_alias.state.fpr_ps1[31] == 0x1111111111111111ULL);
+    assert(all_alias.state.cr == expected_cr);
+    assert(all_alias.state.xer == expected_xer);
+    assert(format_instruction_history(all_alias_result).find(
+        "ps_merge10 fA=f31{ps0=0x1111111111111111,ps1=0x2222222222222222} "
+        "fB=f31{ps0=0x1111111111111111,ps1=0x2222222222222222} "
+        "-> f31{ps0=0x2222222222222222,ps1=0x1111111111111111}") !=
+        std::string::npos);
+
+    // Rc=1 requires FPSCR/CR1 behavior that is not implemented, so reject it.
+    EspressoCore record_form(4U);
+    record_form.state.fpr[31] = 0x1111111111111111ULL;
+    record_form.state.fpr_ps1[31] = 0x2222222222222222ULL;
+    record_form.memory.write32_be(0U, encode_ps_merge10(31U, 31U, 31U, true));
+    const RunResult record_result = record_form.run(1U);
+    assert(record_result.reason == StopReason::unsupported_instruction);
+    assert(record_result.instruction_word == 0x13FFFCA1U);
+    assert(record_form.state.fpr[31] == 0x1111111111111111ULL);
+    assert(record_form.state.fpr_ps1[31] == 0x2222222222222222ULL);
 }
 
 void function_call_and_stack_tests()
@@ -3200,6 +3348,7 @@ int main(int argc, char* argv[])
     floating_point_load_tests();
     floating_point_store_tests();
     floating_point_double_store_tests();
+    paired_single_merge10_tests();
     elf_loader_tests();
     rpx_loader_tests();
     hle_dispatch_tests();

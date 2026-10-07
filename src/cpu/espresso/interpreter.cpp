@@ -251,6 +251,7 @@ void set_record_result(CpuState& state, std::uint32_t value)
     case Opcode::store_single: return "stfs";
     case Opcode::store_single_update: return "stfsu";
     case Opcode::store_double: return "stfd";
+    case Opcode::paired_single_merge10: return "ps_merge10";
     }
     return "unknown";
 }
@@ -318,6 +319,18 @@ void add_history_source(
     }
 
     const Opcode opcode = instruction.opcode;
+    if (opcode == Opcode::paired_single_merge10)
+    {
+        entry.has_paired_fp_state = true;
+        entry.paired_fp_destination_register = instruction.fp_register;
+        entry.paired_fp_source_a_register = instruction.fp_source_a;
+        entry.paired_fp_source_b_register = instruction.fp_source_b;
+        entry.paired_fp_source_a_ps0 = state.fpr[instruction.fp_source_a];
+        entry.paired_fp_source_a_ps1 = state.fpr_ps1[instruction.fp_source_a];
+        entry.paired_fp_source_b_ps0 = state.fpr[instruction.fp_source_b];
+        entry.paired_fp_source_b_ps1 = state.fpr_ps1[instruction.fp_source_b];
+        return entry;
+    }
     if (opcode == Opcode::load_multiple_word || opcode == Opcode::store_multiple_word)
     {
         entry.has_register_range = true;
@@ -587,6 +600,33 @@ std::string format_instruction_history(const RunResult& result)
             text << " f" << std::dec << static_cast<unsigned>(entry.fp_source_register)
                  << '=' << std::setprecision(17) << value << " [0x" << std::hex
                  << std::setw(16) << entry.fp_source_value << ']';
+        }
+        if (entry.has_paired_fp_state)
+        {
+            const auto print_paired_source = [&](char operand, std::uint8_t reg,
+                                                  std::uint64_t ps0, std::uint64_t ps1) {
+                text << " f" << operand << "=f" << std::dec
+                     << static_cast<unsigned>(reg) << "{ps0=0x" << std::hex
+                     << std::setw(16) << ps0 << ",ps1=0x" << std::setw(16) << ps1 << '}';
+            };
+            print_paired_source('A', entry.paired_fp_source_a_register,
+                                entry.paired_fp_source_a_ps0,
+                                entry.paired_fp_source_a_ps1);
+            print_paired_source('B', entry.paired_fp_source_b_register,
+                                entry.paired_fp_source_b_ps0,
+                                entry.paired_fp_source_b_ps1);
+            text << " -> f" << std::dec
+                 << static_cast<unsigned>(entry.paired_fp_destination_register);
+            if (entry.completed)
+            {
+                text << "{ps0=0x" << std::hex << std::setw(16)
+                     << entry.paired_fp_destination_ps0 << ",ps1=0x"
+                     << std::setw(16) << entry.paired_fp_destination_ps1 << '}';
+            }
+            else
+            {
+                text << " (not written)";
+            }
         }
         if (entry.has_effective_address)
         {
@@ -1193,7 +1233,9 @@ StepResult EspressoCore::step()
         const std::uint32_t single_bits = memory.read32_be(address);
         const float single_value = std::bit_cast<float>(single_bits);
         const double double_value = static_cast<double>(single_value);
-        state.fpr[instruction.fp_register] = std::bit_cast<std::uint64_t>(double_value);
+        const std::uint64_t double_bits = std::bit_cast<std::uint64_t>(double_value);
+        state.fpr[instruction.fp_register] = double_bits;
+        state.fpr_ps1[instruction.fp_register] = double_bits;
         break;
     }
 
@@ -1226,6 +1268,26 @@ StepResult EspressoCore::step()
         break;
     }
 
+    case Opcode::paired_single_merge10:
+    {
+        // Snapshot both source lanes first: any of the three FPR operands may
+        // alias, including the all-equal form used by Wind Waker.
+        struct PairedLanes
+        {
+            std::uint64_t ps0;
+            std::uint64_t ps1;
+        };
+        const PairedLanes source_a{
+            state.fpr[instruction.fp_source_a],
+            state.fpr_ps1[instruction.fp_source_a]};
+        const PairedLanes source_b{
+            state.fpr[instruction.fp_source_b],
+            state.fpr_ps1[instruction.fp_source_b]};
+        state.fpr[instruction.fp_register] = source_a.ps1;
+        state.fpr_ps1[instruction.fp_register] = source_b.ps0;
+        break;
+    }
+
     case Opcode::store_halfword:
         memory.write16_be(
             effective_address(state, instruction.base, instruction.immediate),
@@ -1250,6 +1312,13 @@ StepResult EspressoCore::step()
     {
         pending_history_entry_.fp_destination_value =
             state.fpr[pending_history_entry_.fp_destination_register];
+    }
+    if (pending_history_entry_.has_paired_fp_state)
+    {
+        pending_history_entry_.paired_fp_destination_ps0 =
+            state.fpr[pending_history_entry_.paired_fp_destination_register];
+        pending_history_entry_.paired_fp_destination_ps1 =
+            state.fpr_ps1[pending_history_entry_.paired_fp_destination_register];
     }
     append_instruction_history(std::move(pending_history_entry_));
     has_pending_history_entry_ = false;

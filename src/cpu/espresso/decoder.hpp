@@ -64,6 +64,7 @@ enum class Opcode
     store_single,
     store_single_update,
     store_double,
+    paired_single_merge10,
 };
 
 struct DecodedInstruction
@@ -75,6 +76,8 @@ struct DecodedInstruction
     std::uint8_t destination{};
     std::uint8_t source{};
     std::uint8_t fp_register{};
+    std::uint8_t fp_source_a{};
+    std::uint8_t fp_source_b{};
     std::uint8_t base{};
     std::uint8_t cr_field{};
     std::uint8_t branch_options{};

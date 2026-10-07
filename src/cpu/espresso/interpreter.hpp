@@ -71,6 +71,16 @@ struct InstructionHistoryEntry
     std::uint32_t stored_single_value{};
     bool has_stored_double_value{};
     std::uint64_t stored_double_value{};
+    bool has_paired_fp_state{};
+    std::uint8_t paired_fp_destination_register{};
+    std::uint8_t paired_fp_source_a_register{};
+    std::uint8_t paired_fp_source_b_register{};
+    std::uint64_t paired_fp_source_a_ps0{};
+    std::uint64_t paired_fp_source_a_ps1{};
+    std::uint64_t paired_fp_source_b_ps0{};
+    std::uint64_t paired_fp_source_b_ps1{};
+    std::uint64_t paired_fp_destination_ps0{};
+    std::uint64_t paired_fp_destination_ps1{};
     bool completed{};
 };
 
