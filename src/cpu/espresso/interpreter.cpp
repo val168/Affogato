@@ -221,6 +221,7 @@ void set_record_result(CpuState& state, std::uint32_t value)
     case Opcode::arithmetic_shift_right_immediate: return "srawi";
     case Opcode::shift_left_word: return "slw";
     case Opcode::branch: return "b";
+    case Opcode::instruction_sync: return "isync";
     case Opcode::compare_signed_immediate: return "cmpwi";
     case Opcode::compare_signed_register: return "cmpw";
     case Opcode::compare_unsigned_immediate: return "cmplwi";
@@ -1300,6 +1301,11 @@ StepResult EspressoCore::step()
         state.fpr_ps1[instruction.fp_register] = source_b.ps0;
         break;
     }
+
+    case Opcode::instruction_sync:
+        // Instructions are fetched directly from guest memory. There is no
+        // pipeline, I-cache, MMU synchronization state, or JIT cache to sync yet.
+        break;
 
     case Opcode::store_halfword:
         memory.write16_be(

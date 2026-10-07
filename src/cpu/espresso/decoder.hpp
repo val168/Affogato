@@ -33,6 +33,7 @@ enum class Opcode
     arithmetic_shift_right_immediate,
     shift_left_word,
     branch,
+    instruction_sync,
     compare_signed_immediate,
     compare_signed_register,
     compare_unsigned_immediate,

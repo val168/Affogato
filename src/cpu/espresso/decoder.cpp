@@ -119,7 +119,11 @@ DecodedInstruction decode(std::uint32_t raw) noexcept
     case 19: // bclr / blrl / bcctr / bctr
     {
         const std::uint32_t extended_opcode = field(raw, 1, 0x3FFU);
-        if (extended_opcode == 16 || extended_opcode == 528)
+        if (raw == 0x4C00012CU) // isync; all operand/reserved bits are fixed zero
+        {
+            instruction.opcode = Opcode::instruction_sync;
+        }
+        else if (extended_opcode == 16 || extended_opcode == 528)
         {
             instruction.opcode = extended_opcode == 16
                 ? Opcode::conditional_branch_to_link_register

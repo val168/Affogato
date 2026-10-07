@@ -449,6 +449,11 @@ void decoder_tests()
     assert(!branch.absolute);
     assert(branch.link);
 
+    const DecodedInstruction isync = decode(0x4C00012CU);
+    assert(isync.opcode == Opcode::instruction_sync);
+    assert(decode(0x4C00092CU).opcode == Opcode::unsupported);
+    assert(decode(0x4C00012DU).opcode == Opcode::unsupported);
+
     const DecodedInstruction cmpwi = decode(0x2E830007U); // cmpwi cr5, r3, 7
     assert(cmpwi.opcode == Opcode::compare_signed_immediate);
     assert(cmpwi.cr_field == 5);
@@ -834,6 +839,50 @@ void interpreter_tests()
     assert(count_branch_result.cia == 0x10U);
     assert(count_branch_result.instruction_word == 0U);
     assert(count_branch_core.state.ctr == 0x12U);
+}
+
+void instruction_sync_tests()
+{
+    EspressoCore core(0x100U);
+    for (std::size_t index = 0; index < core.state.gpr.size(); ++index)
+    {
+        core.state.gpr[index] = static_cast<std::uint32_t>(0x10203040U + index);
+        core.state.fpr[index] = 0x1111000000000000ULL + index;
+        core.state.fpr_ps1[index] = 0x2222000000000000ULL + index;
+    }
+    core.state.cr = 0x12345678U;
+    core.state.xer = 0xA00000A5U;
+    core.state.lr = 0x10203040U;
+    core.state.ctr = 0x50607080U;
+    core.memory.write32_be(0U, 0x4C00012CU);
+
+    const auto gpr_before = core.state.gpr;
+    const auto fpr_ps0_before = core.state.fpr;
+    const auto fpr_ps1_before = core.state.fpr_ps1;
+    constexpr std::uint32_t expected_cr = 0x12345678U;
+    constexpr std::uint32_t expected_xer = 0xA00000A5U;
+    constexpr std::uint32_t expected_lr = 0x10203040U;
+    constexpr std::uint32_t expected_ctr = 0x50607080U;
+    std::array<std::uint8_t, 0x100U> memory_before{};
+    core.memory.read_bytes(0U, memory_before);
+
+    const RunResult result = core.run(1U);
+    assert(result.reason == StopReason::instruction_limit);
+    assert(core.state.cia == 4U);
+    assert(core.state.gpr == gpr_before);
+    assert(core.state.fpr == fpr_ps0_before);
+    assert(core.state.fpr_ps1 == fpr_ps1_before);
+    assert(core.state.cr == expected_cr);
+    assert(core.state.xer == expected_xer);
+    assert(core.state.lr == expected_lr);
+    assert(core.state.ctr == expected_ctr);
+    std::array<std::uint8_t, 0x100U> memory_after{};
+    core.memory.read_bytes(0U, memory_after);
+    assert(memory_after == memory_before);
+    assert(result.instruction_history.size() == 1U);
+    assert(result.instruction_history.front().opcode_name == "isync");
+    assert(format_instruction_history(result).find("isync") !=
+           std::string::npos);
 }
 
 void integer_alu_tests()
@@ -3468,6 +3517,7 @@ int main(int argc, char* argv[])
     memset_hle_tests();
     memcpy_hle_tests();
     compare_and_conditional_branch_tests();
+    instruction_sync_tests();
     load_store_tests();
     load_halfword_algebraic_tests();
     multiple_word_load_store_tests();
