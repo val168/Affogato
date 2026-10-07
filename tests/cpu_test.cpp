@@ -1568,22 +1568,40 @@ void floating_multiply_add_single_tests()
     assert(execute(3U, 1U, 2U, 3U, two, three, four).state.fpr[3] == ten);
 
     // This case differs from a separately rounded binary64 multiply then add.
-    constexpr std::uint64_t a_near_one = 0x3FF0000002000000ULL; // 1 + 2^-27
-    constexpr std::uint64_t c_near_one = 0x3FEFFFFFFC000000ULL; // 1 - 2^-27
-    constexpr std::uint64_t negative_one = 0xBFF0000000000000ULL;
+    constexpr std::uint64_t a_near_one = 0x3FF0000000800000ULL; // 1 + 2^-29
+    constexpr std::uint64_t c_near_one = 0x3FF0000010000000ULL; // 1 + 2^-24, Force25Bit-stable
+    constexpr std::uint64_t negative_rounded_product = 0xBFF0000010800000ULL;
     const double a_value = std::bit_cast<double>(a_near_one);
     const double c_value = std::bit_cast<double>(c_near_one);
-    const double b_value = std::bit_cast<double>(negative_one);
+    const double b_value = std::bit_cast<double>(negative_rounded_product);
     assert((a_value * c_value) + b_value == 0.0);
     const double fused = std::fma(a_value, c_value, b_value);
     const float fused_single = static_cast<float>(fused);
     const std::uint64_t fused_raw = std::bit_cast<std::uint64_t>(
         static_cast<double>(fused_single));
-    assert(fused_raw == 0xBC90000000000000ULL);
+    assert(fused_raw == 0x3CA0000000000000ULL);
     const Execution fused_execution = execute(
-        7U, 1U, 2U, 3U, a_near_one, c_near_one, negative_one);
+        7U, 1U, 2U, 3U, a_near_one, c_near_one, negative_rounded_product);
     assert(fused_execution.state.fpr[7] == fused_raw);
     assert(fused_execution.state.fpr_ps1[7] == fused_raw);
+
+    // fmadds and fmuls share Espresso's frC operand precision reduction.
+    constexpr std::uint64_t precision_a = 0x4070000000000000ULL;
+    constexpr std::uint64_t precision_c = 0x3FFA794410E24F4BULL;
+    const double rounded_precision_c = std::bit_cast<double>(0x3FFA794410000000ULL);
+    const double precision_product = std::fma(
+        std::bit_cast<double>(precision_a), rounded_precision_c, 0.0);
+    const std::uint64_t expected_shared_precision = std::bit_cast<std::uint64_t>(
+        static_cast<double>(static_cast<float>(precision_product)));
+    const std::uint64_t unrounded_precision = std::bit_cast<std::uint64_t>(
+        static_cast<double>(static_cast<float>(
+            std::fma(std::bit_cast<double>(precision_a),
+                     std::bit_cast<double>(precision_c), 0.0))));
+    assert(expected_shared_precision == 0x407A794400000000ULL);
+    assert(unrounded_precision == 0x407A794420000000ULL);
+    const Execution shared_precision = execute(
+        7U, 1U, 2U, 3U, precision_a, precision_c, 0U);
+    assert(shared_precision.state.fpr[7] == expected_shared_precision);
 
     // Wind Waker regression, with the source operands deliberately placed in PS0.
     const Execution wind_waker = execute(
@@ -1663,6 +1681,211 @@ void floating_multiply_add_single_tests()
         7U, 1U, 2U, 3U, one, signaling_nan, one, fpscr::ve_mask);
     assert(snan_enabled.state.fpr[7] == sentinel_ps0);
     assert(snan_enabled.state.fpr_ps1[7] == sentinel_ps1);
+}
+
+void floating_multiply_single_tests()
+{
+    const auto encode_fmuls = [](std::uint8_t destination, std::uint8_t source_a,
+                                 std::uint8_t source_c, std::uint8_t reserved_b = 0U,
+                                 bool record = false) {
+        return 0xEC000000U |
+            (static_cast<std::uint32_t>(destination) << 21U) |
+            (static_cast<std::uint32_t>(source_a) << 16U) |
+            (static_cast<std::uint32_t>(reserved_b) << 11U) |
+            (static_cast<std::uint32_t>(source_c) << 6U) | (25U << 1U) |
+            static_cast<std::uint32_t>(record);
+    };
+    struct Execution
+    {
+        CpuState state;
+        RunResult result;
+    };
+    const auto execute = [&](std::uint8_t destination, std::uint8_t source_a,
+                             std::uint8_t source_c, std::uint64_t a_raw,
+                             std::uint64_t c_raw, std::uint32_t fpscr_value = 0U) {
+        EspressoCore core(4U);
+        for (std::size_t index = 0; index < core.state.gpr.size(); ++index)
+        {
+            core.state.gpr[index] = static_cast<std::uint32_t>(0x400U + index);
+            core.state.fpr[index] = 0x1111000000000000ULL + index;
+            core.state.fpr_ps1[index] = 0x2222000000000000ULL + index;
+        }
+        core.state.fpr[source_a] = a_raw;
+        core.state.fpr[source_c] = c_raw;
+        core.state.fpr_ps1[source_a] = 0xC040000000000000ULL;
+        core.state.fpr_ps1[source_c] = 0x4040000000000000ULL;
+        core.state.cr = 0xA5C36E91U;
+        core.state.xer = 0x800000A5U;
+        core.state.lr = 0x12345678U;
+        core.state.ctr = 0x87654321U;
+        core.state.fpscr = fpscr_value;
+        const auto gpr_before = core.state.gpr;
+        const auto fpr_before = core.state.fpr;
+        const auto fpr_ps1_before = core.state.fpr_ps1;
+        const std::uint32_t instruction = encode_fmuls(destination, source_a, source_c);
+        core.memory.write32_be(0U, instruction);
+
+        Execution execution{.state = {}, .result = core.run(1U)};
+        assert(execution.result.reason == StopReason::instruction_limit);
+        assert(core.state.cia == 4U);
+        assert(core.state.gpr == gpr_before);
+        assert(core.state.cr == 0xA5C36E91U);
+        assert(core.state.xer == 0x800000A5U);
+        assert(core.state.lr == 0x12345678U);
+        assert(core.state.ctr == 0x87654321U);
+        assert(core.memory.read32_be(0U) == instruction);
+        for (std::size_t index = 0; index < core.state.fpr.size(); ++index)
+        {
+            if (index != destination)
+            {
+                assert(core.state.fpr[index] == fpr_before[index]);
+                assert(core.state.fpr_ps1[index] == fpr_ps1_before[index]);
+            }
+        }
+        execution.state = core.state;
+        return execution;
+    };
+
+    constexpr std::uint32_t wind_waker_word = 0xED2B0032U;
+    const DecodedInstruction wind_decode = decode(wind_waker_word);
+    assert(wind_decode.opcode == Opcode::floating_multiply_single);
+    assert(wind_decode.fp_register == 9U);
+    assert(wind_decode.fp_source_a == 11U);
+    assert(wind_decode.fp_source_c == 0U);
+    assert(((wind_waker_word >> 11U) & 0x1FU) == 0U);
+    assert(((wind_waker_word >> 1U) & 0x1FU) == 25U);
+    assert((wind_waker_word & 1U) == 0U);
+    assert(encode_fmuls(9U, 11U, 0U) == wind_waker_word);
+    assert(decode(encode_fmuls(3U, 4U, 7U)).opcode == Opcode::floating_multiply_single);
+    assert(decode(encode_fmuls(9U, 11U, 0U, 1U)).opcode == Opcode::unsupported);
+    assert(decode(encode_fmuls(9U, 11U, 0U, 0U, true)).opcode == Opcode::unsupported);
+
+    constexpr std::uint64_t positive_zero = 0x0000000000000000ULL;
+    constexpr std::uint64_t negative_zero = 0x8000000000000000ULL;
+    constexpr std::uint64_t one = 0x3FF0000000000000ULL;
+    constexpr std::uint64_t two = 0x4000000000000000ULL;
+    constexpr std::uint64_t three = 0x4008000000000000ULL;
+    constexpr std::uint64_t negative_two = 0xC000000000000000ULL;
+    constexpr std::uint64_t negative_three = 0xC008000000000000ULL;
+    constexpr std::uint64_t six = 0x4018000000000000ULL;
+    constexpr std::uint64_t negative_six = 0xC018000000000000ULL;
+    constexpr std::uint64_t positive_inf = 0x7FF0000000000000ULL;
+    constexpr std::uint64_t negative_inf = 0xFFF0000000000000ULL;
+    constexpr std::uint64_t quiet_nan = 0x7FF8000000001234ULL;
+    constexpr std::uint64_t signaling_nan = 0x7FF0000000001234ULL;
+
+    const Execution ordinary = execute(3U, 1U, 2U, two, three);
+    assert(ordinary.state.fpr[3] == six);
+    assert(ordinary.state.fpr_ps1[3] == six);
+    assert((ordinary.state.fpscr & fpscr::fprf_mask) == 0x00004000U);
+    assert((ordinary.state.fpscr & (fpscr::fi_mask | fpscr::fr_mask)) == 0U);
+    assert(execute(3U, 1U, 2U, two, negative_three).state.fpr[3] == negative_six);
+    assert(execute(3U, 1U, 2U, negative_two, negative_three).state.fpr[3] == six);
+    assert(execute(3U, 1U, 2U, positive_zero, one).state.fpr[3] == positive_zero);
+    assert(execute(3U, 1U, 2U, negative_zero, one).state.fpr[3] == negative_zero);
+    assert(execute(3U, 1U, 2U, positive_zero, negative_two).state.fpr[3] == negative_zero);
+    assert(execute(3U, 1U, 2U, negative_zero, negative_two).state.fpr[3] == positive_zero);
+    assert(execute(3U, 1U, 2U, positive_inf, two).state.fpr[3] == positive_inf);
+    assert(execute(3U, 1U, 2U, negative_inf, two).state.fpr[3] == negative_inf);
+    assert(execute(3U, 1U, 2U, two, positive_inf).state.fpr[3] == positive_inf);
+    assert(execute(3U, 1U, 2U, two, negative_inf).state.fpr[3] == negative_inf);
+    assert(execute(1U, 1U, 2U, two, three).state.fpr[1] == six);
+    assert(execute(2U, 1U, 2U, two, three).state.fpr[2] == six);
+    assert(ordinary.state.fpr_ps1[1] == 0xC040000000000000ULL);
+    assert(ordinary.state.fpr_ps1[2] == 0x4040000000000000ULL);
+
+    const auto force25_reference = [](std::uint64_t raw) {
+        const std::uint64_t exponent = raw & 0x7FF0000000000000ULL;
+        const std::uint64_t fraction = raw & 0x000FFFFFFFFFFFFFULL;
+        if (exponent == 0U && fraction != 0U)
+        {
+            const unsigned shift = static_cast<unsigned>(std::countl_zero(fraction) - 11);
+            const std::int64_t signed_mask =
+                std::bit_cast<std::int64_t>(0xFFFFFFFFF8000000ULL);
+            const std::uint64_t keep = static_cast<std::uint64_t>(signed_mask >> shift);
+            return (raw & keep) + (raw & (0x8000000ULL >> shift));
+        }
+        return (raw & 0xFFFFFFFFF8000000ULL) + (raw & 0x8000000ULL);
+    };
+    const auto expected_product = [&](std::uint64_t a_raw, std::uint64_t c_raw) {
+        const double product = std::bit_cast<double>(a_raw) *
+            std::bit_cast<double>(force25_reference(c_raw));
+        return std::bit_cast<std::uint64_t>(static_cast<double>(static_cast<float>(product)));
+    };
+
+    constexpr std::uint64_t precision_a = 0x4070000000000000ULL;
+    constexpr std::uint64_t precision_c = 0x3FFA794410E24F4BULL;
+    const std::uint64_t rounded_expected = expected_product(precision_a, precision_c);
+    const std::uint64_t unrounded_expected = std::bit_cast<std::uint64_t>(
+        static_cast<double>(static_cast<float>(
+            std::bit_cast<double>(precision_a) * std::bit_cast<double>(precision_c))));
+    assert(force25_reference(precision_c) == 0x3FFA794410000000ULL);
+    assert(rounded_expected == 0x407A794400000000ULL);
+    assert(unrounded_expected == 0x407A794420000000ULL);
+    assert(execute(3U, 1U, 2U, precision_a, precision_c).state.fpr[3] == rounded_expected);
+
+    constexpr std::uint64_t subnormal_a = 0x79B0000000000000ULL;
+    constexpr std::uint64_t subnormal_c = 0x000522DCBAAABE53ULL;
+    assert(force25_reference(subnormal_c) == 0x000522DCBC000000ULL);
+    const std::uint64_t subnormal_expected = expected_product(subnormal_a, subnormal_c);
+    assert(subnormal_expected == 0x39B48B7300000000ULL);
+    assert(execute(3U, 1U, 2U, subnormal_a, subnormal_c).state.fpr[3] ==
+           subnormal_expected);
+    assert(force25_reference(positive_zero) == positive_zero);
+    assert(force25_reference(negative_zero) == negative_zero);
+    assert(force25_reference(positive_inf) == positive_inf);
+    assert(force25_reference(negative_inf) == negative_inf);
+
+    const Execution inexact = execute(3U, 1U, 2U, precision_a, precision_c, 1U);
+    assert((inexact.state.fpscr & fpscr::fi_mask) != 0U);
+    assert((inexact.state.fpscr & fpscr::xx_mask) != 0U);
+    assert((inexact.state.fpscr & 1U) != 0U);
+    assert((inexact.state.fpscr & fpscr::fprf_mask) == 0x00004000U);
+    const Execution exact_after_inexact = execute(
+        3U, 1U, 2U, two, three, fpscr::xx_mask | 0x1U);
+    assert((exact_after_inexact.state.fpscr & (fpscr::fi_mask | fpscr::fr_mask)) == 0U);
+    assert((exact_after_inexact.state.fpscr & fpscr::xx_mask) != 0U);
+    assert((exact_after_inexact.state.fpscr & 1U) != 0U);
+
+    const Execution inf_zero = execute(3U, 1U, 2U, positive_inf, positive_zero);
+    assert((inf_zero.state.fpscr & fpscr::vximz_mask) != 0U);
+    assert((inf_zero.state.fpscr & (fpscr::vx_mask | fpscr::fx_mask)) ==
+           (fpscr::vx_mask | fpscr::fx_mask));
+    assert((inf_zero.state.fpr[3] & 0x7FF8000000000000ULL) == 0x7FF8000000000000ULL);
+    assert((execute(3U, 1U, 2U, positive_zero, positive_inf).state.fpscr &
+            fpscr::vximz_mask) != 0U);
+    const Execution enabled_invalid = execute(
+        3U, 1U, 2U, positive_inf, positive_zero, fpscr::ve_mask);
+    assert(enabled_invalid.state.fpr[3] == 0x1111000000000003ULL);
+    assert(enabled_invalid.state.fpr_ps1[3] == 0x2222000000000003ULL);
+    assert((enabled_invalid.state.fpscr & fpscr::fex_mask) != 0U);
+
+    const Execution signaling = execute(3U, 1U, 2U, signaling_nan, one);
+    assert((signaling.state.fpscr & fpscr::vxsnan_mask) != 0U);
+    assert((signaling.state.fpscr & (fpscr::vx_mask | fpscr::fx_mask)) ==
+           (fpscr::vx_mask | fpscr::fx_mask));
+    assert((signaling.state.fpr[3] & 0x0008000000000000ULL) != 0U);
+    const Execution signaling_enabled = execute(
+        3U, 1U, 2U, one, signaling_nan, fpscr::ve_mask);
+    assert(signaling_enabled.state.fpr[3] == 0x1111000000000003ULL);
+    assert(signaling_enabled.state.fpr_ps1[3] == 0x2222000000000003ULL);
+    const Execution quiet = execute(3U, 1U, 2U, quiet_nan, one);
+    assert((quiet.state.fpscr & fpscr::vxsnan_mask) == 0U);
+    assert((quiet.state.fpr[3] & 0x7FF8000000000000ULL) == 0x7FF8000000000000ULL);
+
+    constexpr std::uint64_t wind_reciprocal = 0x3FC24924A0000000ULL;
+    const Execution wind_waker = execute(9U, 11U, 0U, positive_zero, wind_reciprocal);
+    assert(wind_waker.state.fpr[9] == positive_zero);
+    assert(wind_waker.state.fpr_ps1[9] == positive_zero);
+    assert((wind_waker.state.fpscr & fpscr::fprf_mask) == 0x00002000U);
+    assert((wind_waker.state.fpscr & (fpscr::fi_mask | fpscr::fr_mask)) == 0U);
+    const std::string trace = format_instruction_history(wind_waker.result);
+    assert(trace.find("fmuls f11=0 [0x0000000000000000] f0=0.1428571492433548 ") !=
+           std::string::npos);
+    assert(trace.find("-> f9=0 [0x0000000000000000] single=0x00000000") !=
+           std::string::npos);
+    assert(trace.find("f0=0.1428571492433548") ==
+           trace.rfind("f0=0.1428571492433548"));
 }
 
 void floating_move_register_tests()
@@ -4877,6 +5100,7 @@ int main(int argc, char* argv[])
     floating_divide_single_tests();
     floating_add_single_tests();
     floating_multiply_add_single_tests();
+    floating_multiply_single_tests();
     floating_move_register_tests();
     floating_subtract_double_tests();
     floating_round_to_single_tests();
