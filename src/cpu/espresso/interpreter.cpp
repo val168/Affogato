@@ -3,6 +3,7 @@
 #include "cpu/espresso/decoder.hpp"
 
 #include <bit>
+#include <cmath>
 #include <cstdint>
 #include <exception>
 #include <iomanip>
@@ -33,6 +34,109 @@ constexpr std::uint64_t binary64_quiet_nan_bit = 0x0008000000000000ULL;
 [[nodiscard]] bool is_binary64_signaling_nan(std::uint64_t raw) noexcept
 {
     return is_binary64_nan(raw) && (raw & binary64_quiet_nan_bit) == 0U;
+}
+
+constexpr std::uint64_t binary64_sign_mask = 0x8000000000000000ULL;
+constexpr std::uint64_t binary64_infinity_bits = 0x7FF0000000000000ULL;
+
+[[nodiscard]] bool is_binary64_zero(std::uint64_t raw) noexcept
+{
+    return (raw & ~binary64_sign_mask) == 0U;
+}
+
+[[nodiscard]] bool is_binary64_infinity(std::uint64_t raw) noexcept
+{
+    return (raw & ~binary64_sign_mask) == binary64_infinity_bits;
+}
+
+constexpr std::uint32_t implemented_invalid_masks =
+    fpscr::vxsnan_mask | fpscr::vxzdz_mask | fpscr::vxidi_mask;
+
+void update_fpscr_summaries(CpuState& state) noexcept
+{
+    state.fpscr &= ~(fpscr::vx_mask | fpscr::fex_mask);
+    if ((state.fpscr & implemented_invalid_masks) != 0U)
+    {
+        state.fpscr |= fpscr::vx_mask;
+    }
+
+    const bool enabled_exception =
+        ((state.fpscr & fpscr::vx_mask) != 0U &&
+         (state.fpscr & fpscr::ve_mask) != 0U) ||
+        ((state.fpscr & fpscr::zx_mask) != 0U &&
+         (state.fpscr & fpscr::ze_mask) != 0U) ||
+        ((state.fpscr & fpscr::xx_mask) != 0U &&
+         (state.fpscr & fpscr::xe_mask) != 0U);
+    if (enabled_exception)
+    {
+        state.fpscr |= fpscr::fex_mask;
+    }
+}
+
+void raise_fpscr_exception(CpuState& state, std::uint32_t subexception) noexcept
+{
+    state.fpscr |= subexception | fpscr::fx_mask;
+    update_fpscr_summaries(state);
+}
+
+[[nodiscard]] std::uint8_t single_result_fprf(std::uint32_t bits) noexcept
+{
+    constexpr std::uint32_t exponent_mask = 0x7F800000U;
+    constexpr std::uint32_t fraction_mask = 0x007FFFFFU;
+    constexpr std::uint32_t sign_mask = 0x80000000U;
+    const bool negative = (bits & sign_mask) != 0U;
+    const std::uint32_t exponent = bits & exponent_mask;
+    const std::uint32_t fraction = bits & fraction_mask;
+
+    if (exponent == exponent_mask)
+    {
+        return fraction != 0U ? 0x11U : negative ? 0x09U : 0x05U;
+    }
+    if (exponent == 0U)
+    {
+        if (fraction != 0U)
+        {
+            return negative ? 0x18U : 0x14U;
+        }
+        return negative ? 0x12U : 0x02U;
+    }
+    return negative ? 0x08U : 0x04U;
+}
+
+[[nodiscard]] std::uint32_t quiet_nan_single_bits(std::uint64_t raw) noexcept
+{
+    if (!is_binary64_nan(raw))
+    {
+        raw = 0x7FF8000000000000ULL;
+    }
+    constexpr std::uint32_t single_sign_mask = 0x80000000U;
+    constexpr std::uint32_t single_exponent_mask = 0x7F800000U;
+    constexpr std::uint32_t single_quiet_nan_bit = 0x00400000U;
+    const std::uint32_t sign = (raw & binary64_sign_mask) != 0U
+        ? single_sign_mask
+        : 0U;
+    const std::uint32_t payload = static_cast<std::uint32_t>(
+        (raw & binary64_fraction_mask) >> 29U);
+    return sign | single_exponent_mask | payload | single_quiet_nan_bit;
+}
+
+void set_fdivs_result_status(
+    CpuState& state,
+    std::uint32_t single_bits,
+    bool inexact,
+    bool rounded_up) noexcept
+{
+    state.fpscr &= ~(fpscr::fprf_mask | fpscr::fi_mask | fpscr::fr_mask);
+    state.fpscr |= static_cast<std::uint32_t>(single_result_fprf(single_bits)) << 12U;
+    if (inexact)
+    {
+        state.fpscr |= fpscr::fi_mask | fpscr::xx_mask | fpscr::fx_mask;
+        if (rounded_up)
+        {
+            state.fpscr |= fpscr::fr_mask;
+        }
+    }
+    update_fpscr_summaries(state);
 }
 
 void set_floating_compare_result(
@@ -263,6 +367,7 @@ void set_record_result(CpuState& state, std::uint32_t value)
     case Opcode::branch: return "b";
     case Opcode::instruction_sync: return "isync";
     case Opcode::floating_compare_unordered: return "fcmpu";
+    case Opcode::floating_divide_single: return "fdivs";
     case Opcode::compare_signed_immediate: return "cmpwi";
     case Opcode::compare_signed_register: return "cmpw";
     case Opcode::compare_unsigned_immediate: return "cmplwi";
@@ -384,6 +489,16 @@ void add_history_source(
         entry.fp_compare_b_register = instruction.fp_compare_b;
         entry.fp_compare_a_raw = state.fpr[instruction.fp_compare_a];
         entry.fp_compare_b_raw = state.fpr[instruction.fp_compare_b];
+        return entry;
+    }
+    if (opcode == Opcode::floating_divide_single)
+    {
+        entry.has_fp_arithmetic = true;
+        entry.fp_arithmetic_destination = instruction.fp_register;
+        entry.fp_arithmetic_source_a = instruction.fp_source_a;
+        entry.fp_arithmetic_source_b = instruction.fp_source_b;
+        entry.fp_arithmetic_a_raw = state.fpr[instruction.fp_source_a];
+        entry.fp_arithmetic_b_raw = state.fpr[instruction.fp_source_b];
         return entry;
     }
     if (opcode == Opcode::load_multiple_word || opcode == Opcode::store_multiple_word)
@@ -658,6 +773,38 @@ std::string format_instruction_history(const RunResult& result)
                      << static_cast<unsigned>(entry.fp_compare_cr_field) << "=0x"
                      << std::hex << static_cast<unsigned>(entry.fp_compare_result)
                      << ", fpcc=0x" << static_cast<unsigned>(entry.fp_compare_result) << ')';
+            }
+        }
+        if (entry.has_fp_arithmetic)
+        {
+            const auto print_operand = [&](std::uint8_t reg, std::uint64_t raw) {
+                text << " f" << std::dec << static_cast<unsigned>(reg) << '=';
+                if (is_binary64_nan(raw))
+                {
+                    text << "NaN";
+                }
+                else
+                {
+                    text << std::setprecision(17) << std::bit_cast<double>(raw);
+                }
+                text << " [0x" << std::hex << std::setw(16) << raw << ']';
+            };
+            print_operand(entry.fp_arithmetic_source_a, entry.fp_arithmetic_a_raw);
+            print_operand(entry.fp_arithmetic_source_b, entry.fp_arithmetic_b_raw);
+            if (entry.has_fp_arithmetic_result)
+            {
+                const double value = std::bit_cast<double>(entry.fp_arithmetic_result_raw);
+                text << " -> f" << std::dec
+                     << static_cast<unsigned>(entry.fp_arithmetic_destination) << '='
+                     << std::setprecision(17) << value << " [0x" << std::hex
+                     << std::setw(16) << entry.fp_arithmetic_result_raw << "] single=0x"
+                     << std::setw(8) << entry.fp_arithmetic_single_bits;
+            }
+            else if (entry.completed)
+            {
+                text << " -> f" << std::dec
+                     << static_cast<unsigned>(entry.fp_arithmetic_destination)
+                     << " (write suppressed)";
             }
         }
         if (entry.has_immediate)
@@ -1141,13 +1288,102 @@ StepResult EspressoCore::step()
         set_floating_compare_result(state, instruction.cr_field, result);
         if (is_binary64_signaling_nan(a_raw) || is_binary64_signaling_nan(b_raw))
         {
-            state.fpscr |= fpscr::vxsnan_mask | fpscr::vx_mask | fpscr::fx_mask;
-            if ((state.fpscr & fpscr::ve_mask) != 0U)
-            {
-                state.fpscr |= fpscr::fex_mask;
-            }
+            raise_fpscr_exception(state, fpscr::vxsnan_mask);
         }
         pending_history_entry_.fp_compare_result = result;
+        break;
+    }
+
+    case Opcode::floating_divide_single:
+    {
+        // Snapshot PS0 sources before any destination write; frD may alias either.
+        const std::uint64_t a_raw = state.fpr[instruction.fp_source_a];
+        const std::uint64_t b_raw = state.fpr[instruction.fp_source_b];
+        const auto commit_result = [&](std::uint32_t single_bits,
+                                       bool inexact,
+                                       bool rounded_up) {
+            const float single_result = std::bit_cast<float>(single_bits);
+            const double extended_result = static_cast<double>(single_result);
+            const std::uint64_t raw_result = std::bit_cast<std::uint64_t>(extended_result);
+            state.fpr[instruction.fp_register] = raw_result;
+            state.fpr_ps1[instruction.fp_register] = raw_result;
+            set_fdivs_result_status(state, single_bits, inexact, rounded_up);
+            pending_history_entry_.has_fp_arithmetic_result = true;
+            pending_history_entry_.fp_arithmetic_result_raw = raw_result;
+            pending_history_entry_.fp_arithmetic_single_bits = single_bits;
+        };
+        const auto commit_quiet_nan = [&](std::uint64_t nan_source) {
+            commit_result(quiet_nan_single_bits(nan_source), false, false);
+        };
+        const auto signal_invalid = [&](std::uint32_t subexception,
+                                        std::uint64_t nan_source) {
+            raise_fpscr_exception(state, subexception);
+            if ((state.fpscr & fpscr::ve_mask) == 0U)
+            {
+                commit_quiet_nan(nan_source);
+            }
+        };
+
+        if (is_binary64_signaling_nan(a_raw) || is_binary64_signaling_nan(b_raw))
+        {
+            const std::uint64_t signaling_source = is_binary64_signaling_nan(a_raw)
+                ? a_raw
+                : b_raw;
+            signal_invalid(fpscr::vxsnan_mask, signaling_source);
+            break;
+        }
+        if (is_binary64_nan(a_raw) || is_binary64_nan(b_raw))
+        {
+            commit_quiet_nan(is_binary64_nan(a_raw) ? a_raw : b_raw);
+            break;
+        }
+
+        const bool a_zero = is_binary64_zero(a_raw);
+        const bool b_zero = is_binary64_zero(b_raw);
+        const bool a_infinity = is_binary64_infinity(a_raw);
+        const bool b_infinity = is_binary64_infinity(b_raw);
+        if ((a_zero && b_zero) || (a_infinity && b_infinity))
+        {
+            const std::uint32_t invalid_subexception = a_zero
+                ? fpscr::vxzdz_mask
+                : fpscr::vxidi_mask;
+            signal_invalid(invalid_subexception, 0U);
+            break;
+        }
+        if (b_zero && !a_infinity)
+        {
+            raise_fpscr_exception(state, fpscr::zx_mask);
+            if ((state.fpscr & fpscr::ze_mask) == 0U)
+            {
+                const std::uint64_t sign = (a_raw ^ b_raw) & binary64_sign_mask;
+                const std::uint32_t single_bits =
+                    (sign != 0U ? 0x80000000U : 0U) | 0x7F800000U;
+                commit_result(single_bits, false, false);
+            }
+            break;
+        }
+
+        if (b_zero) // infinity / zero is signed infinity without ZX.
+        {
+            const std::uint64_t sign = (a_raw ^ b_raw) & binary64_sign_mask;
+            const std::uint32_t single_bits =
+                (sign != 0U ? 0x80000000U : 0U) | 0x7F800000U;
+            commit_result(single_bits, false, false);
+            break;
+        }
+
+        const double a = std::bit_cast<double>(a_raw);
+        const double b = std::bit_cast<double>(b_raw);
+        const double exact_result = a / b;
+        const float single_result = static_cast<float>(exact_result);
+        const double extended_result = static_cast<double>(single_result);
+        const std::uint32_t single_bits = std::bit_cast<std::uint32_t>(single_result);
+        const bool inexact = extended_result != exact_result;
+        const bool rounded_up = inexact &&
+            std::fabs(extended_result) > std::fabs(exact_result);
+
+        // TODO: add exact FPSCR OX/UX behavior when broader FP exceptions are modeled.
+        commit_result(single_bits, inexact, rounded_up);
         break;
     }
 

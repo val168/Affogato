@@ -88,6 +88,15 @@ struct InstructionHistoryEntry
     std::uint64_t fp_compare_a_raw{};
     std::uint64_t fp_compare_b_raw{};
     std::uint8_t fp_compare_result{};
+    bool has_fp_arithmetic{};
+    bool has_fp_arithmetic_result{};
+    std::uint8_t fp_arithmetic_destination{};
+    std::uint8_t fp_arithmetic_source_a{};
+    std::uint8_t fp_arithmetic_source_b{};
+    std::uint64_t fp_arithmetic_a_raw{};
+    std::uint64_t fp_arithmetic_b_raw{};
+    std::uint64_t fp_arithmetic_result_raw{};
+    std::uint32_t fp_arithmetic_single_bits{};
     bool completed{};
 };
 
