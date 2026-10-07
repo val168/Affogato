@@ -42,6 +42,7 @@ enum class Opcode
     floating_divide_single,
     floating_add_single,
     floating_multiply_add_single,
+    floating_move_register,
     conditional_branch,
     load_word_zero,
     load_multiple_word,

@@ -100,6 +100,12 @@ struct InstructionHistoryEntry
     std::uint64_t fp_arithmetic_c_raw{};
     std::uint64_t fp_arithmetic_result_raw{};
     std::uint32_t fp_arithmetic_single_bits{};
+    bool has_fp_move{};
+    std::uint8_t fp_move_destination{};
+    std::uint8_t fp_move_source{};
+    std::uint64_t fp_move_source_value{};
+    std::uint64_t fp_move_destination_value{};
+    std::uint64_t fp_move_destination_ps1{};
     bool completed{};
 };
 

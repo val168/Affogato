@@ -1665,6 +1665,111 @@ void floating_multiply_add_single_tests()
     assert(snan_enabled.state.fpr_ps1[7] == sentinel_ps1);
 }
 
+void floating_move_register_tests()
+{
+    constexpr std::uint32_t wind_waker_word = 0xFC20F890U;
+    const DecodedInstruction decoded = decode(wind_waker_word);
+    assert(decoded.opcode == Opcode::floating_move_register);
+    assert(decoded.fp_register == 1U);
+    assert(decoded.fp_source_b == 31U);
+    assert(((wind_waker_word >> 1U) & 0x3FFU) == 72U);
+    assert((wind_waker_word & 1U) == 0U);
+    assert(decode(wind_waker_word | 0x00010000U).opcode == Opcode::unsupported);
+    assert(decode(wind_waker_word | 1U).opcode == Opcode::unsupported);
+    assert(decode(wind_waker_word ^ 0x2U).opcode == Opcode::unsupported);
+
+    struct Execution
+    {
+        CpuState state;
+        RunResult result;
+        std::uint32_t memory_word{};
+    };
+    const auto execute = [](std::uint8_t destination, std::uint8_t source,
+                            std::uint64_t source_raw,
+                            std::uint64_t destination_ps1 = 0xAABBCCDDEEFF0011ULL) {
+        EspressoCore core(16U);
+        for (std::size_t index = 0; index < core.state.gpr.size(); ++index)
+        {
+            core.state.gpr[index] = static_cast<std::uint32_t>(0x400U + index);
+            core.state.fpr[index] = 0x1111000000000000ULL + index;
+            core.state.fpr_ps1[index] = 0x2222000000000000ULL + index;
+        }
+        core.state.fpr[source] = source_raw;
+        core.state.fpr_ps1[destination] = destination_ps1;
+        core.state.cr = 0xA5C36E91U;
+        core.state.xer = 0x800000A5U;
+        core.state.fpscr = 0xD5C3BEEF;
+        core.state.lr = 0x12345678U;
+        core.state.ctr = 0x87654321U;
+        const std::uint32_t instruction_word = 0xFC000000U |
+            (static_cast<std::uint32_t>(destination) << 21U) |
+            (static_cast<std::uint32_t>(source) << 11U) | (72U << 1U);
+        core.memory.write32_be(0U, instruction_word);
+        core.memory.write32_be(8U, 0xDEADBEEFU);
+        const auto gpr_before = core.state.gpr;
+        const auto fpr_before = core.state.fpr;
+        const auto fpr_ps1_before = core.state.fpr_ps1;
+        const std::uint32_t fpscr_before = core.state.fpscr;
+
+        Execution execution{.state = {}, .result = core.run(1U), .memory_word = 0U};
+        assert(execution.result.reason == StopReason::instruction_limit);
+        assert(execution.result.steps == 1U);
+        assert(core.state.cia == 4U);
+        assert(core.state.gpr == gpr_before);
+        assert(core.state.cr == 0xA5C36E91U);
+        assert(core.state.xer == 0x800000A5U);
+        assert(core.state.fpscr == fpscr_before);
+        assert(core.state.lr == 0x12345678U);
+        assert(core.state.ctr == 0x87654321U);
+        assert(core.state.fpr[destination] == source_raw);
+        assert(core.state.fpr_ps1 == fpr_ps1_before);
+        for (std::size_t index = 0; index < core.state.fpr.size(); ++index)
+        {
+            if (index != destination)
+            {
+                assert(core.state.fpr[index] == fpr_before[index]);
+            }
+        }
+        execution.memory_word = core.memory.read32_be(8U);
+        assert(execution.memory_word == 0xDEADBEEFU);
+        execution.state = core.state;
+        return execution;
+    };
+
+    constexpr std::array<std::uint64_t, 7> raw_values{{
+        0x3FF123456789ABCDULL, // finite value
+        0x0000000000000000ULL, // +0
+        0x8000000000000000ULL, // -0
+        0x7FF0000000000000ULL, // +infinity
+        0xFFF0000000000000ULL, // -infinity
+        0x7FF8000000001234ULL, // quiet NaN payload
+        0x7FF0000000001234ULL, // signaling NaN payload
+    }};
+    for (const std::uint64_t raw : raw_values)
+    {
+        const Execution result = execute(1U, 31U, raw);
+        assert(result.state.fpr[1] == raw);
+        assert(result.state.fpr_ps1[1] == 0xAABBCCDDEEFF0011ULL);
+    }
+
+    // Same-register move is an exact PS0 no-op and never touches PS1.
+    const Execution alias = execute(5U, 5U, 0x7FF0000000004321ULL,
+                                    0x123456789ABCDEF0ULL);
+    assert(alias.state.fpr[5] == 0x7FF0000000004321ULL);
+    assert(alias.state.fpr_ps1[5] == 0x123456789ABCDEF0ULL);
+
+    // Wind Waker's fmr must preserve the destination's prior PS1 independently.
+    constexpr std::uint64_t wind_source = 0x404D27D200000000ULL;
+    constexpr std::uint64_t old_destination_ps1 = 0x403D26E020000000ULL;
+    const Execution wind_waker = execute(1U, 31U, wind_source, old_destination_ps1);
+    assert(wind_waker.state.fpr[1] == wind_source);
+    assert(wind_waker.state.fpr_ps1[1] == old_destination_ps1);
+    const std::string trace = format_instruction_history(wind_waker.result);
+    assert(trace.find("fmr f31.ps0=0x404D27D200000000 -> f1.ps0=0x404D27D200000000") !=
+           std::string::npos);
+    assert(trace.find("ps1 unchanged=0x403D26E020000000") != std::string::npos);
+}
+
 void integer_alu_tests()
 {
     const auto run_neg = [](std::uint8_t destination, std::uint8_t source,
@@ -4397,6 +4502,7 @@ int main(int argc, char* argv[])
     floating_divide_single_tests();
     floating_add_single_tests();
     floating_multiply_add_single_tests();
+    floating_move_register_tests();
     load_store_tests();
     load_halfword_algebraic_tests();
     multiple_word_load_store_tests();

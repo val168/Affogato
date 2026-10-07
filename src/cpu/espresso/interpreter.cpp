@@ -371,6 +371,7 @@ void set_record_result(CpuState& state, std::uint32_t value)
     case Opcode::floating_divide_single: return "fdivs";
     case Opcode::floating_add_single: return "fadds";
     case Opcode::floating_multiply_add_single: return "fmadds";
+    case Opcode::floating_move_register: return "fmr";
     case Opcode::compare_signed_immediate: return "cmpwi";
     case Opcode::compare_signed_register: return "cmpw";
     case Opcode::compare_unsigned_immediate: return "cmplwi";
@@ -482,6 +483,15 @@ void add_history_source(
         entry.paired_fp_source_a_ps1 = state.fpr_ps1[instruction.fp_source_a];
         entry.paired_fp_source_b_ps0 = state.fpr[instruction.fp_source_b];
         entry.paired_fp_source_b_ps1 = state.fpr_ps1[instruction.fp_source_b];
+        return entry;
+    }
+    if (opcode == Opcode::floating_move_register)
+    {
+        entry.has_fp_move = true;
+        entry.fp_move_destination = instruction.fp_register;
+        entry.fp_move_source = instruction.fp_source_b;
+        entry.fp_move_source_value = state.fpr[instruction.fp_source_b];
+        entry.fp_move_destination_ps1 = state.fpr_ps1[instruction.fp_register];
         return entry;
     }
     if (opcode == Opcode::floating_compare_unordered)
@@ -824,6 +834,21 @@ std::string format_instruction_history(const RunResult& result)
                 text << " -> f" << std::dec
                      << static_cast<unsigned>(entry.fp_arithmetic_destination)
                      << " (write suppressed)";
+            }
+        }
+        if (entry.has_fp_move)
+        {
+            text << " f" << std::dec << static_cast<unsigned>(entry.fp_move_source)
+                 << ".ps0=0x" << std::hex << std::setw(16)
+                 << entry.fp_move_source_value;
+            if (entry.completed)
+            {
+                text << " -> f" << std::dec
+                     << static_cast<unsigned>(entry.fp_move_destination)
+                     << ".ps0=0x" << std::hex << std::setw(16)
+                     << entry.fp_move_destination_value
+                     << " (ps1 unchanged=0x" << std::setw(16)
+                     << entry.fp_move_destination_ps1 << ')';
             }
         }
         if (entry.has_immediate)
@@ -1556,6 +1581,20 @@ StepResult EspressoCore::step()
 
         // TODO: add exact FPSCR OX/UX behavior when broader FP exceptions are modeled.
         commit_result(single_bits, inexact, rounded_up);
+        break;
+    }
+
+    case Opcode::floating_move_register:
+    {
+        const std::uint64_t source = state.fpr[instruction.fp_source_b];
+        state.fpr[instruction.fp_register] = source;
+        pending_history_entry_.has_fp_move = true;
+        pending_history_entry_.fp_move_destination = instruction.fp_register;
+        pending_history_entry_.fp_move_source = instruction.fp_source_b;
+        pending_history_entry_.fp_move_source_value = source;
+        pending_history_entry_.fp_move_destination_value = source;
+        pending_history_entry_.fp_move_destination_ps1 =
+            state.fpr_ps1[instruction.fp_register];
         break;
     }
 
