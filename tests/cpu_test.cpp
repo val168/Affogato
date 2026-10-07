@@ -543,6 +543,13 @@ void decoder_tests()
     assert(lfs.base == 12);
     assert(lfs.immediate == 4);
 
+    const DecodedInstruction lfsu = decode(0xC409FBA8U); // lfsu f0, -1112(r9)
+    assert(lfsu.opcode == Opcode::load_single_update);
+    assert(lfsu.fp_register == 0U);
+    assert(lfsu.base == 9U);
+    assert(lfsu.immediate == -1112);
+    assert(decode(0xC4000000U).opcode == Opcode::unsupported);
+
     const DecodedInstruction lfd = decode(0xCBE10010U); // lfd f31, 16(r1)
     assert(lfd.opcode == Opcode::load_double);
     assert(lfd.fp_register == 31U);
@@ -2840,6 +2847,7 @@ void floating_point_load_tests()
     assert(positive_result.reason == StopReason::instruction_limit);
     assert(core.state.fpr[13] == 0x3FF8000000000000ULL);
     assert(core.state.fpr_ps1[13] == 0x3FF8000000000000ULL);
+    assert(core.state.gpr[12] == 0x100U); // lfs does not update its base.
     assert(core.state.fpr[12] == 0U);
     const std::string positive_trace = format_instruction_history(positive_result);
     assert(positive_trace.find(
@@ -2895,6 +2903,99 @@ void floating_point_load_tests()
     const std::string trace = format_instruction_history(fault);
     assert(trace.find(
         "lfs r12=0x00001000 [0x00001004] -> f13 (not written)") != std::string::npos);
+}
+
+void floating_point_single_update_tests()
+{
+    const auto encode_lfsu = [](std::uint8_t destination, std::uint8_t base,
+                                std::int16_t displacement) {
+        return 0xC4000000U |
+            (static_cast<std::uint32_t>(destination) << 21U) |
+            (static_cast<std::uint32_t>(base) << 16U) |
+            static_cast<std::uint16_t>(displacement);
+    };
+
+    constexpr std::uint32_t initial_cr = 0x12345678U;
+    constexpr std::uint32_t initial_xer = 0xA00000A5U;
+    constexpr std::uint32_t initial_lr = 0x10203040U;
+    constexpr std::uint32_t initial_ctr = 0x50607080U;
+    constexpr std::uint32_t initial_base = 0x80U;
+    constexpr std::uint32_t effective = 0x84U;
+    const std::array<std::uint32_t, 4> values{
+        0x3FC00000U, // +1.5
+        0xC0100000U, // -2.25
+        0x00000000U, // +0
+        0x80000000U, // -0
+    };
+
+    for (const std::uint32_t single_bits : values)
+    {
+        EspressoCore core(0x200U);
+        core.state.gpr[9] = initial_base;
+        core.state.fpr[0] = 0x1111222233334444ULL;
+        core.state.fpr_ps1[0] = 0xAAAABBBBCCCCDDDDULL;
+        core.state.cr = initial_cr;
+        core.state.xer = initial_xer;
+        core.state.lr = initial_lr;
+        core.state.ctr = initial_ctr;
+        core.memory.write32_be(effective, single_bits);
+        core.memory.write32_be(0U, encode_lfsu(0U, 9U, 4));
+
+        const RunResult result = core.run(1U);
+        const float single = std::bit_cast<float>(single_bits);
+        const std::uint64_t expected = std::bit_cast<std::uint64_t>(
+            static_cast<double>(single));
+        assert(result.reason == StopReason::instruction_limit);
+        assert(core.state.fpr[0] == expected);
+        assert(core.state.fpr_ps1[0] == expected);
+        assert(core.state.gpr[9] == effective);
+        assert(core.state.cr == initial_cr);
+        assert(core.state.xer == initial_xer);
+        assert(core.state.lr == initial_lr);
+        assert(core.state.ctr == initial_ctr);
+
+        const InstructionHistoryEntry& history = result.instruction_history.front();
+        assert(history.opcode_name == "lfsu");
+        assert(history.has_effective_address && history.effective_address == effective);
+        assert(history.has_fp_destination && history.fp_destination_register == 0U);
+        assert(history.fp_destination_value == expected);
+        assert(history.has_destination && history.destination_register == 9U);
+        assert(history.destination_value == effective);
+        const std::string trace = format_instruction_history(result);
+        assert(trace.find("lfsu r9=0x00000080 [0x00000084]") != std::string::npos);
+        assert(trace.find("-> r9=0x00000084 -> f0=") != std::string::npos);
+    }
+
+    // Signed negative displacement uses the original base, then updates it.
+    EspressoCore negative_displacement(0x200U);
+    negative_displacement.state.gpr[9] = 0x120U;
+    negative_displacement.memory.write32_be(0x11CU, 0xC0490FDBU); // -pi single
+    negative_displacement.memory.write32_be(0U, encode_lfsu(0U, 9U, -4));
+    assert(negative_displacement.step() == StepResult::executed);
+    assert(negative_displacement.state.gpr[9] == 0x11CU);
+    assert(negative_displacement.state.fpr[0] == 0xC00921FB60000000ULL);
+    assert(negative_displacement.state.fpr_ps1[0] == 0xC00921FB60000000ULL);
+
+    // A failed read changes neither the base nor either FPR lane.
+    EspressoCore fault_core(0x100U);
+    constexpr std::uint32_t fault_base = 0xFFFFFFFCU;
+    fault_core.state.gpr[9] = fault_base;
+    fault_core.state.fpr[0] = 0x1111222233334444ULL;
+    fault_core.state.fpr_ps1[0] = 0xAAAABBBBCCCCDDDDULL;
+    fault_core.memory.write32_be(0U, encode_lfsu(0U, 9U, 0));
+    const RunResult fault = fault_core.run(1U);
+    assert(fault.reason == StopReason::memory_fault);
+    assert(fault.detail.find("read 4 byte(s)") != std::string::npos);
+    assert(fault.detail.find("0xFFFFFFFC") != std::string::npos);
+    assert(fault_core.state.gpr[9] == fault_base);
+    assert(fault_core.state.fpr[0] == 0x1111222233334444ULL);
+    assert(fault_core.state.fpr_ps1[0] == 0xAAAABBBBCCCCDDDDULL);
+    assert(fault.instruction_history.size() == 1U);
+    const InstructionHistoryEntry& failed = fault.instruction_history.front();
+    assert(failed.opcode_name == "lfsu");
+    assert(failed.has_effective_address && failed.effective_address == fault_base);
+    assert(failed.has_destination && failed.destination_register == 9U);
+    assert(!failed.completed);
 }
 
 void floating_point_double_load_tests()
@@ -3505,6 +3606,7 @@ int main(int argc, char* argv[])
     integer_alu_tests();
     leaf_function_abi_tests();
     floating_point_load_tests();
+    floating_point_single_update_tests();
     floating_point_double_load_tests();
     floating_point_store_tests();
     floating_point_double_store_tests();

@@ -170,6 +170,7 @@ void set_record_result(CpuState& state, std::uint32_t value)
             instruction.opcode == Opcode::load_multiple_word ||
             instruction.opcode == Opcode::store_multiple_word ||
             instruction.opcode == Opcode::load_single ||
+            instruction.opcode == Opcode::load_single_update ||
             instruction.opcode == Opcode::store_single ||
             instruction.opcode == Opcode::store_single_update ||
             instruction.opcode == Opcode::store_double ||
@@ -250,6 +251,7 @@ void set_record_result(CpuState& state, std::uint32_t value)
     case Opcode::move_to_count_register: return "mtctr";
     case Opcode::conditional_branch_to_count_register: return "bcctr";
     case Opcode::load_single: return "lfs";
+    case Opcode::load_single_update: return "lfsu";
     case Opcode::load_double: return "lfd";
     case Opcode::store_single: return "stfs";
     case Opcode::store_single_update: return "stfsu";
@@ -352,7 +354,8 @@ void add_history_source(
         opcode == Opcode::store_byte_update || opcode == Opcode::store_byte_indexed ||
         opcode == Opcode::store_halfword;
 
-    if (opcode == Opcode::load_single || opcode == Opcode::load_double ||
+    if (opcode == Opcode::load_single || opcode == Opcode::load_single_update ||
+        opcode == Opcode::load_double ||
         opcode == Opcode::store_single ||
         opcode == Opcode::store_single_update || opcode == Opcode::store_double ||
         opcode == Opcode::load_halfword_algebraic)
@@ -364,7 +367,8 @@ void add_history_source(
         entry.has_effective_address = true;
         entry.effective_address = effective_address(state, instruction.base, instruction.immediate);
     }
-    if (opcode == Opcode::load_single || opcode == Opcode::load_double)
+    if (opcode == Opcode::load_single || opcode == Opcode::load_single_update ||
+        opcode == Opcode::load_double)
     {
         entry.has_fp_destination = true;
         entry.fp_destination_register = instruction.fp_register;
@@ -499,6 +503,10 @@ void add_history_source(
         entry.destination_register = instruction.destination;
         break;
     case Opcode::load_single:
+        break;
+    case Opcode::load_single_update:
+        entry.has_destination = true;
+        entry.destination_register = instruction.base;
         break;
     case Opcode::load_double:
         break;
@@ -1233,6 +1241,7 @@ StepResult EspressoCore::step()
     }
 
     case Opcode::load_single:
+    case Opcode::load_single_update:
     {
         const std::uint32_t address =
             effective_address(state, instruction.base, instruction.immediate);
@@ -1242,6 +1251,10 @@ StepResult EspressoCore::step()
         const std::uint64_t double_bits = std::bit_cast<std::uint64_t>(double_value);
         state.fpr[instruction.fp_register] = double_bits;
         state.fpr_ps1[instruction.fp_register] = double_bits;
+        if (instruction.opcode == Opcode::load_single_update)
+        {
+            state.gpr[instruction.base] = address;
+        }
         break;
     }
 
