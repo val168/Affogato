@@ -445,6 +445,7 @@ void set_record_result(CpuState& state, std::uint32_t value)
     case Opcode::floating_multiply_add_single: return "fmadds";
     case Opcode::floating_move_register: return "fmr";
     case Opcode::floating_subtract_double: return "fsub";
+    case Opcode::floating_round_to_single: return "frsp";
     case Opcode::compare_signed_immediate: return "cmpwi";
     case Opcode::compare_signed_register: return "cmpw";
     case Opcode::compare_unsigned_immediate: return "cmplwi";
@@ -579,7 +580,8 @@ void add_history_source(
     }
     if (opcode == Opcode::floating_divide_single || opcode == Opcode::floating_add_single ||
         opcode == Opcode::floating_multiply_add_single ||
-        opcode == Opcode::floating_subtract_double)
+        opcode == Opcode::floating_subtract_double ||
+        opcode == Opcode::floating_round_to_single)
     {
         entry.has_fp_arithmetic = true;
         entry.fp_arithmetic_destination = instruction.fp_register;
@@ -588,6 +590,9 @@ void add_history_source(
         entry.fp_arithmetic_a_raw = state.fpr[instruction.fp_source_a];
         entry.fp_arithmetic_b_raw = state.fpr[instruction.fp_source_b];
         entry.has_fp_arithmetic_single_bits = opcode != Opcode::floating_subtract_double;
+        entry.fp_arithmetic_source_count = opcode == Opcode::floating_round_to_single
+            ? 1U
+            : opcode == Opcode::floating_multiply_add_single ? 3U : 2U;
         if (opcode == Opcode::floating_multiply_add_single)
         {
             entry.has_fp_arithmetic_source_c = true;
@@ -893,7 +898,10 @@ std::string format_instruction_history(const RunResult& result)
             }
             else
             {
-                print_operand(entry.fp_arithmetic_source_b, entry.fp_arithmetic_b_raw);
+                if (entry.fp_arithmetic_source_count > 1U)
+                {
+                    print_operand(entry.fp_arithmetic_source_b, entry.fp_arithmetic_b_raw);
+                }
             }
             if (entry.has_fp_arithmetic_result)
             {
@@ -1752,6 +1760,50 @@ StepResult EspressoCore::step()
             pending_history_entry_.has_fp_arithmetic_result = true;
             pending_history_entry_.fp_arithmetic_result_raw = raw_result;
         }
+        break;
+    }
+
+    case Opcode::floating_round_to_single:
+    {
+        const std::uint64_t source_raw = state.fpr[instruction.fp_source_a];
+        const auto commit_result = [&](std::uint32_t single_bits,
+                                       bool inexact,
+                                       bool rounded_up) {
+            const float single_result = std::bit_cast<float>(single_bits);
+            const double extended_result = static_cast<double>(single_result);
+            const std::uint64_t raw_result = std::bit_cast<std::uint64_t>(extended_result);
+            state.fpr[instruction.fp_register] = raw_result;
+            state.fpr_ps1[instruction.fp_register] = raw_result;
+            set_single_arithmetic_result_status(state, single_bits, inexact, rounded_up);
+            pending_history_entry_.has_fp_arithmetic_result = true;
+            pending_history_entry_.fp_arithmetic_result_raw = raw_result;
+            pending_history_entry_.fp_arithmetic_single_bits = single_bits;
+        };
+
+        if (is_binary64_signaling_nan(source_raw))
+        {
+            raise_fpscr_exception(state, fpscr::vxsnan_mask);
+            if ((state.fpscr & fpscr::ve_mask) == 0U)
+            {
+                commit_result(quiet_nan_single_bits(source_raw), false, false);
+            }
+            break;
+        }
+        if (is_binary64_nan(source_raw))
+        {
+            commit_result(quiet_nan_single_bits(source_raw), false, false);
+            break;
+        }
+
+        const double source = std::bit_cast<double>(source_raw);
+        // TODO: honor FPSCR.RN and model exact single overflow/underflow flags.
+        const float single_result = static_cast<float>(source);
+        const double extended_result = static_cast<double>(single_result);
+        const std::uint32_t single_bits = std::bit_cast<std::uint32_t>(single_result);
+        const bool inexact = extended_result != source;
+        const bool rounded_up = inexact &&
+            std::fabs(extended_result) > std::fabs(source);
+        commit_result(single_bits, inexact, rounded_up);
         break;
     }
 
