@@ -121,6 +121,78 @@ void raise_fpscr_exception(CpuState& state, std::uint32_t subexception) noexcept
     return sign | single_exponent_mask | payload | single_quiet_nan_bit;
 }
 
+[[nodiscard]] std::uint64_t quiet_nan_binary64_bits(std::uint64_t raw) noexcept
+{
+    return is_binary64_nan(raw) ? raw | binary64_quiet_nan_bit
+                                : 0x7FF8000000000000ULL;
+}
+
+[[nodiscard]] std::uint8_t binary64_result_fprf(std::uint64_t raw) noexcept
+{
+    const std::uint64_t exponent = raw & binary64_exponent_mask;
+    const std::uint64_t fraction = raw & binary64_fraction_mask;
+    const bool negative = (raw & binary64_sign_mask) != 0U;
+
+    if (exponent == binary64_exponent_mask)
+    {
+        return fraction != 0U ? 0x11U : negative ? 0x09U : 0x05U;
+    }
+    if (exponent == 0U)
+    {
+        if (fraction != 0U)
+        {
+            return negative ? 0x18U : 0x14U;
+        }
+        return negative ? 0x12U : 0x02U;
+    }
+    return negative ? 0x08U : 0x04U;
+}
+
+void set_double_arithmetic_result_status(
+    CpuState& state,
+    std::uint64_t raw_result,
+    bool inexact,
+    bool rounded_up) noexcept
+{
+    state.fpscr &= ~(fpscr::fprf_mask | fpscr::fi_mask | fpscr::fr_mask);
+    state.fpscr |= static_cast<std::uint32_t>(binary64_result_fprf(raw_result)) << 12U;
+    if (inexact)
+    {
+        state.fpscr |= fpscr::fi_mask | fpscr::xx_mask | fpscr::fx_mask;
+        if (rounded_up)
+        {
+            state.fpscr |= fpscr::fr_mask;
+        }
+    }
+    update_fpscr_summaries(state);
+}
+
+void set_double_arithmetic_fprf(CpuState& state, std::uint64_t raw_result) noexcept
+{
+    state.fpscr = (state.fpscr & ~fpscr::fprf_mask) |
+        (static_cast<std::uint32_t>(binary64_result_fprf(raw_result)) << 12U);
+}
+
+[[nodiscard]] bool binary64_normal_or_zero(std::uint64_t raw) noexcept
+{
+    const std::uint64_t exponent = raw & binary64_exponent_mask;
+    const std::uint64_t fraction = raw & binary64_fraction_mask;
+    return exponent != binary64_exponent_mask && (exponent != 0U || fraction == 0U);
+}
+
+[[nodiscard]] double binary64_subtraction_error(
+    double a,
+    double b,
+    double rounded_result) noexcept
+{
+    // Error-free TwoDiff decomposition for finite normal/zero operands/results.
+    const double virtual_b = a - rounded_result;
+    const double virtual_a = rounded_result + virtual_b;
+    const double roundoff_b = virtual_b - b;
+    const double roundoff_a = a - virtual_a;
+    return roundoff_a + roundoff_b;
+}
+
 void set_single_arithmetic_result_status(
     CpuState& state,
     std::uint32_t single_bits,
@@ -372,6 +444,7 @@ void set_record_result(CpuState& state, std::uint32_t value)
     case Opcode::floating_add_single: return "fadds";
     case Opcode::floating_multiply_add_single: return "fmadds";
     case Opcode::floating_move_register: return "fmr";
+    case Opcode::floating_subtract_double: return "fsub";
     case Opcode::compare_signed_immediate: return "cmpwi";
     case Opcode::compare_signed_register: return "cmpw";
     case Opcode::compare_unsigned_immediate: return "cmplwi";
@@ -505,7 +578,8 @@ void add_history_source(
         return entry;
     }
     if (opcode == Opcode::floating_divide_single || opcode == Opcode::floating_add_single ||
-        opcode == Opcode::floating_multiply_add_single)
+        opcode == Opcode::floating_multiply_add_single ||
+        opcode == Opcode::floating_subtract_double)
     {
         entry.has_fp_arithmetic = true;
         entry.fp_arithmetic_destination = instruction.fp_register;
@@ -513,6 +587,7 @@ void add_history_source(
         entry.fp_arithmetic_source_b = instruction.fp_source_b;
         entry.fp_arithmetic_a_raw = state.fpr[instruction.fp_source_a];
         entry.fp_arithmetic_b_raw = state.fpr[instruction.fp_source_b];
+        entry.has_fp_arithmetic_single_bits = opcode != Opcode::floating_subtract_double;
         if (opcode == Opcode::floating_multiply_add_single)
         {
             entry.has_fp_arithmetic_source_c = true;
@@ -826,8 +901,12 @@ std::string format_instruction_history(const RunResult& result)
                 text << " -> f" << std::dec
                      << static_cast<unsigned>(entry.fp_arithmetic_destination) << '='
                      << std::setprecision(17) << value << " [0x" << std::hex
-                     << std::setw(16) << entry.fp_arithmetic_result_raw << "] single=0x"
-                     << std::setw(8) << entry.fp_arithmetic_single_bits;
+                     << std::setw(16) << entry.fp_arithmetic_result_raw << ']';
+                if (entry.has_fp_arithmetic_single_bits)
+                {
+                    text << " single=0x" << std::setw(8)
+                         << entry.fp_arithmetic_single_bits;
+                }
             }
             else if (entry.completed)
             {
@@ -1595,6 +1674,84 @@ StepResult EspressoCore::step()
         pending_history_entry_.fp_move_destination_value = source;
         pending_history_entry_.fp_move_destination_ps1 =
             state.fpr_ps1[instruction.fp_register];
+        break;
+    }
+
+    case Opcode::floating_subtract_double:
+    {
+        const std::uint64_t a_raw = state.fpr[instruction.fp_source_a];
+        const std::uint64_t b_raw = state.fpr[instruction.fp_source_b];
+        const auto commit_result = [&](std::uint64_t raw_result,
+                                       bool inexact,
+                                       bool rounded_up) {
+            state.fpr[instruction.fp_register] = raw_result;
+            set_double_arithmetic_result_status(state, raw_result, inexact, rounded_up);
+            pending_history_entry_.has_fp_arithmetic_result = true;
+            pending_history_entry_.fp_arithmetic_result_raw = raw_result;
+        };
+        const auto commit_quiet_nan = [&](std::uint64_t nan_source) {
+            commit_result(quiet_nan_binary64_bits(nan_source), false, false);
+        };
+        const auto signal_invalid = [&](std::uint32_t subexception,
+                                        std::uint64_t nan_source) {
+            raise_fpscr_exception(state, subexception);
+            if ((state.fpscr & fpscr::ve_mask) == 0U)
+            {
+                commit_quiet_nan(nan_source);
+            }
+        };
+
+        if (is_binary64_signaling_nan(a_raw) || is_binary64_signaling_nan(b_raw))
+        {
+            const std::uint64_t signaling_source = is_binary64_signaling_nan(a_raw)
+                ? a_raw
+                : b_raw;
+            signal_invalid(fpscr::vxsnan_mask, signaling_source);
+            break;
+        }
+        if (is_binary64_nan(a_raw) || is_binary64_nan(b_raw))
+        {
+            commit_quiet_nan(is_binary64_nan(a_raw) ? a_raw : b_raw);
+            break;
+        }
+
+        const bool a_infinity = is_binary64_infinity(a_raw);
+        const bool b_infinity = is_binary64_infinity(b_raw);
+        if (a_infinity && b_infinity &&
+            ((a_raw ^ b_raw) & binary64_sign_mask) == 0U)
+        {
+            signal_invalid(fpscr::vxisi_mask, 0U);
+            break;
+        }
+
+        const double a = std::bit_cast<double>(a_raw);
+        const double b = std::bit_cast<double>(b_raw);
+        const double result = a - b;
+        const std::uint64_t raw_result = std::bit_cast<std::uint64_t>(result);
+        if (a_infinity || b_infinity)
+        {
+            commit_result(raw_result, false, false);
+            break;
+        }
+
+        if (binary64_normal_or_zero(a_raw) && binary64_normal_or_zero(b_raw) &&
+            binary64_normal_or_zero(raw_result))
+        {
+            const double error = binary64_subtraction_error(a, b, result);
+            const bool inexact = error != 0.0;
+            const bool rounded_up = inexact && result != 0.0 &&
+                ((result > 0.0 && error < 0.0) || (result < 0.0 && error > 0.0));
+            commit_result(raw_result, inexact, rounded_up);
+        }
+        else
+        {
+            // TODO: classify double underflow/overflow and their FI/FR/XX details.
+            // FPRF is still exact from the raw binary64 result; do not guess rounding flags.
+            state.fpr[instruction.fp_register] = raw_result;
+            set_double_arithmetic_fprf(state, raw_result);
+            pending_history_entry_.has_fp_arithmetic_result = true;
+            pending_history_entry_.fp_arithmetic_result_raw = raw_result;
+        }
         break;
     }
 

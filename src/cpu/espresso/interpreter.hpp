@@ -90,6 +90,7 @@ struct InstructionHistoryEntry
     std::uint8_t fp_compare_result{};
     bool has_fp_arithmetic{};
     bool has_fp_arithmetic_result{};
+    bool has_fp_arithmetic_single_bits{};
     std::uint8_t fp_arithmetic_destination{};
     std::uint8_t fp_arithmetic_source_a{};
     std::uint8_t fp_arithmetic_source_b{};
