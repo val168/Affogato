@@ -405,6 +405,7 @@ void set_record_result(CpuState& state, std::uint32_t value)
             instruction.opcode == Opcode::store_halfword ||
             instruction.opcode == Opcode::store_halfword_update ||
             instruction.opcode == Opcode::load_multiple_word ||
+            instruction.opcode == Opcode::load_string_word_immediate ||
             instruction.opcode == Opcode::store_multiple_word ||
             instruction.opcode == Opcode::load_single ||
             instruction.opcode == Opcode::load_single_update ||
@@ -476,6 +477,7 @@ void set_record_result(CpuState& state, std::uint32_t value)
     case Opcode::conditional_branch: return "bc";
     case Opcode::load_word_zero: return "lwz";
     case Opcode::load_multiple_word: return "lmw";
+    case Opcode::load_string_word_immediate: return "lswi";
     case Opcode::load_word_update: return "lwzu";
     case Opcode::load_word_indexed: return "lwzx";
     case Opcode::store_word: return "stw";
@@ -638,6 +640,24 @@ void add_history_source(
         entry.memory_displacement = instruction.immediate;
         entry.has_effective_address = true;
         entry.effective_address = effective_address(state, instruction.base, instruction.immediate);
+        return entry;
+    }
+    if (opcode == Opcode::load_string_word_immediate)
+    {
+        entry.has_string_load = true;
+        entry.string_load_base_register = instruction.base;
+        entry.string_load_base_value = instruction.base == 0 ? 0U : state.gpr[instruction.base];
+        entry.string_load_byte_count = instruction.string_byte_count == 0
+            ? 32U : instruction.string_byte_count;
+        entry.string_load_register_count = static_cast<std::uint8_t>(
+            (entry.string_load_byte_count + 3U) / 4U);
+        entry.has_effective_address = true;
+        entry.effective_address = entry.string_load_base_value;
+        for (std::uint8_t i = 0; i < entry.string_load_register_count; ++i)
+        {
+            entry.string_load_registers[i] = static_cast<std::uint8_t>(
+                (instruction.destination + i) & 31U);
+        }
         return entry;
     }
     const bool store = opcode == Opcode::store_word || opcode == Opcode::store_word_update ||
@@ -868,6 +888,14 @@ std::string format_instruction_history(const RunResult& result)
                  << entry.memory_displacement << "(r"
                  << static_cast<unsigned>(entry.memory_base_register) << ')';
         }
+        else if (entry.has_string_load)
+        {
+            text << " r" << std::dec << static_cast<unsigned>(entry.string_load_registers[0])
+                 << ",r" << static_cast<unsigned>(entry.string_load_base_register) << ','
+                 << static_cast<unsigned>(entry.string_load_byte_count)
+                 << " r" << static_cast<unsigned>(entry.string_load_base_register)
+                 << "=0x" << std::hex << std::setw(8) << entry.string_load_base_value;
+        }
         else
         {
             for (std::uint8_t i = 0; i < entry.source_count; ++i)
@@ -1031,6 +1059,16 @@ std::string format_instruction_history(const RunResult& result)
         if (entry.has_effective_address)
         {
             text << " [0x" << std::hex << std::setw(8) << entry.effective_address << ']';
+        }
+        if (entry.has_string_load && entry.completed)
+        {
+            text << " ->";
+            for (std::uint8_t i = 0; i < entry.string_load_register_count; ++i)
+            {
+                text << " r" << std::dec
+                     << static_cast<unsigned>(entry.string_load_registers[i])
+                     << "=0x" << std::hex << std::setw(8) << entry.string_load_values[i];
+            }
         }
         if (entry.has_destination)
         {
@@ -2011,6 +2049,31 @@ StepResult EspressoCore::step()
         break;
     }
 
+    case Opcode::load_string_word_immediate:
+    {
+        // Snapshot the base and validate/read the complete string before any
+        // destination GPR is changed. lswi may overwrite rA or wrap through r0.
+        const std::uint32_t address = instruction.base == 0
+            ? 0U : state.gpr[instruction.base];
+        const std::size_t byte_count = instruction.string_byte_count == 0
+            ? 32U : instruction.string_byte_count;
+        std::array<std::uint8_t, 32> bytes{};
+        memory.read_bytes(address, std::span<std::uint8_t>(bytes).first(byte_count));
+
+        const std::size_t register_count = (byte_count + 3U) / 4U;
+        std::array<std::uint32_t, 8> values{};
+        for (std::size_t i = 0; i < byte_count; ++i)
+        {
+            const unsigned shift = static_cast<unsigned>(24U - (i % 4U) * 8U);
+            values[i / 4U] |= static_cast<std::uint32_t>(bytes[i]) << shift;
+        }
+        for (std::size_t i = 0; i < register_count; ++i)
+        {
+            state.gpr[(instruction.destination + i) & 31U] = values[i];
+        }
+        break;
+    }
+
     case Opcode::load_word_indexed:
     {
         const std::uint32_t base = instruction.base == 0 ? 0U : state.gpr[instruction.base];
@@ -2223,6 +2286,14 @@ StepResult EspressoCore::step()
     }
 
     pending_history_entry_.completed = true;
+    if (pending_history_entry_.has_string_load)
+    {
+        for (std::uint8_t i = 0; i < pending_history_entry_.string_load_register_count; ++i)
+        {
+            pending_history_entry_.string_load_values[i] =
+                state.gpr[pending_history_entry_.string_load_registers[i]];
+        }
+    }
     if (pending_history_entry_.has_destination)
     {
         pending_history_entry_.destination_value =

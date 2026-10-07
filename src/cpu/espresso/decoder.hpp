@@ -50,6 +50,7 @@ enum class Opcode
     conditional_branch,
     load_word_zero,
     load_multiple_word,
+    load_string_word_immediate,
     load_word_update,
     load_word_indexed,
     store_word,
@@ -101,6 +102,7 @@ struct DecodedInstruction
     std::uint8_t shift{};
     std::uint8_t mask_begin{};
     std::uint8_t mask_end{};
+    std::uint8_t string_byte_count{};
 
     // Signed for immediate arithmetic and branch displacement; unsigned for logical ops.
     std::int32_t immediate{};
