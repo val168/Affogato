@@ -44,6 +44,7 @@ enum class Opcode
     floating_multiply_single,
     floating_multiply_add_single,
     floating_move_register,
+    floating_negate,
     floating_subtract_double,
     floating_round_to_single,
     conditional_branch,
