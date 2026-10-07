@@ -81,6 +81,13 @@ struct InstructionHistoryEntry
     std::uint64_t paired_fp_source_b_ps1{};
     std::uint64_t paired_fp_destination_ps0{};
     std::uint64_t paired_fp_destination_ps1{};
+    bool has_fp_compare{};
+    std::uint8_t fp_compare_cr_field{};
+    std::uint8_t fp_compare_a_register{};
+    std::uint8_t fp_compare_b_register{};
+    std::uint64_t fp_compare_a_raw{};
+    std::uint64_t fp_compare_b_raw{};
+    std::uint8_t fp_compare_result{};
     bool completed{};
 };
 

@@ -19,6 +19,45 @@ constexpr std::uint32_t xer_carry_mask = 0x20000000U;
 constexpr std::uint8_t cr_less_than = 0x8U;
 constexpr std::uint8_t cr_greater_than = 0x4U;
 constexpr std::uint8_t cr_equal = 0x2U;
+constexpr std::uint8_t fp_unordered = 0x1U;
+constexpr std::uint64_t binary64_exponent_mask = 0x7FF0000000000000ULL;
+constexpr std::uint64_t binary64_fraction_mask = 0x000FFFFFFFFFFFFFULL;
+constexpr std::uint64_t binary64_quiet_nan_bit = 0x0008000000000000ULL;
+
+[[nodiscard]] bool is_binary64_nan(std::uint64_t raw) noexcept
+{
+    return (raw & binary64_exponent_mask) == binary64_exponent_mask &&
+           (raw & binary64_fraction_mask) != 0U;
+}
+
+[[nodiscard]] bool is_binary64_signaling_nan(std::uint64_t raw) noexcept
+{
+    return is_binary64_nan(raw) && (raw & binary64_quiet_nan_bit) == 0U;
+}
+
+void set_floating_compare_result(
+    CpuState& state,
+    std::uint8_t field,
+    std::uint8_t result) noexcept
+{
+    const unsigned shift = (7U - field) * 4U;
+    const std::uint32_t mask = 0xFU << shift;
+    state.cr = (state.cr & ~mask) | (static_cast<std::uint32_t>(result) << shift);
+    state.fpscr = (state.fpscr & ~fpscr::fpcc_mask) |
+        (static_cast<std::uint32_t>(result) << 12U);
+}
+
+[[nodiscard]] const char* floating_compare_result_name(std::uint8_t result) noexcept
+{
+    switch (result)
+    {
+    case cr_less_than: return "LT";
+    case cr_greater_than: return "GT";
+    case cr_equal: return "EQ";
+    case fp_unordered: return "UN";
+    default: return "?";
+    }
+}
 
 void set_compare_result(CpuState& state, std::uint8_t field, std::int32_t lhs, std::int32_t rhs)
 {
@@ -223,6 +262,7 @@ void set_record_result(CpuState& state, std::uint32_t value)
     case Opcode::shift_left_word: return "slw";
     case Opcode::branch: return "b";
     case Opcode::instruction_sync: return "isync";
+    case Opcode::floating_compare_unordered: return "fcmpu";
     case Opcode::compare_signed_immediate: return "cmpwi";
     case Opcode::compare_signed_register: return "cmpw";
     case Opcode::compare_unsigned_immediate: return "cmplwi";
@@ -334,6 +374,16 @@ void add_history_source(
         entry.paired_fp_source_a_ps1 = state.fpr_ps1[instruction.fp_source_a];
         entry.paired_fp_source_b_ps0 = state.fpr[instruction.fp_source_b];
         entry.paired_fp_source_b_ps1 = state.fpr_ps1[instruction.fp_source_b];
+        return entry;
+    }
+    if (opcode == Opcode::floating_compare_unordered)
+    {
+        entry.has_fp_compare = true;
+        entry.fp_compare_cr_field = instruction.cr_field;
+        entry.fp_compare_a_register = instruction.fp_compare_a;
+        entry.fp_compare_b_register = instruction.fp_compare_b;
+        entry.fp_compare_a_raw = state.fpr[instruction.fp_compare_a];
+        entry.fp_compare_b_raw = state.fpr[instruction.fp_compare_b];
         return entry;
     }
     if (opcode == Opcode::load_multiple_word || opcode == Opcode::store_multiple_word)
@@ -581,6 +631,33 @@ std::string format_instruction_history(const RunResult& result)
             {
                 text << " r" << std::dec << static_cast<unsigned>(entry.source_registers[i])
                      << "=0x" << std::hex << std::setw(8) << entry.source_values[i];
+            }
+        }
+        if (entry.has_fp_compare)
+        {
+            const auto print_operand = [&](std::uint8_t reg, std::uint64_t raw) {
+                text << " f" << std::dec << static_cast<unsigned>(reg) << '=';
+                if (is_binary64_nan(raw))
+                {
+                    text << "NaN";
+                }
+                else
+                {
+                    text << std::setprecision(17) << std::bit_cast<double>(raw);
+                }
+                text << " [0x" << std::hex << std::setw(16) << raw << ']';
+            };
+            text << " cr" << std::dec
+                 << static_cast<unsigned>(entry.fp_compare_cr_field);
+            print_operand(entry.fp_compare_a_register, entry.fp_compare_a_raw);
+            print_operand(entry.fp_compare_b_register, entry.fp_compare_b_raw);
+            if (entry.completed)
+            {
+                text << " -> " << floating_compare_result_name(entry.fp_compare_result)
+                     << " (cr" << std::dec
+                     << static_cast<unsigned>(entry.fp_compare_cr_field) << "=0x"
+                     << std::hex << static_cast<unsigned>(entry.fp_compare_result)
+                     << ", fpcc=0x" << static_cast<unsigned>(entry.fp_compare_result) << ')';
             }
         }
         if (entry.has_immediate)
@@ -1044,6 +1121,35 @@ StepResult EspressoCore::step()
             state.gpr[instruction.base],
             state.gpr[instruction.source]);
         break;
+
+    case Opcode::floating_compare_unordered:
+    {
+        const std::uint64_t a_raw = state.fpr[instruction.fp_compare_a];
+        const std::uint64_t b_raw = state.fpr[instruction.fp_compare_b];
+        const bool a_nan = is_binary64_nan(a_raw);
+        const bool b_nan = is_binary64_nan(b_raw);
+        std::uint8_t result = fp_unordered;
+        if (!a_nan && !b_nan)
+        {
+            const double a = std::bit_cast<double>(a_raw);
+            const double b = std::bit_cast<double>(b_raw);
+            result = a < b ? cr_less_than
+                : a > b ? cr_greater_than
+                        : cr_equal;
+        }
+
+        set_floating_compare_result(state, instruction.cr_field, result);
+        if (is_binary64_signaling_nan(a_raw) || is_binary64_signaling_nan(b_raw))
+        {
+            state.fpscr |= fpscr::vxsnan_mask | fpscr::vx_mask | fpscr::fx_mask;
+            if ((state.fpscr & fpscr::ve_mask) != 0U)
+            {
+                state.fpscr |= fpscr::fex_mask;
+            }
+        }
+        pending_history_entry_.fp_compare_result = result;
+        break;
+    }
 
     case Opcode::conditional_branch:
         if (instruction.link)

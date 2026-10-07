@@ -305,6 +305,17 @@ DecodedInstruction decode(std::uint32_t raw) noexcept
         break;
     }
 
+    case 63: // Floating-point X-form instructions
+        if (field(raw, 1, 0x3FFU) == 0U &&
+            (raw & ((0x3U << 21U) | 1U)) == 0U)
+        {
+            instruction.opcode = Opcode::floating_compare_unordered;
+            instruction.cr_field = static_cast<std::uint8_t>(field(raw, 23, 0x7U));
+            instruction.fp_compare_a = static_cast<std::uint8_t>(field(raw, 16, 0x1FU));
+            instruction.fp_compare_b = static_cast<std::uint8_t>(field(raw, 11, 0x1FU));
+        }
+        break;
+
     case 32: // lwz
         instruction.opcode = Opcode::load_word_zero;
         instruction.destination = static_cast<std::uint8_t>(field(raw, 21, 0x1FU));

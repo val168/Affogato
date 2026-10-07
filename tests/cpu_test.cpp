@@ -476,6 +476,14 @@ void decoder_tests()
     assert(cmplw.base == 8);
     assert(cmplw.source == 6);
 
+    const DecodedInstruction fcmpu = decode(0xFC01F800U);
+    assert(fcmpu.opcode == Opcode::floating_compare_unordered);
+    assert(fcmpu.cr_field == 0U);
+    assert(fcmpu.fp_compare_a == 1U);
+    assert(fcmpu.fp_compare_b == 31U);
+    assert(decode(0xFC41F800U).opcode == Opcode::unsupported);
+    assert(decode(0xFC01F801U).opcode == Opcode::unsupported);
+
     const DecodedInstruction bc = decode(0x4182000CU); // beq +12
     assert(bc.opcode == Opcode::conditional_branch);
     assert(bc.branch_options == 12);
@@ -890,6 +898,148 @@ void instruction_sync_tests()
     assert(result.instruction_history.front().opcode_name == "isync");
     assert(format_instruction_history(result).find("isync") !=
            std::string::npos);
+}
+
+void floating_compare_unordered_tests()
+{
+    const auto encode_fcmpu = [](std::uint8_t cr_field, std::uint8_t fr_a,
+                                 std::uint8_t fr_b) {
+        return 0xFC000000U |
+            (static_cast<std::uint32_t>(cr_field) << 23U) |
+            (static_cast<std::uint32_t>(fr_a) << 16U) |
+            (static_cast<std::uint32_t>(fr_b) << 11U);
+    };
+    struct ComparisonCase
+    {
+        std::uint64_t a;
+        std::uint64_t b;
+        std::uint8_t result;
+        std::uint8_t cr_field;
+    };
+    constexpr std::uint64_t positive_zero = 0x0000000000000000ULL;
+    constexpr std::uint64_t negative_zero = 0x8000000000000000ULL;
+    constexpr std::uint64_t one = 0x3FF0000000000000ULL;
+    constexpr std::uint64_t two = 0x4000000000000000ULL;
+    constexpr std::uint64_t positive_infinity = 0x7FF0000000000000ULL;
+    constexpr std::uint64_t negative_infinity = 0xFFF0000000000000ULL;
+    const std::array<ComparisonCase, 7> cases{{
+        {one, two, 0x8U, 0U},
+        {two, one, 0x4U, 3U},
+        {one, one, 0x2U, 0U},
+        {positive_zero, negative_zero, 0x2U, 3U},
+        {positive_infinity, one, 0x4U, 0U},
+        {negative_infinity, one, 0x8U, 3U},
+        {positive_infinity, positive_infinity, 0x2U, 0U},
+    }};
+
+    for (const ComparisonCase& test : cases)
+    {
+        EspressoCore core(16U);
+        core.state.fpr[1] = test.a;
+        core.state.fpr[31] = test.b;
+        // Deliberately contradictory paired lanes prove fcmpu observes PS0 only.
+        core.state.fpr_ps1[1] = negative_infinity;
+        core.state.fpr_ps1[31] = positive_infinity;
+        core.state.cr = 0xA5C36E91U;
+        core.state.xer = 0x80000000U; // SO must not leak into the floating result.
+        core.state.lr = 0x10203040U;
+        core.state.ctr = 0x50607080U;
+        core.state.fpscr = 0x0000A0A5U;
+        const auto gpr_before = core.state.gpr;
+        const auto fpr_before = core.state.fpr;
+        const auto fpr_ps1_before = core.state.fpr_ps1;
+        const std::uint32_t old_cr = core.state.cr;
+        const std::uint32_t old_xer = core.state.xer;
+        core.memory.write32_be(0U, encode_fcmpu(test.cr_field, 1U, 31U));
+        std::array<std::uint8_t, 16U> memory_before{};
+        core.memory.read_bytes(0U, memory_before);
+
+        const RunResult result = core.run(1U);
+        assert(result.reason == StopReason::instruction_limit);
+        const unsigned shift = (7U - test.cr_field) * 4U;
+        const std::uint32_t cr_mask = 0xFU << shift;
+        assert(core.state.cr == ((old_cr & ~cr_mask) |
+               (static_cast<std::uint32_t>(test.result) << shift)));
+        constexpr std::uint32_t fpcc_mask = 0x0000F000U;
+        assert(core.state.fpscr == ((0x0000A0A5U & ~fpcc_mask) |
+               (static_cast<std::uint32_t>(test.result) << 12U)));
+        assert(core.state.gpr == gpr_before);
+        assert(core.state.fpr == fpr_before);
+        assert(core.state.fpr_ps1 == fpr_ps1_before);
+        assert(core.state.xer == old_xer);
+        assert(core.state.lr == 0x10203040U);
+        assert(core.state.ctr == 0x50607080U);
+        std::array<std::uint8_t, 16U> memory_after{};
+        core.memory.read_bytes(0U, memory_after);
+        assert(memory_after == memory_before);
+
+        assert(result.instruction_history.size() == 1U);
+        const InstructionHistoryEntry& history = result.instruction_history.front();
+        assert(history.opcode_name == "fcmpu");
+        assert(history.has_fp_compare);
+        assert(history.fp_compare_cr_field == test.cr_field);
+        assert(history.fp_compare_a_register == 1U);
+        assert(history.fp_compare_b_register == 31U);
+        assert(history.fp_compare_a_raw == test.a);
+        assert(history.fp_compare_b_raw == test.b);
+        assert(history.fp_compare_result == test.result);
+    }
+
+    // Current Wind Waker values compare greater-than and only alter CR0/FPCC.
+    EspressoCore wind_waker(8U);
+    wind_waker.state.fpr[1] = 0x40AA905E00000000ULL;
+    wind_waker.state.fpr[31] = 0x0000000000000000ULL;
+    const auto wind_waker_ps0_before = wind_waker.state.fpr;
+    const auto wind_waker_ps1_before = wind_waker.state.fpr_ps1;
+    wind_waker.memory.write32_be(0U, 0xFC01F800U);
+    const RunResult wind_waker_result = wind_waker.run(1U);
+    assert(wind_waker_result.reason == StopReason::instruction_limit);
+    assert((wind_waker.state.cr >> 28U) == 0x4U);
+    assert((wind_waker.state.fpscr & 0x0000F000U) == 0x00004000U);
+    assert(wind_waker.state.fpr == wind_waker_ps0_before);
+    assert(wind_waker.state.fpr_ps1 == wind_waker_ps1_before);
+    const std::string trace = format_instruction_history(wind_waker_result);
+    assert(trace.find("fcmpu cr0 f1=3400.18359375 [0x40AA905E00000000] ") !=
+           std::string::npos);
+    assert(trace.find("f31=0 [0x0000000000000000] -> GT (cr0=0x4, fpcc=0x4)") !=
+           std::string::npos);
+
+    constexpr std::uint32_t unrelated_fpscr = 0x00000025U;
+    constexpr std::uint32_t exception_masks = fpscr::vxsnan_mask | fpscr::vx_mask |
+        fpscr::fx_mask | fpscr::fex_mask;
+    const auto run_nan_compare = [&](std::uint64_t nan_bits, bool enable_invalid) {
+        EspressoCore core(8U);
+        core.state.fpr[1] = nan_bits;
+        core.state.fpr[31] = one;
+        core.state.fpscr = unrelated_fpscr |
+            (enable_invalid ? fpscr::ve_mask : 0U);
+        core.memory.write32_be(0U, 0xFC01F800U);
+        const RunResult result = core.run(1U);
+        assert(result.reason == StopReason::instruction_limit);
+        assert((core.state.cr >> 28U) == 0x1U);
+        assert((core.state.fpscr & fpscr::fpcc_mask) == 0x00001000U);
+        return core.state.fpscr;
+    };
+
+    constexpr std::uint64_t quiet_nan = 0x7FF8000000000001ULL;
+    constexpr std::uint64_t signaling_nan = 0x7FF0000000000001ULL;
+    const std::uint32_t quiet_fpscr = run_nan_compare(quiet_nan, false);
+    assert((quiet_fpscr & exception_masks) == 0U);
+    assert((quiet_fpscr & unrelated_fpscr) == unrelated_fpscr);
+
+    const std::uint32_t signaling_disabled = run_nan_compare(signaling_nan, false);
+    assert((signaling_disabled & fpscr::vxsnan_mask) != 0U);
+    assert((signaling_disabled & fpscr::vx_mask) != 0U);
+    assert((signaling_disabled & fpscr::fx_mask) != 0U);
+    assert((signaling_disabled & fpscr::fex_mask) == 0U);
+    assert((signaling_disabled & unrelated_fpscr) == unrelated_fpscr);
+
+    const std::uint32_t signaling_enabled = run_nan_compare(signaling_nan, true);
+    assert((signaling_enabled & fpscr::vxsnan_mask) != 0U);
+    assert((signaling_enabled & fpscr::vx_mask) != 0U);
+    assert((signaling_enabled & fpscr::fx_mask) != 0U);
+    assert((signaling_enabled & fpscr::fex_mask) != 0U);
+    assert((signaling_enabled & fpscr::ve_mask) != 0U);
 }
 
 void integer_alu_tests()
@@ -3620,6 +3770,7 @@ int main(int argc, char* argv[])
     memcpy_hle_tests();
     compare_and_conditional_branch_tests();
     instruction_sync_tests();
+    floating_compare_unordered_tests();
     load_store_tests();
     load_halfword_algebraic_tests();
     multiple_word_load_store_tests();

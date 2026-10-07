@@ -20,6 +20,7 @@ inline void cpu_state_tests()
     }
 
     assert(cpu.cr == 0);
+    assert(cpu.fpscr == 0U);
     assert(cpu.xer == 0);
     assert(cpu.lr == 0);
     assert(cpu.ctr == 0);
@@ -29,12 +30,14 @@ inline void cpu_state_tests()
     cpu.fpr[3] = 0x1111222233334444ULL;
     cpu.fpr_ps1[3] = 0xAAAABBBBCCCCDDDDULL;
     cpu.cr = 1;
+    cpu.fpscr = 0xFFFFFFFFU;
     cpu.lr = 0x1000;
 
     assert(cpu.gpr[3] == 42);
     assert(cpu.fpr[3] == 0x1111222233334444ULL);
     assert(cpu.fpr_ps1[3] == 0xAAAABBBBCCCCDDDDULL);
     assert(cpu.cr == 1);
+    assert(cpu.fpscr == 0xFFFFFFFFU);
     assert(cpu.lr == 0x1000);
 
     cpu.reset();
@@ -49,6 +52,7 @@ inline void cpu_state_tests()
         assert(value == 0U);
     }
     assert(cpu.cr == 0);
+    assert(cpu.fpscr == 0U);
     assert(cpu.lr == 0);
 
 }

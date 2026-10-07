@@ -38,6 +38,7 @@ enum class Opcode
     compare_signed_register,
     compare_unsigned_immediate,
     compare_unsigned_register,
+    floating_compare_unordered,
     conditional_branch,
     load_word_zero,
     load_multiple_word,
@@ -83,6 +84,8 @@ struct DecodedInstruction
     std::uint8_t fp_source_b{};
     std::uint8_t base{};
     std::uint8_t cr_field{};
+    std::uint8_t fp_compare_a{};
+    std::uint8_t fp_compare_b{};
     std::uint8_t branch_options{};
     std::uint8_t condition_bit{};
     std::uint8_t shift{};
