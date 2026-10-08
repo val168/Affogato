@@ -86,6 +86,7 @@ enum class Opcode
     store_single,
     store_single_update,
     store_double,
+    store_double_update,
     paired_single_merge10,
 };
 

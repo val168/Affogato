@@ -574,6 +574,16 @@ DecodedInstruction decode(std::uint32_t raw) noexcept
         instruction.immediate = sign_extend(raw, 16);
         break;
 
+    case 55: // stfdu (rA must not be zero)
+        instruction.base = static_cast<std::uint8_t>(field(raw, 16, 0x1FU));
+        if (instruction.base != 0)
+        {
+            instruction.opcode = Opcode::store_double_update;
+            instruction.fp_register = static_cast<std::uint8_t>(field(raw, 21, 0x1FU));
+            instruction.immediate = sign_extend(raw, 16);
+        }
+        break;
+
     case 59: // Single-precision A-form arithmetic
     {
         const std::uint32_t extended_opcode = field(raw, 1, 0x1FU);

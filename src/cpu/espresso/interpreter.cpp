@@ -415,6 +415,7 @@ void set_record_result(CpuState& state, std::uint32_t value)
             instruction.opcode == Opcode::store_single ||
             instruction.opcode == Opcode::store_single_update ||
             instruction.opcode == Opcode::store_double ||
+            instruction.opcode == Opcode::store_double_update ||
             instruction.opcode == Opcode::load_double;
         if (memory_instruction)
         {
@@ -516,6 +517,7 @@ void set_record_result(CpuState& state, std::uint32_t value)
     case Opcode::store_single: return "stfs";
     case Opcode::store_single_update: return "stfsu";
     case Opcode::store_double: return "stfd";
+    case Opcode::store_double_update: return "stfdu";
     case Opcode::paired_single_merge10: return "ps_merge10";
     }
     return "unknown";
@@ -705,6 +707,7 @@ void add_history_source(
         opcode == Opcode::load_double ||
         opcode == Opcode::store_single ||
         opcode == Opcode::store_single_update || opcode == Opcode::store_double ||
+        opcode == Opcode::store_double_update ||
         opcode == Opcode::load_halfword_algebraic || opcode == Opcode::store_halfword_update)
     {
         if (instruction.base != 0)
@@ -721,7 +724,7 @@ void add_history_source(
         entry.fp_destination_register = instruction.fp_register;
     }
     else if (opcode == Opcode::store_single || opcode == Opcode::store_single_update ||
-             opcode == Opcode::store_double)
+             opcode == Opcode::store_double || opcode == Opcode::store_double_update)
     {
         entry.has_fp_source = true;
         entry.fp_source_register = instruction.fp_register;
@@ -880,6 +883,7 @@ void add_history_source(
     case Opcode::store_word_update:
     case Opcode::store_byte_update:
     case Opcode::store_halfword_update:
+    case Opcode::store_double_update:
         entry.has_destination = true;
         entry.destination_register = instruction.base;
         break;
@@ -2435,6 +2439,7 @@ StepResult EspressoCore::step()
     }
 
     case Opcode::store_double:
+    case Opcode::store_double_update:
     {
         const std::uint32_t address =
             effective_address(state, instruction.base, instruction.immediate);
@@ -2442,6 +2447,10 @@ StepResult EspressoCore::step()
         memory.write64_be(address, value);
         pending_history_entry_.has_stored_double_value = true;
         pending_history_entry_.stored_double_value = value;
+        if (instruction.opcode == Opcode::store_double_update)
+        {
+            state.gpr[instruction.base] = address;
+        }
         break;
     }
 

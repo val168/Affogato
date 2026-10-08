@@ -629,6 +629,13 @@ void decoder_tests()
     assert(stfd.base == 1U);
     assert(stfd.immediate == 16);
 
+    const DecodedInstruction stfdu = decode(0xDDA904E8U); // stfdu f13, 1256(r9)
+    assert(stfdu.opcode == Opcode::store_double_update);
+    assert(stfdu.fp_register == 13U);
+    assert(stfdu.base == 9U);
+    assert(stfdu.immediate == 1256);
+    assert(decode(0xDC000040U).opcode == Opcode::unsupported); // update rA=0 is invalid
+
     const DecodedInstruction ps_merge10 = decode(0x13FFFCA0U);
     assert(ps_merge10.opcode == Opcode::paired_single_merge10);
     assert(ps_merge10.fp_register == 31U);
@@ -6399,6 +6406,143 @@ void floating_point_double_store_tests()
 
 }
 
+void floating_point_double_update_store_tests()
+{
+    const auto encode_stfdu = [](std::uint8_t source, std::uint8_t base,
+                                 std::int16_t displacement) {
+        return 0xDC000000U |
+            (static_cast<std::uint32_t>(source) << 21U) |
+            (static_cast<std::uint32_t>(base) << 16U) |
+            static_cast<std::uint16_t>(displacement);
+    };
+
+    constexpr std::uint32_t expected_cr = 0x12345678U;
+    constexpr std::uint32_t expected_xer = 0xA00000A5U;
+    constexpr std::uint32_t expected_fpscr = 0x5A5AA55AU;
+    constexpr std::uint64_t ps1_sentinel = 0xDEADBEEF01234567ULL;
+    const std::array<std::uint64_t, 9> raw_values{
+        0x0000000000000000ULL, // +0.0
+        0x8000000000000000ULL, // -0.0
+        0x3FF0000000000000ULL, // +1.0
+        0xBFF8000000000000ULL, // -1.5
+        0x7FF0000000000000ULL, // +infinity
+        0xFFF0000000000000ULL, // -infinity
+        0x7FF8123456789ABCULL, // quiet NaN payload
+        0x7FF0123456789ABCULL, // signaling NaN payload
+        0x0123456789ABCDEFULL, // arbitrary raw bits
+    };
+
+    for (const std::uint64_t raw : raw_values)
+    {
+        EspressoCore core(0x200U);
+        constexpr std::uint32_t base_before = 0x80U;
+        constexpr std::uint32_t address = 0x88U;
+        core.state.gpr[9] = base_before;
+        core.state.fpr[13] = raw;
+        core.state.fpr_ps1[13] = ps1_sentinel;
+        core.state.cr = expected_cr;
+        core.state.xer = expected_xer;
+        core.state.fpscr = expected_fpscr;
+        core.state.lr = 0x11223344U;
+        core.state.ctr = 0x55667788U;
+        core.memory.write32_be(0U, encode_stfdu(13U, 9U, 8));
+
+        const RunResult result = core.run(1U);
+        assert(result.reason == StopReason::instruction_limit);
+        assert(core.memory.read64_be(address) == raw);
+        assert(core.state.gpr[9] == address);
+        assert(core.state.fpr[13] == raw);
+        assert(core.state.fpr_ps1[13] == ps1_sentinel);
+        assert(core.state.cr == expected_cr);
+        assert(core.state.xer == expected_xer);
+        assert(core.state.fpscr == expected_fpscr);
+        assert(core.state.lr == 0x11223344U);
+        assert(core.state.ctr == 0x55667788U);
+
+        const InstructionHistoryEntry& history = result.instruction_history.front();
+        assert(history.opcode_name == "stfdu");
+        assert(history.has_effective_address && history.effective_address == address);
+        assert(history.has_fp_source && history.fp_source_register == 13U);
+        assert(history.fp_source_value == raw);
+        assert(history.has_stored_double_value && history.stored_double_value == raw);
+        assert(history.has_destination && history.destination_register == 9U);
+        assert(history.destination_value == address);
+        assert(history.completed);
+        const std::string trace = format_instruction_history(result);
+        assert(trace.find("stfdu r9=0x00000080 f13=") != std::string::npos);
+        assert(trace.find("[0x00000088] -> r9=0x00000088 -> mem64=0x") !=
+               std::string::npos);
+    }
+
+    // Exact Wind Waker instruction and behavior: raw PS0 is stored, then r9 updates.
+    const DecodedInstruction wind_waker = decode(0xDDA904E8U);
+    assert(wind_waker.opcode == Opcode::store_double_update);
+    assert(wind_waker.fp_register == 13U && wind_waker.base == 9U);
+    assert(wind_waker.immediate == 1256);
+    EspressoCore wind_waker_core(0x200U);
+    wind_waker_core.state.gpr[9] = 0x104A0000U;
+    wind_waker_core.state.fpr[13] = 0U;
+    wind_waker_core.state.fpr_ps1[13] = ps1_sentinel;
+    wind_waker_core.memory.map_region(0x104A0000U, 0x1000U);
+    wind_waker_core.memory.write32_be(0U, 0xDDA904E8U);
+    const RunResult wind_waker_result = wind_waker_core.run(1U);
+    assert(wind_waker_result.reason == StopReason::instruction_limit);
+    assert(wind_waker_core.memory.read64_be(0x104A04E8U) == 0U);
+    assert(wind_waker_core.state.gpr[9] == 0x104A04E8U);
+    assert(wind_waker_core.state.fpr[13] == 0U);
+    assert(wind_waker_core.state.fpr_ps1[13] == ps1_sentinel);
+
+    // Signed displacement is applied with 32-bit guest-address arithmetic.
+    EspressoCore negative(0x200U);
+    negative.state.gpr[3] = 0x100U;
+    negative.state.fpr[5] = 0x0123456789ABCDEFULL;
+    negative.memory.write32_be(0U, encode_stfdu(5U, 3U, -16));
+    assert(negative.step() == StepResult::executed);
+    assert(negative.memory.read64_be(0xF0U) == 0x0123456789ABCDEFULL);
+    assert(negative.state.gpr[3] == 0xF0U);
+
+    // Eight-byte store crosses from flat to adjacent sparse backing.
+    EspressoCore boundary(0x20U);
+    boundary.memory.map_region(0x20U, 0x20U);
+    boundary.state.gpr[2] = 0x1CU;
+    boundary.state.fpr[4] = 0x0123456789ABCDEFULL;
+    boundary.memory.write32_be(0U, encode_stfdu(4U, 2U, 0));
+    assert(boundary.step() == StepResult::executed);
+    assert(boundary.memory.read64_be(0x1CU) == 0x0123456789ABCDEFULL);
+    assert(boundary.state.gpr[2] == 0x1CU);
+
+    // The full store validates before writing, and rA changes only on success.
+    EspressoCore fault_core(0x100U);
+    constexpr std::uint32_t fault_address = 0xFCU;
+    constexpr std::uint32_t old_base = fault_address - 4U;
+    constexpr std::uint64_t fault_source = 0x7FF0123456789ABCULL;
+    fault_core.state.gpr[6] = old_base;
+    fault_core.state.fpr[7] = fault_source;
+    fault_core.state.fpr_ps1[7] = ps1_sentinel;
+    fault_core.memory.fill_bytes(fault_address, 4U, 0xA5U);
+    fault_core.memory.write32_be(0U, encode_stfdu(7U, 6U, 4));
+    const RunResult fault = fault_core.run(1U);
+    assert(fault.reason == StopReason::memory_fault);
+    assert(fault.detail.find("write 8 byte(s)") != std::string::npos);
+    assert(fault.detail.find("0x000000FC") != std::string::npos);
+    assert(fault.detail.find("rA=6 (0x000000F8)") != std::string::npos);
+    assert(fault_core.state.gpr[6] == old_base);
+    assert(fault_core.state.fpr[7] == fault_source);
+    assert(fault_core.state.fpr_ps1[7] == ps1_sentinel);
+    for (std::uint32_t i = 0; i < 4U; ++i)
+    {
+        assert(fault_core.memory.read8(fault_address + i) == 0xA5U);
+    }
+    assert(fault.instruction_history.size() == 1U);
+    const InstructionHistoryEntry& failed = fault.instruction_history.front();
+    assert(failed.opcode_name == "stfdu");
+    assert(failed.has_effective_address && failed.effective_address == fault_address);
+    assert(failed.has_fp_source && failed.fp_source_register == 7U);
+    assert(failed.fp_source_value == fault_source);
+    assert(!failed.completed && !failed.has_stored_double_value);
+    assert(failed.has_destination && failed.destination_register == 6U);
+}
+
 void paired_single_merge10_tests()
 {
     const auto encode_ps_merge10 = [](std::uint8_t destination, std::uint8_t source_a,
@@ -6632,6 +6776,7 @@ int main(int argc, char* argv[])
     floating_point_double_load_tests();
     floating_point_store_tests();
     floating_point_double_store_tests();
+    floating_point_double_update_store_tests();
     paired_single_merge10_tests();
     elf_loader_tests();
     rpx_loader_tests();
