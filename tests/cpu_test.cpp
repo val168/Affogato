@@ -545,6 +545,14 @@ void decoder_tests()
     assert(lwzu.destination == 9);
     assert(lwzu.base == 28);
 
+    const DecodedInstruction lbzx = decode(0x7D6900AEU); // lbzx r11, r9, r0
+    assert(lbzx.opcode == Opcode::load_byte_zero_indexed);
+    assert(lbzx.destination == 11U);
+    assert(lbzx.base == 9U);
+    assert(lbzx.source == 0U);
+    assert(((0x7D6900AEU >> 1U) & 0x3FFU) == 87U);
+    assert(decode(0x7D6900AFU).opcode == Opcode::unsupported);
+
     const DecodedInstruction lhzx = decode(0x7D7B422EU); // lhzx r11, r27, r8
     assert(lhzx.opcode == Opcode::load_halfword_zero_indexed);
     assert(lhzx.destination == 11U);
@@ -7375,6 +7383,169 @@ void load_halfword_zero_indexed_tests()
     assert(fault.memory.read8(0x1FU) == 0x12U);
 }
 
+void load_byte_zero_indexed_tests()
+{
+    const auto encode_lbzx = [](std::uint8_t destination, std::uint8_t base,
+                                std::uint8_t index, bool reserved_bit = false) {
+        return (31U << 26U) |
+            (static_cast<std::uint32_t>(destination) << 21U) |
+            (static_cast<std::uint32_t>(base) << 16U) |
+            (static_cast<std::uint32_t>(index) << 11U) | (87U << 1U) |
+            static_cast<std::uint32_t>(reserved_bit);
+    };
+
+    constexpr std::uint32_t wind_waker_word = 0x7D6900AEU;
+    const DecodedInstruction decoded = decode(wind_waker_word);
+    assert(decoded.opcode == Opcode::load_byte_zero_indexed);
+    assert(decoded.destination == 11U);
+    assert(decoded.base == 9U);
+    assert(decoded.source == 0U);
+    assert(((wind_waker_word >> 1U) & 0x3FFU) == 87U);
+    assert(decode(encode_lbzx(11U, 9U, 0U, true)).opcode == Opcode::unsupported);
+
+    const auto run_load = [&](std::uint8_t destination, std::uint8_t base,
+                              std::uint8_t index, std::uint32_t base_value,
+                              std::uint32_t index_value, std::uint32_t address,
+                              std::uint8_t memory_value) {
+        EspressoCore core(0x200U);
+        core.state.gpr.fill(0xA5A5A5A5U);
+        core.state.gpr[destination] = 0xDEADBEEFU;
+        if (base != 0U)
+        {
+            core.state.gpr[base] = base_value;
+        }
+        core.state.gpr[index] = index_value;
+        core.state.cr = 0x12345678U;
+        core.state.xer = 0xA00000A5U;
+        core.state.lr = 0x11223344U;
+        core.state.ctr = 0x55667788U;
+        core.state.fpscr = 0xCAFEBABEU;
+        core.state.fpr.fill(0x0123456789ABCDEFULL);
+        core.state.fpr_ps1.fill(0xFEDCBA9876543210ULL);
+        core.memory.write32_be(0U, encode_lbzx(destination, base, index));
+        core.memory.write8(address, memory_value);
+        const auto original_gprs = core.state.gpr;
+        const auto original_fpr = core.state.fpr;
+        const auto original_fpr_ps1 = core.state.fpr_ps1;
+        const RunResult result = core.run(1U);
+        assert(result.steps == 1U);
+        assert(result.reason == StopReason::instruction_limit);
+        assert(core.state.cia == 4U);
+        assert(core.state.gpr[destination] == memory_value);
+        for (std::uint32_t reg = 0; reg < 32U; ++reg)
+        {
+            if (reg != destination)
+            {
+                assert(core.state.gpr[reg] == original_gprs[reg]);
+            }
+        }
+        assert(core.state.cr == 0x12345678U);
+        assert(core.state.xer == 0xA00000A5U);
+        assert(core.state.lr == 0x11223344U);
+        assert(core.state.ctr == 0x55667788U);
+        assert(core.state.fpscr == 0xCAFEBABEU);
+        assert(core.state.fpr == original_fpr);
+        assert(core.state.fpr_ps1 == original_fpr_ps1);
+        assert(core.memory.read8(address) == memory_value);
+        const InstructionHistoryEntry& history = result.instruction_history.front();
+        assert(history.opcode_name == "lbzx");
+        assert(history.has_effective_address && history.effective_address == address);
+        assert(history.has_destination && history.destination_register == destination);
+        assert(history.destination_value == memory_value);
+        return result;
+    };
+
+    constexpr std::array<std::uint8_t, 6> values{0x00U, 0x01U, 0x7FU,
+                                                0x80U, 0xFEU, 0xFFU};
+    for (const std::uint8_t value : values)
+    {
+        const RunResult result = run_load(11U, 4U, 8U, 0x40U, 8U, 0x48U, value);
+        assert(result.instruction_history.front().destination_value == value);
+    }
+    const RunResult unsigned_ff = run_load(11U, 4U, 8U, 0x40U, 8U, 0x48U, 0xFFU);
+    assert(unsigned_ff.instruction_history.front().destination_value == 0x000000FFU);
+
+    // rA=0 is literal zero even though GPR0 holds a nonzero value.
+    const RunResult zero_base = run_load(11U, 0U, 4U, 0xDEADBEEFU, 0x40U,
+                                         0x40U, 0x80U);
+    assert(zero_base.instruction_history.front().source_count == 1U);
+    assert(zero_base.instruction_history.front().source_registers[0] == 4U);
+
+    // rB=0 still reads GPR0 and participates in the effective address.
+    EspressoCore index_zero(0x100U);
+    index_zero.memory.map_region(0x100U, 0x100U);
+    index_zero.state.gpr[9] = 0x100U;
+    index_zero.state.gpr[0] = 0x20U;
+    index_zero.memory.write8(0x120U, 0xABU);
+    index_zero.memory.write32_be(0U, wind_waker_word);
+    const RunResult index_zero_result = index_zero.run(1U);
+    assert(index_zero_result.reason == StopReason::instruction_limit);
+    assert(index_zero.state.gpr[11] == 0x000000ABU);
+    assert(index_zero_result.instruction_history.front().effective_address == 0x120U);
+    assert(index_zero_result.instruction_history.front().source_count == 2U);
+    assert(index_zero_result.instruction_history.front().source_registers[1] == 0U);
+
+    // Addition wraps in the 32-bit guest address space.
+    EspressoCore wrapping(0x100U);
+    wrapping.state.gpr[4] = 0xFFFFFFF0U;
+    wrapping.state.gpr[5] = 0x20U;
+    wrapping.memory.write8(0x10U, 0x6CU);
+    wrapping.memory.write32_be(0U, encode_lbzx(6U, 4U, 5U));
+    assert(wrapping.step() == StepResult::executed);
+    assert(wrapping.state.gpr[6] == 0x6CU);
+
+    // Destination aliasing uses the original base and/or index values.
+    (void)run_load(5U, 5U, 6U, 0x40U, 3U, 0x43U, 0xA5U);
+    (void)run_load(5U, 4U, 5U, 0x40U, 3U, 0x43U, 0x5AU);
+    (void)run_load(5U, 5U, 5U, 0x20U, 0x20U, 0x40U, 0x77U);
+
+    // Exact Wind Waker addressing regression; byte value is synthetic.
+    EspressoCore wind_waker(0x100U);
+    wind_waker.memory.map_region(0x1018A000U, 0x2000U);
+    wind_waker.state.gpr[9] = 0x1018A5E8U;
+    wind_waker.state.gpr[0] = 0x80U;
+    wind_waker.state.gpr[11] = 0xDEADBEEFU;
+    constexpr std::uint32_t wind_waker_address = 0x1018A668U;
+    wind_waker.memory.write8(wind_waker_address, 0x5AU);
+    wind_waker.memory.write32_be(0U, wind_waker_word);
+    const RunResult wind_waker_result = wind_waker.run(1U);
+    assert(wind_waker_result.reason == StopReason::instruction_limit);
+    assert(wind_waker.state.gpr[11] == 0x0000005AU);
+    assert(wind_waker.state.gpr[9] == 0x1018A5E8U);
+    assert(wind_waker.state.gpr[0] == 0x80U);
+    const InstructionHistoryEntry& wind_history =
+        wind_waker_result.instruction_history.front();
+    assert(wind_history.effective_address == wind_waker_address);
+    assert(wind_history.destination_value == 0x5AU);
+    const std::string trace = format_instruction_history(wind_waker_result);
+    assert(trace.find("lbzx r9=0x1018A5E8 r0=0x00000080 [0x1018A668] -> r11=0x0000005A") !=
+           std::string::npos);
+
+    // Unmapped byte read faults before any destination-register update.
+    EspressoCore fault(0x100U);
+    fault.state.gpr.fill(0xA5A5A5A5U);
+    fault.state.gpr[9] = 0x100U;
+    fault.state.gpr[0] = 0x20U;
+    fault.state.gpr[11] = 0xDEADBEEFU;
+    fault.memory.write32_be(0U, wind_waker_word);
+    const auto before_fault_gprs = fault.state.gpr;
+    const RunResult fault_result = fault.run(1U);
+    assert(fault_result.reason == StopReason::memory_fault);
+    assert(fault_result.detail.find("read 1 byte(s) at guest address 0x00000120") !=
+           std::string::npos);
+    assert(fault_result.detail.find("rA=9 (0x00000100), rB=0 (0x00000020)") !=
+           std::string::npos);
+    assert(fault_result.instruction_history.size() == 1U);
+    const InstructionHistoryEntry& fault_history = fault_result.instruction_history.front();
+    assert(fault_history.opcode_name == "lbzx");
+    assert(fault_history.has_effective_address && fault_history.effective_address == 0x120U);
+    assert(fault_history.source_count == 2U);
+    assert(fault_history.source_registers[1] == 0U);
+    assert(!fault_history.completed);
+    assert(fault_history.has_destination && fault_history.destination_register == 11U);
+    assert(fault.state.gpr == before_fault_gprs);
+}
+
 void load_halfword_algebraic_tests()
 {
     const auto run_lha = [](std::uint8_t destination, std::uint8_t base,
@@ -8858,6 +9029,7 @@ int main(int argc, char* argv[])
     store_halfword_update_tests();
     store_halfword_indexed_tests();
     load_halfword_zero_indexed_tests();
+    load_byte_zero_indexed_tests();
     load_halfword_algebraic_tests();
     multiple_word_load_store_tests();
     load_string_word_immediate_tests();
