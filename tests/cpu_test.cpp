@@ -541,6 +541,14 @@ void decoder_tests()
     assert(stwx.base == 26);
     assert(stwx.source == 9);
 
+    const DecodedInstruction sthx = decode(0x7FA7DB2EU); // sthx r29, r7, r27
+    assert(sthx.opcode == Opcode::store_halfword_indexed);
+    assert(sthx.destination == 29U);
+    assert(sthx.base == 7U);
+    assert(sthx.source == 27U);
+    assert(((0x7FA7DB2EU >> 1U) & 0x3FFU) == 407U);
+    assert(decode(0x7FA7DB2FU).opcode == Opcode::unsupported);
+
     const DecodedInstruction lbz = decode(0x88810002U); // lbz r4, 2(r1)
     assert(lbz.opcode == Opcode::load_byte_zero);
     assert(lbz.destination == 4);
@@ -5181,6 +5189,140 @@ void store_halfword_update_tests()
     assert(failed.has_destination && failed.destination_register == 8U);
 }
 
+void store_halfword_indexed_tests()
+{
+    const auto encode_sthx = [](std::uint8_t source, std::uint8_t base,
+                                std::uint8_t index, bool reserved_bit = false) {
+        return (31U << 26U) |
+            (static_cast<std::uint32_t>(source) << 21U) |
+            (static_cast<std::uint32_t>(base) << 16U) |
+            (static_cast<std::uint32_t>(index) << 11U) |
+            (407U << 1U) | static_cast<std::uint32_t>(reserved_bit);
+    };
+
+    constexpr std::uint32_t wind_waker_word = 0x7FA7DB2EU;
+    const DecodedInstruction decoded = decode(wind_waker_word);
+    assert(decoded.opcode == Opcode::store_halfword_indexed);
+    assert(decoded.destination == 29U);
+    assert(decoded.base == 7U);
+    assert(decoded.source == 27U);
+
+    const auto run_store = [&](std::uint8_t source, std::uint8_t base,
+                               std::uint8_t index, std::uint32_t source_value,
+                               std::uint32_t base_value, std::uint32_t index_value,
+                               std::size_t memory_size = 0x100U) {
+        EspressoCore core(memory_size);
+        core.state.gpr.fill(0xA5A5A5A5U);
+        core.state.gpr[source] = source_value;
+        core.state.gpr[base] = base_value;
+        core.state.gpr[index] = index_value;
+        core.state.cr = 0x12345678U;
+        core.state.xer = 0xA00000A5U;
+        core.state.lr = 0x11223344U;
+        core.state.ctr = 0x55667788U;
+        core.state.fpscr = 0xCAFEBABEU;
+        core.state.fpr.fill(0x0123456789ABCDEFULL);
+        core.state.fpr_ps1.fill(0xFEDCBA9876543210ULL);
+        const auto original_gprs = core.state.gpr;
+        const auto original_fpr = core.state.fpr;
+        const auto original_fpr_ps1 = core.state.fpr_ps1;
+        const std::uint32_t address = (base == 0U ? 0U : base_value) + index_value;
+        const std::uint32_t word = encode_sthx(source, base, index);
+        core.memory.write32_be(0U, word);
+
+        const RunResult result = core.run(1U);
+        assert(result.steps == 1U);
+        assert(result.reason == StopReason::instruction_limit);
+        for (std::uint32_t reg = 0; reg < 32U; ++reg)
+        {
+            assert(core.state.gpr[reg] == original_gprs[reg]);
+        }
+        assert(core.state.cr == 0x12345678U);
+        assert(core.state.xer == 0xA00000A5U);
+        assert(core.state.lr == 0x11223344U);
+        assert(core.state.ctr == 0x55667788U);
+        assert(core.state.fpscr == 0xCAFEBABEU);
+        assert(core.state.fpr == original_fpr);
+        assert(core.state.fpr_ps1 == original_fpr_ps1);
+        assert(core.memory.read16_be(address) == static_cast<std::uint16_t>(source_value));
+        return std::pair{address, result};
+    };
+
+    const auto basic = run_store(5U, 4U, 6U, 0x1234ABCDU, 0x40U, 0x08U);
+    assert(basic.first == 0x48U);
+    assert(basic.second.instruction_history.front().has_effective_address);
+    assert(basic.second.instruction_history.front().effective_address == 0x48U);
+    assert(basic.second.instruction_history.front().has_stored_halfword_value);
+    assert(basic.second.instruction_history.front().stored_halfword_value == 0xABCDU);
+    assert(format_instruction_history(basic.second).find(
+        "sthx r4=0x00000040 r6=0x00000008 r5=0x1234ABCD [0x00000048] -> mem16=0xABCD") !=
+        std::string::npos);
+    assert(run_store(5U, 4U, 6U, 0xFFFF1234U, 0x30U, 0x12U).first == 0x42U);
+
+    // RA=0 uses literal zero, not the deliberately nonzero GPR0 value.
+    const auto zero_base = run_store(5U, 0U, 6U, 0xABCD9876U,
+                                     0xDEADBEEFU, 0x40U, 0x100U);
+    assert(zero_base.first == 0x40U);
+    assert(zero_base.second.instruction_history.front().source_registers[0] == 6U);
+    assert(zero_base.second.instruction_history.front().source_registers[1] == 5U);
+
+    // Address addition wraps in 32-bit guest address space.
+    assert(run_store(5U, 4U, 6U, 0xDEAD1234U, 0xFFFFFFFEU, 4U).first == 2U);
+
+    // Aliases retain old source/base/index values and never update GPRs.
+    assert(run_store(5U, 5U, 6U, 0x20U, 0x20U, 4U).first == 0x24U);
+    assert(run_store(6U, 4U, 6U, 0x08U, 0x20U, 0x08U).first == 0x28U);
+    assert(run_store(5U, 5U, 5U, 0x20U, 0x20U, 0x20U).first == 0x40U);
+
+    // An adjacent sparse region makes a halfword crossing flat -> sparse valid.
+    EspressoCore crossing(0x20U);
+    crossing.memory.map_region(0x20U, 0x20U);
+    crossing.state.gpr[6] = 0x1FU;
+    crossing.state.gpr[5] = 0xCAFEU;
+    crossing.memory.write32_be(0U, encode_sthx(5U, 0U, 6U));
+    assert(crossing.step() == StepResult::executed);
+    assert(crossing.memory.read8(0x1FU) == 0xCAU);
+    assert(crossing.memory.read8(0x20U) == 0xFEU);
+
+    // Wind Waker's address is sparse-backed; the preceding OSBlockMove bytes remain.
+    EspressoCore wind_waker(0x100U);
+    wind_waker.memory.map_region(0x10490800U, 0x1000U);
+    wind_waker.state.gpr[29] = 0U;
+    wind_waker.state.gpr[7] = 2U;
+    wind_waker.state.gpr[27] = 0x104908D4U;
+    wind_waker.memory.write8(0x104908D4U, 0x20U);
+    wind_waker.memory.write8(0x104908D5U, 0x26U);
+    wind_waker.memory.write8(0x104908D6U, 0xAAU);
+    wind_waker.memory.write8(0x104908D7U, 0xBBU);
+    wind_waker.memory.write32_be(0U, wind_waker_word);
+    const auto wind_result = wind_waker.run(1U);
+    assert(wind_result.reason == StopReason::instruction_limit);
+    assert(wind_waker.memory.read32_be(0x104908D4U) == 0x20260000U);
+    assert(wind_waker.state.gpr[29] == 0U);
+    assert(wind_waker.state.gpr[7] == 2U);
+    assert(wind_waker.state.gpr[27] == 0x104908D4U);
+    assert(format_instruction_history(wind_result).find(
+        "sthx r7=0x00000002 r27=0x104908D4 r29=0x00000000 "
+        "[0x104908D6] -> mem16=0x0000") != std::string::npos);
+
+    // Only the first target byte is mapped: write must be atomic and diagnosed as indexed.
+    EspressoCore fault(0x20U);
+    fault.state.gpr[6] = 0x1FU;
+    fault.state.gpr[5] = 0x1234U;
+    fault.memory.write8(0x1FU, 0xA5U);
+    fault.memory.write32_be(0U, encode_sthx(5U, 0U, 6U));
+    const RunResult fault_result = fault.run(1U);
+    assert(fault_result.reason == StopReason::memory_fault);
+    assert(fault_result.detail.find("write 2 byte(s)") != std::string::npos);
+    assert(fault_result.detail.find("rA=0 (0x00000000), rB=6 (0x0000001F)") !=
+           std::string::npos);
+    assert(fault.memory.read8(0x1FU) == 0xA5U);
+    assert(fault_result.instruction_history.size() == 1U);
+    assert(fault_result.instruction_history.front().opcode_name == "sthx");
+    assert(!fault_result.instruction_history.front().completed);
+    assert(!fault_result.instruction_history.front().has_stored_halfword_value);
+}
+
 void load_halfword_algebraic_tests()
 {
     const auto run_lha = [](std::uint8_t destination, std::uint8_t base,
@@ -6512,6 +6654,7 @@ int main(int argc, char* argv[])
     floating_round_to_single_tests();
     load_store_tests();
     store_halfword_update_tests();
+    store_halfword_indexed_tests();
     load_halfword_algebraic_tests();
     multiple_word_load_store_tests();
     load_string_word_immediate_tests();

@@ -323,6 +323,13 @@ DecodedInstruction decode(std::uint32_t raw) noexcept
             instruction.base = static_cast<std::uint8_t>(field(raw, 16, 0x1FU));
             instruction.source = static_cast<std::uint8_t>(field(raw, 11, 0x1FU));
         }
+        else if (extended_opcode == 407U && (raw & 1U) == 0U) // sthx
+        {
+            instruction.opcode = Opcode::store_halfword_indexed;
+            instruction.destination = static_cast<std::uint8_t>(field(raw, 21, 0x1FU));
+            instruction.base = static_cast<std::uint8_t>(field(raw, 16, 0x1FU));
+            instruction.source = static_cast<std::uint8_t>(field(raw, 11, 0x1FU));
+        }
         else if (extended_opcode == 824) // srawi
         {
             instruction.opcode = Opcode::arithmetic_shift_right_immediate;
