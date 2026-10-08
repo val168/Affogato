@@ -63,6 +63,39 @@ constexpr std::uint32_t mem_exp_heap_block_tag_offset = 0x10U;
 constexpr std::uint32_t mem2_minimum_heap_size = 0x6CU;
 constexpr std::uint32_t default_bump_heap_minimum_remaining = 0x1000U;
 constexpr std::uint16_t mem2_free_block_tag = 0x4652U; // 'FR'
+constexpr std::uint32_t fs_client_size = 0x1700U;
+constexpr std::uint32_t fs_client_body_size = 0x1620U;
+constexpr std::uint32_t fs_client_body_alignment_mask = 0x3FU;
+constexpr std::uint32_t fs_status_fatal_error = 0xFFFFFC00U;
+constexpr std::uint32_t fs_fast_mutex_tag = 0x664D7458U;
+constexpr std::uint32_t fs_fast_mutex_size = 0x2CU;
+constexpr std::uint32_t fs_alarm_tag = 0x614C724DU;
+constexpr std::uint32_t fs_alarm_size = 0x58U;
+
+constexpr std::uint32_t fs_client_handle_offset = 0x1444U;
+constexpr std::uint32_t fs_client_fsm_offset = 0x1448U;
+constexpr std::uint32_t fs_client_cmd_queue_offset = 0x1480U;
+constexpr std::uint32_t fs_client_last_dequeued_command_offset = 0x14C4U;
+constexpr std::uint32_t fs_client_emulated_error_offset = 0x14C8U;
+constexpr std::uint32_t fs_client_mutex_offset = 0x1560U;
+constexpr std::uint32_t fs_client_fsm_alarm_offset = 0x1590U;
+constexpr std::uint32_t fs_client_last_error_offset = 0x15E8U;
+constexpr std::uint32_t fs_client_last_error_without_volume_offset = 0x15ECU;
+constexpr std::uint32_t fs_client_mount_source_type_offset = 0x1610U;
+constexpr std::uint32_t fs_client_link_offset = 0x1614U;
+constexpr std::uint32_t fs_client_pointer_offset = 0x161CU;
+constexpr std::uint32_t fs_client_link_next_offset = 0x00U;
+constexpr std::uint32_t fs_client_link_prev_offset = 0x04U;
+
+constexpr std::uint32_t fs_cmd_queue_head_offset = 0x00U;
+constexpr std::uint32_t fs_cmd_queue_tail_offset = 0x04U;
+constexpr std::uint32_t fs_cmd_queue_mutex_offset = 0x08U;
+constexpr std::uint32_t fs_cmd_queue_dequeue_handler_offset = 0x34U;
+constexpr std::uint32_t fs_cmd_queue_active_count_offset = 0x38U;
+constexpr std::uint32_t fs_cmd_queue_max_active_count_offset = 0x3CU;
+constexpr std::uint32_t fs_cmd_queue_status_offset = 0x40U;
+
+constexpr std::uint32_t fs_volume_state_ready = 1U;
 
 static_assert(os_system_info_timer_clock_speed == 62156250U);
 static_assert(os_system_info_core_clock_speed / os_system_info_bus_clock_speed ==
@@ -96,6 +129,16 @@ void initialize_guest_message_queue(
     memory.write32_be(queue + os_message_queue_capacity_offset, size);
     memory.write32_be(queue + os_message_queue_first_offset, 0U);
     memory.write32_be(queue + os_message_queue_used_offset, 0U);
+}
+
+void initialize_guest_fast_mutex(
+    GuestMemory& memory,
+    std::uint32_t mutex,
+    std::uint32_t name)
+{
+    memory.zero_fill(mutex, fs_fast_mutex_size);
+    memory.write32_be(mutex, fs_fast_mutex_tag);
+    memory.write32_be(mutex + sizeof(std::uint32_t), name);
 }
 
 [[nodiscard]] std::optional<std::uint32_t> exception_callback_array_offset(
@@ -668,6 +711,153 @@ void register_coreinit_hle(HleDispatcher& dispatcher)
         });
     dispatcher.register_function(
         "coreinit",
+        "FSAddClient",
+        [](EspressoCore& core) {
+            constexpr std::uint64_t guest_address_space_end =
+                std::uint64_t{1} << 32U;
+            constexpr std::uint32_t fs_client_fsm_current_state_offset = 0x00U;
+            constexpr std::uint32_t fs_client_fsm_volume_state_offset = 0x04U;
+
+            const std::uint32_t client = core.state.gpr[3];
+            const std::uint32_t error_mask = core.state.gpr[4];
+            (void)error_mask;
+
+            if (!core.fs_initialized || client == 0U)
+            {
+                core.state.gpr[3] = fs_status_fatal_error;
+                return;
+            }
+
+            const std::uint64_t client_address = client;
+            const std::uint64_t client_end = client_address + fs_client_size;
+            if (client_end > guest_address_space_end)
+            {
+                throw HleExecutionError(
+                    "FSAddClient client storage wraps the guest address space");
+            }
+
+            const std::uint64_t body_address =
+                (client_address + fs_client_body_alignment_mask) &
+                ~static_cast<std::uint64_t>(fs_client_body_alignment_mask);
+            const std::uint64_t body_end = body_address + fs_client_body_size;
+            if (body_address > std::numeric_limits<std::uint32_t>::max() ||
+                body_end > client_end)
+            {
+                throw HleExecutionError(
+                    "FSAddClient cannot derive a valid aligned FSClientBody");
+            }
+
+            const std::uint32_t body = static_cast<std::uint32_t>(body_address);
+            core.memory.validate_write_range(client, fs_client_size);
+
+            const bool duplicate = std::any_of(
+                core.fs_clients.begin(), core.fs_clients.end(),
+                [client, body, client_end](const FsClientRegistration& registration) {
+                    const std::uint64_t registered_begin =
+                        registration.client_address;
+                    const std::uint64_t registered_end =
+                        registered_begin + fs_client_size;
+                    return registration.client_address == client ||
+                           registration.body_address == body ||
+                           (static_cast<std::uint64_t>(client) < registered_end &&
+                            registered_begin < client_end);
+                });
+            if (duplicate || core.next_fs_client_handle == 0U ||
+                core.next_fs_client_handle > 0x7FFFFFFFU)
+            {
+                core.state.gpr[3] = fs_status_fatal_error;
+                return;
+            }
+
+            // Reserve bookkeeping before touching guest memory, so host-side
+            // allocation failure cannot leave an initialized but unregistered client.
+            core.fs_clients.reserve(core.fs_clients.size() + 1U);
+            const std::uint32_t handle = core.next_fs_client_handle;
+
+            core.memory.zero_fill(client, fs_client_size);
+
+            const std::uint32_t fsm = body + fs_client_fsm_offset;
+            const std::uint32_t command_queue = body + fs_client_cmd_queue_offset;
+            core.memory.write32_be(
+                body + fs_client_handle_offset, handle);
+            core.memory.write32_be(
+                fsm + fs_client_fsm_current_state_offset,
+                fs_volume_state_ready);
+            core.memory.write32_be(
+                fsm + fs_client_fsm_volume_state_offset,
+                fs_volume_state_ready);
+
+            core.memory.write32_be(
+                command_queue + fs_cmd_queue_head_offset, 0U);
+            core.memory.write32_be(
+                command_queue + fs_cmd_queue_tail_offset, 0U);
+            initialize_guest_fast_mutex(
+                core.memory,
+                command_queue + fs_cmd_queue_mutex_offset,
+                0U);
+            core.memory.write32_be(
+                command_queue + fs_cmd_queue_dequeue_handler_offset, 0U);
+            core.memory.write32_be(
+                command_queue + fs_cmd_queue_active_count_offset, 0U);
+            core.memory.write32_be(
+                command_queue + fs_cmd_queue_max_active_count_offset, 1U);
+            core.memory.write32_be(
+                command_queue + fs_cmd_queue_status_offset, 0U);
+
+            core.memory.write32_be(
+                body + fs_client_last_dequeued_command_offset, 0U);
+            core.memory.write32_be(
+                body + fs_client_emulated_error_offset, 0U);
+            initialize_guest_fast_mutex(
+                core.memory, body + fs_client_mutex_offset, 0U);
+
+            const std::uint32_t alarm = body + fs_client_fsm_alarm_offset;
+            core.memory.zero_fill(alarm, fs_alarm_size);
+            core.memory.write32_be(alarm, fs_alarm_tag);
+            core.memory.write32_be(
+                body + fs_client_last_error_offset, 0U);
+            core.memory.write32_be(
+                body + fs_client_last_error_without_volume_offset, 0U);
+            core.memory.write32_be(
+                body + fs_client_mount_source_type_offset, 0U);
+            core.memory.write32_be(
+                body + fs_client_pointer_offset, client);
+
+            if (core.fs_clients.empty())
+            {
+                const std::uint32_t link = body + fs_client_link_offset;
+                core.memory.write32_be(
+                    link + fs_client_link_next_offset, body);
+                core.memory.write32_be(
+                    link + fs_client_link_prev_offset, body);
+            }
+            else
+            {
+                const std::uint32_t head =
+                    core.fs_clients.front().body_address;
+                const std::uint32_t tail =
+                    core.fs_clients.back().body_address;
+                const std::uint32_t link = body + fs_client_link_offset;
+                core.memory.write32_be(
+                    link + fs_client_link_next_offset, head);
+                core.memory.write32_be(
+                    link + fs_client_link_prev_offset, tail);
+                core.memory.write32_be(
+                    tail + fs_client_link_offset + fs_client_link_next_offset,
+                    body);
+                core.memory.write32_be(
+                    head + fs_client_link_offset + fs_client_link_prev_offset,
+                    body);
+            }
+
+            // IOS_Open("/dev/fsa") is not modeled; this stable positive guest
+            // handle represents that per-client connection for now.
+            core.fs_clients.push_back({client, body, handle});
+            core.next_fs_client_handle = handle + 1U;
+            core.state.gpr[3] = 0U;
+        });
+    dispatcher.register_function(
+        "coreinit",
         "FSAInit",
         [](EspressoCore& core) {
             // The startup path only needs the filesystem facade's successful
@@ -764,12 +954,8 @@ void register_coreinit_hle(HleDispatcher& dispatcher)
         "coreinit",
         "OSFastMutex_Init",
         [](EspressoCore& core) {
-            constexpr std::uint32_t fast_mutex_size = 0x2CU;
-            constexpr std::uint32_t fast_mutex_tag = 0x664D7458U;
             const std::uint32_t mutex = core.state.gpr[3];
-            core.memory.zero_fill(mutex, fast_mutex_size);
-            core.memory.write32_be(mutex, fast_mutex_tag);
-            core.memory.write32_be(mutex + 4U, core.state.gpr[4]);
+            initialize_guest_fast_mutex(core.memory, mutex, core.state.gpr[4]);
         });
     dispatcher.register_function(
         "coreinit",

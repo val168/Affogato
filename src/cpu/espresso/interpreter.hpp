@@ -145,6 +145,13 @@ struct RunResult
     std::vector<InstructionHistoryEntry> instruction_history;
 };
 
+struct FsClientRegistration
+{
+    std::uint32_t client_address{};
+    std::uint32_t body_address{};
+    std::uint32_t synthetic_handle{};
+};
+
 class EspressoCore
 {
 public:
@@ -158,6 +165,8 @@ public:
         state.reset();
         current_thread_address = 0;
         fs_initialized = false;
+        fs_clients.clear();
+        next_fs_client_handle = 1U;
         guest_heap_cursor = 0;
         guest_heap_limit = 0;
         base_heap_handles.fill(0U);
@@ -207,6 +216,8 @@ public:
     HleDispatcher hle;
     std::uint32_t current_thread_address{};
     bool fs_initialized{};
+    std::vector<FsClientRegistration> fs_clients;
+    std::uint32_t next_fs_client_handle{1U};
     std::uint32_t guest_heap_cursor{};
     std::uint32_t guest_heap_limit{};
     std::array<std::uint32_t, 9> base_heap_handles{};

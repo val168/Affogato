@@ -6941,6 +6941,277 @@ void fs_init_hle_tests()
     assert(second.fs_initialized);
 }
 
+void fs_add_client_hle_tests()
+{
+    constexpr std::uint32_t client_size = 0x1700U;
+    constexpr std::uint32_t fatal_status = 0xFFFFFC00U;
+    constexpr std::uint32_t fast_mutex_tag = 0x664D7458U;
+    constexpr std::uint32_t alarm_tag = 0x614C724DU;
+    constexpr std::uint32_t return_address = 0x02742248U;
+
+    const auto aligned_body = [](std::uint32_t client) {
+        return static_cast<std::uint32_t>(
+            (static_cast<std::uint64_t>(client) + 0x3FU) & ~std::uint64_t{0x3F});
+    };
+    const auto write_expected_u32 = [](std::vector<std::uint8_t>& bytes,
+                                       std::uint32_t offset,
+                                       std::uint32_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value >> 24U);
+        bytes[offset + 1U] = static_cast<std::uint8_t>(value >> 16U);
+        bytes[offset + 2U] = static_cast<std::uint8_t>(value >> 8U);
+        bytes[offset + 3U] = static_cast<std::uint8_t>(value);
+    };
+
+    EspressoCore core(0x10000U);
+    register_coreinit_hle(core.hle);
+    const std::uint32_t import = core.hle.bind_import("coreinit", "FSAddClient");
+    core.fs_initialized = true;
+    constexpr std::uint32_t client_a = 0x2003U;
+    constexpr std::uint32_t body_a = 0x2040U;
+    core.memory.write8(client_a - 1U, 0x91U);
+    core.memory.write8(client_a + client_size, 0x92U);
+    core.memory.fill_bytes(client_a, client_size, 0xA5U);
+
+    for (std::uint32_t reg = 0; reg < core.state.gpr.size(); ++reg)
+    {
+        core.state.gpr[reg] = 0xA1000000U + reg * 0x101U;
+    }
+    for (std::uint32_t reg = 0; reg < core.state.fpr.size(); ++reg)
+    {
+        core.state.fpr[reg] = 0x1111000000000000ULL + reg;
+        core.state.fpr_ps1[reg] = 0x2222000000000000ULL + reg;
+    }
+    core.state.cr = 0x12345678U;
+    core.state.xer = 0xA00000A5U;
+    core.state.ctr = 0xCAFEBABEU;
+    core.state.fpscr = 0x5A5AA55AU;
+    core.state.lr = return_address;
+    core.state.cia = import;
+    core.state.gpr[3] = client_a;
+    core.state.gpr[4] = 0x12345678U;
+    const auto gprs_before = core.state.gpr;
+    const auto fpr_before = core.state.fpr;
+    const auto ps1_before = core.state.fpr_ps1;
+    const std::uint32_t cr_before = core.state.cr;
+    const std::uint32_t xer_before = core.state.xer;
+    const std::uint32_t ctr_before = core.state.ctr;
+    const std::uint32_t fpscr_before = core.state.fpscr;
+    const std::uint32_t lr_before = core.state.lr;
+    const std::uint32_t heap_cursor_before = core.guest_heap_cursor;
+    assert(core.step() == StepResult::executed);
+    assert(core.state.gpr[3] == 0U);
+    assert(core.state.cia == return_address);
+    assert(core.state.lr == lr_before);
+    assert(core.state.gpr[4] == gprs_before[4]);
+    for (std::size_t reg = 0; reg < core.state.gpr.size(); ++reg)
+    {
+        if (reg != 3U)
+        {
+            assert(core.state.gpr[reg] == gprs_before[reg]);
+        }
+    }
+    assert(core.state.fpr == fpr_before);
+    assert(core.state.fpr_ps1 == ps1_before);
+    assert(core.state.cr == cr_before);
+    assert(core.state.xer == xer_before);
+    assert(core.state.ctr == ctr_before);
+    assert(core.state.fpscr == fpscr_before);
+    assert(core.guest_heap_cursor == heap_cursor_before);
+    assert(core.fs_clients.size() == 1U);
+    assert(core.fs_clients[0].client_address == client_a);
+    assert(core.fs_clients[0].body_address == body_a);
+    assert(core.fs_clients[0].synthetic_handle == 1U);
+    assert(core.next_fs_client_handle == 2U);
+    assert(core.memory.read8(client_a - 1U) == 0x91U);
+    assert(core.memory.read8(client_a + client_size) == 0x92U);
+
+    // Compare the entire FSClient against a zero-filled expected image with
+    // only the known Cafe fields populated.
+    std::vector<std::uint8_t> expected_client(client_size, 0U);
+    const auto put = [&](std::uint32_t body_offset, std::uint32_t value) {
+        write_expected_u32(expected_client, body_a - client_a + body_offset, value);
+    };
+    put(0x1444U, 1U);
+    put(0x1448U, 1U);
+    put(0x144CU, 1U);
+    put(0x1488U, fast_mutex_tag);
+    put(0x14BCU, 1U);
+    put(0x1560U, fast_mutex_tag);
+    put(0x1590U, alarm_tag);
+    put(0x1614U, body_a);
+    put(0x1618U, body_a);
+    put(0x161CU, client_a);
+    std::vector<std::uint8_t> actual_client(client_size);
+    core.memory.read_bytes(client_a, actual_client);
+    assert(actual_client == expected_client);
+
+    // Second and third clients extend a circular doubly-linked guest list and
+    // receive distinct stable per-core service handles.
+    constexpr std::array<std::uint32_t, 3> clients{
+        client_a, 0x4007U, 0x600BU};
+    for (std::size_t index = 1; index < clients.size(); ++index)
+    {
+        core.state.cia = import;
+        core.state.lr = return_address + static_cast<std::uint32_t>(index * 4U);
+        core.state.gpr[3] = clients[index];
+        core.state.gpr[4] = 0U;
+        assert(core.step() == StepResult::executed);
+        assert(core.state.gpr[3] == 0U);
+    }
+    assert(core.fs_clients.size() == clients.size());
+    for (std::size_t index = 0; index < clients.size(); ++index)
+    {
+        const std::uint32_t body = aligned_body(clients[index]);
+        const std::uint32_t next_body = aligned_body(
+            clients[(index + 1U) % clients.size()]);
+        const std::uint32_t previous_body = aligned_body(
+            clients[(index + clients.size() - 1U) % clients.size()]);
+        assert(core.fs_clients[index].client_address == clients[index]);
+        assert(core.fs_clients[index].body_address == body);
+        assert(core.fs_clients[index].synthetic_handle == index + 1U);
+        assert(core.memory.read32_be(body + 0x1444U) == index + 1U);
+        assert(core.memory.read32_be(body + 0x1614U) == next_body);
+        assert(core.memory.read32_be(body + 0x1618U) == previous_body);
+        assert(core.memory.read32_be(next_body + 0x1618U) == body);
+        assert(core.memory.read32_be(previous_body + 0x1614U) == body);
+        assert(core.memory.read32_be(body + 0x161CU) == clients[index]);
+    }
+
+    // A duplicate pointer or body must fail without zeroing or allocating.
+    const auto client_a_snapshot = [&]() {
+        std::vector<std::uint8_t> result(client_size);
+        core.memory.read_bytes(client_a, result);
+        return result;
+    }();
+    const std::uint32_t next_handle_before_duplicate = core.next_fs_client_handle;
+    core.state.cia = import;
+    core.state.lr = return_address;
+    core.state.gpr[3] = client_a;
+    core.state.gpr[4] = 0U;
+    assert(core.step() == StepResult::executed);
+    assert(core.state.gpr[3] == fatal_status);
+    assert(core.fs_clients.size() == 3U);
+    assert(core.next_fs_client_handle == next_handle_before_duplicate);
+    std::vector<std::uint8_t> client_a_after_duplicate(client_size);
+    core.memory.read_bytes(client_a, client_a_after_duplicate);
+    assert(client_a_after_duplicate == client_a_snapshot);
+
+    // Same aligned body (and overlapping storage) is also a duplicate.
+    core.state.cia = import;
+    core.state.gpr[3] = 0x203FU;
+    core.state.gpr[4] = 0U;
+    assert(core.step() == StepResult::executed);
+    assert(core.state.gpr[3] == fatal_status);
+    assert(core.fs_clients.size() == 3U);
+    assert(core.next_fs_client_handle == next_handle_before_duplicate);
+    std::vector<std::uint8_t> client_a_after_alias(client_size);
+    core.memory.read_bytes(client_a, client_a_after_alias);
+    assert(client_a_after_alias == client_a_snapshot);
+
+    // A fresh core rejects FSAddClient before initialization without touching
+    // the valid client storage or consuming a handle.
+    EspressoCore uninitialized(0x8000U);
+    register_coreinit_hle(uninitialized.hle);
+    const std::uint32_t uninitialized_import =
+        uninitialized.hle.bind_import("coreinit", "FSAddClient");
+    constexpr std::uint32_t uninitialized_client = 0x1000U;
+    uninitialized.memory.fill_bytes(uninitialized_client, client_size, 0xA5U);
+    std::vector<std::uint8_t> uninitialized_before(client_size);
+    uninitialized.memory.read_bytes(uninitialized_client, uninitialized_before);
+    uninitialized.state.cia = uninitialized_import;
+    uninitialized.state.lr = return_address;
+    uninitialized.state.gpr[3] = uninitialized_client;
+    uninitialized.state.gpr[4] = 0U;
+    assert(uninitialized.step() == StepResult::executed);
+    assert(uninitialized.state.gpr[3] == fatal_status);
+    assert(uninitialized.fs_clients.empty());
+    assert(uninitialized.next_fs_client_handle == 1U);
+    std::vector<std::uint8_t> uninitialized_after(client_size);
+    uninitialized.memory.read_bytes(uninitialized_client, uninitialized_after);
+    assert(uninitialized_after == uninitialized_before);
+
+    // Null client and exhausted synthetic handle namespace fail without
+    // touching guest memory or registration state.
+    core.state.cia = import;
+    core.state.gpr[3] = 0U;
+    core.state.gpr[4] = 0U;
+    assert(core.step() == StepResult::executed);
+    assert(core.state.gpr[3] == fatal_status);
+    assert(core.fs_clients.size() == 3U);
+    const std::uint32_t saved_next_handle = core.next_fs_client_handle;
+    core.next_fs_client_handle = 0x80000000U;
+    core.state.cia = import;
+    core.state.gpr[3] = 0x8003U;
+    core.state.gpr[4] = 0U;
+    core.memory.fill_bytes(0x8003U, client_size, 0x5AU);
+    assert(core.step() == StepResult::executed);
+    assert(core.state.gpr[3] == fatal_status);
+    assert(core.fs_clients.size() == 3U);
+    assert(core.next_fs_client_handle == 0x80000000U);
+    assert(core.memory.read8(0x8003U) == 0x5AU);
+    core.next_fs_client_handle = saved_next_handle;
+
+    // Inaccessible ranges stop cleanly before any partial initialization.
+    EspressoCore unmapped(0x1000U);
+    register_coreinit_hle(unmapped.hle);
+    const std::uint32_t unmapped_import =
+        unmapped.hle.bind_import("coreinit", "FSAddClient");
+    unmapped.fs_initialized = true;
+    unmapped.memory.fill_bytes(0x800U, 0x800U, 0xA5U);
+    unmapped.state.cia = unmapped_import;
+    unmapped.state.lr = return_address;
+    unmapped.state.gpr[3] = 0x800U;
+    unmapped.state.gpr[4] = 0U;
+    const RunResult unmapped_result = unmapped.run(1U);
+    assert(unmapped_result.reason == StopReason::memory_fault);
+    assert(unmapped.fs_clients.empty());
+    assert(unmapped.next_fs_client_handle == 1U);
+    for (std::uint32_t address = 0x800U; address < 0x1000U; ++address)
+    {
+        assert(unmapped.memory.read8(address) == 0xA5U);
+    }
+
+    EspressoCore wrapping(0x1000U);
+    register_coreinit_hle(wrapping.hle);
+    const std::uint32_t wrapping_import =
+        wrapping.hle.bind_import("coreinit", "FSAddClient");
+    wrapping.fs_initialized = true;
+    wrapping.state.cia = wrapping_import;
+    wrapping.state.lr = return_address;
+    wrapping.state.gpr[3] = 0xFFFFFFF0U;
+    wrapping.state.gpr[4] = 0U;
+    const RunResult wrapping_result = wrapping.run(1U);
+    assert(wrapping_result.reason == StopReason::hle_error);
+    assert(wrapping.fs_clients.empty());
+    assert(wrapping.next_fs_client_handle == 1U);
+
+    // Independent cores have independent registries and handle namespaces;
+    // reset clears only its own registrations and restarts handle numbering.
+    EspressoCore other(0x8000U);
+    register_coreinit_hle(other.hle);
+    const std::uint32_t other_import = other.hle.bind_import("coreinit", "FSAddClient");
+    other.fs_initialized = true;
+    other.state.cia = other_import;
+    other.state.lr = return_address;
+    other.state.gpr[3] = 0x2003U;
+    other.state.gpr[4] = 0U;
+    assert(other.step() == StepResult::executed);
+    assert(other.state.gpr[3] == 0U);
+    assert(other.fs_clients.size() == 1U);
+    assert(other.fs_clients[0].synthetic_handle == 1U);
+    assert(core.fs_clients.size() == 3U);
+    core.reset();
+    assert(!core.fs_initialized);
+    assert(core.fs_clients.empty());
+    assert(core.next_fs_client_handle == 1U);
+    assert(other.fs_clients.size() == 1U);
+    assert(other.fs_clients[0].synthetic_handle == 1U);
+
+    // The unsigned raw error value is the signed FS_STATUS_FATAL_ERROR ABI.
+    assert(static_cast<std::uint32_t>(static_cast<std::int32_t>(-0x400)) ==
+           fatal_status);
+}
+
 void os_get_system_time_hle_tests()
 {
     using Clock = std::chrono::system_clock;
@@ -10418,6 +10689,7 @@ int main(int argc, char* argv[])
                       << " (" << std::dec << image.loaded_sections << " sections)\n";
             const auto session_result = emulator.run(rpx_instruction_limit);
             const auto& execution = session_result.execution;
+            const auto& core = emulator.core();
             std::cout << "Stopped after " << execution.steps << " instructions at CIA 0x"
                       << std::hex << execution.cia << std::dec << ": ";
             switch (execution.reason)
@@ -10440,6 +10712,42 @@ int main(int argc, char* argv[])
                 break;
             }
             std::cout << " (guest r3=" << session_result.gpr3 << ")\n";
+            std::cout << "Guest GPR3: 0x" << std::hex << core.state.gpr[3]
+                      << "  GPR4: 0x" << core.state.gpr[4] << std::dec << '\n';
+            std::cout << "FS initialized: "
+                      << (core.fs_initialized ? "true" : "false")
+                      << "  registered clients: " << core.fs_clients.size() << '\n';
+            if (!core.fs_clients.empty())
+            {
+                constexpr std::uint32_t fs_client_body_fsm_offset = 0x1448U;
+                constexpr std::uint32_t fs_client_body_queue_offset = 0x1480U;
+                constexpr std::uint32_t fs_client_body_mutex_offset = 0x1560U;
+                constexpr std::uint32_t fs_client_body_alarm_offset = 0x1590U;
+                constexpr std::uint32_t fs_client_body_link_offset = 0x1614U;
+                const auto& registration = core.fs_clients.front();
+                const std::uint32_t body = registration.body_address;
+                std::cout << "FSAddClient: client=0x" << std::hex
+                          << registration.client_address << " body=0x" << body
+                          << " handle=0x" << registration.synthetic_handle
+                          << " status=0x00000000" << std::dec << '\n';
+                std::cout << "  FSM=" << core.memory.read32_be(body + fs_client_body_fsm_offset)
+                          << " volume=" << core.memory.read32_be(body + fs_client_body_fsm_offset + 4U)
+                          << " queue(head,tail,max)=(0x" << std::hex
+                          << core.memory.read32_be(body + fs_client_body_queue_offset)
+                          << ",0x" << core.memory.read32_be(body + fs_client_body_queue_offset + 4U)
+                          << ",0x" << core.memory.read32_be(body + fs_client_body_queue_offset + 0x3CU)
+                          << ") queueMutex=0x"
+                          << core.memory.read32_be(body + fs_client_body_queue_offset + 8U)
+                          << " clientMutex=0x"
+                          << core.memory.read32_be(body + fs_client_body_mutex_offset)
+                          << " alarm=0x"
+                          << core.memory.read32_be(body + fs_client_body_alarm_offset)
+                          << " link(next,prev)=(0x"
+                          << core.memory.read32_be(body + fs_client_body_link_offset)
+                          << ",0x"
+                          << core.memory.read32_be(body + fs_client_body_link_offset + 4U)
+                          << ")" << std::dec << '\n';
+            }
             std::cout << affogato::cpu::espresso::format_instruction_history(execution) << '\n';
         }
         catch (const std::exception& error)
@@ -10482,6 +10790,7 @@ int main(int argc, char* argv[])
     os_block_move_hle_tests();
     os_get_system_info_hle_tests();
     fs_init_hle_tests();
+    fs_add_client_hle_tests();
     os_get_system_time_hle_tests();
     os_set_exception_callback_hle_tests();
     os_get_thread_priority_hle_tests();
