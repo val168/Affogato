@@ -2939,6 +2939,112 @@ void integer_alu_tests()
     assert((arithmetic_shift_core.state.xer & 0x20000000U) != 0);
 }
 
+void multiply_high_word_unsigned_tests()
+{
+    const auto encode_mulhwu = [](std::uint8_t destination, std::uint8_t ra,
+                                 std::uint8_t rb, bool record = false) {
+        return (31U << 26U) |
+            (static_cast<std::uint32_t>(destination) << 21U) |
+            (static_cast<std::uint32_t>(ra) << 16U) |
+            (static_cast<std::uint32_t>(rb) << 11U) |
+            (11U << 1U) | static_cast<std::uint32_t>(record);
+    };
+
+    constexpr std::uint32_t wind_waker_word = 0x7C605816U;
+    const DecodedInstruction wind_waker = decode(wind_waker_word);
+    assert(wind_waker.opcode == Opcode::multiply_high_word_unsigned);
+    assert(wind_waker.destination == 3U);
+    assert(wind_waker.base == 0U);
+    assert(wind_waker.source == 11U);
+    assert(((wind_waker_word >> 1U) & 0x3FFU) == 11U);
+    assert(!wind_waker.record);
+    assert(decode(encode_mulhwu(3U, 0U, 11U, true)).opcode ==
+           Opcode::multiply_high_word_unsigned);
+    assert(decode(encode_mulhwu(3U, 0U, 11U, true)).record);
+
+    const auto execute = [&](std::uint8_t destination, std::uint8_t ra,
+                             std::uint8_t rb, std::uint32_t lhs,
+                             std::uint32_t rhs, bool record = false,
+                             bool so = false) {
+        EspressoCore core(8U);
+        core.state.gpr.fill(0xA5A5A5A5U);
+        core.state.gpr[ra] = lhs;
+        core.state.gpr[rb] = rhs;
+        constexpr std::uint32_t initial_cr = 0x12345678U;
+        const std::uint32_t initial_xer = so ? 0xA00000A5U : 0x200000A5U;
+        core.state.cr = initial_cr;
+        core.state.xer = initial_xer;
+        core.state.lr = 0x11223344U;
+        core.state.ctr = 0x55667788U;
+        core.state.fpscr = 0xCAFEBABEU;
+        core.state.fpr.fill(0x0123456789ABCDEFULL);
+        core.state.fpr_ps1.fill(0xFEDCBA9876543210ULL);
+        const std::uint32_t word = encode_mulhwu(destination, ra, rb, record);
+        core.memory.write32_be(0U, word);
+        const auto original_gprs = core.state.gpr;
+        const auto original_fpr = core.state.fpr;
+        const auto original_fpr_ps1 = core.state.fpr_ps1;
+        const std::uint64_t product = static_cast<std::uint64_t>(lhs) * rhs;
+        const std::uint32_t expected = static_cast<std::uint32_t>(product >> 32U);
+
+        const RunResult result = core.run(1U);
+        assert(result.steps == 1U);
+        assert(result.reason == StopReason::instruction_limit);
+        assert(core.state.gpr[destination] == expected);
+        for (std::uint32_t reg = 0; reg < 32U; ++reg)
+        {
+            if (reg != destination)
+            {
+                assert(core.state.gpr[reg] == original_gprs[reg]);
+            }
+        }
+        if (record)
+        {
+            const std::uint32_t expected_cr0 = (expected & 0x80000000U) != 0U
+                ? (0x8U | static_cast<std::uint32_t>(so))
+                : expected == 0U ? (0x2U | static_cast<std::uint32_t>(so))
+                                 : (0x4U | static_cast<std::uint32_t>(so));
+            assert(((core.state.cr >> 28U) & 0xFU) == expected_cr0);
+            assert((core.state.cr & 0x0FFFFFFFU) == (initial_cr & 0x0FFFFFFFU));
+        }
+        else
+        {
+            assert(core.state.cr == initial_cr);
+        }
+        assert(core.state.xer == initial_xer);
+        assert(core.state.lr == 0x11223344U);
+        assert(core.state.ctr == 0x55667788U);
+        assert(core.state.fpscr == 0xCAFEBABEU);
+        assert(core.state.fpr == original_fpr);
+        assert(core.state.fpr_ps1 == original_fpr_ps1);
+        assert(core.memory.read32_be(0U) == word);
+        return std::pair{expected, result};
+    };
+
+    assert(execute(3U, 0U, 11U, 1U, 16807U).first == 0U);
+    assert(execute(3U, 4U, 5U, 0U, 0xFFFFFFFFU).first == 0U);
+    assert(execute(3U, 4U, 5U, 0xFFFFFFFFU, 2U).first == 0x00000001U);
+    assert(execute(3U, 4U, 5U, 0xFFFFFFFFU, 0xFFFFFFFFU).first == 0xFFFFFFFEU);
+    assert(execute(3U, 4U, 5U, 0x80000000U, 2U).first == 0x00000001U);
+    assert(execute(3U, 4U, 5U, 0x80000000U, 0x80000000U).first == 0x40000000U);
+
+    // Destination aliases either input or both, with operands captured first.
+    assert(execute(3U, 3U, 4U, 0xFFFFFFFFU, 2U).first == 1U);
+    assert(execute(4U, 3U, 4U, 0xFFFFFFFFU, 2U).first == 1U);
+    assert(execute(5U, 5U, 5U, 0xFFFFFFFFU, 0xFFFFFFFFU).first == 0xFFFFFFFEU);
+
+    (void)execute(6U, 4U, 5U, 1U, 0U, true, false); // zero -> EQ
+    (void)execute(6U, 4U, 5U, 0xFFFFFFFFU, 2U, true, false); // +1 -> GT
+    (void)execute(6U, 4U, 5U, 0xFFFFFFFFU, 0xFFFFFFFFU, true, false); // negative -> LT
+    (void)execute(6U, 4U, 5U, 0xFFFFFFFFU, 0xFFFFFFFFU, true, true); // LT | SO
+
+    const auto wind_result = execute(3U, 0U, 11U, 1U, 0x41A7U);
+    assert(wind_result.first == 0U);
+    const std::string trace = format_instruction_history(wind_result.second);
+    assert(trace.find("mulhwu r0=0x00000001 r11=0x000041A7 -> r3=0x00000000") !=
+           std::string::npos);
+}
+
 void or_immediate_shifted_tests()
 {
     const auto encode_oris = [](std::uint8_t destination, std::uint8_t source,
@@ -5824,6 +5930,7 @@ int main(int argc, char* argv[])
     guest_memory_tests();
     interpreter_tests();
     integer_alu_tests();
+    multiply_high_word_unsigned_tests();
     or_immediate_shifted_tests();
     extend_sign_byte_tests();
     leaf_function_abi_tests();

@@ -278,6 +278,14 @@ DecodedInstruction decode(std::uint32_t raw) noexcept
             instruction.source = static_cast<std::uint8_t>(field(raw, 11, 0x1FU));
             instruction.record = (raw & 1U) != 0;
         }
+        else if (extended_opcode == 11U) // mulhwu
+        {
+            instruction.opcode = Opcode::multiply_high_word_unsigned;
+            instruction.destination = static_cast<std::uint8_t>(field(raw, 21, 0x1FU));
+            instruction.base = static_cast<std::uint8_t>(field(raw, 16, 0x1FU));
+            instruction.source = static_cast<std::uint8_t>(field(raw, 11, 0x1FU));
+            instruction.record = (raw & 1U) != 0U;
+        }
         else if (extended_opcode == 151) // stwx
         {
             instruction.opcode = Opcode::store_word_indexed;
