@@ -270,6 +270,13 @@ DecodedInstruction decode(std::uint32_t raw) noexcept
             instruction.source = static_cast<std::uint8_t>(field(raw, 11, 0x1FU));
             instruction.record = (raw & 1U) != 0U;
         }
+        else if (extended_opcode == 202U && field(raw, 11, 0x1FU) == 0U)
+        {
+            instruction.opcode = Opcode::add_to_zero_extended;
+            instruction.destination = static_cast<std::uint8_t>(field(raw, 21, 0x1FU));
+            instruction.base = static_cast<std::uint8_t>(field(raw, 16, 0x1FU));
+            instruction.record = (raw & 1U) != 0U;
+        }
         else if (extended_opcode == 8) // subfc; OE=1 changes the extended opcode
         {
             instruction.opcode = Opcode::subtract_from_carrying;
