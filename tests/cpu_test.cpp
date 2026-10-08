@@ -7451,6 +7451,222 @@ void mem_get_total_free_size_for_exp_heap_hle_tests()
     expect_hle_error(malformed, 0x20000U, "header is outside mapped guest memory");
 }
 
+void mem_get_allocatable_size_for_exp_heap_ex_hle_tests()
+{
+    constexpr std::uint32_t heap = 0x1000U;
+    constexpr std::uint32_t data_start = 0x1100U;
+    constexpr std::uint32_t data_end = 0x4000U;
+    constexpr std::uint32_t block_a = 0x1200U;
+    constexpr std::uint32_t block_b = 0x2400U;
+    constexpr std::uint32_t block_c = 0x3000U;
+    constexpr std::uint32_t return_address = 0x02005F14U;
+
+    const auto initialize_heap = [](EspressoCore& core,
+                                    std::uint32_t head,
+                                    std::uint32_t tail) {
+        core.memory.zero_fill(heap, 0x54U);
+        core.memory.write32_be(heap, 0x45585048U);
+        core.memory.write32_be(heap + 0x18U, data_start);
+        core.memory.write32_be(heap + 0x1CU, data_end);
+        core.memory.write32_be(heap + 0x40U, head);
+        core.memory.write32_be(heap + 0x44U, tail);
+    };
+    const auto initialize_block = [](EspressoCore& core,
+                                     std::uint32_t address,
+                                     std::uint32_t size,
+                                     std::uint32_t next) {
+        core.memory.write32_be(address + 0x04U, size);
+        core.memory.write32_be(address + 0x0CU, next);
+        core.memory.write16_be(address + 0x10U, 0x4652U);
+    };
+
+    EspressoCore core(0x10000U);
+    register_coreinit_hle(core.hle);
+    core.configure_guest_heap(0x8000U, 0x9000U);
+    core.base_heap_handles[1] = heap;
+    core.mem2_heap_region_begin = heap;
+    core.mem2_heap_region_end = data_end;
+    initialize_heap(core, block_a, block_c);
+    initialize_block(core, block_a, 0x1000U, block_b);
+    initialize_block(core, block_b, 0x900U, block_c);
+    initialize_block(core, block_c, 0x500U, 0U);
+    core.memory.write32_be(heap + 0x48U, 0x3800U); // unrelated used list
+    core.memory.write32_be(heap + 0x4CU, 0x3800U);
+    initialize_block(core, 0x3800U, 0x777U, 0U);
+
+    const std::uint32_t total_import = core.hle.bind_import(
+        "coreinit", "MEMGetTotalFreeSizeForExpHeap");
+    const std::uint32_t allocatable_import = core.hle.bind_import(
+        "coreinit", "MEMGetAllocatableSizeForExpHeapEx");
+    const auto invoke = [&](std::uint32_t import, std::uint32_t handle,
+                            std::uint32_t alignment_bits) {
+        core.state.gpr[3] = handle;
+        core.state.gpr[4] = alignment_bits;
+        core.state.lr = return_address;
+        core.state.cia = import;
+        return core.run(1U);
+    };
+
+    for (std::uint32_t reg = 0; reg < core.state.gpr.size(); ++reg)
+    {
+        core.state.gpr[reg] = 0xA1000000U + reg * 0x101U;
+    }
+    core.state.gpr[3] = heap;
+    core.state.gpr[4] = 0x20U;
+    core.state.lr = return_address;
+    for (std::uint32_t reg = 0; reg < core.state.fpr.size(); ++reg)
+    {
+        core.state.fpr[reg] = 0x1111000000000000ULL + reg;
+        core.state.fpr_ps1[reg] = 0x2222000000000000ULL + reg;
+    }
+    const auto gprs_before = core.state.gpr;
+    const auto fprs_before = core.state.fpr;
+    const auto ps1_before = core.state.fpr_ps1;
+    core.state.cr = 0x12345678U;
+    core.state.xer = 0xA00000A5U;
+    core.state.ctr = 0xCAFEBABEU;
+    core.state.fpscr = 0x5A5AA55AU;
+    const auto cr_before = core.state.cr;
+    const auto xer_before = core.state.xer;
+    const auto ctr_before = core.state.ctr;
+    const auto fpscr_before = core.state.fpscr;
+    const std::uint32_t cursor_before = core.guest_heap_cursor;
+    const std::uint32_t limit_before = core.guest_heap_limit;
+    const auto handles_before = core.base_heap_handles;
+    const std::uint32_t region_begin_before = core.mem2_heap_region_begin;
+    const std::uint32_t region_end_before = core.mem2_heap_region_end;
+    std::vector<std::uint8_t> heap_before(data_end - heap);
+    core.memory.read_bytes(heap, heap_before);
+
+    RunResult result = invoke(allocatable_import, heap, 0x20U);
+    assert(result.reason == StopReason::instruction_limit);
+    // Each block loses 0xC bytes to 32-byte alignment:
+    // 0xFF4, 0x8F4, 0x4F4. Return the largest single candidate.
+    assert(core.state.gpr[3] == 0xFF4U);
+    assert(core.state.gpr[4] == 0x20U);
+    assert(core.state.cia == return_address);
+    assert(core.state.lr == return_address);
+    assert(core.state.cr == cr_before);
+    assert(core.state.xer == xer_before);
+    assert(core.state.ctr == ctr_before);
+    assert(core.state.fpscr == fpscr_before);
+    assert(core.state.fpr == fprs_before);
+    assert(core.state.fpr_ps1 == ps1_before);
+    for (std::size_t reg = 0; reg < core.state.gpr.size(); ++reg)
+    {
+        if (reg != 3U)
+        {
+            assert(core.state.gpr[reg] == gprs_before[reg]);
+        }
+    }
+    std::vector<std::uint8_t> heap_after(data_end - heap);
+    core.memory.read_bytes(heap, heap_after);
+    assert(heap_after == heap_before);
+    assert(core.guest_heap_cursor == cursor_before);
+    assert(core.guest_heap_limit == limit_before);
+    assert(core.base_heap_handles == handles_before);
+    assert(core.mem2_heap_region_begin == region_begin_before);
+    assert(core.mem2_heap_region_end == region_end_before);
+
+    // Total free bytes exceed the largest contiguous aligned allocation.
+    result = invoke(total_import, heap, 0U);
+    assert(result.reason == StopReason::instruction_limit);
+    const std::uint32_t total_free = core.state.gpr[3];
+    assert(total_free == 0x1E00U);
+    result = invoke(allocatable_import, heap, 4U);
+    assert(result.reason == StopReason::instruction_limit);
+    assert(core.state.gpr[3] == 0x1000U);
+    assert(total_free > core.state.gpr[3]);
+
+    // Direct edits to guest block metadata are observed on the next call.
+    core.memory.write32_be(block_b + 0x04U, 0x100U);
+    core.memory.write32_be(block_c + 0x04U, 0x80U);
+    core.memory.write32_be(block_a + 0x04U, 0x800U);
+    result = invoke(allocatable_import, heap, 4U);
+    assert(result.reason == StopReason::instruction_limit);
+    assert(core.state.gpr[3] == 0x800U);
+
+    // Empty free list is a valid heap and returns zero.
+    initialize_heap(core, 0U, 0U);
+    result = invoke(allocatable_import, heap, 4U);
+    assert(result.reason == StopReason::instruction_limit);
+    assert(core.state.gpr[3] == 0U);
+
+    const auto expect_hle_error = [&](std::uint32_t handle,
+                                      std::uint32_t alignment_bits,
+                                      const std::string& text) {
+        const RunResult error = invoke(allocatable_import, handle, alignment_bits);
+        assert(error.reason == StopReason::hle_error);
+        assert(error.detail.find(text) != std::string::npos);
+        assert(error.steps == 0U);
+    };
+    expect_hle_error(0U, 4U, "null heap handle");
+    expect_hle_error(heap, 0U, "zero alignment");
+    expect_hle_error(heap, 0x80000000U, "magnitude is not representable");
+    expect_hle_error(heap, 6U, "power of two and at least 4");
+
+    initialize_heap(core, block_a, block_a);
+    initialize_block(core, block_a, 0x100U, 0U);
+    core.memory.write32_be(block_a + 0x0CU, block_a);
+    expect_hle_error(heap, 4U, "cycle detected");
+
+    EspressoCore invalid_heap(0x10000U);
+    register_coreinit_hle(invalid_heap.hle);
+    const std::uint32_t invalid_import = invalid_heap.hle.bind_import(
+        "coreinit", "MEMGetAllocatableSizeForExpHeapEx");
+    invalid_heap.memory.write32_be(heap, 0xDEADBEEFU);
+    invalid_heap.state.gpr[3] = heap;
+    invalid_heap.state.gpr[4] = 4U;
+    invalid_heap.state.lr = return_address;
+    invalid_heap.state.cia = invalid_import;
+    const RunResult invalid_result = invalid_heap.run(1U);
+    assert(invalid_result.reason == StopReason::hle_error);
+    assert(invalid_result.detail.find("not an EXPH heap") != std::string::npos);
+
+    // The real initializer's first free block is 4-byte aligned, and both
+    // capacity queries agree for the initial single-block heap.
+    EspressoCore fresh(0x10000U);
+    register_coreinit_hle(fresh.hle);
+    fresh.configure_guest_heap(0x1000U, 0x8000U);
+    assert(initialize_default_guest_heaps(fresh));
+    const std::uint32_t fresh_handle = fresh.base_heap_handles[1];
+    const std::uint32_t fresh_block = fresh.memory.read32_be(fresh_handle + 0x40U);
+    const std::uint32_t fresh_block_size = fresh.memory.read32_be(fresh_block + 4U);
+    const std::uint32_t fresh_total_import = fresh.hle.bind_import(
+        "coreinit", "MEMGetTotalFreeSizeForExpHeap");
+    const std::uint32_t fresh_allocatable_import = fresh.hle.bind_import(
+        "coreinit", "MEMGetAllocatableSizeForExpHeapEx");
+    const auto invoke_fresh = [&](std::uint32_t import, std::uint32_t alignment) {
+        fresh.state.gpr[3] = fresh_handle;
+        fresh.state.gpr[4] = alignment;
+        fresh.state.lr = return_address;
+        fresh.state.cia = import;
+        return fresh.run(1U);
+    };
+    result = invoke_fresh(fresh_total_import, 4U);
+    assert(result.reason == StopReason::instruction_limit);
+    const std::uint32_t fresh_total = fresh.state.gpr[3];
+    assert(fresh_total == fresh_block_size);
+    result = invoke_fresh(fresh_allocatable_import, 4U);
+    assert(result.reason == StopReason::instruction_limit);
+    assert(fresh.state.gpr[3] == fresh_block_size);
+    assert(fresh.state.gpr[3] == fresh_total);
+
+    const std::uint64_t raw_start = static_cast<std::uint64_t>(fresh_block) + 0x14U;
+    const std::uint64_t aligned_start = (raw_start + 0x1FU) & ~std::uint64_t{0x1FU};
+    const std::uint64_t raw_end = raw_start + fresh_block_size;
+    const std::uint32_t expected_32 = aligned_start < raw_end
+        ? static_cast<std::uint32_t>(raw_end - aligned_start)
+        : 0U;
+    result = invoke_fresh(fresh_allocatable_import, 0x20U);
+    assert(result.reason == StopReason::instruction_limit);
+    const std::uint32_t positive_32 = fresh.state.gpr[3];
+    assert(positive_32 == expected_32);
+    result = invoke_fresh(fresh_allocatable_import, 0xFFFFFFE0U);
+    assert(result.reason == StopReason::instruction_limit);
+    assert(fresh.state.gpr[3] == positive_32);
+}
+
 void compare_and_conditional_branch_tests()
 {
     EspressoCore unsigned_compare_core(8);
@@ -9642,6 +9858,7 @@ int main(int argc, char* argv[])
     os_set_exception_callback_hle_tests();
     mem_get_base_heap_handle_hle_tests();
     mem_get_total_free_size_for_exp_heap_hle_tests();
+    mem_get_allocatable_size_for_exp_heap_ex_hle_tests();
     compare_and_conditional_branch_tests();
     instruction_sync_tests();
     floating_compare_unordered_tests();

@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <chrono>
 #include <limits>
 #include <optional>
@@ -60,9 +61,11 @@ static_assert(os_system_info_core_clock_speed / os_system_info_bus_clock_speed =
     }
 }
 
-[[nodiscard]] std::uint32_t total_free_size_for_exp_heap(
+template <typename Visitor>
+void visit_validated_exp_heap_free_blocks(
     const GuestMemory& memory,
-    std::uint32_t heap)
+    std::uint32_t heap,
+    Visitor&& visitor)
 {
     constexpr std::uint64_t guest_address_space_end = std::uint64_t{1} << 32U;
     if (heap == 0U)
@@ -112,7 +115,6 @@ static_assert(os_system_info_core_clock_speed / os_system_info_bus_clock_speed =
     // The current execution lane is single-threaded, so this read-only walk
     // cannot race guest heap mutations. Revisit when Cafe scheduling exists.
     std::set<std::uint32_t> visited;
-    std::uint64_t total = 0U;
     while (block != 0U)
     {
         if (!visited.insert(block).second)
@@ -158,16 +160,59 @@ static_assert(os_system_info_core_clock_speed / os_system_info_bus_clock_speed =
                 "MEMGetTotalFreeSizeForExpHeap free-list block has invalid tag");
         }
 
-        total += block_size;
-        if (total > std::numeric_limits<std::uint32_t>::max())
-        {
-            throw HleExecutionError(
-                "MEMGetTotalFreeSizeForExpHeap free-size overflow");
-        }
+        visitor(block, block_size, block_header_end, block_data_end);
         block = next;
     }
+}
 
+[[nodiscard]] std::uint32_t total_free_size_for_exp_heap(
+    const GuestMemory& memory,
+    std::uint32_t heap)
+{
+    std::uint64_t total = 0U;
+    visit_validated_exp_heap_free_blocks(
+        memory,
+        heap,
+        [&total](std::uint32_t, std::uint32_t block_size, std::uint64_t, std::uint64_t) {
+            total += block_size;
+            if (total > std::numeric_limits<std::uint32_t>::max())
+            {
+                throw HleExecutionError(
+                    "MEMGetTotalFreeSizeForExpHeap free-size overflow");
+            }
+        });
     return static_cast<std::uint32_t>(total);
+}
+
+[[nodiscard]] std::uint32_t allocatable_size_for_exp_heap(
+    const GuestMemory& memory,
+    std::uint32_t heap,
+    std::uint32_t alignment)
+{
+    std::uint64_t largest = 0U;
+    visit_validated_exp_heap_free_blocks(
+        memory,
+        heap,
+        [alignment, &largest](
+            std::uint32_t,
+            std::uint32_t,
+            std::uint64_t raw_start,
+            std::uint64_t raw_end) {
+            const std::uint64_t aligned_start =
+                (raw_start + alignment - 1U) &
+                ~static_cast<std::uint64_t>(alignment - 1U);
+            if (aligned_start >= raw_end)
+            {
+                return;
+            }
+            largest = std::max(largest, raw_end - aligned_start);
+        });
+    if (largest > std::numeric_limits<std::uint32_t>::max())
+    {
+        throw HleExecutionError(
+            "MEMGetAllocatableSizeForExpHeapEx result overflow");
+    }
+    return static_cast<std::uint32_t>(largest);
 }
 
 [[nodiscard]] std::uint64_t initial_os_system_base_time() noexcept
@@ -391,6 +436,41 @@ void register_coreinit_hle(HleDispatcher& dispatcher)
         [](EspressoCore& core) {
             const std::uint32_t heap = core.state.gpr[3];
             core.state.gpr[3] = total_free_size_for_exp_heap(core.memory, heap);
+        });
+    dispatcher.register_function(
+        "coreinit",
+        "MEMGetAllocatableSizeForExpHeapEx",
+        [](EspressoCore& core) {
+            const std::uint32_t heap = core.state.gpr[3];
+            const std::int32_t signed_alignment =
+                std::bit_cast<std::int32_t>(core.state.gpr[4]);
+            if (signed_alignment == 0)
+            {
+                throw HleExecutionError(
+                    "MEMGetAllocatableSizeForExpHeapEx received zero alignment");
+            }
+            if (signed_alignment == std::numeric_limits<std::int32_t>::min())
+            {
+                throw HleExecutionError(
+                    "MEMGetAllocatableSizeForExpHeapEx alignment magnitude is not representable");
+            }
+
+            // This size query normalizes negative alignment to its magnitude;
+            // it does not use negative alignment as a tail-allocation request.
+            const std::uint64_t alignment_magnitude = signed_alignment < 0
+                ? static_cast<std::uint64_t>(-static_cast<std::int64_t>(signed_alignment))
+                : static_cast<std::uint64_t>(signed_alignment);
+            if (alignment_magnitude < 4U || (alignment_magnitude & 3U) != 0U ||
+                (alignment_magnitude & (alignment_magnitude - 1U)) != 0U)
+            {
+                throw HleExecutionError(
+                    "MEMGetAllocatableSizeForExpHeapEx alignment must be a power of two and at least 4");
+            }
+
+            core.state.gpr[3] = allocatable_size_for_exp_heap(
+                core.memory,
+                heap,
+                static_cast<std::uint32_t>(alignment_magnitude));
         });
     dispatcher.register_function(
         "coreinit",
