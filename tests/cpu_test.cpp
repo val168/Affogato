@@ -8366,11 +8366,12 @@ int main(int argc, char* argv[])
 
         try
         {
+            constexpr std::size_t rpx_instruction_limit = 10'000'000U;
             affogato::Emulator emulator;
             const auto image = emulator.load_rpx(file);
             std::cout << "Loaded RPX entry point 0x" << std::hex << image.entry_point
                       << " (" << std::dec << image.loaded_sections << " sections)\n";
-            const auto session_result = emulator.run(1'000'000);
+            const auto session_result = emulator.run(rpx_instruction_limit);
             const auto& execution = session_result.execution;
             std::cout << "Stopped after " << execution.steps << " instructions at CIA 0x"
                       << std::hex << execution.cia << std::dec << ": ";
