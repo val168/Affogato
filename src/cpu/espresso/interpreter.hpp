@@ -159,6 +159,9 @@ public:
         current_thread_address = 0;
         guest_heap_cursor = 0;
         guest_heap_limit = 0;
+        base_heap_handles.fill(0U);
+        mem2_heap_region_begin = 0U;
+        mem2_heap_region_end = 0U;
         instruction_history_ = {};
         instruction_history_next_ = 0;
         instruction_history_count_ = 0;
@@ -170,6 +173,9 @@ public:
     {
         guest_heap_cursor = begin;
         guest_heap_limit = end;
+        base_heap_handles.fill(0U);
+        mem2_heap_region_begin = 0U;
+        mem2_heap_region_end = 0U;
     }
 
     [[nodiscard]] std::uint32_t allocate_guest_memory(
@@ -201,6 +207,9 @@ public:
     std::uint32_t current_thread_address{};
     std::uint32_t guest_heap_cursor{};
     std::uint32_t guest_heap_limit{};
+    std::array<std::uint32_t, 9> base_heap_handles{};
+    std::uint32_t mem2_heap_region_begin{};
+    std::uint32_t mem2_heap_region_end{};
 
 private:
     std::uint32_t current_instruction_word_{};

@@ -13,5 +13,6 @@ void register_coreinit_hle(HleDispatcher& dispatcher);
     EspressoCore& core,
     std::uint32_t stack_start,
     std::uint32_t stack_end);
+[[nodiscard]] bool initialize_default_guest_heaps(EspressoCore& core);
 
 }

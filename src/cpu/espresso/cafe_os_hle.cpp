@@ -26,6 +26,13 @@ constexpr std::uint32_t os_system_info_l2_core2_size = 512U * 1024U;
 constexpr std::uint32_t os_system_info_cpu_ratio = 5U;
 constexpr std::int64_t os_system_info_unix_epoch_offset = 946684800;
 constexpr std::uint32_t current_core_index = 1U;
+constexpr std::uint32_t mem2_base_heap_index = 1U;
+constexpr std::uint32_t mem2_expanded_heap_tag = 0x45585048U; // EXPH
+constexpr std::uint32_t mem2_expanded_heap_header_size = 0x54U;
+constexpr std::uint32_t mem2_expanded_heap_block_header_size = 0x14U;
+constexpr std::uint32_t mem2_minimum_heap_size = 0x6CU;
+constexpr std::uint32_t default_bump_heap_minimum_remaining = 0x1000U;
+constexpr std::uint16_t mem2_free_block_tag = 0x4652U; // 'FR'
 
 static_assert(os_system_info_timer_clock_speed == 62156250U);
 static_assert(os_system_info_core_clock_speed / os_system_info_bus_clock_speed ==
@@ -130,6 +137,105 @@ std::uint32_t initialize_default_guest_thread(
     return address;
 }
 
+bool initialize_default_guest_heaps(EspressoCore& core)
+{
+    if (core.base_heap_handles[mem2_base_heap_index] != 0U ||
+        core.mem2_heap_region_begin != 0U || core.mem2_heap_region_end != 0U)
+    {
+        return false;
+    }
+
+    const std::uint32_t allocation_begin = core.guest_heap_cursor;
+    const std::uint32_t allocation_end = core.guest_heap_limit & ~0xFU;
+    if (allocation_begin == 0U || allocation_end <= allocation_begin)
+    {
+        return false;
+    }
+
+    const std::uint64_t available =
+        static_cast<std::uint64_t>(allocation_end) - allocation_begin;
+    // Reserve one quarter of the loader-selected gap for MEM2 while retaining
+    // most of it for existing bump-allocated Cafe OS objects.
+    const std::uint64_t desired_mem2_size = std::max<std::uint64_t>(
+        mem2_minimum_heap_size,
+        (available + 3U) / 4U);
+    const std::uint64_t aligned_mem2_size =
+        (desired_mem2_size + 0xFU) & ~std::uint64_t{0xFU};
+    if (aligned_mem2_size > available)
+    {
+        return false;
+    }
+
+    const std::uint64_t mem2_begin_unaligned =
+        static_cast<std::uint64_t>(allocation_end) - aligned_mem2_size;
+    const std::uint64_t mem2_begin = mem2_begin_unaligned & ~std::uint64_t{0xFU};
+    const std::uint64_t mem2_end = allocation_end;
+    if (mem2_begin <= allocation_begin ||
+        mem2_begin - allocation_begin < default_bump_heap_minimum_remaining ||
+        mem2_end - mem2_begin < mem2_minimum_heap_size ||
+        mem2_end > std::numeric_limits<std::uint32_t>::max())
+    {
+        return false;
+    }
+
+    const std::uint64_t data_start =
+        mem2_begin + mem2_expanded_heap_header_size;
+    const std::uint64_t block_data_start =
+        data_start + mem2_expanded_heap_block_header_size;
+    if (data_start >= mem2_end || block_data_start >= mem2_end ||
+        mem2_end - mem2_begin < mem2_minimum_heap_size)
+    {
+        return false;
+    }
+
+    const auto handle = static_cast<std::uint32_t>(mem2_begin);
+    const auto heap_end = static_cast<std::uint32_t>(mem2_end);
+    const auto free_block = static_cast<std::uint32_t>(data_start);
+    try
+    {
+        // Validate the whole reserved range before touching guest bytes. The
+        // loader selected this interval from a mapped, unoccupied gap.
+        core.memory.validate_write_range(
+            handle, static_cast<std::size_t>(mem2_end - mem2_begin));
+    }
+    catch (const GuestMemoryFault&)
+    {
+        return false;
+    }
+
+    // This is a guest-visible EXPH header plus its genuine initial free block.
+    // The block occupies only the upper partition; the legacy bump allocator
+    // is capped at handle, so the two allocation models cannot overlap.
+    core.memory.zero_fill(
+        handle,
+        mem2_expanded_heap_header_size + mem2_expanded_heap_block_header_size);
+    core.memory.write32_be(handle + 0x00U, mem2_expanded_heap_tag);
+    core.memory.write32_be(handle + 0x18U, free_block);
+    core.memory.write32_be(handle + 0x1CU, heap_end);
+    core.memory.write32_be(handle + 0x30U, 0U); // no heap lock in single-lane mode
+
+    core.memory.write32_be(handle + 0x40U, free_block);
+    core.memory.write32_be(handle + 0x44U, free_block);
+    core.memory.write32_be(handle + 0x48U, 0U);
+    core.memory.write32_be(handle + 0x4CU, 0U);
+    core.memory.write16_be(handle + 0x50U, 0U); // group ID
+    core.memory.write16_be(handle + 0x52U, 0U); // heap attributes
+
+    core.memory.write32_be(free_block + 0x00U, 0U);
+    core.memory.write32_be(
+        free_block + 0x04U,
+        static_cast<std::uint32_t>(mem2_end - block_data_start));
+    core.memory.write32_be(free_block + 0x08U, 0U);
+    core.memory.write32_be(free_block + 0x0CU, 0U);
+    core.memory.write16_be(free_block + 0x10U, mem2_free_block_tag);
+
+    core.guest_heap_limit = handle;
+    core.mem2_heap_region_begin = handle;
+    core.mem2_heap_region_end = heap_end;
+    core.base_heap_handles[mem2_base_heap_index] = handle;
+    return true;
+}
+
 void register_coreinit_hle(HleDispatcher& dispatcher)
 {
     dispatcher.register_function(
@@ -150,6 +256,16 @@ void register_coreinit_hle(HleDispatcher& dispatcher)
         "OSGetCurrentThread",
         [](EspressoCore& core) {
             core.state.gpr[3] = core.current_thread_address;
+        });
+    dispatcher.register_function(
+        "coreinit",
+        "MEMGetBaseHeapHandle",
+        [](EspressoCore& core) {
+            constexpr std::size_t base_heap_count = 9U;
+            const std::uint32_t type = core.state.gpr[3];
+            core.state.gpr[3] = type < base_heap_count
+                ? core.base_heap_handles[type]
+                : 0U;
         });
     dispatcher.register_function(
         "coreinit",

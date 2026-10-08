@@ -7001,6 +7001,227 @@ void os_set_exception_callback_hle_tests()
     assert(no_thread.detail.find("no current guest OSThread") != std::string::npos);
 }
 
+void mem_get_base_heap_handle_hle_tests()
+{
+    constexpr std::uint32_t heap_tag = 0x45585048U; // EXPH
+    constexpr std::uint32_t header_size = 0x54U;
+    constexpr std::uint32_t block_header_size = 0x14U;
+    constexpr std::uint16_t free_block_tag = 0x4652U; // 'FR'
+    constexpr std::uint32_t return_address = 0x02005EE8U;
+
+    EspressoCore core(0x10000U);
+    register_coreinit_hle(core.hle);
+    core.configure_guest_heap(0x1000U, 0x8000U);
+    for (const std::uint32_t handle : core.base_heap_handles)
+    {
+        assert(handle == 0U);
+    }
+
+    const std::uint32_t thread = initialize_default_guest_thread(
+        core, 0xF000U, 0xE000U);
+    const std::uint32_t initial_cursor = core.guest_heap_cursor;
+    const std::uint32_t initial_allocator_limit = core.guest_heap_limit;
+    assert(initialize_default_guest_heaps(core));
+
+    const std::uint32_t handle = core.base_heap_handles[1];
+    assert(handle != 0U);
+    assert(core.base_heap_handles[0] == 0U);
+    assert(core.base_heap_handles[8] == 0U);
+    assert(core.mem2_heap_region_begin == handle);
+    assert(core.mem2_heap_region_end == initial_allocator_limit);
+    assert(core.guest_heap_cursor == initial_cursor);
+    assert(core.guest_heap_limit == handle);
+    assert(handle > thread + 0x6A0U);
+    assert((handle & 0xFU) == 0U);
+    assert(core.memory.read32_be(handle + 0x00U) == heap_tag);
+    assert(core.memory.read32_be(handle + 0x04U) == 0U);
+    assert(core.memory.read32_be(handle + 0x08U) == 0U);
+    assert(core.memory.read32_be(handle + 0x0CU) == 0U);
+    assert(core.memory.read32_be(handle + 0x10U) == 0U);
+    assert(core.memory.read32_be(handle + 0x14U) == 0U);
+    const std::uint32_t free_block = handle + header_size;
+    assert(core.memory.read32_be(handle + 0x18U) == free_block);
+    assert(core.memory.read32_be(handle + 0x1CU) == core.mem2_heap_region_end);
+    assert(core.memory.read32_be(handle + 0x30U) == 0U);
+    assert(core.memory.read32_be(handle + 0x40U) == free_block);
+    assert(core.memory.read32_be(handle + 0x44U) == free_block);
+    assert(core.memory.read32_be(handle + 0x48U) == 0U);
+    assert(core.memory.read32_be(handle + 0x4CU) == 0U);
+    assert(core.memory.read16_be(handle + 0x50U) == 0U);
+    assert(core.memory.read16_be(handle + 0x52U) == 0U);
+    assert(core.memory.read32_be(free_block + 0x00U) == 0U);
+    assert(core.memory.read32_be(free_block + 0x04U) ==
+           core.mem2_heap_region_end - free_block - block_header_size);
+    assert(core.memory.read32_be(free_block + 0x08U) == 0U);
+    assert(core.memory.read32_be(free_block + 0x0CU) == 0U);
+    assert(core.memory.read16_be(free_block + 0x10U) == free_block_tag);
+    core.memory.validate_write_range(
+        free_block, core.mem2_heap_region_end - free_block);
+    core.memory.validate_write_range(
+        core.mem2_heap_region_end - 1U, 1U);
+
+    const std::uint32_t get_handle = core.hle.bind_import(
+        "coreinit", "MEMGetBaseHeapHandle");
+    for (std::uint32_t reg = 0; reg < core.state.gpr.size(); ++reg)
+    {
+        core.state.gpr[reg] = 0xA1000000U + reg * 0x101U;
+    }
+    for (std::uint32_t reg = 0; reg < core.state.fpr.size(); ++reg)
+    {
+        core.state.fpr[reg] = 0x1111000000000000ULL + reg;
+        core.state.fpr_ps1[reg] = 0x2222000000000000ULL + reg;
+    }
+    core.state.cr = 0x12345678U;
+    core.state.xer = 0xA00000A5U;
+    core.state.ctr = 0xCAFEBABEU;
+    core.state.fpscr = 0x5A5AA55AU;
+    core.state.lr = return_address;
+    std::vector<std::uint8_t> heap_snapshot(core.mem2_heap_region_end - handle);
+    core.memory.read_bytes(handle, heap_snapshot);
+
+    const auto lookup = [&](std::uint32_t type, std::uint32_t expected) {
+        core.state.gpr[3] = type;
+        core.state.lr = return_address;
+        core.state.cia = get_handle;
+        auto gpr_before = core.state.gpr;
+        auto fpr_before = core.state.fpr;
+        auto ps1_before = core.state.fpr_ps1;
+        const auto cr_before = core.state.cr;
+        const auto xer_before = core.state.xer;
+        const auto ctr_before = core.state.ctr;
+        const auto fpscr_before = core.state.fpscr;
+        const auto lr_before = core.state.lr;
+        const std::uint32_t cursor_before = core.guest_heap_cursor;
+        const auto registry_before = core.base_heap_handles;
+
+        assert(core.step() == StepResult::executed);
+        assert(core.state.gpr[3] == expected);
+        assert(core.state.cia == return_address);
+        assert(core.state.lr == lr_before);
+        assert(core.state.cr == cr_before);
+        assert(core.state.xer == xer_before);
+        assert(core.state.ctr == ctr_before);
+        assert(core.state.fpscr == fpscr_before);
+        assert(core.state.fpr == fpr_before);
+        assert(core.state.fpr_ps1 == ps1_before);
+        for (std::uint32_t reg = 0; reg < core.state.gpr.size(); ++reg)
+        {
+            if (reg != 3U)
+            {
+                assert(core.state.gpr[reg] == gpr_before[reg]);
+            }
+        }
+        assert(core.guest_heap_cursor == cursor_before);
+        assert(core.base_heap_handles == registry_before);
+    };
+
+    lookup(1U, handle);
+    lookup(1U, handle);
+    lookup(0U, 0U);
+    lookup(8U, 0U);
+    lookup(9U, 0U);
+    lookup(0xFFFFFFFFU, 0U);
+    std::vector<std::uint8_t> heap_after_lookups(heap_snapshot.size());
+    core.memory.read_bytes(handle, heap_after_lookups);
+    assert(heap_after_lookups == heap_snapshot);
+
+    // Default bump allocations retain their established alignment and stay in
+    // the low partition, never overlapping the MEM2 heap or its metadata.
+    const std::uint32_t allocate_ex = core.hle.bind_import(
+        "coreinit", "MEMAllocFromDefaultHeapEx");
+    core.state.gpr[3] = 0x80U;
+    core.state.gpr[4] = 64U;
+    core.state.lr = return_address;
+    core.state.cia = allocate_ex;
+    assert(core.step() == StepResult::executed);
+    const std::uint32_t first_allocation = core.state.gpr[3];
+    core.state.gpr[3] = 0x100U;
+    core.state.gpr[4] = 256U;
+    core.state.lr = return_address;
+    core.state.cia = allocate_ex;
+    assert(core.step() == StepResult::executed);
+    const std::uint32_t second_allocation = core.state.gpr[3];
+    assert(first_allocation != 0U && (first_allocation & 63U) == 0U);
+    assert(second_allocation != 0U && (second_allocation & 255U) == 0U);
+    assert(first_allocation + 0x80U <= handle);
+    assert(second_allocation + 0x100U <= handle);
+    const std::uint32_t cursor_after_allocations = core.guest_heap_cursor;
+    assert(core.allocate_guest_memory(handle, 16U) == 0U);
+    assert(core.guest_heap_cursor == cursor_after_allocations);
+    assert(core.base_heap_handles[1] == handle);
+    assert(core.memory.read32_be(handle) == heap_tag);
+
+    // A small but viable selected gap initializes cleanly.
+    EspressoCore small_success(0x4000U);
+    small_success.configure_guest_heap(0x1000U, 0x2800U);
+    assert(initialize_default_guest_heaps(small_success));
+    assert(small_success.base_heap_handles[1] != 0U);
+    assert(small_success.mem2_heap_region_end == 0x2800U);
+    assert(small_success.memory.read32_be(small_success.base_heap_handles[1]) == heap_tag);
+
+    EspressoCore unaligned_boundary(0x4000U);
+    unaligned_boundary.configure_guest_heap(0x1001U, 0x280BU);
+    assert(initialize_default_guest_heaps(unaligned_boundary));
+    assert((unaligned_boundary.base_heap_handles[1] & 0xFU) == 0U);
+    assert(unaligned_boundary.mem2_heap_region_end == 0x2800U);
+
+    // Insufficient allocator room or an unmapped configured range fails
+    // transactionally: cursor, bounds, registry, and guest bytes stay intact.
+    EspressoCore too_small(0x4000U);
+    too_small.configure_guest_heap(0x1000U, 0x2000U);
+    too_small.memory.fill_bytes(0x1000U, 0x1000U, 0xA5U);
+    const auto too_small_cursor = too_small.guest_heap_cursor;
+    const auto too_small_limit = too_small.guest_heap_limit;
+    assert(!initialize_default_guest_heaps(too_small));
+    assert(too_small.guest_heap_cursor == too_small_cursor);
+    assert(too_small.guest_heap_limit == too_small_limit);
+    assert(too_small.base_heap_handles[1] == 0U);
+    assert(too_small.memory.read8(0x1000U) == 0xA5U);
+    assert(too_small.memory.read8(0x1FFFU) == 0xA5U);
+
+    EspressoCore unmapped(0x4000U);
+    unmapped.configure_guest_heap(0x1000U, 0x30000U);
+    assert(!initialize_default_guest_heaps(unmapped));
+    assert(unmapped.base_heap_handles[1] == 0U);
+    assert(unmapped.guest_heap_limit == 0x30000U);
+
+    EspressoCore near_address_limit(0x4000U);
+    near_address_limit.configure_guest_heap(0xFFFF0000U, 0xFFFFFFF0U);
+    assert(!initialize_default_guest_heaps(near_address_limit));
+    assert(near_address_limit.base_heap_handles[1] == 0U);
+    assert(near_address_limit.guest_heap_limit == 0xFFFFFFF0U);
+
+    // A full Emulator initializes the heap after RPX placement and OSThread
+    // allocation, before execution can reach the getter.
+    affogato::Emulator emulator(0x40000U);
+    const auto fixture_rpx = make_minimal_compressed_rpx(0x1000U);
+    static_cast<void>(emulator.load_rpx(fixture_rpx));
+    const EspressoCore& emulated_core = emulator.core();
+    const std::uint32_t startup_handle = emulated_core.base_heap_handles[1];
+    assert(startup_handle != 0U);
+    assert(emulated_core.current_thread_address != 0U);
+    assert(emulated_core.memory.read32_be(startup_handle) == heap_tag);
+    assert(emulated_core.guest_heap_limit == startup_handle);
+
+    EspressoCore independent(0x10000U);
+    independent.configure_guest_heap(0x1000U, 0x8000U);
+    assert(initialize_default_guest_heaps(independent));
+    const std::uint32_t independent_handle = independent.base_heap_handles[1];
+    assert(independent_handle != 0U);
+    independent.memory.write32_be(independent_handle, 0xDEADBEEFU);
+    assert(core.memory.read32_be(handle) == heap_tag);
+    independent.reset();
+    assert(independent.base_heap_handles[1] == 0U);
+    assert(independent.mem2_heap_region_begin == 0U);
+    assert(independent.mem2_heap_region_end == 0U);
+    assert(core.base_heap_handles[1] == handle);
+
+    core.reset();
+    assert(core.base_heap_handles[1] == 0U);
+    assert(core.mem2_heap_region_begin == 0U);
+    assert(core.mem2_heap_region_end == 0U);
+}
+
 void compare_and_conditional_branch_tests()
 {
     EspressoCore unsigned_compare_core(8);
@@ -9190,6 +9411,7 @@ int main(int argc, char* argv[])
     os_block_move_hle_tests();
     os_get_system_info_hle_tests();
     os_set_exception_callback_hle_tests();
+    mem_get_base_heap_handle_hle_tests();
     compare_and_conditional_branch_tests();
     instruction_sync_tests();
     floating_compare_unordered_tests();
