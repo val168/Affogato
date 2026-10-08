@@ -489,6 +489,7 @@ void set_record_result(CpuState& state, std::uint32_t value)
     case Opcode::floating_multiply_single: return "fmuls";
     case Opcode::floating_multiply_double: return "fmul";
     case Opcode::floating_multiply_add_single: return "fmadds";
+    case Opcode::floating_negative_multiply_subtract_double: return "fnmsub";
     case Opcode::floating_move_register: return "fmr";
     case Opcode::floating_negate: return "fneg";
     case Opcode::floating_absolute_value: return "fabs";
@@ -645,6 +646,7 @@ void add_history_source(
         opcode == Opcode::floating_multiply_single ||
         opcode == Opcode::floating_multiply_double ||
         opcode == Opcode::floating_multiply_add_single ||
+        opcode == Opcode::floating_negative_multiply_subtract_double ||
         opcode == Opcode::floating_subtract_double ||
         opcode == Opcode::floating_round_to_single)
     {
@@ -656,13 +658,16 @@ void add_history_source(
         entry.fp_arithmetic_b_raw = state.fpr[instruction.fp_source_b];
         entry.has_fp_arithmetic_single_bits =
             opcode != Opcode::floating_subtract_double &&
-            opcode != Opcode::floating_multiply_double;
+            opcode != Opcode::floating_multiply_double &&
+            opcode != Opcode::floating_negative_multiply_subtract_double;
         entry.fp_arithmetic_source_count = opcode == Opcode::floating_round_to_single
             ? 1U
-            : opcode == Opcode::floating_multiply_add_single ? 3U : 2U;
+            : (opcode == Opcode::floating_multiply_add_single ||
+               opcode == Opcode::floating_negative_multiply_subtract_double) ? 3U : 2U;
         if (opcode == Opcode::floating_multiply_single ||
             opcode == Opcode::floating_multiply_double ||
-            opcode == Opcode::floating_multiply_add_single)
+            opcode == Opcode::floating_multiply_add_single ||
+            opcode == Opcode::floating_negative_multiply_subtract_double)
         {
             entry.has_fp_arithmetic_source_c = true;
             entry.fp_arithmetic_source_c = instruction.fp_source_c;
@@ -2229,6 +2234,91 @@ StepResult EspressoCore::step()
         const bool rounded_up = inexact && result != 0.0 &&
             ((result > 0.0 && error < 0.0) || (result < 0.0 && error > 0.0));
         commit_result(raw_result, inexact, rounded_up);
+        break;
+    }
+
+    case Opcode::floating_negative_multiply_subtract_double:
+    {
+        // Snapshot all three PS0 inputs before writing; frD may alias any operand.
+        const std::uint64_t a_raw = state.fpr[instruction.fp_source_a];
+        const std::uint64_t b_raw = state.fpr[instruction.fp_source_b];
+        const std::uint64_t c_raw = state.fpr[instruction.fp_source_c];
+        const auto commit_result = [&](std::uint64_t raw_result,
+                                       bool known_exact) {
+            state.fpr[instruction.fp_register] = raw_result;
+            if (known_exact)
+            {
+                set_double_arithmetic_result_status(state, raw_result, false, false);
+            }
+            else
+            {
+                // TODO: classify exact binary64 FMA FI/FR/XX and OX/UX behavior.
+                set_double_arithmetic_fprf(state, raw_result);
+            }
+            pending_history_entry_.has_fp_arithmetic_result = true;
+            pending_history_entry_.fp_arithmetic_result_raw = raw_result;
+        };
+        const auto commit_quiet_nan = [&](std::uint64_t nan_source) {
+            commit_result(quiet_nan_binary64_bits(nan_source), true);
+        };
+        const auto signal_invalid = [&](std::uint32_t subexception,
+                                        std::uint64_t nan_source) {
+            raise_fpscr_exception(state, subexception);
+            if ((state.fpscr & fpscr::ve_mask) == 0U)
+            {
+                commit_quiet_nan(nan_source);
+            }
+        };
+
+        if (is_binary64_signaling_nan(a_raw) || is_binary64_signaling_nan(b_raw) ||
+            is_binary64_signaling_nan(c_raw))
+        {
+            const std::uint64_t signaling_source = is_binary64_signaling_nan(a_raw)
+                ? a_raw
+                : is_binary64_signaling_nan(c_raw) ? c_raw : b_raw;
+            signal_invalid(fpscr::vxsnan_mask, signaling_source);
+            break;
+        }
+        if (is_binary64_nan(a_raw) || is_binary64_nan(c_raw) || is_binary64_nan(b_raw))
+        {
+            const std::uint64_t nan_source = is_binary64_nan(a_raw) ? a_raw
+                : is_binary64_nan(c_raw) ? c_raw : b_raw;
+            commit_quiet_nan(nan_source);
+            break;
+        }
+
+        const bool a_zero = is_binary64_zero(a_raw);
+        const bool c_zero = is_binary64_zero(c_raw);
+        const bool a_infinity = is_binary64_infinity(a_raw);
+        const bool c_infinity = is_binary64_infinity(c_raw);
+        if ((a_infinity && c_zero) || (a_zero && c_infinity))
+        {
+            signal_invalid(fpscr::vximz_mask, 0U);
+            break;
+        }
+
+        const bool b_infinity = is_binary64_infinity(b_raw);
+        const bool product_is_infinite = a_infinity || c_infinity;
+        const bool product_is_negative =
+            ((a_raw ^ c_raw) & binary64_sign_mask) != 0U;
+        const bool b_is_negative = (b_raw & binary64_sign_mask) != 0U;
+        if (product_is_infinite && b_infinity && product_is_negative == b_is_negative)
+        {
+            signal_invalid(fpscr::vxisi_mask, 0U);
+            break;
+        }
+
+        const double a = std::bit_cast<double>(a_raw);
+        const double b = std::bit_cast<double>(b_raw);
+        const double c = std::bit_cast<double>(c_raw);
+        const double temporary = std::fma(a, c, -b);
+        const std::uint64_t temporary_raw = std::bit_cast<std::uint64_t>(temporary);
+        const std::uint64_t raw_result = is_binary64_nan(temporary_raw)
+            ? temporary_raw
+            : temporary_raw ^ binary64_sign_mask;
+
+        const bool known_exact = c_zero || a_infinity || c_infinity || b_infinity;
+        commit_result(raw_result, known_exact);
         break;
     }
 
