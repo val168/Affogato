@@ -49,6 +49,7 @@ enum class Opcode
     floating_divide_single,
     floating_add_single,
     floating_multiply_single,
+    floating_multiply_double,
     floating_multiply_add_single,
     floating_move_register,
     floating_negate,

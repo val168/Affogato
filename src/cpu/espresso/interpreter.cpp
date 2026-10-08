@@ -213,6 +213,15 @@ void set_double_arithmetic_fprf(CpuState& state, std::uint64_t raw_result) noexc
     return roundoff_a + roundoff_b;
 }
 
+[[nodiscard]] double binary64_multiplication_error(
+    double a,
+    double c,
+    double rounded_result) noexcept
+{
+    // One correctly rounded fused operation exposes the product's rounding residual.
+    return std::fma(a, c, -rounded_result);
+}
+
 void set_single_arithmetic_result_status(
     CpuState& state,
     std::uint32_t single_bits,
@@ -478,6 +487,7 @@ void set_record_result(CpuState& state, std::uint32_t value)
     case Opcode::floating_divide_single: return "fdivs";
     case Opcode::floating_add_single: return "fadds";
     case Opcode::floating_multiply_single: return "fmuls";
+    case Opcode::floating_multiply_double: return "fmul";
     case Opcode::floating_multiply_add_single: return "fmadds";
     case Opcode::floating_move_register: return "fmr";
     case Opcode::floating_negate: return "fneg";
@@ -631,6 +641,7 @@ void add_history_source(
     }
     if (opcode == Opcode::floating_divide_single || opcode == Opcode::floating_add_single ||
         opcode == Opcode::floating_multiply_single ||
+        opcode == Opcode::floating_multiply_double ||
         opcode == Opcode::floating_multiply_add_single ||
         opcode == Opcode::floating_subtract_double ||
         opcode == Opcode::floating_round_to_single)
@@ -641,11 +652,14 @@ void add_history_source(
         entry.fp_arithmetic_source_b = instruction.fp_source_b;
         entry.fp_arithmetic_a_raw = state.fpr[instruction.fp_source_a];
         entry.fp_arithmetic_b_raw = state.fpr[instruction.fp_source_b];
-        entry.has_fp_arithmetic_single_bits = opcode != Opcode::floating_subtract_double;
+        entry.has_fp_arithmetic_single_bits =
+            opcode != Opcode::floating_subtract_double &&
+            opcode != Opcode::floating_multiply_double;
         entry.fp_arithmetic_source_count = opcode == Opcode::floating_round_to_single
             ? 1U
             : opcode == Opcode::floating_multiply_add_single ? 3U : 2U;
         if (opcode == Opcode::floating_multiply_single ||
+            opcode == Opcode::floating_multiply_double ||
             opcode == Opcode::floating_multiply_add_single)
         {
             entry.has_fp_arithmetic_source_c = true;
@@ -2119,6 +2133,85 @@ StepResult EspressoCore::step()
             pending_history_entry_.has_fp_arithmetic_result = true;
             pending_history_entry_.fp_arithmetic_result_raw = raw_result;
         }
+        break;
+    }
+
+    case Opcode::floating_multiply_double:
+    {
+        // fmul consumes frA.PS0 and frC.PS0 and writes only destination PS0.
+        const std::uint64_t a_raw = state.fpr[instruction.fp_source_a];
+        const std::uint64_t c_raw = state.fpr[instruction.fp_source_c];
+        const auto commit_result = [&](std::uint64_t raw_result,
+                                       bool inexact,
+                                       bool rounded_up) {
+            state.fpr[instruction.fp_register] = raw_result;
+            set_double_arithmetic_result_status(state, raw_result, inexact, rounded_up);
+            pending_history_entry_.has_fp_arithmetic_result = true;
+            pending_history_entry_.fp_arithmetic_result_raw = raw_result;
+        };
+        const auto commit_quiet_nan = [&](std::uint64_t nan_source) {
+            commit_result(quiet_nan_binary64_bits(nan_source), false, false);
+        };
+        const auto signal_invalid = [&](std::uint32_t subexception,
+                                        std::uint64_t nan_source) {
+            raise_fpscr_exception(state, subexception);
+            if ((state.fpscr & fpscr::ve_mask) == 0U)
+            {
+                commit_quiet_nan(nan_source);
+            }
+        };
+
+        if (is_binary64_signaling_nan(a_raw) || is_binary64_signaling_nan(c_raw))
+        {
+            signal_invalid(fpscr::vxsnan_mask,
+                is_binary64_signaling_nan(a_raw) ? a_raw : c_raw);
+            break;
+        }
+        if (is_binary64_nan(a_raw) || is_binary64_nan(c_raw))
+        {
+            commit_quiet_nan(is_binary64_nan(a_raw) ? a_raw : c_raw);
+            break;
+        }
+
+        const bool a_zero = is_binary64_zero(a_raw);
+        const bool c_zero = is_binary64_zero(c_raw);
+        const bool a_infinity = is_binary64_infinity(a_raw);
+        const bool c_infinity = is_binary64_infinity(c_raw);
+        if ((a_infinity && c_zero) || (a_zero && c_infinity))
+        {
+            signal_invalid(fpscr::vximz_mask, 0U);
+            break;
+        }
+
+        const double a = std::bit_cast<double>(a_raw);
+        const double c = std::bit_cast<double>(c_raw);
+        const double result = a * c;
+        const std::uint64_t raw_result = std::bit_cast<std::uint64_t>(result);
+        if (a_infinity || c_infinity)
+        {
+            commit_result(raw_result, false, false);
+            break;
+        }
+
+        const bool subnormal_or_overflow_case =
+            !binary64_normal_or_zero(a_raw) || !binary64_normal_or_zero(c_raw) ||
+            !binary64_normal_or_zero(raw_result) ||
+            (is_binary64_zero(raw_result) && !a_zero && !c_zero);
+        if (subnormal_or_overflow_case)
+        {
+            // TODO: model exact binary64 underflow/overflow exception and rounding flags.
+            state.fpr[instruction.fp_register] = raw_result;
+            set_double_arithmetic_fprf(state, raw_result);
+            pending_history_entry_.has_fp_arithmetic_result = true;
+            pending_history_entry_.fp_arithmetic_result_raw = raw_result;
+            break;
+        }
+
+        const double error = binary64_multiplication_error(a, c, result);
+        const bool inexact = error != 0.0;
+        const bool rounded_up = inexact && result != 0.0 &&
+            ((result > 0.0 && error < 0.0) || (result < 0.0 && error > 0.0));
+        commit_result(raw_result, inexact, rounded_up);
         break;
     }
 
