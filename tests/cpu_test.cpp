@@ -7181,6 +7181,169 @@ void os_get_thread_priority_hle_tests()
     expect_hle_error(0xFFFFFF00U, "wraps guest address space");
 }
 
+void os_init_message_queue_hle_tests()
+{
+    constexpr std::uint32_t queue = 0x1000U;
+    constexpr std::uint32_t messages = 0x2000U;
+    constexpr std::uint32_t queue_size = 0x3CU;
+    constexpr std::uint32_t message_array_size = 0x200U;
+    constexpr std::uint32_t return_address = 0x02760BE0U;
+    constexpr std::uint8_t sentinel = 0xA5U;
+
+    EspressoCore core(0x4000U);
+    register_coreinit_hle(core.hle);
+    const std::uint32_t initialize =
+        core.hle.bind_import("coreinit", "OSInitMessageQueue");
+    core.memory.fill_bytes(queue - 1U, queue_size + 2U, sentinel);
+    core.memory.fill_bytes(messages, message_array_size, 0x5AU);
+    std::vector<std::uint8_t> messages_before(message_array_size);
+    core.memory.read_bytes(messages, messages_before);
+
+    for (std::uint32_t reg = 0; reg < core.state.gpr.size(); ++reg)
+    {
+        core.state.gpr[reg] = 0xA5000000U + reg * 0x101U;
+    }
+    for (std::uint32_t reg = 0; reg < core.state.fpr.size(); ++reg)
+    {
+        core.state.fpr[reg] = 0x1111000000000000ULL + reg;
+        core.state.fpr_ps1[reg] = 0x2222000000000000ULL + reg;
+    }
+    core.state.cr = 0x12345678U;
+    core.state.xer = 0xA00000A5U;
+    core.state.ctr = 0xCAFEBABEU;
+    core.state.fpscr = 0x5A5AA55AU;
+    core.state.lr = return_address;
+    core.state.gpr[3] = queue;
+    core.state.gpr[4] = messages;
+    core.state.gpr[5] = 0x20U;
+    const auto gprs_before = core.state.gpr;
+    const auto fprs_before = core.state.fpr;
+    const auto ps1_before = core.state.fpr_ps1;
+    const std::uint32_t cr_before = core.state.cr;
+    const std::uint32_t xer_before = core.state.xer;
+    const std::uint32_t ctr_before = core.state.ctr;
+    const std::uint32_t fpscr_before = core.state.fpscr;
+    const std::uint32_t lr_before = core.state.lr;
+    const std::uint32_t heap_cursor_before = core.guest_heap_cursor;
+    const std::uint32_t heap_limit_before = core.guest_heap_limit;
+    const auto base_heap_handles_before = core.base_heap_handles;
+    const std::uint32_t mem2_begin_before = core.mem2_heap_region_begin;
+    const std::uint32_t mem2_end_before = core.mem2_heap_region_end;
+
+    core.state.cia = initialize;
+    const RunResult initialized = core.run(1U);
+    assert(initialized.reason == StopReason::instruction_limit);
+    assert(initialized.steps == 1U);
+    assert(core.state.cia == return_address);
+    assert(core.state.lr == lr_before);
+    assert(core.state.gpr == gprs_before);
+    assert(core.state.fpr == fprs_before);
+    assert(core.state.fpr_ps1 == ps1_before);
+    assert(core.state.cr == cr_before);
+    assert(core.state.xer == xer_before);
+    assert(core.state.ctr == ctr_before);
+    assert(core.state.fpscr == fpscr_before);
+    assert(core.guest_heap_cursor == heap_cursor_before);
+    assert(core.guest_heap_limit == heap_limit_before);
+    assert(core.base_heap_handles == base_heap_handles_before);
+    assert(core.mem2_heap_region_begin == mem2_begin_before);
+    assert(core.mem2_heap_region_end == mem2_end_before);
+
+    assert(core.memory.read32_be(queue + 0x00U) == 0x6D536751U);
+    assert(core.memory.read32_be(queue + 0x04U) == 0U);
+    assert(core.memory.read32_be(queue + 0x08U) == 0U);
+    assert(core.memory.read32_be(queue + 0x0CU) == 0U);
+    assert(core.memory.read32_be(queue + 0x10U) == 0U);
+    assert(core.memory.read32_be(queue + 0x14U) == queue);
+    assert(core.memory.read32_be(queue + 0x18U) == 0U);
+    assert(core.memory.read32_be(queue + 0x1CU) == 0U);
+    assert(core.memory.read32_be(queue + 0x20U) == 0U);
+    assert(core.memory.read32_be(queue + 0x24U) == queue);
+    assert(core.memory.read32_be(queue + 0x28U) == 0U);
+    assert(core.memory.read32_be(queue + 0x2CU) == messages);
+    assert(core.memory.read32_be(queue + 0x30U) == 0x20U);
+    assert(core.memory.read32_be(queue + 0x34U) == 0U);
+    assert(core.memory.read32_be(queue + 0x38U) == 0U);
+    assert(core.memory.read8(queue - 1U) == sentinel);
+    assert(core.memory.read8(queue + queue_size) == sentinel);
+    std::vector<std::uint8_t> messages_after(message_array_size);
+    core.memory.read_bytes(messages, messages_after);
+    assert(messages_after == messages_before);
+
+    // Reinitialization deterministically clears stale queue state and accepts
+    // a guest message pointer without dereferencing it, including size zero.
+    core.memory.write32_be(queue + 0x04U, 0x11111111U);
+    core.memory.write32_be(queue + 0x08U, 0x22222222U);
+    core.memory.write32_be(queue + 0x0CU, 0x33333333U);
+    core.memory.write32_be(queue + 0x20U, 0x44444444U);
+    core.memory.write32_be(queue + 0x34U, 7U);
+    core.memory.write32_be(queue + 0x38U, 9U);
+    core.state.gpr[3] = queue;
+    core.state.gpr[4] = 0xDEADBEEFU;
+    core.state.gpr[5] = 0U;
+    core.state.cia = initialize;
+    assert(core.step() == StepResult::executed);
+    assert(core.state.cia == return_address);
+    assert(core.state.gpr[3] == queue);
+    assert(core.state.gpr[4] == 0xDEADBEEFU);
+    assert(core.state.gpr[5] == 0U);
+    assert(core.memory.read32_be(queue + 0x00U) == 0x6D536751U);
+    assert(core.memory.read32_be(queue + 0x04U) == 0U);
+    assert(core.memory.read32_be(queue + 0x08U) == 0U);
+    assert(core.memory.read32_be(queue + 0x0CU) == 0U);
+    assert(core.memory.read32_be(queue + 0x10U) == 0U);
+    assert(core.memory.read32_be(queue + 0x14U) == queue);
+    assert(core.memory.read32_be(queue + 0x18U) == 0U);
+    assert(core.memory.read32_be(queue + 0x1CU) == 0U);
+    assert(core.memory.read32_be(queue + 0x20U) == 0U);
+    assert(core.memory.read32_be(queue + 0x24U) == queue);
+    assert(core.memory.read32_be(queue + 0x28U) == 0U);
+    assert(core.memory.read32_be(queue + 0x2CU) == 0xDEADBEEFU);
+    assert(core.memory.read32_be(queue + 0x30U) == 0U);
+    assert(core.memory.read32_be(queue + 0x34U) == 0U);
+    assert(core.memory.read32_be(queue + 0x38U) == 0U);
+    core.memory.read_bytes(messages, messages_after);
+    assert(messages_after == messages_before);
+
+    const auto expect_queue_error = [&](std::uint32_t invalid_queue,
+                                        const std::string& expected_detail) {
+        core.state.cia = initialize;
+        core.state.lr = return_address;
+        core.state.gpr[3] = invalid_queue;
+        core.state.gpr[4] = messages;
+        core.state.gpr[5] = 1U;
+        const std::uint32_t gpr3_before = core.state.gpr[3];
+        const RunResult result = core.run(1U);
+        assert(result.reason == StopReason::hle_error);
+        assert(result.steps == 0U);
+        assert(result.detail.find(expected_detail) != std::string::npos);
+        assert(core.state.gpr[3] == gpr3_before);
+    };
+    expect_queue_error(0U, "null OSMessageQueue pointer");
+    expect_queue_error(0x4000U, "outside writable guest memory");
+    expect_queue_error(0xFFFFFFF0U, "wraps guest address space");
+
+    EspressoCore partial_core(0x1000U);
+    register_coreinit_hle(partial_core.hle);
+    partial_core.memory.map_region(0x2000U, 0x10U);
+    partial_core.memory.fill_bytes(0x2000U, 0x10U, sentinel);
+    const std::uint32_t partial_initialize = partial_core.hle.bind_import(
+        "coreinit", "OSInitMessageQueue");
+    partial_core.state.cia = partial_initialize;
+    partial_core.state.lr = return_address;
+    partial_core.state.gpr[3] = 0x2000U;
+    partial_core.state.gpr[4] = 0x3000U;
+    partial_core.state.gpr[5] = 1U;
+    const RunResult partial_fault = partial_core.run(1U);
+    assert(partial_fault.reason == StopReason::hle_error);
+    assert(partial_fault.detail.find("outside writable guest memory") !=
+           std::string::npos);
+    for (std::uint32_t address = 0x2000U; address < 0x2010U; ++address)
+    {
+        assert(partial_core.memory.read8(address) == sentinel);
+    }
+}
+
 void mem_get_base_heap_handle_hle_tests()
 {
     constexpr std::uint32_t heap_tag = 0x45585048U; // EXPH
@@ -10037,6 +10200,7 @@ int main(int argc, char* argv[])
     os_get_system_info_hle_tests();
     os_set_exception_callback_hle_tests();
     os_get_thread_priority_hle_tests();
+    os_init_message_queue_hle_tests();
     mem_get_base_heap_handle_hle_tests();
     mem_get_total_free_size_for_exp_heap_hle_tests();
     mem_get_allocatable_size_for_exp_heap_ex_hle_tests();

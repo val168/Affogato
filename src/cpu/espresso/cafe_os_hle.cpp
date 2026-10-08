@@ -39,6 +39,17 @@ constexpr std::int32_t os_thread_default_app_priority = 16;
 constexpr std::int32_t os_thread_app_priority_base = 64;
 constexpr std::int32_t os_thread_default_internal_priority =
     os_thread_app_priority_base + os_thread_default_app_priority;
+constexpr std::uint32_t os_message_queue_size = 0x3CU;
+constexpr std::uint32_t os_message_queue_tag = 0x6D536751U; // mSgQ
+constexpr std::uint32_t os_message_queue_send_queue_offset = 0x0CU;
+constexpr std::uint32_t os_message_queue_recv_queue_offset = 0x1CU;
+constexpr std::uint32_t os_message_queue_messages_offset = 0x2CU;
+constexpr std::uint32_t os_message_queue_capacity_offset = 0x30U;
+constexpr std::uint32_t os_message_queue_first_offset = 0x34U;
+constexpr std::uint32_t os_message_queue_used_offset = 0x38U;
+constexpr std::uint32_t os_thread_queue_head_offset = 0x00U;
+constexpr std::uint32_t os_thread_queue_tail_offset = 0x04U;
+constexpr std::uint32_t os_thread_queue_parent_offset = 0x08U;
 constexpr std::uint32_t mem2_base_heap_index = 1U;
 constexpr std::uint32_t mem2_expanded_heap_tag = 0x45585048U; // EXPH
 constexpr std::uint32_t mem2_expanded_heap_header_size = 0x54U;
@@ -56,6 +67,36 @@ constexpr std::uint16_t mem2_free_block_tag = 0x4652U; // 'FR'
 static_assert(os_system_info_timer_clock_speed == 62156250U);
 static_assert(os_system_info_core_clock_speed / os_system_info_bus_clock_speed ==
               os_system_info_cpu_ratio);
+
+void initialize_guest_thread_queue(
+    GuestMemory& memory,
+    std::uint32_t thread_queue,
+    std::uint32_t parent)
+{
+    memory.write32_be(thread_queue + os_thread_queue_head_offset, 0U);
+    memory.write32_be(thread_queue + os_thread_queue_tail_offset, 0U);
+    memory.write32_be(thread_queue + os_thread_queue_parent_offset, parent);
+    memory.write32_be(
+        thread_queue + os_thread_queue_parent_offset + sizeof(std::uint32_t), 0U);
+}
+
+void initialize_guest_message_queue(
+    GuestMemory& memory,
+    std::uint32_t queue,
+    std::uint32_t messages,
+    std::uint32_t size)
+{
+    memory.zero_fill(queue, os_message_queue_size);
+    memory.write32_be(queue, os_message_queue_tag);
+    initialize_guest_thread_queue(
+        memory, queue + os_message_queue_send_queue_offset, queue);
+    initialize_guest_thread_queue(
+        memory, queue + os_message_queue_recv_queue_offset, queue);
+    memory.write32_be(queue + os_message_queue_messages_offset, messages);
+    memory.write32_be(queue + os_message_queue_capacity_offset, size);
+    memory.write32_be(queue + os_message_queue_first_offset, 0U);
+    memory.write32_be(queue + os_message_queue_used_offset, 0U);
+}
 
 [[nodiscard]] std::optional<std::uint32_t> exception_callback_array_offset(
     std::uint32_t exception_type) noexcept
@@ -797,6 +838,40 @@ void register_coreinit_hle(HleDispatcher& dispatcher)
         "OSInitMutex",
         [](EspressoCore& core) {
             initialize_guest_os_mutex(core, core.state.gpr[3], core.state.gpr[4]);
+        });
+    dispatcher.register_function(
+        "coreinit",
+        "OSInitMessageQueue",
+        [](EspressoCore& core) {
+            constexpr std::uint64_t guest_address_space_end =
+                std::uint64_t{1} << 32U;
+            const std::uint32_t queue = core.state.gpr[3];
+            const std::uint32_t messages = core.state.gpr[4];
+            const std::uint32_t size = core.state.gpr[5];
+            if (queue == 0U)
+            {
+                throw HleExecutionError(
+                    "OSInitMessageQueue received null OSMessageQueue pointer");
+            }
+            if (static_cast<std::uint64_t>(queue) + os_message_queue_size >
+                guest_address_space_end)
+            {
+                throw HleExecutionError(
+                    "OSInitMessageQueue OSMessageQueue address wraps guest address space");
+            }
+            try
+            {
+                // Validate the entire object before zeroing or populating it,
+                // so an invalid queue cannot be left partially initialized.
+                core.memory.validate_write_range(queue, os_message_queue_size);
+            }
+            catch (const GuestMemoryFault&)
+            {
+                throw HleExecutionError(
+                    "OSInitMessageQueue OSMessageQueue is outside writable guest memory");
+            }
+
+            initialize_guest_message_queue(core.memory, queue, messages, size);
         });
     dispatcher.register_function(
         "coreinit",
