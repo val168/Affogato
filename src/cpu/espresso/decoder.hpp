@@ -49,6 +49,7 @@ enum class Opcode
     compare_unsigned_register,
     floating_compare_unordered,
     floating_divide_single,
+    floating_divide_double,
     floating_add_single,
     floating_add_double,
     floating_multiply_single,
