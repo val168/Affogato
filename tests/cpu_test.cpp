@@ -6819,6 +6819,188 @@ void os_get_system_info_hle_tests()
     assert(core.memory.read32_be(address) == bus_clock_speed);
 }
 
+void os_set_exception_callback_hle_tests()
+{
+    struct CallbackType
+    {
+        std::uint32_t exception_type;
+        std::uint32_t callback_array_offset;
+    };
+    constexpr std::array<CallbackType, 5> supported_types{{
+        {2U, 0x630U}, // DSI
+        {3U, 0x63CU}, // ISI
+        {6U, 0x648U}, // Program
+        {11U, 0x654U}, // Performance monitor
+        {5U, 0x680U}, // Alignment
+    }};
+    constexpr std::uint32_t thread_size = 0x6A0U;
+    constexpr std::uint32_t return_address = 0x80U;
+
+    EspressoCore core(0x5000U);
+    register_coreinit_hle(core.hle);
+    core.configure_guest_heap(0x1000U, 0x2000U);
+    const std::uint32_t thread = initialize_default_guest_thread(
+        core, 0x4800U, 0x4000U);
+    const std::uint32_t import = core.hle.bind_import(
+        "coreinit", "OSSetExceptionCallback");
+    assert(core.current_thread_address == thread);
+
+    for (std::uint32_t reg = 0; reg < core.state.gpr.size(); ++reg)
+    {
+        core.state.gpr[reg] = 0xA0000000U + reg * 0x10101U;
+    }
+    for (std::uint32_t reg = 0; reg < core.state.fpr.size(); ++reg)
+    {
+        core.state.fpr[reg] = 0x1111000000000000ULL + reg;
+        core.state.fpr_ps1[reg] = 0x2222000000000000ULL + reg;
+    }
+    core.state.cr = 0x12345678U;
+    core.state.xer = 0xA00000A5U;
+    core.state.ctr = 0xCAFEBABEU;
+    core.state.fpscr = 0x5A5AA55AU;
+    core.memory.write32_be(0x80U, 0xDEADBEEFU);
+
+    // The callback fields are three-element arrays. This HLE must select only
+    // the CPU1 member, matching the default thread's current affinity.
+    core.memory.write32_be(thread + 0x630U, 0xAAAAAAAAU);
+    core.memory.write32_be(thread + 0x638U, 0xCCCCCCCCU);
+
+    const auto invoke = [&](std::uint32_t exception_type,
+                            std::uint32_t callback,
+                            std::uint32_t slot,
+                            std::uint32_t expected_previous,
+                            std::uint32_t return_cia) {
+        core.state.gpr[3] = exception_type;
+        core.state.gpr[4] = callback;
+        core.state.lr = return_cia;
+        core.state.cia = import;
+        const auto gpr_before = core.state.gpr;
+        const auto fpr_before = core.state.fpr;
+        const auto fpr_ps1_before = core.state.fpr_ps1;
+        const auto cr_before = core.state.cr;
+        const auto xer_before = core.state.xer;
+        const auto lr_before = core.state.lr;
+        const auto ctr_before = core.state.ctr;
+        const auto fpscr_before = core.state.fpscr;
+        std::array<std::uint8_t, thread_size> thread_before{};
+        for (std::uint32_t byte = 0; byte < thread_size; ++byte)
+        {
+            thread_before[byte] = core.memory.read8(thread + byte);
+        }
+        const std::uint32_t unrelated_memory_before = core.memory.read32_be(0x80U);
+
+        assert(core.step() == StepResult::executed);
+        assert(core.state.cia == return_cia);
+        assert(core.state.gpr[3] == expected_previous);
+        for (std::uint32_t reg = 0; reg < core.state.gpr.size(); ++reg)
+        {
+            if (reg != 3U)
+            {
+                assert(core.state.gpr[reg] == gpr_before[reg]);
+            }
+        }
+        assert(core.state.fpr == fpr_before);
+        assert(core.state.fpr_ps1 == fpr_ps1_before);
+        assert(core.state.cr == cr_before);
+        assert(core.state.xer == xer_before);
+        assert(core.state.lr == lr_before);
+        assert(core.state.ctr == ctr_before);
+        assert(core.state.fpscr == fpscr_before);
+        assert(core.memory.read32_be(slot) == callback);
+        assert(core.memory.read32_be(0x80U) == unrelated_memory_before);
+        for (std::uint32_t byte = 0; byte < thread_size; ++byte)
+        {
+            if (byte < slot - thread || byte >= slot - thread + 4U)
+            {
+                assert(core.memory.read8(thread + byte) == thread_before[byte]);
+            }
+        }
+    };
+
+    std::uint32_t return_cia = return_address;
+    for (const CallbackType& type : supported_types)
+    {
+        const std::uint32_t slot = thread + type.callback_array_offset + 4U;
+        assert(core.memory.read32_be(slot) == 0U);
+
+        const std::uint32_t first_callback = type.exception_type == 2U
+            ? 0x020347D0U
+            : 0x02001000U + type.exception_type * 4U;
+        invoke(type.exception_type, first_callback, slot, 0U, return_cia);
+        assert(core.state.gpr[4] == first_callback);
+        assert(core.memory.read32_be(slot) == first_callback);
+        if (type.exception_type == 2U)
+        {
+            assert(slot == thread + 0x634U);
+            assert(core.memory.read32_be(thread + 0x630U) == 0xAAAAAAAAU);
+            assert(core.memory.read32_be(thread + 0x638U) == 0xCCCCCCCCU);
+        }
+
+        const std::uint32_t replacement = type.exception_type == 2U
+            ? 0x02034820U
+            : 0x02002000U + type.exception_type * 4U;
+        return_cia += 4U;
+        invoke(type.exception_type, replacement, slot, first_callback, return_cia);
+        assert(core.memory.read32_be(slot) == replacement);
+
+        // The HLE reads the guest-visible slot each time, with no hidden copy.
+        core.memory.write32_be(slot, 0x12345678U);
+        return_cia += 4U;
+        invoke(type.exception_type, 0U, slot, 0x12345678U, return_cia);
+        assert(core.memory.read32_be(slot) == 0U); // NULL unregisters the callback.
+        return_cia += 4U;
+    }
+
+    // Unsupported exception kinds return NULL and leave every callback array
+    // member untouched.
+    std::array<std::uint32_t, 15> callback_slots{};
+    std::size_t slot_index = 0;
+    for (const CallbackType& type : supported_types)
+    {
+        for (std::uint32_t core_index = 0; core_index < 3U; ++core_index)
+        {
+            const std::uint32_t slot = thread + type.callback_array_offset +
+                core_index * 4U;
+            const std::uint32_t sentinel = 0xB0000000U +
+                static_cast<std::uint32_t>(slot_index) * 0x101U;
+            callback_slots[slot_index++] = slot;
+            core.memory.write32_be(slot, sentinel);
+        }
+    }
+    constexpr std::array<std::uint32_t, 10> unsupported_types{
+        0U, 1U, 4U, 7U, 8U, 9U, 10U, 12U, 13U, 14U};
+    for (const std::uint32_t exception_type : unsupported_types)
+    {
+        core.state.gpr[3] = exception_type;
+        core.state.gpr[4] = 0x12345678U;
+        core.state.lr = return_cia;
+        core.state.cia = import;
+        assert(core.step() == StepResult::executed);
+        assert(core.state.gpr[3] == 0U);
+        assert(core.state.gpr[4] == 0x12345678U);
+        assert(core.state.cia == return_cia);
+        for (std::size_t index = 0; index < callback_slots.size(); ++index)
+        {
+            const std::uint32_t expected = 0xB0000000U +
+                static_cast<std::uint32_t>(index) * 0x101U;
+            assert(core.memory.read32_be(callback_slots[index]) == expected);
+        }
+        return_cia += 4U;
+    }
+
+    // A supported call without a current guest thread is an explicit HLE error.
+    EspressoCore no_thread_core(0x100U);
+    register_coreinit_hle(no_thread_core.hle);
+    no_thread_core.state.cia = no_thread_core.hle.bind_import(
+        "coreinit", "OSSetExceptionCallback");
+    no_thread_core.state.lr = 0x40U;
+    no_thread_core.state.gpr[3] = 2U;
+    no_thread_core.state.gpr[4] = 0x020347D0U;
+    const RunResult no_thread = no_thread_core.run(1U);
+    assert(no_thread.reason == StopReason::hle_error);
+    assert(no_thread.detail.find("no current guest OSThread") != std::string::npos);
+}
+
 void compare_and_conditional_branch_tests()
 {
     EspressoCore unsigned_compare_core(8);
@@ -9007,6 +9189,7 @@ int main(int argc, char* argv[])
     memcpy_hle_tests();
     os_block_move_hle_tests();
     os_get_system_info_hle_tests();
+    os_set_exception_callback_hle_tests();
     compare_and_conditional_branch_tests();
     instruction_sync_tests();
     floating_compare_unordered_tests();

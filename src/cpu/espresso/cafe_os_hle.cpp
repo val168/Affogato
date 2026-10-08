@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <chrono>
 #include <limits>
+#include <optional>
 #include <stdexcept>
 
 namespace affogato::cpu::espresso
@@ -24,10 +25,25 @@ constexpr std::uint32_t os_system_info_l2_core1_size = 2U * 1024U * 1024U;
 constexpr std::uint32_t os_system_info_l2_core2_size = 512U * 1024U;
 constexpr std::uint32_t os_system_info_cpu_ratio = 5U;
 constexpr std::int64_t os_system_info_unix_epoch_offset = 946684800;
+constexpr std::uint32_t current_core_index = 1U;
 
 static_assert(os_system_info_timer_clock_speed == 62156250U);
 static_assert(os_system_info_core_clock_speed / os_system_info_bus_clock_speed ==
               os_system_info_cpu_ratio);
+
+[[nodiscard]] std::optional<std::uint32_t> exception_callback_array_offset(
+    std::uint32_t exception_type) noexcept
+{
+    switch (exception_type)
+    {
+    case 2U: return 0x630U; // DSI
+    case 3U: return 0x63CU; // ISI
+    case 5U: return 0x680U; // Alignment
+    case 6U: return 0x648U; // Program
+    case 11U: return 0x654U; // Performance monitor
+    default: return std::nullopt;
+    }
+}
 
 [[nodiscard]] std::uint64_t initial_os_system_base_time() noexcept
 {
@@ -134,6 +150,38 @@ void register_coreinit_hle(HleDispatcher& dispatcher)
         "OSGetCurrentThread",
         [](EspressoCore& core) {
             core.state.gpr[3] = core.current_thread_address;
+        });
+    dispatcher.register_function(
+        "coreinit",
+        "OSSetExceptionCallback",
+        [](EspressoCore& core) {
+            if (core.current_thread_address == 0U)
+            {
+                throw HleExecutionError(
+                    "OSSetExceptionCallback has no current guest OSThread");
+            }
+
+            const std::uint32_t exception_type = core.state.gpr[3];
+            const std::uint32_t callback = core.state.gpr[4];
+            const auto callback_array_offset =
+                exception_callback_array_offset(exception_type);
+            if (!callback_array_offset)
+            {
+                core.state.gpr[3] = 0U;
+                return;
+            }
+
+            // Affogato currently runs one guest execution lane, corresponding
+            // to CPU1 affinity on its default thread. Replace this with real
+            // per-core state when multicore scheduling is implemented.
+            const std::uint32_t slot = core.current_thread_address +
+                *callback_array_offset + current_core_index *
+                    static_cast<std::uint32_t>(sizeof(std::uint32_t));
+            // With no asynchronous guest interrupt delivery, this replacement
+            // is atomic in the current single-threaded execution model.
+            const std::uint32_t previous = core.memory.read32_be(slot);
+            core.memory.write32_be(slot, callback);
+            core.state.gpr[3] = previous;
         });
     dispatcher.register_function(
         "coreinit",
