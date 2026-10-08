@@ -23,6 +23,7 @@ enum class Opcode
     negate,
     extend_sign_byte,
     ori,
+    or_immediate_shifted,
     bitwise_or,
     bitwise_and,
     bitwise_and_complement,

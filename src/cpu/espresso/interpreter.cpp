@@ -448,6 +448,7 @@ void set_record_result(CpuState& state, std::uint32_t value)
     case Opcode::negate: return "neg";
     case Opcode::extend_sign_byte: return "extsb";
     case Opcode::ori: return "ori";
+    case Opcode::or_immediate_shifted: return "oris";
     case Opcode::xor_immediate: return "xori";
     case Opcode::xor_immediate_shifted: return "xoris";
     case Opcode::count_leading_zeros: return "cntlzw";
@@ -558,7 +559,8 @@ void add_history_source(
         entry.has_immediate = true;
         entry.immediate = instruction.immediate;
     }
-    else if (instruction.opcode == Opcode::xor_immediate ||
+    else if (instruction.opcode == Opcode::or_immediate_shifted ||
+             instruction.opcode == Opcode::xor_immediate ||
              instruction.opcode == Opcode::xor_immediate_shifted)
     {
         entry.has_immediate = true;
@@ -738,6 +740,7 @@ void add_history_source(
         add_history_source(entry, state, instruction.base);
         break;
     case Opcode::ori:
+    case Opcode::or_immediate_shifted:
     case Opcode::xor_immediate:
     case Opcode::xor_immediate_shifted:
     case Opcode::count_leading_zeros:
@@ -804,6 +807,7 @@ void add_history_source(
     case Opcode::negate:
     case Opcode::extend_sign_byte:
     case Opcode::ori:
+    case Opcode::or_immediate_shifted:
     case Opcode::xor_immediate:
     case Opcode::xor_immediate_shifted:
     case Opcode::count_leading_zeros:
@@ -1359,6 +1363,15 @@ StepResult EspressoCore::step()
             state.gpr[instruction.source] |
             static_cast<std::uint32_t>(instruction.immediate);
         break;
+
+    case Opcode::or_immediate_shifted:
+    {
+        const std::uint32_t source = state.gpr[instruction.source];
+        const std::uint32_t operand =
+            static_cast<std::uint32_t>(instruction.immediate) << 16U;
+        state.gpr[instruction.destination] = source | operand;
+        break;
+    }
 
     case Opcode::count_leading_zeros:
     {

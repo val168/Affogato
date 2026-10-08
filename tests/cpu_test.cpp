@@ -378,6 +378,12 @@ void decoder_tests()
     assert(ori.destination == 3);
     assert(ori.immediate == 0x1234);
 
+    const DecodedInstruction oris = decode(0x67FFFFFFU); // oris r31, r31, 0xFFFF
+    assert(oris.opcode == Opcode::or_immediate_shifted);
+    assert(oris.source == 31U);
+    assert(oris.destination == 31U);
+    assert(oris.immediate == 0xFFFF);
+
     const DecodedInstruction bit_or = decode(0x7C872B78U); // or r7, r4, r5
     assert(bit_or.opcode == Opcode::bitwise_or);
     assert(bit_or.source == 4);
@@ -2931,6 +2937,78 @@ void integer_alu_tests()
     assert(arithmetic_shift_core.step() == StepResult::executed);
     assert(arithmetic_shift_core.state.gpr[9] == 0xFFFFFFFEU);
     assert((arithmetic_shift_core.state.xer & 0x20000000U) != 0);
+}
+
+void or_immediate_shifted_tests()
+{
+    const auto encode_oris = [](std::uint8_t destination, std::uint8_t source,
+                                std::uint16_t immediate) {
+        return (25U << 26U) |
+            (static_cast<std::uint32_t>(source) << 21U) |
+            (static_cast<std::uint32_t>(destination) << 16U) | immediate;
+    };
+
+    constexpr std::uint32_t wind_waker_word = 0x67FFFFFFU;
+    const DecodedInstruction decoded = decode(wind_waker_word);
+    assert(decoded.opcode == Opcode::or_immediate_shifted);
+    assert(decoded.source == 31U);
+    assert(decoded.destination == 31U);
+    assert(decoded.immediate == 0xFFFF);
+
+    const auto execute = [&](std::uint8_t destination, std::uint8_t source,
+                             std::uint32_t source_value, std::uint16_t immediate) {
+        EspressoCore core(8U);
+        core.state.gpr.fill(0xA5A5A5A5U);
+        core.state.gpr[source] = source_value;
+        core.state.cr = 0x12345678U;
+        core.state.xer = 0xA00000A5U;
+        core.state.lr = 0x11223344U;
+        core.state.ctr = 0x55667788U;
+        core.state.fpscr = 0xCAFEBABEU;
+        core.state.fpr.fill(0x0123456789ABCDEFULL);
+        core.state.fpr_ps1.fill(0xFEDCBA9876543210ULL);
+        const std::uint32_t word = encode_oris(destination, source, immediate);
+        core.memory.write32_be(0U, word);
+        const auto original_gprs = core.state.gpr;
+        const auto original_fpr = core.state.fpr;
+        const auto original_fpr_ps1 = core.state.fpr_ps1;
+        const RunResult result = core.run(1U);
+        const std::uint32_t expected = source_value |
+            (static_cast<std::uint32_t>(immediate) << 16U);
+        assert(result.steps == 1U);
+        assert(result.reason == StopReason::instruction_limit);
+        assert(core.state.gpr[destination] == expected);
+        for (std::uint32_t reg = 0; reg < 32U; ++reg)
+        {
+            if (reg != destination)
+            {
+                assert(core.state.gpr[reg] == original_gprs[reg]);
+            }
+        }
+        assert(core.state.cr == 0x12345678U);
+        assert(core.state.xer == 0xA00000A5U);
+        assert(core.state.lr == 0x11223344U);
+        assert(core.state.ctr == 0x55667788U);
+        assert(core.state.fpscr == 0xCAFEBABEU);
+        assert(core.state.fpr == original_fpr);
+        assert(core.state.fpr_ps1 == original_fpr_ps1);
+        assert(core.memory.read32_be(0U) == word);
+        return std::pair{expected, result};
+    };
+
+    assert(execute(6U, 5U, 0x12345678U, 0x0000U).first == 0x12345678U);
+    assert(execute(6U, 5U, 0x12345678U, 0x0001U).first == 0x12355678U);
+    assert(execute(6U, 5U, 0x12345678U, 0x8000U).first == 0x92345678U);
+    assert(execute(6U, 5U, 0x12345678U, 0xFFFFU).first == 0xFFFF5678U);
+    assert(execute(5U, 5U, 0x12345678U, 0xFFFFU).first == 0xFFFF5678U);
+
+    // Exact Wind Waker instruction and generic source/destination aliasing.
+    const auto wind_waker = execute(31U, 31U, 0x12345678U, 0xFFFFU);
+    assert(wind_waker.first == 0xFFFF5678U);
+    const std::string trace = format_instruction_history(wind_waker.second);
+    assert(trace.find("oris r31=0x12345678 imm=0xFFFF -> r31=0xFFFF5678") !=
+           std::string::npos);
+    assert(execute(31U, 31U, 0xA5A51234U, 0xFFFFU).first == 0xFFFF1234U);
 }
 
 void extend_sign_byte_tests()
@@ -5746,6 +5824,7 @@ int main(int argc, char* argv[])
     guest_memory_tests();
     interpreter_tests();
     integer_alu_tests();
+    or_immediate_shifted_tests();
     extend_sign_byte_tests();
     leaf_function_abi_tests();
     floating_point_load_tests();
