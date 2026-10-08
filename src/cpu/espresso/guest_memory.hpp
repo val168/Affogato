@@ -136,6 +136,22 @@ public:
         write_bytes(destination, temporary);
     }
 
+    // Guest ranges may overlap, matching memmove's contract. Validate both
+    // complete ranges before staging and writing so faults never partially move.
+    void move_bytes(std::uint32_t source, std::uint32_t destination, std::size_t length)
+    {
+        if (length == 0)
+        {
+            return;
+        }
+        validate_access(source, length, GuestMemoryAccess::read);
+        validate_access(destination, length, GuestMemoryAccess::write);
+
+        std::vector<std::uint8_t> temporary(length);
+        read_bytes(source, temporary);
+        write_bytes(destination, temporary);
+    }
+
     void fill_bytes(std::uint32_t address, std::size_t length, std::uint8_t value)
     {
         if (length == 0)

@@ -146,6 +146,23 @@ void register_coreinit_hle(HleDispatcher& dispatcher)
         });
     dispatcher.register_function(
         "coreinit",
+        "OSBlockMove",
+        [](EspressoCore& core) {
+            const std::uint32_t destination = core.state.gpr[3];
+            const std::uint32_t source = core.state.gpr[4];
+            const std::uint32_t size = core.state.gpr[5];
+            const std::uint32_t flush = core.state.gpr[6];
+
+            core.memory.move_bytes(source, destination, size);
+            core.state.gpr[3] = destination;
+
+            // Cafe can flush cache state after OSBlockMove. Affogato exposes
+            // coherent GuestMemory and has no D-cache/GPU cache model yet, so
+            // the flush flag is accepted but has no additional effect.
+            (void)flush;
+        });
+    dispatcher.register_function(
+        "coreinit",
         "OSFastMutex_Init",
         [](EspressoCore& core) {
             constexpr std::uint32_t fast_mutex_size = 0x2CU;

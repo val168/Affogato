@@ -4791,6 +4791,148 @@ void memcpy_hle_tests()
     assert(core.state.gpr[5] == 2U);
 }
 
+void os_block_move_hle_tests()
+{
+    EspressoCore core(0x20U);
+    register_coreinit_hle(core.hle);
+    core.memory.map_region(0x20U, 0x20U);
+    core.memory.fill_bytes(0U, 0x40U, 0xCCU);
+    const std::uint32_t import = core.hle.bind_import("coreinit", "OSBlockMove");
+
+    const auto invoke = [&](std::uint32_t destination, std::uint32_t source,
+                            std::uint32_t size, std::uint32_t flush,
+                            std::uint32_t return_address) {
+        core.state.cia = import;
+        core.state.lr = return_address;
+        core.state.gpr[3] = destination;
+        core.state.gpr[4] = source;
+        core.state.gpr[5] = size;
+        core.state.gpr[6] = flush;
+        assert(core.step() == StepResult::executed);
+        assert(core.state.cia == return_address);
+        assert(core.state.gpr[3] == destination);
+        assert(core.state.gpr[4] == source);
+        assert(core.state.gpr[5] == size);
+        assert(core.state.gpr[6] == flush);
+    };
+
+    core.memory.write8(1U, 0x5AU);
+    invoke(3U, 1U, 1U, 0U, 0x80U);
+    assert(core.memory.read8(2U) == 0xCCU);
+    assert(core.memory.read8(3U) == 0x5AU);
+    assert(core.memory.read8(4U) == 0xCCU);
+
+    const std::array<std::uint8_t, 5> unaligned{0x10U, 0x20U, 0x30U, 0x40U, 0x50U};
+    core.memory.write_bytes(7U, unaligned);
+    invoke(0x0DU, 7U, static_cast<std::uint32_t>(unaligned.size()), 0U, 0x84U);
+    std::array<std::uint8_t, 5> unaligned_result{};
+    core.memory.read_bytes(0x0DU, unaligned_result);
+    assert(unaligned_result == unaligned);
+    assert(core.memory.read8(0x0CU) == 0xCCU);
+    assert(core.memory.read8(0x12U) == 0xCCU);
+
+    const auto reset_overlap_bytes = [&]() {
+        constexpr std::array<std::uint8_t, 8> bytes{0, 1, 2, 3, 4, 5, 6, 7};
+        core.memory.write_bytes(0x10U, bytes);
+    };
+    std::array<std::uint8_t, 8> overlap_result{};
+    reset_overlap_bytes();
+    invoke(0x12U, 0x10U, 6U, 0U, 0x88U);
+    core.memory.read_bytes(0x10U, overlap_result);
+    assert((overlap_result == std::array<std::uint8_t, 8>{0, 1, 0, 1, 2, 3, 4, 5}));
+
+    reset_overlap_bytes();
+    invoke(0x10U, 0x12U, 6U, 0U, 0x8CU);
+    core.memory.read_bytes(0x10U, overlap_result);
+    assert((overlap_result == std::array<std::uint8_t, 8>{2, 3, 4, 5, 6, 7, 6, 7}));
+
+    reset_overlap_bytes();
+    invoke(0x10U, 0x10U, 8U, 0U, 0x90U);
+    core.memory.read_bytes(0x10U, overlap_result);
+    assert((overlap_result == std::array<std::uint8_t, 8>{0, 1, 2, 3, 4, 5, 6, 7}));
+
+    // Both source and destination can independently cross flat -> sparse storage.
+    const std::array<std::uint8_t, 6> cross_source{0x20U, 0x26U, 0x31U,
+                                                  0x42U, 0x53U, 0x64U};
+    core.memory.write_bytes(0x1DU, cross_source);
+    invoke(0x08U, 0x1DU, 6U, 0U, 0x94U);
+    std::array<std::uint8_t, 6> cross_result{};
+    core.memory.read_bytes(0x08U, cross_result);
+    assert(cross_result == cross_source);
+
+    const std::array<std::uint8_t, 6> destination_cross_source{1, 3, 5, 7, 9, 11};
+    core.memory.write_bytes(0x0AU, destination_cross_source);
+    invoke(0x1DU, 0x0AU, 6U, 1U, 0x98U);
+    core.memory.read_bytes(0x1DU, cross_result);
+    assert(cross_result == destination_cross_source);
+
+    // Overlap across the backing-store boundary still stages original bytes.
+    const std::array<std::uint8_t, 8> spanning_overlap{0xA0U, 0xA1U, 0xA2U, 0xA3U,
+                                                       0xA4U, 0xA5U, 0xA6U, 0xA7U};
+    core.memory.write_bytes(0x1CU, spanning_overlap);
+    invoke(0x1EU, 0x1CU, 6U, 0U, 0x9CU);
+    std::array<std::uint8_t, 8> spanning_result{};
+    core.memory.read_bytes(0x1CU, spanning_result);
+    assert((spanning_result == std::array<std::uint8_t, 8>{
+        0xA0U, 0xA1U, 0xA0U, 0xA1U, 0xA2U, 0xA3U, 0xA4U, 0xA5U}));
+
+    // Zero length never touches invalid guest addresses but still returns dst.
+    invoke(0xFFFFFFFFU, 0xFFFFFFFEU, 0U, 0U, 0xA0U);
+
+    // Invalid source: no destination byte changes.
+    core.memory.write_bytes(0x10U, std::array<std::uint8_t, 4>{0xB1U, 0xB2U, 0xB3U, 0xB4U});
+    core.state.cia = import;
+    core.state.lr = 0xA4U;
+    core.state.gpr[3] = 0x10U;
+    core.state.gpr[4] = 0x40U;
+    core.state.gpr[5] = 2U;
+    core.state.gpr[6] = 0U;
+    const RunResult invalid_source = core.run(1U);
+    assert(invalid_source.reason == StopReason::memory_fault);
+    assert(invalid_source.detail.find("read 2 byte(s)") != std::string::npos);
+    assert(core.memory.read32_be(0x10U) == 0xB1B2B3B4U);
+
+    // A partly mapped source also faults transactionally.
+    core.state.cia = import;
+    core.state.lr = 0xA8U;
+    core.state.gpr[3] = 0x10U;
+    core.state.gpr[4] = 0x3EU;
+    core.state.gpr[5] = 4U;
+    core.state.gpr[6] = 0U;
+    const RunResult partial_source = core.run(1U);
+    assert(partial_source.reason == StopReason::memory_fault);
+    assert(partial_source.detail.find("read 4 byte(s)") != std::string::npos);
+    assert(core.memory.read32_be(0x10U) == 0xB1B2B3B4U);
+
+    // Invalid/partly mapped destination writes nothing, including its mapped prefix.
+    core.memory.write8(0x3EU, 0xD1U);
+    core.memory.write8(0x3FU, 0xD2U);
+    core.state.cia = import;
+    core.state.lr = 0xACU;
+    core.state.gpr[3] = 0x3EU;
+    core.state.gpr[4] = 0x10U;
+    core.state.gpr[5] = 4U;
+    core.state.gpr[6] = 1U;
+    const RunResult invalid_destination = core.run(1U);
+    assert(invalid_destination.reason == StopReason::memory_fault);
+    assert(invalid_destination.detail.find("write 4 byte(s)") != std::string::npos);
+    assert(core.memory.read8(0x3EU) == 0xD1U);
+    assert(core.memory.read8(0x3FU) == 0xD2U);
+
+    // flush=0 and flush=1 have the same coherent GuestMemory behavior for now.
+    core.memory.write_bytes(0x10U, std::array<std::uint8_t, 3>{0x20U, 0x26U, 0x30U});
+    invoke(0x18U, 0x10U, 2U, 0U, 0xB0U);
+    assert(core.memory.read16_be(0x18U) == 0x2026U);
+    core.memory.zero_fill(0x18U, 2U);
+    invoke(0x18U, 0x10U, 2U, 1U, 0xB4U);
+    assert(core.memory.read16_be(0x18U) == 0x2026U);
+
+    // Wind Waker regression: copy the two-byte UTF-16 value 0x2026.
+    core.memory.write16_be(0x14U, 0x2026U);
+    invoke(0x16U, 0x14U, 2U, 0U, 0xB8U);
+    assert(core.memory.read16_be(0x16U) == 0x2026U);
+}
+
 void compare_and_conditional_branch_tests()
 {
     EspressoCore unsigned_compare_core(8);
@@ -6356,6 +6498,7 @@ int main(int argc, char* argv[])
     guest_mutex_tests();
     memset_hle_tests();
     memcpy_hle_tests();
+    os_block_move_hle_tests();
     compare_and_conditional_branch_tests();
     instruction_sync_tests();
     floating_compare_unordered_tests();
