@@ -357,6 +357,18 @@ void decoder_tests()
     assert(!subfc.record);
     assert(decode(0x7C6C5C10U).opcode == Opcode::unsupported); // subfco remains unsupported
 
+    const DecodedInstruction subfe = decode(0x7D8C6110U); // subfe r12, r12, r12
+    assert(subfe.opcode == Opcode::subtract_from_extended);
+    assert(subfe.destination == 12U);
+    assert(subfe.base == 12U);
+    assert(subfe.source == 12U);
+    assert(((0x7D8C6110U >> 1U) & 0x3FFU) == 136U);
+    assert(!subfe.record);
+    assert(decode(0x7D8C6111U).opcode == Opcode::subtract_from_extended);
+    assert(decode(0x7D8C6111U).record);
+    assert(decode((0x7D8C6110U & ~(0x3FFU << 1U)) | (648U << 1U)).opcode ==
+           Opcode::unsupported); // subfeo remains unsupported
+
     const DecodedInstruction mullw = decode(0x7FDFF1D6U); // mullw r30, r31, r30
     assert(mullw.opcode == Opcode::multiply_low_word);
     assert(mullw.destination == 30);
@@ -2937,6 +2949,171 @@ void integer_alu_tests()
     assert(arithmetic_shift_core.step() == StepResult::executed);
     assert(arithmetic_shift_core.state.gpr[9] == 0xFFFFFFFEU);
     assert((arithmetic_shift_core.state.xer & 0x20000000U) != 0);
+}
+
+void subtract_from_extended_tests()
+{
+    constexpr std::uint32_t xer_ca = 0x20000000U;
+    constexpr std::uint32_t xer_ov = 0x40000000U;
+    constexpr std::uint32_t xer_so = 0x80000000U;
+    const auto encode_subfe = [](std::uint8_t destination, std::uint8_t ra,
+                                 std::uint8_t rb, bool record = false,
+                                 bool overflow_enable = false) {
+        const std::uint32_t xo = 136U + (overflow_enable ? 512U : 0U);
+        return (31U << 26U) |
+            (static_cast<std::uint32_t>(destination) << 21U) |
+            (static_cast<std::uint32_t>(ra) << 16U) |
+            (static_cast<std::uint32_t>(rb) << 11U) |
+            (xo << 1U) | static_cast<std::uint32_t>(record);
+    };
+
+    constexpr std::uint32_t wind_waker_word = 0x7D8C6110U;
+    const DecodedInstruction wind_waker = decode(wind_waker_word);
+    assert(wind_waker.opcode == Opcode::subtract_from_extended);
+    assert(wind_waker.destination == 12U);
+    assert(wind_waker.base == 12U);
+    assert(wind_waker.source == 12U);
+    assert(((wind_waker_word >> 1U) & 0x3FFU) == 136U);
+    assert(!wind_waker.record);
+    const DecodedInstruction record_form = decode(encode_subfe(3U, 4U, 5U, true));
+    assert(record_form.opcode == Opcode::subtract_from_extended);
+    assert(record_form.record);
+    assert(decode(encode_subfe(3U, 4U, 5U, false, true)).opcode ==
+           Opcode::unsupported); // subfeo remains unsupported
+
+    const auto execute = [&](std::uint8_t destination, std::uint8_t ra,
+                             std::uint8_t rb, std::uint32_t a, std::uint32_t b,
+                             bool carry_in, bool record = false, bool so = false) {
+        EspressoCore core(8U);
+        core.state.gpr.fill(0xA5A5A5A5U);
+        core.state.gpr[ra] = a;
+        core.state.gpr[rb] = b;
+        constexpr std::uint32_t initial_cr = 0x12345678U;
+        const std::uint32_t initial_xer = 0x400000A5U |
+            (so ? xer_so : 0U) | (carry_in ? xer_ca : 0U);
+        core.state.cr = initial_cr;
+        core.state.xer = initial_xer;
+        core.state.lr = 0x11223344U;
+        core.state.ctr = 0x55667788U;
+        core.state.fpscr = 0xCAFEBABEU;
+        core.state.fpr.fill(0x0123456789ABCDEFULL);
+        core.state.fpr_ps1.fill(0xFEDCBA9876543210ULL);
+        const std::uint32_t word = encode_subfe(destination, ra, rb, record);
+        core.memory.write32_be(0U, word);
+        const auto original_gprs = core.state.gpr;
+        const auto original_fpr = core.state.fpr;
+        const auto original_fpr_ps1 = core.state.fpr_ps1;
+        const std::uint64_t sum =
+            static_cast<std::uint64_t>(static_cast<std::uint32_t>(~a)) + b +
+            static_cast<std::uint32_t>(carry_in);
+        const std::uint32_t expected = static_cast<std::uint32_t>(sum);
+        const bool expected_carry = (sum >> 32U) != 0U;
+
+        const RunResult run_result = core.run(1U);
+        assert(run_result.steps == 1U);
+        assert(run_result.reason == StopReason::instruction_limit);
+        assert(core.state.cia == 4U);
+        assert(core.state.gpr[destination] == expected);
+        for (std::uint32_t reg = 0; reg < 32U; ++reg)
+        {
+            if (reg != destination)
+            {
+                assert(core.state.gpr[reg] == original_gprs[reg]);
+            }
+        }
+        assert(((core.state.xer & xer_ca) != 0U) == expected_carry);
+        assert((core.state.xer & ~xer_ca) == (initial_xer & ~xer_ca));
+        assert(core.state.lr == 0x11223344U);
+        assert(core.state.ctr == 0x55667788U);
+        assert(core.state.fpscr == 0xCAFEBABEU);
+        assert(core.state.fpr == original_fpr);
+        assert(core.state.fpr_ps1 == original_fpr_ps1);
+        assert(core.memory.read32_be(0U) == word);
+        if (record)
+        {
+            const std::uint32_t expected_cr0 =
+                (expected & 0x80000000U) != 0U ? 0x8U
+                : expected == 0U ? 0x2U : 0x4U;
+            assert(((core.state.cr >> 28U) & 0xFU) ==
+                   (expected_cr0 | static_cast<std::uint32_t>(so)));
+            assert((core.state.cr & 0x0FFFFFFFU) == (initial_cr & 0x0FFFFFFFU));
+        }
+        else
+        {
+            assert(core.state.cr == initial_cr);
+        }
+        return std::pair{expected, run_result};
+    };
+
+    assert(execute(3U, 4U, 5U, 5U, 5U, true).first == 0U);
+    assert(execute(3U, 4U, 5U, 5U, 5U, false).first == 0xFFFFFFFFU);
+    assert(execute(3U, 4U, 5U, 5U, 6U, false).first == 0U);
+    assert(execute(3U, 4U, 5U, 6U, 5U, true).first == 0xFFFFFFFFU);
+    assert(execute(3U, 4U, 5U, 0U, 0U, false).first == 0xFFFFFFFFU);
+    assert(execute(3U, 4U, 5U, 0U, 0U, true).first == 0U);
+    assert(execute(3U, 4U, 5U, 0xFFFFFFFFU, 0xFFFFFFFFU, true).first == 0U);
+    assert(execute(3U, 4U, 5U, 0xFFFFFFFFU, 0U, true).first == 1U);
+    assert(execute(3U, 4U, 5U, 0U, 0xFFFFFFFFU, false).first == 0xFFFFFFFEU);
+
+    assert(execute(4U, 4U, 5U, 5U, 6U, false).first == 0U); // rD == rA
+    assert(execute(5U, 4U, 5U, 5U, 6U, false).first == 0U); // rD == rB
+    assert(execute(5U, 5U, 5U, 5U, 5U, false).first == 0xFFFFFFFFU);
+    (void)execute(6U, 4U, 5U, 5U, 5U, true, true); // EQ
+    (void)execute(6U, 4U, 5U, 5U, 6U, false, true); // EQ, CA out set
+    (void)execute(6U, 4U, 5U, 5U, 7U, false, true); // GT
+    (void)execute(6U, 4U, 5U, 5U, 5U, false, true); // LT
+    (void)execute(6U, 4U, 5U, 5U, 5U, false, true, true); // LT | SO
+    (void)xer_ov;
+
+    // The exact Wind Waker subfc -> subfe carry chain.
+    EspressoCore wind_chain(8U);
+    wind_chain.state.gpr[10] = 0xFFFFF800U;
+    wind_chain.state.gpr[7] = 0x60B7A437U;
+    wind_chain.state.gpr[12] = 0xDEADBEEFU;
+    wind_chain.memory.write32_be(0U, 0x7D8A3810U); // subfc r12,r10,r7
+    wind_chain.memory.write32_be(4U, wind_waker_word); // subfe r12,r12,r12
+    const RunResult chain_result = wind_chain.run(2U);
+    assert(chain_result.steps == 2U);
+    assert(wind_chain.state.gpr[12] == 0xFFFFFFFFU);
+    assert((wind_chain.state.xer & xer_ca) == 0U);
+    const std::string chain_trace = format_instruction_history(chain_result);
+    assert(chain_trace.find("subfc r10=0xFFFFF800 r7=0x60B7A437 -> r12=0x60B7AC37 CA=0") !=
+           std::string::npos);
+    assert(chain_trace.find("subfe r12=0x60B7AC37 CAin=0 -> r12=0xFFFFFFFF CA=0") !=
+           std::string::npos);
+
+    EspressoCore record_trace_core(8U);
+    record_trace_core.state.gpr[4] = 5U;
+    record_trace_core.state.gpr[5] = 5U;
+    record_trace_core.state.xer = xer_ca;
+    record_trace_core.memory.write32_be(0U, encode_subfe(3U, 4U, 5U, true));
+    const RunResult record_trace = record_trace_core.run(1U);
+    assert(record_trace.instruction_history[0].opcode_name == "subfe.");
+    assert(format_instruction_history(record_trace).find("CAin=1") != std::string::npos);
+
+    // Verify subfc/subfe form a correct 64-bit unsigned borrow chain.
+    const auto run_64bit_subtract = [&encode_subfe](std::uint64_t a, std::uint64_t b) {
+        EspressoCore core(8U);
+        core.state.gpr[4] = static_cast<std::uint32_t>(a);
+        core.state.gpr[7] = static_cast<std::uint32_t>(a >> 32U);
+        core.state.gpr[5] = static_cast<std::uint32_t>(b);
+        core.state.gpr[8] = static_cast<std::uint32_t>(b >> 32U);
+        core.memory.write32_be(0U, (31U << 26U) | (3U << 21U) |
+            (4U << 16U) | (5U << 11U) | (8U << 1U)); // subfc r3,r4,r5
+        core.memory.write32_be(4U, encode_subfe(6U, 7U, 8U)); // subfe r6,r7,r8
+        const RunResult run = core.run(2U);
+        assert(run.steps == 2U);
+        return (static_cast<std::uint64_t>(core.state.gpr[6]) << 32U) |
+            core.state.gpr[3];
+    };
+    for (const auto [a, b] : std::array<std::pair<std::uint64_t, std::uint64_t>, 4>{
+             std::pair{0x0000000100000000ULL, 0x0000000200000001ULL},
+             std::pair{0x0000000100000001ULL, 0x0000000200000000ULL},
+             std::pair{0xFEDCBA9876543210ULL, 0x123456789ABCDEF0ULL},
+             std::pair{0xFFFFFFFFFFFFFFFFULL, 0ULL}})
+    {
+        assert(run_64bit_subtract(a, b) == b - a);
+    }
 }
 
 void multiply_high_word_unsigned_tests()
@@ -6159,6 +6336,7 @@ int main(int argc, char* argv[])
     guest_memory_tests();
     interpreter_tests();
     integer_alu_tests();
+    subtract_from_extended_tests();
     multiply_high_word_unsigned_tests();
     divide_word_unsigned_tests();
     shift_right_word_tests();
