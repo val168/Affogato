@@ -61,6 +61,8 @@ enum class Opcode
     store_string_word_immediate,
     load_word_update,
     load_word_indexed,
+    load_halfword_zero_indexed,
+    load_halfword_algebraic_indexed,
     store_word,
     store_multiple_word,
     store_word_indexed,
