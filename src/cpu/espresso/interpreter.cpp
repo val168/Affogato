@@ -49,6 +49,18 @@ constexpr std::uint64_t binary64_infinity_bits = 0x7FF0000000000000ULL;
     return (raw & ~binary64_sign_mask) == binary64_infinity_bits;
 }
 
+[[nodiscard]] std::uint64_t encode_fctiw_result(
+    std::uint32_t integer_bits,
+    std::uint64_t source_raw) noexcept
+{
+    std::uint64_t encoded = 0xFFF8000000000000ULL | integer_bits;
+    if (integer_bits == 0U && (source_raw & binary64_sign_mask) != 0U)
+    {
+        encoded |= 0x0000000100000000ULL;
+    }
+    return encoded;
+}
+
 // Espresso rounds the frC operand of single-precision multiply-family
 // instructions to a 25-bit significand before performing the operation.
 // Subnormals use the same rounding point after normalizing their significand.
@@ -71,7 +83,7 @@ constexpr std::uint64_t binary64_infinity_bits = 0x7FF0000000000000ULL;
 
 constexpr std::uint32_t implemented_invalid_masks =
     fpscr::vxsnan_mask | fpscr::vxzdz_mask | fpscr::vximz_mask |
-    fpscr::vxidi_mask | fpscr::vxisi_mask;
+    fpscr::vxidi_mask | fpscr::vxisi_mask | fpscr::vxcvi_mask;
 
 void update_fpscr_summaries(CpuState& state) noexcept
 {
@@ -493,6 +505,7 @@ void set_record_result(CpuState& state, std::uint32_t value)
     case Opcode::floating_move_register: return "fmr";
     case Opcode::floating_negate: return "fneg";
     case Opcode::floating_absolute_value: return "fabs";
+    case Opcode::floating_convert_to_integer_word_zero: return "fctiwz";
     case Opcode::floating_subtract_double: return "fsub";
     case Opcode::floating_round_to_single: return "frsp";
     case Opcode::compare_signed_immediate: return "cmpwi";
@@ -630,6 +643,14 @@ void add_history_source(
         entry.fp_move_source = instruction.fp_source_b;
         entry.fp_move_source_value = state.fpr[instruction.fp_source_b];
         entry.fp_move_destination_ps1 = state.fpr_ps1[instruction.fp_register];
+        return entry;
+    }
+    if (opcode == Opcode::floating_convert_to_integer_word_zero)
+    {
+        entry.has_fp_integer_conversion = true;
+        entry.fp_integer_conversion_source = instruction.fp_source_b;
+        entry.fp_integer_conversion_source_raw = state.fpr[instruction.fp_source_b];
+        entry.fp_integer_conversion_destination = instruction.fp_register;
         return entry;
     }
     if (opcode == Opcode::floating_compare_unordered)
@@ -1029,6 +1050,50 @@ std::string format_instruction_history(const RunResult& result)
                      << static_cast<unsigned>(entry.fp_compare_cr_field) << "=0x"
                      << std::hex << static_cast<unsigned>(entry.fp_compare_result)
                      << ", fpcc=0x" << static_cast<unsigned>(entry.fp_compare_result) << ')';
+            }
+        }
+        if (entry.has_fp_integer_conversion)
+        {
+            text << " f" << std::dec
+                 << static_cast<unsigned>(entry.fp_integer_conversion_source) << '=';
+            if (is_binary64_nan(entry.fp_integer_conversion_source_raw))
+            {
+                text << "NaN";
+            }
+            else
+            {
+                text << std::setprecision(17)
+                     << std::bit_cast<double>(entry.fp_integer_conversion_source_raw);
+            }
+            text << " [0x" << std::hex << std::setw(16)
+                 << entry.fp_integer_conversion_source_raw << ']';
+            if (entry.completed)
+            {
+                const std::int32_t integer = std::bit_cast<std::int32_t>(
+                    entry.fp_integer_conversion_result);
+                if (entry.fp_integer_conversion_write_suppressed)
+                {
+                    text << " -> f" << std::dec
+                         << static_cast<unsigned>(entry.fp_integer_conversion_destination)
+                         << " (write suppressed; int32(" << integer << ") raw=0x"
+                         << std::hex << std::setw(16)
+                         << entry.fp_integer_conversion_encoded_raw;
+                }
+                else
+                {
+                    text << " -> f" << std::dec
+                         << static_cast<unsigned>(entry.fp_integer_conversion_destination)
+                         << "=int32(" << integer << ") raw=0x" << std::hex
+                         << std::setw(16) << entry.fp_integer_conversion_encoded_raw;
+                }
+                if (entry.fp_integer_conversion_invalid)
+                {
+                    text << " invalid";
+                }
+                if (entry.fp_integer_conversion_write_suppressed)
+                {
+                    text << ')';
+                }
             }
         }
         if (entry.has_fp_arithmetic)
@@ -2363,6 +2428,77 @@ StepResult EspressoCore::step()
         const bool rounded_up = inexact &&
             std::fabs(extended_result) > std::fabs(source);
         commit_result(single_bits, inexact, rounded_up);
+        break;
+    }
+
+    case Opcode::floating_convert_to_integer_word_zero:
+    {
+        const std::uint64_t source_raw = state.fpr[instruction.fp_source_b];
+        const double source = std::bit_cast<double>(source_raw);
+        constexpr double minimum_signed_word = -2147483648.0;
+        constexpr double one_past_maximum_signed_word = 2147483648.0;
+        std::uint32_t integer_bits{};
+        bool invalid = false;
+        bool inexact = false;
+
+        if (is_binary64_nan(source_raw))
+        {
+            invalid = true;
+            integer_bits = 0x80000000U;
+            raise_fpscr_exception(state, fpscr::vxcvi_mask);
+            if (is_binary64_signaling_nan(source_raw))
+            {
+                raise_fpscr_exception(state, fpscr::vxsnan_mask);
+            }
+        }
+        else
+        {
+            const double rounded = std::trunc(source);
+            if (rounded >= one_past_maximum_signed_word)
+            {
+                invalid = true;
+                integer_bits = 0x7FFFFFFFU;
+            }
+            else if (rounded < minimum_signed_word)
+            {
+                invalid = true;
+                integer_bits = 0x80000000U;
+            }
+            else
+            {
+                const std::int32_t integer = static_cast<std::int32_t>(rounded);
+                integer_bits = std::bit_cast<std::uint32_t>(integer);
+                inexact = rounded != source;
+            }
+
+            if (invalid)
+            {
+                raise_fpscr_exception(state, fpscr::vxcvi_mask);
+            }
+        }
+
+        state.fpscr &= ~(fpscr::fi_mask | fpscr::fr_mask);
+        if (!invalid && inexact)
+        {
+            state.fpscr |= fpscr::fi_mask | fpscr::xx_mask | fpscr::fx_mask;
+        }
+        update_fpscr_summaries(state);
+
+        const std::uint64_t encoded = encode_fctiw_result(integer_bits, source_raw);
+        const bool write_suppressed = invalid && (state.fpscr & fpscr::ve_mask) != 0U;
+        if (!write_suppressed)
+        {
+            state.fpr[instruction.fp_register] = encoded;
+        }
+
+        pending_history_entry_.has_fp_integer_conversion = true;
+        pending_history_entry_.fp_integer_conversion_source = instruction.fp_source_b;
+        pending_history_entry_.fp_integer_conversion_source_raw = source_raw;
+        pending_history_entry_.fp_integer_conversion_destination = instruction.fp_register;
+        pending_history_entry_.fp_integer_conversion_result = integer_bits;
+        pending_history_entry_.fp_integer_conversion_encoded_raw = encoded;
+        pending_history_entry_.fp_integer_conversion_invalid = invalid;
+        pending_history_entry_.fp_integer_conversion_write_suppressed = write_suppressed;
         break;
     }
 

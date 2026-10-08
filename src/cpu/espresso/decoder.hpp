@@ -55,6 +55,7 @@ enum class Opcode
     floating_move_register,
     floating_negate,
     floating_absolute_value,
+    floating_convert_to_integer_word_zero,
     floating_subtract_double,
     floating_round_to_single,
     conditional_branch,

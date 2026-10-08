@@ -15,6 +15,7 @@ inline constexpr std::uint32_t fr_mask = 0x00040000U;
 inline constexpr std::uint32_t xe_mask = 0x00000008U;
 inline constexpr std::uint32_t ze_mask = 0x00000010U;
 inline constexpr std::uint32_t ve_mask = 0x00000080U;
+inline constexpr std::uint32_t vxcvi_mask = 0x00000100U;
 inline constexpr std::uint32_t vxzdz_mask = 0x00200000U;
 inline constexpr std::uint32_t vximz_mask = 0x00100000U;
 inline constexpr std::uint32_t vxidi_mask = 0x00400000U;

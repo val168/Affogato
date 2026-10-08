@@ -122,6 +122,14 @@ struct InstructionHistoryEntry
     std::uint64_t fp_move_source_value{};
     std::uint64_t fp_move_destination_value{};
     std::uint64_t fp_move_destination_ps1{};
+    bool has_fp_integer_conversion{};
+    std::uint8_t fp_integer_conversion_source{};
+    std::uint64_t fp_integer_conversion_source_raw{};
+    std::uint8_t fp_integer_conversion_destination{};
+    std::uint32_t fp_integer_conversion_result{};
+    std::uint64_t fp_integer_conversion_encoded_raw{};
+    bool fp_integer_conversion_invalid{};
+    bool fp_integer_conversion_write_suppressed{};
     bool completed{};
 };
 
