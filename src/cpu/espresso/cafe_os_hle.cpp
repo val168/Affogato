@@ -29,6 +29,16 @@ constexpr std::uint32_t os_system_info_l2_core2_size = 512U * 1024U;
 constexpr std::uint32_t os_system_info_cpu_ratio = 5U;
 constexpr std::int64_t os_system_info_unix_epoch_offset = 946684800;
 constexpr std::uint32_t current_core_index = 1U;
+constexpr std::uint32_t os_thread_size = 0x6A0U;
+constexpr std::uint32_t os_thread_tag_offset = 0x320U;
+constexpr std::uint32_t os_thread_priority_offset = 0x32CU;
+constexpr std::uint32_t os_thread_base_priority_offset = 0x330U;
+constexpr std::uint32_t os_thread_type_offset = 0x5BCU;
+constexpr std::uint32_t os_thread_tag = 0x74487244U; // tHrD
+constexpr std::int32_t os_thread_default_app_priority = 16;
+constexpr std::int32_t os_thread_app_priority_base = 64;
+constexpr std::int32_t os_thread_default_internal_priority =
+    os_thread_app_priority_base + os_thread_default_app_priority;
 constexpr std::uint32_t mem2_base_heap_index = 1U;
 constexpr std::uint32_t mem2_expanded_heap_tag = 0x45585048U; // EXPH
 constexpr std::uint32_t mem2_expanded_heap_header_size = 0x54U;
@@ -256,15 +266,11 @@ std::uint32_t initialize_default_guest_thread(
     std::uint32_t stack_start,
     std::uint32_t stack_end)
 {
-    constexpr std::uint32_t thread_size = 0x6A0U;
-    constexpr std::uint32_t thread_tag_offset = 0x320U;
     constexpr std::uint32_t thread_state_offset = 0x324U;
     constexpr std::uint32_t thread_attributes_offset = 0x325U;
     constexpr std::uint32_t thread_id_offset = 0x326U;
     constexpr std::uint32_t thread_stack_start_offset = 0x394U;
     constexpr std::uint32_t thread_stack_end_offset = 0x398U;
-    constexpr std::uint32_t thread_type_offset = 0x5BCU;
-    constexpr std::uint32_t thread_tag = 0x74487244U;
     constexpr std::uint8_t thread_state_running = 1U << 1U;
     constexpr std::uint8_t thread_affinity_cpu1 = 1U << 1U;
     constexpr std::uint16_t default_thread_id = 1U;
@@ -279,7 +285,7 @@ std::uint32_t initialize_default_guest_thread(
         throw std::invalid_argument("default guest thread stack bounds are invalid");
     }
 
-    const std::uint32_t address = core.allocate_guest_memory(thread_size, 8U);
+    const std::uint32_t address = core.allocate_guest_memory(os_thread_size, 8U);
     if (address == 0)
     {
         throw std::runtime_error(
@@ -288,14 +294,20 @@ std::uint32_t initialize_default_guest_thread(
             std::to_string(core.guest_heap_limit) + ")");
     }
 
-    core.memory.zero_fill(address, thread_size);
-    core.memory.write32_be(address + thread_tag_offset, thread_tag);
+    core.memory.zero_fill(address, os_thread_size);
+    core.memory.write32_be(address + os_thread_tag_offset, os_thread_tag);
     core.memory.write8(address + thread_state_offset, thread_state_running);
     core.memory.write8(address + thread_attributes_offset, thread_affinity_cpu1);
     core.memory.write16_be(address + thread_id_offset, default_thread_id);
+    core.memory.write32_be(
+        address + os_thread_priority_offset,
+        static_cast<std::uint32_t>(os_thread_default_internal_priority));
+    core.memory.write32_be(
+        address + os_thread_base_priority_offset,
+        static_cast<std::uint32_t>(os_thread_default_internal_priority));
     core.memory.write32_be(address + thread_stack_start_offset, stack_start);
     core.memory.write32_be(address + thread_stack_end_offset, stack_end);
-    core.memory.write32_be(address + thread_type_offset, thread_type_application);
+    core.memory.write32_be(address + os_thread_type_offset, thread_type_application);
     core.current_thread_address = address;
     return address;
 }
@@ -419,6 +431,69 @@ void register_coreinit_hle(HleDispatcher& dispatcher)
         "OSGetCurrentThread",
         [](EspressoCore& core) {
             core.state.gpr[3] = core.current_thread_address;
+        });
+    dispatcher.register_function(
+        "coreinit",
+        "OSGetThreadPriority",
+        [](EspressoCore& core) {
+            constexpr std::uint64_t guest_address_space_end = std::uint64_t{1} << 32U;
+            const std::uint32_t thread = core.state.gpr[3];
+            if (thread == 0U)
+            {
+                throw HleExecutionError(
+                    "OSGetThreadPriority received null OSThread pointer");
+            }
+            constexpr std::uint32_t required_thread_extent =
+                os_thread_type_offset + sizeof(std::uint32_t);
+            if (static_cast<std::uint64_t>(thread) + required_thread_extent >
+                guest_address_space_end)
+            {
+                throw HleExecutionError(
+                    "OSGetThreadPriority OSThread address wraps guest address space");
+            }
+
+            std::uint32_t tag{};
+            std::uint32_t base_priority_bits{};
+            std::uint32_t type{};
+            try
+            {
+                tag = core.memory.read32_be(thread + os_thread_tag_offset);
+                if (tag != os_thread_tag)
+                {
+                    throw HleExecutionError(
+                        "OSGetThreadPriority received object with invalid thread tag");
+                }
+                base_priority_bits = core.memory.read32_be(
+                    thread + os_thread_base_priority_offset);
+                type = core.memory.read32_be(thread + os_thread_type_offset);
+            }
+            catch (const GuestMemoryFault&)
+            {
+                throw HleExecutionError(
+                    "OSGetThreadPriority OSThread fields are outside mapped guest memory");
+            }
+
+            std::int32_t priority_namespace_base{};
+            switch (type)
+            {
+            case 0U: priority_namespace_base = 0; break;  // Driver
+            case 1U: priority_namespace_base = 32; break; // I/O
+            case 2U: priority_namespace_base = 64; break; // Application
+            default:
+                throw HleExecutionError(
+                    "OSGetThreadPriority encountered unsupported thread type");
+            }
+
+            const std::int32_t base_priority =
+                std::bit_cast<std::int32_t>(base_priority_bits);
+            const std::int64_t external_priority =
+                static_cast<std::int64_t>(base_priority) - priority_namespace_base;
+            if (external_priority < 0 || external_priority >= 32)
+            {
+                throw HleExecutionError(
+                    "OSGetThreadPriority base priority is outside the valid range for thread type");
+            }
+            core.state.gpr[3] = static_cast<std::uint32_t>(external_priority);
         });
     dispatcher.register_function(
         "coreinit",

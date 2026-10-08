@@ -5979,6 +5979,11 @@ void hle_dispatch_tests()
     assert(thread_core.memory.read32_be(thread_address + 0x320U) == 0x74487244U);
     assert(thread_core.memory.read8(thread_address + 0x324U) == 2U);
     assert(thread_core.memory.read16_be(thread_address + 0x326U) == 1U);
+    assert(thread_core.memory.read32_be(thread_address + 0x32CU) == 80U);
+    assert(thread_core.memory.read32_be(thread_address + 0x330U) == 80U);
+    assert(thread_core.memory.read32_be(thread_address + 0x394U) == stack_start);
+    assert(thread_core.memory.read32_be(thread_address + 0x398U) == stack_end);
+    assert(thread_core.memory.read32_be(thread_address + 0x5BCU) == 2U);
 
     const std::uint32_t get_specific =
         thread_core.hle.bind_import("coreinit", "OSGetThreadSpecific");
@@ -6999,6 +7004,181 @@ void os_set_exception_callback_hle_tests()
     const RunResult no_thread = no_thread_core.run(1U);
     assert(no_thread.reason == StopReason::hle_error);
     assert(no_thread.detail.find("no current guest OSThread") != std::string::npos);
+}
+
+void os_get_thread_priority_hle_tests()
+{
+    constexpr std::uint32_t thread_size = 0x6A0U;
+    constexpr std::uint32_t thread_tag = 0x74487244U;
+    constexpr std::uint32_t return_address = 0x02760F04U;
+    constexpr std::uint32_t arbitrary_thread = 0x4000U;
+    constexpr std::uint32_t malformed_thread = 0x5000U;
+
+    EspressoCore core(0x10000U);
+    register_coreinit_hle(core.hle);
+    core.configure_guest_heap(0x1000U, 0x8000U);
+    const std::uint32_t default_thread = initialize_default_guest_thread(
+        core, 0xF000U, 0xE000U);
+    assert(default_thread == core.current_thread_address);
+    assert(core.memory.read32_be(default_thread + 0x320U) == thread_tag);
+    assert(core.memory.read32_be(default_thread + 0x32CU) == 80U);
+    assert(core.memory.read32_be(default_thread + 0x330U) == 80U);
+    assert(core.memory.read32_be(default_thread + 0x5BCU) == 2U);
+
+    core.memory.zero_fill(arbitrary_thread, thread_size);
+    core.memory.write32_be(arbitrary_thread + 0x320U, thread_tag);
+    core.memory.write32_be(arbitrary_thread + 0x32CU, 64U);
+    core.memory.write32_be(arbitrary_thread + 0x330U, 71U);
+    core.memory.write32_be(arbitrary_thread + 0x5BCU, 2U);
+    const std::uint32_t import = core.hle.bind_import(
+        "coreinit", "OSGetThreadPriority");
+
+    for (std::uint32_t reg = 0; reg < core.state.gpr.size(); ++reg)
+    {
+        core.state.gpr[reg] = 0xA1000000U + reg * 0x101U;
+    }
+    for (std::uint32_t reg = 0; reg < core.state.fpr.size(); ++reg)
+    {
+        core.state.fpr[reg] = 0x1111000000000000ULL + reg;
+        core.state.fpr_ps1[reg] = 0x2222000000000000ULL + reg;
+    }
+    core.state.cr = 0x12345678U;
+    core.state.xer = 0xA00000A5U;
+    core.state.ctr = 0xCAFEBABEU;
+    core.state.fpscr = 0x5A5AA55AU;
+
+    const auto invoke = [&](std::uint32_t thread, std::uint32_t expected) {
+        core.state.gpr[3] = thread;
+        core.state.lr = return_address;
+        core.state.cia = import;
+        const auto gprs_before = core.state.gpr;
+        const auto fprs_before = core.state.fpr;
+        const auto ps1_before = core.state.fpr_ps1;
+        const std::uint32_t cr_before = core.state.cr;
+        const std::uint32_t xer_before = core.state.xer;
+        const std::uint32_t ctr_before = core.state.ctr;
+        const std::uint32_t fpscr_before = core.state.fpscr;
+        const std::uint32_t lr_before = core.state.lr;
+        const std::uint32_t current_thread_before = core.current_thread_address;
+        const std::uint32_t cursor_before = core.guest_heap_cursor;
+        const std::uint32_t limit_before = core.guest_heap_limit;
+        const auto base_handles_before = core.base_heap_handles;
+        const std::uint32_t mem2_begin_before = core.mem2_heap_region_begin;
+        const std::uint32_t mem2_end_before = core.mem2_heap_region_end;
+        std::vector<std::uint8_t> thread_before(thread_size);
+        core.memory.read_bytes(thread, thread_before);
+
+        const RunResult result = core.run(1U);
+        assert(result.reason == StopReason::instruction_limit);
+        assert(result.steps == 1U);
+        assert(core.state.gpr[3] == expected);
+        assert(core.state.cia == return_address);
+        assert(core.state.lr == lr_before);
+        assert(core.state.cr == cr_before);
+        assert(core.state.xer == xer_before);
+        assert(core.state.ctr == ctr_before);
+        assert(core.state.fpscr == fpscr_before);
+        assert(core.state.fpr == fprs_before);
+        assert(core.state.fpr_ps1 == ps1_before);
+        for (std::size_t reg = 0; reg < core.state.gpr.size(); ++reg)
+        {
+            if (reg != 3U)
+            {
+                assert(core.state.gpr[reg] == gprs_before[reg]);
+            }
+        }
+        std::vector<std::uint8_t> thread_after(thread_size);
+        core.memory.read_bytes(thread, thread_after);
+        assert(thread_after == thread_before);
+        assert(core.current_thread_address == current_thread_before);
+        assert(core.guest_heap_cursor == cursor_before);
+        assert(core.guest_heap_limit == limit_before);
+        assert(core.base_heap_handles == base_handles_before);
+        assert(core.mem2_heap_region_begin == mem2_begin_before);
+        assert(core.mem2_heap_region_end == mem2_end_before);
+    };
+
+    // The initialized APP thread's 80 internal priority maps to external 16.
+    invoke(default_thread, 16U);
+
+    // A distinct supplied thread wins over current_thread_address. The getter
+    // reads basePriority (+0x330), not effective priority (+0x32C).
+    assert(arbitrary_thread != core.current_thread_address);
+    invoke(arbitrary_thread, 7U);
+    core.memory.write32_be(arbitrary_thread + 0x32CU, 95U);
+    invoke(arbitrary_thread, 7U);
+    core.memory.write32_be(arbitrary_thread + 0x330U, 70U);
+    invoke(arbitrary_thread, 6U);
+
+    struct PriorityCase
+    {
+        std::uint32_t type;
+        std::int32_t base_priority;
+        std::uint32_t external_priority;
+    };
+    constexpr std::array<PriorityCase, 6> boundaries{{
+        {0U, 0, 0U}, {0U, 31, 31U},
+        {1U, 32, 0U}, {1U, 63, 31U},
+        {2U, 64, 0U}, {2U, 95, 31U},
+    }};
+    for (const PriorityCase& test : boundaries)
+    {
+        core.memory.write32_be(arbitrary_thread + 0x5BCU, test.type);
+        core.memory.write32_be(
+            arbitrary_thread + 0x330U,
+            static_cast<std::uint32_t>(test.base_priority));
+        invoke(arbitrary_thread, test.external_priority);
+    }
+
+    const auto expect_hle_error = [&](std::uint32_t thread,
+                                      const std::string& message) {
+        core.state.gpr[3] = thread;
+        core.state.lr = return_address;
+        core.state.cia = import;
+        const RunResult result = core.run(1U);
+        assert(result.reason == StopReason::hle_error);
+        assert(result.detail.find(message) != std::string::npos);
+        assert(result.steps == 0U);
+    };
+
+    core.memory.write32_be(arbitrary_thread + 0x5BCU, 3U);
+    core.memory.write32_be(arbitrary_thread + 0x330U, 80U);
+    expect_hle_error(arbitrary_thread, "unsupported thread type");
+
+    struct InvalidPriorityCase
+    {
+        std::uint32_t type;
+        std::int32_t base_priority;
+    };
+    constexpr std::array<InvalidPriorityCase, 5> invalid_priorities{{
+        {0U, 32}, {1U, 31}, {1U, 64}, {2U, 63}, {2U, 96},
+    }};
+    for (const InvalidPriorityCase& test : invalid_priorities)
+    {
+        core.memory.write32_be(arbitrary_thread + 0x5BCU, test.type);
+        core.memory.write32_be(
+            arbitrary_thread + 0x330U,
+            static_cast<std::uint32_t>(test.base_priority));
+        expect_hle_error(
+            arbitrary_thread,
+            "base priority is outside the valid range");
+    }
+
+    // Invalid tags, null pointers, unmapped storage, and wrapping addresses
+    // fail through the HLE error path without touching guest memory.
+    core.memory.zero_fill(malformed_thread, thread_size);
+    core.memory.write32_be(malformed_thread + 0x320U, 0xDEADBEEFU);
+    core.memory.write32_be(malformed_thread + 0x330U, 80U);
+    core.memory.write32_be(malformed_thread + 0x5BCU, 2U);
+    std::vector<std::uint8_t> malformed_before(thread_size);
+    core.memory.read_bytes(malformed_thread, malformed_before);
+    expect_hle_error(malformed_thread, "invalid thread tag");
+    std::vector<std::uint8_t> malformed_after(thread_size);
+    core.memory.read_bytes(malformed_thread, malformed_after);
+    assert(malformed_after == malformed_before);
+    expect_hle_error(0U, "null OSThread pointer");
+    expect_hle_error(0x20000U, "outside mapped guest memory");
+    expect_hle_error(0xFFFFFF00U, "wraps guest address space");
 }
 
 void mem_get_base_heap_handle_hle_tests()
@@ -9856,6 +10036,7 @@ int main(int argc, char* argv[])
     os_block_move_hle_tests();
     os_get_system_info_hle_tests();
     os_set_exception_callback_hle_tests();
+    os_get_thread_priority_hle_tests();
     mem_get_base_heap_handle_hle_tests();
     mem_get_total_free_size_for_exp_heap_hle_tests();
     mem_get_allocatable_size_for_exp_heap_ex_hle_tests();
