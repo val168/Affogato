@@ -157,6 +157,7 @@ public:
     {
         state.reset();
         current_thread_address = 0;
+        fs_initialized = false;
         guest_heap_cursor = 0;
         guest_heap_limit = 0;
         base_heap_handles.fill(0U);
@@ -205,6 +206,7 @@ public:
     GuestMemory memory;
     HleDispatcher hle;
     std::uint32_t current_thread_address{};
+    bool fs_initialized{};
     std::uint32_t guest_heap_cursor{};
     std::uint32_t guest_heap_limit{};
     std::array<std::uint32_t, 9> base_heap_handles{};

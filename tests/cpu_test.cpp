@@ -6825,6 +6825,122 @@ void os_get_system_info_hle_tests()
     assert(core.memory.read32_be(address) == bus_clock_speed);
 }
 
+void fs_init_hle_tests()
+{
+    constexpr std::uint32_t return_address = 0x0274223CU;
+    constexpr std::uint32_t thread_stack_start = 0x3F00U;
+    constexpr std::uint32_t thread_stack_end = 0x2F00U;
+
+    EspressoCore core(0x4000U);
+    assert(!core.fs_initialized);
+    register_coreinit_hle(core.hle);
+    const std::uint32_t import = core.hle.bind_import("coreinit", "FSInit");
+    core.configure_guest_heap(0x100U, 0x1000U);
+    const std::uint32_t thread = initialize_default_guest_thread(
+        core, thread_stack_start, thread_stack_end);
+    constexpr std::uint32_t queue = 0x1800U;
+    core.memory.fill_bytes(queue, 0x3CU, 0xD7U);
+    core.memory.fill_bytes(0x2000U, 0x100U, 0xA6U);
+
+    for (std::uint32_t reg = 0; reg < core.state.gpr.size(); ++reg)
+    {
+        core.state.gpr[reg] = 0xA1000000U + reg * 0x101U;
+    }
+    for (std::uint32_t reg = 0; reg < core.state.fpr.size(); ++reg)
+    {
+        core.state.fpr[reg] = 0x1111000000000000ULL + reg;
+        core.state.fpr_ps1[reg] = 0x2222000000000000ULL + reg;
+    }
+    core.state.cr = 0x12345678U;
+    core.state.xer = 0xA00000A5U;
+    core.state.ctr = 0xCAFEBABEU;
+    core.state.fpscr = 0x5A5AA55AU;
+    core.current_thread_address = thread;
+
+    const auto invoke = [&](std::uint32_t stale_r3) {
+        core.state.gpr[3] = stale_r3;
+        core.state.lr = return_address;
+        core.state.cia = import;
+        const auto gprs_before = core.state.gpr;
+        const auto fpr_before = core.state.fpr;
+        const auto ps1_before = core.state.fpr_ps1;
+        const std::uint32_t cr_before = core.state.cr;
+        const std::uint32_t xer_before = core.state.xer;
+        const std::uint32_t ctr_before = core.state.ctr;
+        const std::uint32_t fpscr_before = core.state.fpscr;
+        const std::uint32_t lr_before = core.state.lr;
+        const std::uint32_t thread_before = core.current_thread_address;
+        const std::uint32_t heap_cursor_before = core.guest_heap_cursor;
+        const std::uint32_t heap_limit_before = core.guest_heap_limit;
+        const auto base_handles_before = core.base_heap_handles;
+        const std::uint32_t mem2_begin_before = core.mem2_heap_region_begin;
+        const std::uint32_t mem2_end_before = core.mem2_heap_region_end;
+        std::vector<std::uint8_t> memory_before(core.memory.size());
+        core.memory.read_bytes(0U, memory_before);
+
+        assert(core.step() == StepResult::executed);
+        assert(core.fs_initialized);
+        assert(core.state.cia == return_address);
+        assert(core.state.gpr == gprs_before);
+        assert(core.state.fpr == fpr_before);
+        assert(core.state.fpr_ps1 == ps1_before);
+        assert(core.state.cr == cr_before);
+        assert(core.state.xer == xer_before);
+        assert(core.state.ctr == ctr_before);
+        assert(core.state.fpscr == fpscr_before);
+        assert(core.state.lr == lr_before);
+        assert(core.current_thread_address == thread_before);
+        assert(core.guest_heap_cursor == heap_cursor_before);
+        assert(core.guest_heap_limit == heap_limit_before);
+        assert(core.base_heap_handles == base_handles_before);
+        assert(core.mem2_heap_region_begin == mem2_begin_before);
+        assert(core.mem2_heap_region_end == mem2_end_before);
+        std::vector<std::uint8_t> memory_after(core.memory.size());
+        core.memory.read_bytes(0U, memory_after);
+        assert(memory_after == memory_before);
+    };
+
+    assert(!core.fs_initialized);
+    invoke(0x04021078U);
+    assert(core.state.gpr[3] == 0x04021078U);
+    invoke(0xDEADBEEFU);
+    assert(core.state.gpr[3] == 0xDEADBEEFU);
+
+    // Heap configuration is allocator setup, not a new Cafe process/session.
+    core.configure_guest_heap(0x2000U, 0x3000U);
+    assert(core.fs_initialized);
+
+    core.reset();
+    assert(!core.fs_initialized);
+
+    EspressoCore first(0x100U);
+    EspressoCore second(0x100U);
+    register_coreinit_hle(first.hle);
+    register_coreinit_hle(second.hle);
+    const std::uint32_t first_import = first.hle.bind_import("coreinit", "FSInit");
+    const std::uint32_t second_import = second.hle.bind_import("coreinit", "FSInit");
+    assert(!first.fs_initialized);
+    assert(!second.fs_initialized);
+
+    first.state.cia = first_import;
+    first.state.lr = 0x80U;
+    first.state.gpr[3] = 0x11111111U;
+    assert(first.step() == StepResult::executed);
+    assert(first.fs_initialized);
+    assert(!second.fs_initialized);
+
+    second.state.cia = second_import;
+    second.state.lr = 0x84U;
+    second.state.gpr[3] = 0x22222222U;
+    assert(second.step() == StepResult::executed);
+    assert(first.fs_initialized);
+    assert(second.fs_initialized);
+
+    first.reset();
+    assert(!first.fs_initialized);
+    assert(second.fs_initialized);
+}
+
 void os_get_system_time_hle_tests()
 {
     using Clock = std::chrono::system_clock;
@@ -10365,6 +10481,7 @@ int main(int argc, char* argv[])
     memcpy_hle_tests();
     os_block_move_hle_tests();
     os_get_system_info_hle_tests();
+    fs_init_hle_tests();
     os_get_system_time_hle_tests();
     os_set_exception_callback_hle_tests();
     os_get_thread_priority_hle_tests();

@@ -660,6 +660,14 @@ void register_coreinit_hle(HleDispatcher& dispatcher)
         });
     dispatcher.register_function(
         "coreinit",
+        "FSInit",
+        [](EspressoCore& core) {
+            // Track Cafe FS-library initialization per emulated core. Client
+            // registration and IOSU-backed operations are modeled separately.
+            core.fs_initialized = true;
+        });
+    dispatcher.register_function(
+        "coreinit",
         "FSAInit",
         [](EspressoCore& core) {
             // The startup path only needs the filesystem facade's successful
