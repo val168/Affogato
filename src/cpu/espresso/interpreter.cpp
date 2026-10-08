@@ -453,6 +453,7 @@ void set_record_result(CpuState& state, std::uint32_t value)
     case Opcode::subtract_from_extended: return "subfe";
     case Opcode::negate: return "neg";
     case Opcode::extend_sign_byte: return "extsb";
+    case Opcode::extend_sign_halfword: return "extsh";
     case Opcode::ori: return "ori";
     case Opcode::or_immediate_shifted: return "oris";
     case Opcode::xor_immediate: return "xori";
@@ -561,6 +562,7 @@ void add_history_source(
          instruction.opcode == Opcode::count_leading_zeros ||
          instruction.opcode == Opcode::negate ||
          instruction.opcode == Opcode::extend_sign_byte ||
+         instruction.opcode == Opcode::extend_sign_halfword ||
          instruction.opcode == Opcode::rotate_left_word_and_mask_insert ||
          instruction.opcode == Opcode::rotate_left_word_and_mask ||
          instruction.opcode == Opcode::shift_right_word) && instruction.record)
@@ -793,6 +795,7 @@ void add_history_source(
         break;
     case Opcode::negate:
     case Opcode::extend_sign_byte:
+    case Opcode::extend_sign_halfword:
         add_history_source(entry, state, instruction.source);
         break;
     case Opcode::shift_left_word:
@@ -838,6 +841,7 @@ void add_history_source(
     case Opcode::divide_word_unsigned:
     case Opcode::negate:
     case Opcode::extend_sign_byte:
+    case Opcode::extend_sign_halfword:
     case Opcode::ori:
     case Opcode::or_immediate_shifted:
     case Opcode::xor_immediate:
@@ -1318,6 +1322,20 @@ StepResult EspressoCore::step()
         const std::uint32_t low_byte = source & 0xFFU;
         const std::uint32_t result = low_byte |
             ((low_byte & 0x80U) != 0U ? 0xFFFFFF00U : 0U);
+        state.gpr[instruction.destination] = result;
+        if (instruction.record)
+        {
+            set_record_result(state, result);
+        }
+        break;
+    }
+
+    case Opcode::extend_sign_halfword:
+    {
+        const std::uint32_t source = state.gpr[instruction.source];
+        const std::uint32_t low_halfword = source & 0xFFFFU;
+        const std::uint32_t result = low_halfword |
+            ((low_halfword & 0x8000U) != 0U ? 0xFFFF0000U : 0U);
         state.gpr[instruction.destination] = result;
         if (instruction.record)
         {

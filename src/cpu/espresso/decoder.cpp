@@ -194,6 +194,13 @@ DecodedInstruction decode(std::uint32_t raw) noexcept
             instruction.base = static_cast<std::uint8_t>(field(raw, 16, 0x1FU));
             instruction.string_byte_count = static_cast<std::uint8_t>(field(raw, 11, 0x1FU));
         }
+        else if (extended_opcode == 922U && field(raw, 11, 0x1FU) == 0U) // extsh
+        {
+            instruction.opcode = Opcode::extend_sign_halfword;
+            instruction.source = static_cast<std::uint8_t>(field(raw, 21, 0x1FU));
+            instruction.destination = static_cast<std::uint8_t>(field(raw, 16, 0x1FU));
+            instruction.record = (raw & 1U) != 0U;
+        }
         else if (extended_opcode == 954U && field(raw, 11, 0x1FU) == 0U) // extsb
         {
             instruction.opcode = Opcode::extend_sign_byte;

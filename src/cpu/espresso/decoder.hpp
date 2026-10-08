@@ -25,6 +25,7 @@ enum class Opcode
     subtract_from_extended,
     negate,
     extend_sign_byte,
+    extend_sign_halfword,
     ori,
     or_immediate_shifted,
     bitwise_or,
