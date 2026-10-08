@@ -310,7 +310,8 @@ void launch_game(const fs::path& path, WorkerResult& worker, std::jthread& threa
             }
             affogato::Emulator emulator;
             (void)emulator.load_rpx(bytes);
-            message = format_result(emulator.run());
+            constexpr std::size_t rpx_instruction_limit = 10'000'000U;
+            message = format_result(emulator.run(rpx_instruction_limit));
         }
         catch (const std::exception& exception)
         {
