@@ -23,6 +23,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -6824,6 +6825,172 @@ void os_get_system_info_hle_tests()
     assert(core.memory.read32_be(address) == bus_clock_speed);
 }
 
+void os_get_system_time_hle_tests()
+{
+    using Clock = std::chrono::system_clock;
+    constexpr std::uint32_t timer_clock_speed = 62156250U;
+    constexpr std::int64_t unix_epoch_offset = 946684800;
+    constexpr std::uint32_t return_address = 0x027616D4U;
+    constexpr std::uint32_t stack_sentinel_address = 0x100U;
+
+    const auto cafe_epoch_ticks_at = [](Clock::time_point time) {
+        using namespace std::chrono;
+        const auto elapsed = time.time_since_epoch();
+        const auto unix_seconds = duration_cast<seconds>(elapsed).count();
+        if (unix_seconds < unix_epoch_offset)
+        {
+            return std::uint64_t{0};
+        }
+        const auto fractional_nanoseconds =
+            duration_cast<nanoseconds>(elapsed - seconds(unix_seconds)).count();
+        return static_cast<std::uint64_t>(unix_seconds - unix_epoch_offset) *
+                timer_clock_speed +
+            static_cast<std::uint64_t>(fractional_nanoseconds) * timer_clock_speed /
+                1000000000ULL;
+    };
+    assert(cafe_epoch_ticks_at(Clock::time_point{
+               std::chrono::seconds(unix_epoch_offset + 1)}) == timer_clock_speed);
+    assert(cafe_epoch_ticks_at(Clock::time_point{
+               std::chrono::milliseconds(unix_epoch_offset * 1000 + 500)}) ==
+           timer_clock_speed / 2U);
+    assert(cafe_epoch_ticks_at(Clock::time_point{
+               std::chrono::milliseconds(unix_epoch_offset * 1000 + 1)}) == 62156U);
+
+    EspressoCore core(0x400U);
+    register_coreinit_hle(core.hle);
+    const std::uint32_t import = core.hle.bind_import("coreinit", "OSGetSystemTime");
+    core.configure_guest_heap(0x20U, 0x300U);
+    core.current_thread_address = 0x12345678U;
+    core.base_heap_handles.fill(0xAABBCCDDU);
+    core.mem2_heap_region_begin = 0x234U;
+    core.mem2_heap_region_end = 0x345U;
+    core.memory.fill_bytes(stack_sentinel_address, 0x80U, 0xB6U);
+    std::array<std::uint8_t, 0x80U> stack_before{};
+    core.memory.read_bytes(stack_sentinel_address, stack_before);
+
+    for (std::uint32_t reg = 0; reg < core.state.gpr.size(); ++reg)
+    {
+        core.state.gpr[reg] = 0xA1000000U + reg * 0x101U;
+    }
+    for (std::uint32_t reg = 0; reg < core.state.fpr.size(); ++reg)
+    {
+        core.state.fpr[reg] = 0x1111000000000000ULL + reg;
+        core.state.fpr_ps1[reg] = 0x2222000000000000ULL + reg;
+    }
+    core.state.cr = 0x12345678U;
+    core.state.xer = 0xA00000A5U;
+    core.state.ctr = 0xCAFEBABEU;
+    core.state.fpscr = 0x5A5AA55AU;
+
+    const auto invoke = [&]() {
+        core.state.cia = import;
+        core.state.lr = return_address;
+        const auto gprs_before = core.state.gpr;
+        const auto fprs_before = core.state.fpr;
+        const auto ps1_before = core.state.fpr_ps1;
+        const std::uint32_t cr_before = core.state.cr;
+        const std::uint32_t xer_before = core.state.xer;
+        const std::uint32_t ctr_before = core.state.ctr;
+        const std::uint32_t fpscr_before = core.state.fpscr;
+        const std::uint32_t lr_before = core.state.lr;
+        const std::uint32_t heap_cursor_before = core.guest_heap_cursor;
+        const std::uint32_t heap_limit_before = core.guest_heap_limit;
+        const auto base_handles_before = core.base_heap_handles;
+        const std::uint32_t mem2_begin_before = core.mem2_heap_region_begin;
+        const std::uint32_t mem2_end_before = core.mem2_heap_region_end;
+        const std::uint32_t thread_before = core.current_thread_address;
+        const RunResult result = core.run(1U);
+        assert(result.reason == StopReason::instruction_limit);
+        assert(result.steps == 1U);
+        assert(core.state.cia == return_address);
+        assert(core.state.lr == lr_before);
+        for (std::size_t reg = 0; reg < core.state.gpr.size(); ++reg)
+        {
+            if (reg != 3U && reg != 4U)
+            {
+                assert(core.state.gpr[reg] == gprs_before[reg]);
+            }
+        }
+        assert(core.state.fpr == fprs_before);
+        assert(core.state.fpr_ps1 == ps1_before);
+        assert(core.state.cr == cr_before);
+        assert(core.state.xer == xer_before);
+        assert(core.state.ctr == ctr_before);
+        assert(core.state.fpscr == fpscr_before);
+        assert(core.guest_heap_cursor == heap_cursor_before);
+        assert(core.guest_heap_limit == heap_limit_before);
+        assert(core.base_heap_handles == base_handles_before);
+        assert(core.mem2_heap_region_begin == mem2_begin_before);
+        assert(core.mem2_heap_region_end == mem2_end_before);
+        assert(core.current_thread_address == thread_before);
+        std::array<std::uint8_t, 0x80U> stack_after{};
+        core.memory.read_bytes(stack_sentinel_address, stack_after);
+        assert(stack_after == stack_before);
+        return (static_cast<std::uint64_t>(core.state.gpr[3]) << 32U) |
+               core.state.gpr[4];
+    };
+
+    // The time API lazily materializes the same persistent system-info object;
+    // r3's stale caller value is not interpreted as an argument.
+    core.state.gpr[3] = 0x100FEE58U;
+    core.state.gpr[4] = 0xDEADBEEFU;
+    const auto host_before_first = Clock::now();
+    const std::uint64_t first = invoke();
+    const auto host_after_first = Clock::now();
+    const auto system_info_address = core.hle.data_address(
+        "coreinit", "__affogato_internal_OSSystemInfo");
+    assert(system_info_address);
+    assert(core.state.gpr[3] != 0x100FEE58U);
+    const std::uint64_t base_time = core.memory.read64_be(*system_info_address + 0x08U);
+    assert(base_time != 0U);
+    assert(base_time + first >= cafe_epoch_ticks_at(host_before_first));
+    assert(base_time + first <= cafe_epoch_ticks_at(host_after_first) + 1U);
+
+    std::array<std::uint8_t, 0x20U> info_before{};
+    core.memory.read_bytes(*system_info_address, info_before);
+    const std::uint64_t second = invoke();
+    assert(second >= first);
+    std::array<std::uint8_t, 0x20U> info_after{};
+    core.memory.read_bytes(*system_info_address, info_after);
+    assert(info_after == info_before);
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(8));
+    const std::uint64_t third = invoke();
+    assert(third > second);
+    core.memory.read_bytes(*system_info_address, info_after);
+    assert(info_after == info_before);
+
+    // A zero baseTime makes elapsed ticks span more than 32 bits, validating
+    // the PPC32 r3-high/r4-low return convention against host-clock bounds.
+    core.memory.write64_be(*system_info_address + 0x08U, 0U);
+    core.memory.read_bytes(*system_info_address, info_before);
+    const auto host_before_wide = Clock::now();
+    const std::uint64_t wide = invoke();
+    const auto host_after_wide = Clock::now();
+    assert(wide > UINT32_MAX);
+    assert(wide >= cafe_epoch_ticks_at(host_before_wide));
+    assert(wide <= cafe_epoch_ticks_at(host_after_wide) + 1U);
+    assert(core.state.gpr[3] == static_cast<std::uint32_t>(wide >> 32U));
+    assert(core.state.gpr[4] == static_cast<std::uint32_t>(wide));
+    core.memory.read_bytes(*system_info_address, info_after);
+    assert(info_after == info_before);
+
+    // Each core gets its own guest baseTime and data object state.
+    EspressoCore other(0x200U);
+    register_coreinit_hle(other.hle);
+    const std::uint32_t other_import =
+        other.hle.bind_import("coreinit", "OSGetSystemTime");
+    other.state.cia = other_import;
+    other.state.lr = 0x88U;
+    assert(other.step() == StepResult::executed);
+    const auto other_info_address = other.hle.data_address(
+        "coreinit", "__affogato_internal_OSSystemInfo");
+    assert(other_info_address == system_info_address);
+    assert(other.memory.read64_be(*other_info_address + 0x08U) != 0U);
+    other.memory.write64_be(*other_info_address + 0x08U, 0U);
+    assert(core.memory.read64_be(*system_info_address + 0x08U) == 0U);
+}
+
 void os_set_exception_callback_hle_tests()
 {
     struct CallbackType
@@ -10198,6 +10365,7 @@ int main(int argc, char* argv[])
     memcpy_hle_tests();
     os_block_move_hle_tests();
     os_get_system_info_hle_tests();
+    os_get_system_time_hle_tests();
     os_set_exception_callback_hle_tests();
     os_get_thread_priority_hle_tests();
     os_init_message_queue_hle_tests();
