@@ -14,6 +14,7 @@
 #include <bit>
 #include <cassert>
 #include <cmath>
+#include <chrono>
 #include <cstdint>
 #include <fstream>
 #include <iostream>
@@ -4948,6 +4949,128 @@ void os_block_move_hle_tests()
     assert(core.memory.read16_be(0x16U) == 0x2026U);
 }
 
+void os_get_system_info_hle_tests()
+{
+    using Clock = std::chrono::system_clock;
+    constexpr std::uint32_t bus_clock_speed = 248625000U;
+    constexpr std::uint32_t core_clock_speed = 1243125000U;
+    constexpr std::uint32_t timer_clock_speed = 62156250U;
+    constexpr std::int64_t unix_epoch_offset = 946684800;
+
+    const auto base_ticks_at = [](Clock::time_point time) {
+        using namespace std::chrono;
+        const auto elapsed = time.time_since_epoch();
+        const auto unix_seconds = duration_cast<seconds>(elapsed).count();
+        if (unix_seconds < unix_epoch_offset)
+        {
+            return std::uint64_t{0};
+        }
+        const auto fractional_nanoseconds =
+            duration_cast<nanoseconds>(elapsed - seconds(unix_seconds)).count();
+        return static_cast<std::uint64_t>(unix_seconds - unix_epoch_offset) *
+                timer_clock_speed +
+            static_cast<std::uint64_t>(fractional_nanoseconds) * timer_clock_speed /
+                1000000000ULL;
+    };
+
+    EspressoCore core(0x400U);
+    register_coreinit_hle(core.hle);
+    const std::uint32_t import = core.hle.bind_import("coreinit", "OSGetSystemInfo");
+    core.memory.fill_bytes(0x100U, 0x20U, 0xA5U);
+
+    for (std::uint32_t reg = 0; reg < core.state.gpr.size(); ++reg)
+    {
+        core.state.gpr[reg] = 0xA0000000U + reg * 0x10101U;
+    }
+    const auto gpr_before = core.state.gpr;
+    for (std::uint32_t reg = 0; reg < core.state.fpr.size(); ++reg)
+    {
+        core.state.fpr[reg] = 0x1111000000000000ULL + reg;
+        core.state.fpr_ps1[reg] = 0x2222000000000000ULL + reg;
+    }
+    const auto ps0_before = core.state.fpr;
+    const auto ps1_before = core.state.fpr_ps1;
+    core.state.cr = 0x12345678U;
+    core.state.xer = 0xA00000A5U;
+    core.state.ctr = 0xCAFEBABEU;
+    core.state.fpscr = 0x5A5AA55AU;
+    core.state.lr = 0x80U;
+
+    const auto host_time_before = Clock::now();
+    core.state.cia = import;
+    assert(core.step() == StepResult::executed);
+    const auto host_time_after = Clock::now();
+
+    const std::uint32_t address = core.state.gpr[3];
+    assert(address != 0U);
+    assert(address >= HleDispatcher::first_data_address);
+    assert(address + 0x20U <= HleDispatcher::data_address_limit);
+    assert((address & 7U) == 0U);
+    assert(core.state.cia == 0x80U);
+    assert(core.state.lr == 0x80U);
+    for (std::uint32_t reg = 0; reg < core.state.gpr.size(); ++reg)
+    {
+        if (reg != 3U)
+        {
+            assert(core.state.gpr[reg] == gpr_before[reg]);
+        }
+    }
+    assert(core.state.cr == 0x12345678U);
+    assert(core.state.xer == 0xA00000A5U);
+    assert(core.state.ctr == 0xCAFEBABEU);
+    assert(core.state.fpscr == 0x5A5AA55AU);
+    assert(core.state.fpr == ps0_before);
+    assert(core.state.fpr_ps1 == ps1_before);
+    assert(core.memory.read8(0x100U) == 0xA5U);
+    assert(core.memory.read8(0x11FU) == 0xA5U);
+
+    assert(core.memory.read32_be(address + 0x00U) == bus_clock_speed);
+    assert(core.memory.read32_be(address + 0x04U) == core_clock_speed);
+    const std::uint64_t base_time = core.memory.read64_be(address + 0x08U);
+    assert(base_time != 0U);
+    assert(core.memory.read32_be(address + 0x10U) == 0x00080000U);
+    assert(core.memory.read32_be(address + 0x14U) == 0x00200000U);
+    assert(core.memory.read32_be(address + 0x18U) == 0x00080000U);
+    assert(core.memory.read32_be(address + 0x1CU) == 5U);
+    const std::uint64_t earliest_base = base_ticks_at(host_time_before);
+    const std::uint64_t latest_base = base_ticks_at(host_time_after) + timer_clock_speed;
+    assert(base_time >= earliest_base && base_time <= latest_base);
+
+    // Every guest field is big-endian and occupies exactly its documented bytes.
+    assert(core.memory.read8(address + 0x00U) == 0x0EU);
+    assert(core.memory.read8(address + 0x01U) == 0xD1U);
+    assert(core.memory.read8(address + 0x02U) == 0xB7U);
+    assert(core.memory.read8(address + 0x03U) == 0x68U);
+    assert(core.memory.read8(address + 0x04U) == 0x4AU);
+    assert(core.memory.read8(address + 0x05U) == 0x18U);
+    assert(core.memory.read8(address + 0x06U) == 0x95U);
+    assert(core.memory.read8(address + 0x07U) == 0x08U);
+
+    // A second call returns the same data object and does not refresh baseTime.
+    core.state.gpr[3] = 0x101F8BA0U; // stale caller value is not an input
+    core.state.lr = 0x84U;
+    core.state.cia = import;
+    assert(core.step() == StepResult::executed);
+    assert(core.state.gpr[3] == address);
+    assert(core.memory.read64_be(address + 0x08U) == base_time);
+    assert(core.state.cia == 0x84U);
+
+    // A separate core receives its own guest backing, even though the virtual
+    // address can be identical in its independent address space.
+    EspressoCore other(0x200U);
+    register_coreinit_hle(other.hle);
+    const std::uint32_t other_import =
+        other.hle.bind_import("coreinit", "OSGetSystemInfo");
+    other.state.cia = other_import;
+    other.state.lr = 0x88U;
+    assert(other.step() == StepResult::executed);
+    const std::uint32_t other_address = other.state.gpr[3];
+    assert(other_address == address);
+    assert(other.memory.read32_be(other_address) == bus_clock_speed);
+    other.memory.write32_be(other_address, 0xDEADBEEFU);
+    assert(core.memory.read32_be(address) == bus_clock_speed);
+}
+
 void compare_and_conditional_branch_tests()
 {
     EspressoCore unsigned_compare_core(8);
@@ -6786,6 +6909,7 @@ int main(int argc, char* argv[])
     memset_hle_tests();
     memcpy_hle_tests();
     os_block_move_hle_tests();
+    os_get_system_info_hle_tests();
     compare_and_conditional_branch_tests();
     instruction_sync_tests();
     floating_compare_unordered_tests();

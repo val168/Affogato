@@ -5,10 +5,65 @@
 #include "cpu/espresso/interpreter.hpp"
 
 #include <algorithm>
+#include <chrono>
+#include <limits>
 #include <stdexcept>
 
 namespace affogato::cpu::espresso
 {
+namespace
+{
+
+constexpr std::uint32_t os_system_info_size = 0x20U;
+constexpr std::uint32_t os_system_info_bus_clock_speed = 248625000U;
+constexpr std::uint32_t os_system_info_core_clock_speed = 1243125000U;
+constexpr std::uint32_t os_system_info_timer_clock_speed =
+    os_system_info_bus_clock_speed / 4U;
+constexpr std::uint32_t os_system_info_l2_core0_size = 512U * 1024U;
+constexpr std::uint32_t os_system_info_l2_core1_size = 2U * 1024U * 1024U;
+constexpr std::uint32_t os_system_info_l2_core2_size = 512U * 1024U;
+constexpr std::uint32_t os_system_info_cpu_ratio = 5U;
+constexpr std::int64_t os_system_info_unix_epoch_offset = 946684800;
+
+static_assert(os_system_info_timer_clock_speed == 62156250U);
+static_assert(os_system_info_core_clock_speed / os_system_info_bus_clock_speed ==
+              os_system_info_cpu_ratio);
+
+[[nodiscard]] std::uint64_t initial_os_system_base_time() noexcept
+{
+    using namespace std::chrono;
+
+    const auto elapsed = system_clock::now().time_since_epoch();
+    const auto unix_seconds = duration_cast<seconds>(elapsed).count();
+    if (unix_seconds < os_system_info_unix_epoch_offset)
+    {
+        return 0;
+    }
+
+    const auto fractional_nanoseconds =
+        duration_cast<nanoseconds>(elapsed - seconds(unix_seconds)).count();
+    const auto seconds_since_epoch = static_cast<std::uint64_t>(
+        unix_seconds - os_system_info_unix_epoch_offset);
+    constexpr std::uint64_t timer_clock = os_system_info_timer_clock_speed;
+    constexpr std::uint64_t max_base_time =
+        static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max());
+
+    const std::uint64_t fractional_ticks =
+        static_cast<std::uint64_t>(fractional_nanoseconds) * timer_clock /
+        1000000000ULL;
+    if (seconds_since_epoch > max_base_time / timer_clock)
+    {
+        return max_base_time;
+    }
+    const std::uint64_t whole_second_ticks = seconds_since_epoch * timer_clock;
+    if (whole_second_ticks > max_base_time - fractional_ticks)
+    {
+        return max_base_time;
+    }
+    return whole_second_ticks + fractional_ticks;
+}
+
+} // namespace
 
 std::uint32_t initialize_default_guest_thread(
     EspressoCore& core,
@@ -61,6 +116,19 @@ std::uint32_t initialize_default_guest_thread(
 
 void register_coreinit_hle(HleDispatcher& dispatcher)
 {
+    dispatcher.register_function(
+        "coreinit",
+        "OSGetSystemInfo",
+        [](EspressoCore& core) {
+            const auto address = core.hle.bind_data_import(
+                "coreinit", "__affogato_internal_OSSystemInfo", core.memory);
+            if (!address)
+            {
+                throw HleExecutionError(
+                    "OSGetSystemInfo internal data is not registered");
+            }
+            core.state.gpr[3] = *address;
+        });
     dispatcher.register_function(
         "coreinit",
         "OSGetCurrentThread",
@@ -377,6 +445,24 @@ void register_coreinit_hle(HleDispatcher& dispatcher)
         alignof(std::uint16_t),
         [](GuestMemory& memory, std::uint32_t address) {
             memory.write16_be(address, 20U);
+        });
+    dispatcher.register_data(
+        "coreinit",
+        "__affogato_internal_OSSystemInfo",
+        os_system_info_size,
+        8U,
+        [](GuestMemory& memory, std::uint32_t address) {
+            // Cafe baseTime is timer-clock ticks since 2000-01-01 UTC. This
+            // one-time host-clock snapshot is a scoped approximation until
+            // Affogato models the Espresso time base and OSGetTime family.
+            const std::uint64_t base_time = initial_os_system_base_time();
+            memory.write32_be(address + 0x00U, os_system_info_bus_clock_speed);
+            memory.write32_be(address + 0x04U, os_system_info_core_clock_speed);
+            memory.write64_be(address + 0x08U, base_time);
+            memory.write32_be(address + 0x10U, os_system_info_l2_core0_size);
+            memory.write32_be(address + 0x14U, os_system_info_l2_core1_size);
+            memory.write32_be(address + 0x18U, os_system_info_l2_core2_size);
+            memory.write32_be(address + 0x1CU, os_system_info_cpu_ratio);
         });
 }
 
