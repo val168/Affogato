@@ -5,9 +5,11 @@
 #include "cpu/espresso/interpreter.hpp"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <limits>
 #include <optional>
+#include <set>
 #include <stdexcept>
 
 namespace affogato::cpu::espresso
@@ -30,6 +32,12 @@ constexpr std::uint32_t mem2_base_heap_index = 1U;
 constexpr std::uint32_t mem2_expanded_heap_tag = 0x45585048U; // EXPH
 constexpr std::uint32_t mem2_expanded_heap_header_size = 0x54U;
 constexpr std::uint32_t mem2_expanded_heap_block_header_size = 0x14U;
+constexpr std::uint32_t mem_exp_heap_data_start_offset = 0x18U;
+constexpr std::uint32_t mem_exp_heap_data_end_offset = 0x1CU;
+constexpr std::uint32_t mem_exp_heap_free_list_head_offset = 0x40U;
+constexpr std::uint32_t mem_exp_heap_block_size_offset = 0x04U;
+constexpr std::uint32_t mem_exp_heap_block_next_offset = 0x0CU;
+constexpr std::uint32_t mem_exp_heap_block_tag_offset = 0x10U;
 constexpr std::uint32_t mem2_minimum_heap_size = 0x6CU;
 constexpr std::uint32_t default_bump_heap_minimum_remaining = 0x1000U;
 constexpr std::uint16_t mem2_free_block_tag = 0x4652U; // 'FR'
@@ -50,6 +58,116 @@ static_assert(os_system_info_core_clock_speed / os_system_info_bus_clock_speed =
     case 11U: return 0x654U; // Performance monitor
     default: return std::nullopt;
     }
+}
+
+[[nodiscard]] std::uint32_t total_free_size_for_exp_heap(
+    const GuestMemory& memory,
+    std::uint32_t heap)
+{
+    constexpr std::uint64_t guest_address_space_end = std::uint64_t{1} << 32U;
+    if (heap == 0U)
+    {
+        throw HleExecutionError(
+            "MEMGetTotalFreeSizeForExpHeap received null heap handle");
+    }
+    if (static_cast<std::uint64_t>(heap) + mem2_expanded_heap_header_size >
+        guest_address_space_end)
+    {
+        throw HleExecutionError(
+            "MEMGetTotalFreeSizeForExpHeap heap header wraps guest address space");
+    }
+
+    // Validate the complete guest header before trusting any of its pointers.
+    std::array<std::uint8_t, mem2_expanded_heap_header_size> header{};
+    try
+    {
+        memory.read_bytes(heap, header);
+    }
+    catch (const GuestMemoryFault&)
+    {
+        throw HleExecutionError(
+            "MEMGetTotalFreeSizeForExpHeap heap header is outside mapped guest memory");
+    }
+
+    const std::uint32_t tag = memory.read32_be(heap);
+    if (tag != mem2_expanded_heap_tag)
+    {
+        throw HleExecutionError(
+            "MEMGetTotalFreeSizeForExpHeap handle is not an EXPH heap (tag " +
+            std::to_string(tag) + ")");
+    }
+
+    const std::uint32_t data_start =
+        memory.read32_be(heap + mem_exp_heap_data_start_offset);
+    const std::uint32_t data_end =
+        memory.read32_be(heap + mem_exp_heap_data_end_offset);
+    if (data_start > data_end)
+    {
+        throw HleExecutionError(
+            "MEMGetTotalFreeSizeForExpHeap has invalid heap data bounds");
+    }
+
+    std::uint32_t block =
+        memory.read32_be(heap + mem_exp_heap_free_list_head_offset);
+    // The current execution lane is single-threaded, so this read-only walk
+    // cannot race guest heap mutations. Revisit when Cafe scheduling exists.
+    std::set<std::uint32_t> visited;
+    std::uint64_t total = 0U;
+    while (block != 0U)
+    {
+        if (!visited.insert(block).second)
+        {
+            throw HleExecutionError(
+                "MEMGetTotalFreeSizeForExpHeap free-list cycle detected");
+        }
+
+        const std::uint64_t block_header_end =
+            static_cast<std::uint64_t>(block) +
+            mem2_expanded_heap_block_header_size;
+        if (block < data_start || block_header_end > data_end ||
+            block_header_end > guest_address_space_end)
+        {
+            throw HleExecutionError(
+                "MEMGetTotalFreeSizeForExpHeap free block lies outside heap bounds");
+        }
+
+        std::uint32_t block_size{};
+        std::uint32_t next{};
+        std::uint16_t block_tag{};
+        try
+        {
+            block_size = memory.read32_be(block + mem_exp_heap_block_size_offset);
+            next = memory.read32_be(block + mem_exp_heap_block_next_offset);
+            block_tag = memory.read16_be(block + mem_exp_heap_block_tag_offset);
+        }
+        catch (const GuestMemoryFault&)
+        {
+            throw HleExecutionError(
+                "MEMGetTotalFreeSizeForExpHeap free block header is outside mapped guest memory");
+        }
+        const std::uint64_t block_data_end =
+            block_header_end + static_cast<std::uint64_t>(block_size);
+        if (block_data_end > data_end || block_data_end > guest_address_space_end)
+        {
+            throw HleExecutionError(
+                "MEMGetTotalFreeSizeForExpHeap free block exceeds heap bounds");
+        }
+        if (block_tag != mem2_free_block_tag)
+        {
+            throw HleExecutionError(
+                "MEMGetTotalFreeSizeForExpHeap free-list block has invalid tag");
+        }
+
+        total += block_size;
+        if (total > std::numeric_limits<std::uint32_t>::max())
+        {
+            throw HleExecutionError(
+                "MEMGetTotalFreeSizeForExpHeap free-size overflow");
+        }
+        block = next;
+    }
+
+    return static_cast<std::uint32_t>(total);
 }
 
 [[nodiscard]] std::uint64_t initial_os_system_base_time() noexcept
@@ -266,6 +384,13 @@ void register_coreinit_hle(HleDispatcher& dispatcher)
             core.state.gpr[3] = type < base_heap_count
                 ? core.base_heap_handles[type]
                 : 0U;
+        });
+    dispatcher.register_function(
+        "coreinit",
+        "MEMGetTotalFreeSizeForExpHeap",
+        [](EspressoCore& core) {
+            const std::uint32_t heap = core.state.gpr[3];
+            core.state.gpr[3] = total_free_size_for_exp_heap(core.memory, heap);
         });
     dispatcher.register_function(
         "coreinit",

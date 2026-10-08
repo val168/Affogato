@@ -7222,6 +7222,235 @@ void mem_get_base_heap_handle_hle_tests()
     assert(core.mem2_heap_region_end == 0U);
 }
 
+void mem_get_total_free_size_for_exp_heap_hle_tests()
+{
+    constexpr std::uint32_t heap = 0x1000U;
+    constexpr std::uint32_t data_start = 0x1100U;
+    constexpr std::uint32_t data_end = 0x5000U;
+    constexpr std::uint32_t block_a = 0x1200U;
+    constexpr std::uint32_t block_b = 0x1500U;
+    constexpr std::uint32_t block_c = 0x1900U;
+    constexpr std::uint32_t return_address = 0x02005F08U;
+
+    const auto initialize_heap = [](EspressoCore& core,
+                                    std::uint32_t heap_address,
+                                    std::uint32_t start,
+                                    std::uint32_t end,
+                                    std::uint32_t head,
+                                    std::uint32_t tail) {
+        core.memory.zero_fill(heap_address, 0x54U);
+        core.memory.write32_be(heap_address, 0x45585048U);
+        core.memory.write32_be(heap_address + 0x18U, start);
+        core.memory.write32_be(heap_address + 0x1CU, end);
+        core.memory.write32_be(heap_address + 0x40U, head);
+        core.memory.write32_be(heap_address + 0x44U, tail);
+    };
+    const auto initialize_block = [](EspressoCore& core,
+                                     std::uint32_t address,
+                                     std::uint32_t size,
+                                     std::uint32_t previous,
+                                     std::uint32_t next) {
+        core.memory.write32_be(address + 0x00U, 0U);
+        core.memory.write32_be(address + 0x04U, size);
+        core.memory.write32_be(address + 0x08U, previous);
+        core.memory.write32_be(address + 0x0CU, next);
+        core.memory.write16_be(address + 0x10U, 0x4652U);
+    };
+
+    EspressoCore fresh_heap(0x10000U);
+    register_coreinit_hle(fresh_heap.hle);
+    fresh_heap.configure_guest_heap(0x1000U, 0x8000U);
+    assert(initialize_default_guest_heaps(fresh_heap));
+    const std::uint32_t fresh_handle = fresh_heap.base_heap_handles[1];
+    const std::uint32_t fresh_head =
+        fresh_heap.memory.read32_be(fresh_handle + 0x40U);
+    assert(fresh_head == fresh_heap.memory.read32_be(fresh_handle + 0x44U));
+    fresh_heap.state.gpr[3] = fresh_handle;
+    fresh_heap.state.lr = return_address;
+    fresh_heap.state.cia = fresh_heap.hle.bind_import(
+        "coreinit", "MEMGetTotalFreeSizeForExpHeap");
+    const RunResult fresh_result = fresh_heap.run(1U);
+    assert(fresh_result.reason == StopReason::instruction_limit);
+    assert(fresh_heap.state.gpr[3] ==
+           fresh_heap.memory.read32_be(fresh_head + 0x04U));
+    assert(fresh_heap.state.cia == return_address);
+
+    EspressoCore core(0x10000U);
+    register_coreinit_hle(core.hle);
+    initialize_heap(core, heap, data_start, data_end, block_a, block_a);
+    initialize_block(core, block_a, 0x800U, 0U, 0U);
+    const std::uint32_t import = core.hle.bind_import(
+        "coreinit", "MEMGetTotalFreeSizeForExpHeap");
+
+    const auto invoke = [&](std::uint32_t handle) {
+        core.state.gpr[3] = handle;
+        core.state.lr = return_address;
+        core.state.cia = import;
+        return core.run(1U);
+    };
+
+    const std::uint32_t guest_head = core.memory.read32_be(heap + 0x40U);
+    const std::uint32_t guest_tail = core.memory.read32_be(heap + 0x44U);
+    const std::uint32_t initial_size = core.memory.read32_be(guest_head + 4U);
+    std::vector<std::uint8_t> heap_before(data_end - heap);
+    core.memory.read_bytes(heap, heap_before);
+    core.configure_guest_heap(0x8000U, 0x9000U);
+    core.base_heap_handles[1] = heap;
+    core.mem2_heap_region_begin = heap;
+    core.mem2_heap_region_end = data_end;
+    for (std::uint32_t reg = 0; reg < core.state.gpr.size(); ++reg)
+    {
+        core.state.gpr[reg] = 0xA1000000U + reg * 0x101U;
+    }
+    core.state.gpr[3] = heap;
+    core.state.lr = return_address;
+    const auto gprs_before = core.state.gpr;
+    for (std::uint32_t reg = 0; reg < core.state.fpr.size(); ++reg)
+    {
+        core.state.fpr[reg] = 0x1111000000000000ULL + reg;
+        core.state.fpr_ps1[reg] = 0x2222000000000000ULL + reg;
+    }
+    const auto fprs_before = core.state.fpr;
+    const auto ps1_before = core.state.fpr_ps1;
+    core.state.cr = 0x12345678U;
+    core.state.xer = 0xA00000A5U;
+    core.state.ctr = 0xCAFEBABEU;
+    core.state.fpscr = 0x5A5AA55AU;
+    const auto cr_before = core.state.cr;
+    const auto xer_before = core.state.xer;
+    const auto ctr_before = core.state.ctr;
+    const auto fpscr_before = core.state.fpscr;
+    const std::uint32_t cursor_before = core.guest_heap_cursor;
+    const std::uint32_t limit_before = core.guest_heap_limit;
+    const auto handles_before = core.base_heap_handles;
+    const std::uint32_t region_begin_before = core.mem2_heap_region_begin;
+    const std::uint32_t region_end_before = core.mem2_heap_region_end;
+
+    RunResult result = invoke(heap);
+    assert(result.steps == 1U);
+    assert(result.reason == StopReason::instruction_limit);
+    assert(core.state.gpr[3] == initial_size);
+    assert(core.state.cia == return_address);
+    assert(core.state.lr == return_address);
+    assert(core.state.cr == cr_before);
+    assert(core.state.xer == xer_before);
+    assert(core.state.ctr == ctr_before);
+    assert(core.state.fpscr == fpscr_before);
+    assert(core.state.fpr == fprs_before);
+    assert(core.state.fpr_ps1 == ps1_before);
+    for (std::size_t reg = 0; reg < core.state.gpr.size(); ++reg)
+    {
+        if (reg != 3U)
+        {
+            assert(core.state.gpr[reg] == gprs_before[reg]);
+        }
+    }
+    assert(core.guest_heap_cursor == cursor_before);
+    assert(core.guest_heap_limit == limit_before);
+    assert(core.base_heap_handles == handles_before);
+    assert(core.mem2_heap_region_begin == region_begin_before);
+    assert(core.mem2_heap_region_end == region_end_before);
+    std::vector<std::uint8_t> heap_after(data_end - heap);
+    core.memory.read_bytes(heap, heap_after);
+    assert(heap_after == heap_before);
+    assert(guest_head == block_a && guest_tail == block_a);
+
+    // The guest free-list block size, not host-side MEM2 bounds, is the
+    // authoritative result on every query.
+    core.memory.write32_be(block_a + 0x04U, 0x600U);
+    result = invoke(heap);
+    assert(result.reason == StopReason::instruction_limit);
+    assert(core.state.gpr[3] == 0x600U);
+
+    // Sum all free blocks reached through the guest next pointers. The used
+    // list is intentionally populated but must not contribute to the result.
+    initialize_heap(core, heap, data_start, data_end, block_a, block_c);
+    initialize_block(core, block_a, 0x100U, 0U, block_b);
+    initialize_block(core, block_b, 0x200U, block_a, block_c);
+    initialize_block(core, block_c, 0x40U, block_b, 0U);
+    core.memory.write32_be(heap + 0x48U, 0x2200U);
+    core.memory.write32_be(heap + 0x4CU, 0x2200U);
+    initialize_block(core, 0x2200U, 0x777U, 0U, 0U);
+    std::vector<std::uint8_t> fragmented_before(data_end - heap);
+    core.memory.read_bytes(heap, fragmented_before);
+    result = invoke(heap);
+    assert(result.reason == StopReason::instruction_limit);
+    assert(core.state.gpr[3] == 0x340U);
+    std::vector<std::uint8_t> fragmented_after(data_end - heap);
+    core.memory.read_bytes(heap, fragmented_after);
+    assert(fragmented_after == fragmented_before);
+
+    // Empty list is a valid zero-free-space heap.
+    initialize_heap(core, heap, data_start, data_end, 0U, 0U);
+    result = invoke(heap);
+    assert(result.reason == StopReason::instruction_limit);
+    assert(core.state.gpr[3] == 0U);
+
+    const auto expect_hle_error = [&](EspressoCore& target, std::uint32_t handle,
+                                      const std::string& expected_text) {
+        target.state.gpr[3] = handle;
+        target.state.lr = return_address;
+        target.state.cia = target.hle.bind_import(
+            "coreinit", "MEMGetTotalFreeSizeForExpHeap");
+        const RunResult error = target.run(1U);
+        assert(error.reason == StopReason::hle_error);
+        assert(error.detail.find(expected_text) != std::string::npos);
+        assert(error.steps == 0U);
+    };
+
+    expect_hle_error(core, 0U, "null heap handle");
+
+    EspressoCore malformed(0x10000U);
+    register_coreinit_hle(malformed.hle);
+    const auto prepare_malformed = [&](std::uint32_t head, std::uint32_t end) {
+        initialize_heap(malformed, heap, data_start, end, head, head);
+    };
+
+    prepare_malformed(0U, data_end);
+    malformed.memory.write32_be(heap, 0xDEADBEEFU);
+    expect_hle_error(malformed, heap, "not an EXPH heap");
+
+    prepare_malformed(data_start - 4U, data_end);
+    expect_hle_error(malformed, heap, "outside heap bounds");
+
+    prepare_malformed(data_end - 8U, data_end);
+    expect_hle_error(malformed, heap, "outside heap bounds");
+
+    prepare_malformed(block_a, data_end);
+    initialize_block(malformed, block_a, data_end, 0U, 0U);
+    expect_hle_error(malformed, heap, "exceeds heap bounds");
+
+    prepare_malformed(block_a, data_end);
+    initialize_block(malformed, block_a, 0x100U, 0U, 0U);
+    malformed.memory.write16_be(block_a + 0x10U, 0x1234U);
+    expect_hle_error(malformed, heap, "invalid tag");
+
+    prepare_malformed(block_a, data_end);
+    initialize_block(malformed, block_a, 0x100U, 0U, block_a);
+    expect_hle_error(malformed, heap, "cycle detected");
+
+    prepare_malformed(block_a, data_end);
+    initialize_block(malformed, block_a, 0x100U, 0U, block_b);
+    initialize_block(malformed, block_b, 0x100U, block_a, block_a);
+    expect_hle_error(malformed, heap, "cycle detected");
+
+    prepare_malformed(block_a, 0xFFFFFFFFU);
+    initialize_block(malformed, block_a, 0xFFFFD000U, 0U, block_b);
+    initialize_block(malformed, block_b, 0xFFFFD000U, block_a, 0U);
+    expect_hle_error(malformed, heap, "free-size overflow");
+
+    prepare_malformed(block_a, 0x30000U);
+    initialize_block(malformed, block_a, 0x100U, 0U, block_b);
+    // The heap claims a broad interval, but the next header itself is not
+    // mapped; reject it cleanly instead of allowing a guest-memory fault.
+    malformed.memory.write32_be(block_a + 0x0CU, 0x20000U);
+    expect_hle_error(malformed, heap, "free block header is outside mapped guest memory");
+
+    // An unmapped alleged heap handle is converted to a clear HLE diagnostic,
+    // rather than exposing a host exception or dereferencing host memory.
+    expect_hle_error(malformed, 0x20000U, "header is outside mapped guest memory");
+}
+
 void compare_and_conditional_branch_tests()
 {
     EspressoCore unsigned_compare_core(8);
@@ -9412,6 +9641,7 @@ int main(int argc, char* argv[])
     os_get_system_info_hle_tests();
     os_set_exception_callback_hle_tests();
     mem_get_base_heap_handle_hle_tests();
+    mem_get_total_free_size_for_exp_heap_hle_tests();
     compare_and_conditional_branch_tests();
     instruction_sync_tests();
     floating_compare_unordered_tests();
