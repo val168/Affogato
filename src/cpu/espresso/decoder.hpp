@@ -18,6 +18,7 @@ enum class Opcode
     addi,
     addis,
     add_immediate_carry,
+    add_carrying,
     subtract_from_immediate_carry,
     add,
     subtract_from,
