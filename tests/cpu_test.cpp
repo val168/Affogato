@@ -3045,6 +3045,121 @@ void multiply_high_word_unsigned_tests()
            std::string::npos);
 }
 
+void divide_word_unsigned_tests()
+{
+    const auto encode_divwu = [](std::uint8_t destination, std::uint8_t ra,
+                                std::uint8_t rb, bool record = false,
+                                bool overflow_enable = false) {
+        return (31U << 26U) |
+            (static_cast<std::uint32_t>(destination) << 21U) |
+            (static_cast<std::uint32_t>(ra) << 16U) |
+            (static_cast<std::uint32_t>(rb) << 11U) |
+            ((459U + (overflow_enable ? 512U : 0U)) << 1U) |
+            static_cast<std::uint32_t>(record);
+    };
+
+    constexpr std::uint32_t wind_waker_word = 0x7D1DFB96U;
+    const DecodedInstruction wind_waker = decode(wind_waker_word);
+    assert(wind_waker.opcode == Opcode::divide_word_unsigned);
+    assert(wind_waker.destination == 8U);
+    assert(wind_waker.base == 29U);
+    assert(wind_waker.source == 31U);
+    assert(((wind_waker_word >> 1U) & 0x3FFU) == 459U);
+    assert(!wind_waker.record);
+
+    const DecodedInstruction record_form = decode(encode_divwu(8U, 29U, 31U, true));
+    assert(record_form.opcode == Opcode::divide_word_unsigned);
+    assert(record_form.record);
+    assert(decode(encode_divwu(8U, 29U, 31U, false, true)).opcode ==
+           Opcode::unsupported);
+
+    const auto execute = [&](std::uint8_t destination, std::uint8_t ra,
+                             std::uint8_t rb, std::uint32_t dividend,
+                             std::uint32_t divisor, bool record = false,
+                             bool so = false) {
+        EspressoCore core(8U);
+        core.state.gpr.fill(0xA5A5A5A5U);
+        core.state.gpr[ra] = dividend;
+        core.state.gpr[rb] = divisor;
+        constexpr std::uint32_t initial_cr = 0x12345678U;
+        const std::uint32_t initial_xer = so ? 0xA00000A5U : 0x200000A5U;
+        core.state.cr = initial_cr;
+        core.state.xer = initial_xer;
+        core.state.lr = 0x11223344U;
+        core.state.ctr = 0x55667788U;
+        core.state.fpscr = 0xCAFEBABEU;
+        core.state.fpr.fill(0x0123456789ABCDEFULL);
+        core.state.fpr_ps1.fill(0xFEDCBA9876543210ULL);
+        const std::uint32_t word = encode_divwu(destination, ra, rb, record);
+        core.memory.write32_be(0U, word);
+        const auto original_gprs = core.state.gpr;
+        const auto original_xer = core.state.xer;
+        const auto original_fpr = core.state.fpr;
+        const auto original_fpr_ps1 = core.state.fpr_ps1;
+        const std::uint32_t expected = divisor == 0U ? 0U : dividend / divisor;
+
+        const RunResult run_result = core.run(1U);
+        assert(run_result.steps == 1U);
+        assert(run_result.reason == StopReason::instruction_limit);
+        assert(core.state.gpr[destination] == expected);
+        for (std::uint32_t reg = 0; reg < 32U; ++reg)
+        {
+            if (reg != destination)
+            {
+                assert(core.state.gpr[reg] == original_gprs[reg]);
+            }
+        }
+        if (record)
+        {
+            const std::uint32_t expected_cr0 = (expected & 0x80000000U) != 0U
+                ? (0x8U | static_cast<std::uint32_t>(so))
+                : expected == 0U ? (0x2U | static_cast<std::uint32_t>(so))
+                                 : (0x4U | static_cast<std::uint32_t>(so));
+            assert(((core.state.cr >> 28U) & 0xFU) == expected_cr0);
+            assert((core.state.cr & 0x0FFFFFFFU) == (initial_cr & 0x0FFFFFFFU));
+        }
+        else
+        {
+            assert(core.state.cr == initial_cr);
+        }
+        assert(core.state.xer == original_xer);
+        assert(core.state.lr == 0x11223344U);
+        assert(core.state.ctr == 0x55667788U);
+        assert(core.state.fpscr == 0xCAFEBABEU);
+        assert(core.state.fpr == original_fpr);
+        assert(core.state.fpr_ps1 == original_fpr_ps1);
+        assert(core.memory.read32_be(0U) == word);
+        return std::pair{expected, run_result};
+    };
+
+    assert(execute(3U, 4U, 5U, 10U, 2U).first == 5U);
+    assert(execute(3U, 4U, 5U, 10U, 3U).first == 3U);
+    assert(execute(3U, 4U, 5U, 0U, 123U).first == 0U);
+    assert(execute(3U, 4U, 5U, 123U, 1U).first == 123U);
+    assert(execute(3U, 4U, 5U, 5U, 10U).first == 0U);
+    assert(execute(3U, 4U, 5U, 0xFFFFFFFFU, 2U).first == 0x7FFFFFFFU);
+    assert(execute(3U, 4U, 5U, 0x80000000U, 2U).first == 0x40000000U);
+    assert(execute(3U, 4U, 5U, 0xFFFFFFFFU, 0xFFFFFFFFU).first == 1U);
+    assert(execute(3U, 4U, 5U, 0x80000000U, 0xFFFFFFFFU).first == 0U);
+    assert(execute(3U, 4U, 5U, 0x12345678U, 0U).first == 0U);
+
+    // Destination aliases either input or both; source operands are snapshotted.
+    assert(execute(3U, 3U, 4U, 10U, 2U).first == 5U);
+    assert(execute(4U, 3U, 4U, 10U, 2U).first == 5U);
+    assert(execute(5U, 5U, 5U, 123U, 123U).first == 1U);
+
+    (void)execute(6U, 4U, 5U, 10U, 0U, true); // zero -> EQ
+    (void)execute(6U, 4U, 5U, 10U, 2U, true); // positive -> GT
+    (void)execute(6U, 4U, 5U, 0xFFFFFFFFU, 1U, true); // high-bit result -> LT
+    (void)execute(6U, 4U, 5U, 0xFFFFFFFFU, 1U, true, true); // LT | SO
+
+    const auto wind_result = execute(8U, 29U, 31U, 0x41A7U, 0x7FFFFFFFU);
+    assert(wind_result.first == 0U);
+    const std::string trace = format_instruction_history(wind_result.second);
+    assert(trace.find("divwu r29=0x000041A7 r31=0x7FFFFFFF -> r8=0x00000000") !=
+           std::string::npos);
+}
+
 void or_immediate_shifted_tests()
 {
     const auto encode_oris = [](std::uint8_t destination, std::uint8_t source,
@@ -5931,6 +6046,7 @@ int main(int argc, char* argv[])
     interpreter_tests();
     integer_alu_tests();
     multiply_high_word_unsigned_tests();
+    divide_word_unsigned_tests();
     or_immediate_shifted_tests();
     extend_sign_byte_tests();
     leaf_function_abi_tests();

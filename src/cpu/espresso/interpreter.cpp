@@ -438,6 +438,7 @@ void set_record_result(CpuState& state, std::uint32_t value)
         return "mulli";
     case Opcode::multiply_low_word: return "mullw";
     case Opcode::multiply_high_word_unsigned: return "mulhwu";
+    case Opcode::divide_word_unsigned: return "divwu";
     case Opcode::unsupported: return "unsupported";
     case Opcode::addi: return "addi";
     case Opcode::addis: return "addis";
@@ -548,6 +549,7 @@ void add_history_source(
     entry.opcode_name = opcode_name(instruction.opcode);
     if ((instruction.opcode == Opcode::multiply_low_word ||
          instruction.opcode == Opcode::multiply_high_word_unsigned ||
+         instruction.opcode == Opcode::divide_word_unsigned ||
          instruction.opcode == Opcode::count_leading_zeros ||
          instruction.opcode == Opcode::negate ||
          instruction.opcode == Opcode::extend_sign_byte ||
@@ -757,6 +759,7 @@ void add_history_source(
     case Opcode::subtract_from_carrying:
     case Opcode::multiply_low_word:
     case Opcode::multiply_high_word_unsigned:
+    case Opcode::divide_word_unsigned:
     case Opcode::bitwise_or:
     case Opcode::bitwise_and:
     case Opcode::bitwise_and_complement:
@@ -808,6 +811,7 @@ void add_history_source(
     case Opcode::subtract_from_carrying:
     case Opcode::multiply_low_word:
     case Opcode::multiply_high_word_unsigned:
+    case Opcode::divide_word_unsigned:
     case Opcode::negate:
     case Opcode::extend_sign_byte:
     case Opcode::ori:
@@ -1239,6 +1243,19 @@ StepResult EspressoCore::step()
         const std::uint64_t rhs = state.gpr[instruction.source];
         const std::uint64_t product = lhs * rhs;
         const std::uint32_t result = static_cast<std::uint32_t>(product >> 32U);
+        state.gpr[instruction.destination] = result;
+        if (instruction.record)
+        {
+            set_record_result(state, result);
+        }
+        break;
+    }
+
+    case Opcode::divide_word_unsigned:
+    {
+        const std::uint32_t dividend = state.gpr[instruction.base];
+        const std::uint32_t divisor = state.gpr[instruction.source];
+        const std::uint32_t result = divisor == 0U ? 0U : dividend / divisor;
         state.gpr[instruction.destination] = result;
         if (instruction.record)
         {
