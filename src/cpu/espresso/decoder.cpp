@@ -331,6 +331,14 @@ DecodedInstruction decode(std::uint32_t raw) noexcept
             instruction.base = static_cast<std::uint8_t>(field(raw, 11, 0x1FU));
             instruction.record = (raw & 1U) != 0;
         }
+        else if (extended_opcode == 536U) // srw
+        {
+            instruction.opcode = Opcode::shift_right_word;
+            instruction.source = static_cast<std::uint8_t>(field(raw, 21, 0x1FU));
+            instruction.destination = static_cast<std::uint8_t>(field(raw, 16, 0x1FU));
+            instruction.base = static_cast<std::uint8_t>(field(raw, 11, 0x1FU));
+            instruction.record = (raw & 1U) != 0U;
+        }
         else if (extended_opcode == 444 || extended_opcode == 28 ||
                  extended_opcode == 60 || extended_opcode == 316 ||
                  extended_opcode == 284)

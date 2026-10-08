@@ -464,6 +464,7 @@ void set_record_result(CpuState& state, std::uint32_t value)
     case Opcode::rotate_left_word_and_mask_insert: return "rlwimi";
     case Opcode::arithmetic_shift_right_immediate: return "srawi";
     case Opcode::shift_left_word: return "slw";
+    case Opcode::shift_right_word: return "srw";
     case Opcode::branch: return "b";
     case Opcode::instruction_sync: return "isync";
     case Opcode::floating_compare_unordered: return "fcmpu";
@@ -554,7 +555,8 @@ void add_history_source(
          instruction.opcode == Opcode::negate ||
          instruction.opcode == Opcode::extend_sign_byte ||
          instruction.opcode == Opcode::rotate_left_word_and_mask_insert ||
-         instruction.opcode == Opcode::rotate_left_word_and_mask) && instruction.record)
+         instruction.opcode == Opcode::rotate_left_word_and_mask ||
+         instruction.opcode == Opcode::shift_right_word) && instruction.record)
     {
         entry.opcode_name += '.';
     }
@@ -775,6 +777,7 @@ void add_history_source(
         add_history_source(entry, state, instruction.source);
         break;
     case Opcode::shift_left_word:
+    case Opcode::shift_right_word:
         add_history_source(entry, state, instruction.source);
         add_history_source(entry, state, instruction.base);
         break;
@@ -829,6 +832,7 @@ void add_history_source(
     case Opcode::rotate_left_word_and_mask_insert:
     case Opcode::arithmetic_shift_right_immediate:
     case Opcode::shift_left_word:
+    case Opcode::shift_right_word:
     case Opcode::load_word_zero:
     case Opcode::load_word_update:
     case Opcode::load_word_indexed:
@@ -1521,6 +1525,19 @@ StepResult EspressoCore::step()
         const std::uint32_t result = shift >= 32U
             ? 0U
             : state.gpr[instruction.source] << shift;
+        state.gpr[instruction.destination] = result;
+        if (instruction.record)
+        {
+            set_record_result(state, result);
+        }
+        break;
+    }
+
+    case Opcode::shift_right_word:
+    {
+        const std::uint32_t shift = state.gpr[instruction.base] & 0x3FU;
+        const std::uint32_t source = state.gpr[instruction.source];
+        const std::uint32_t result = shift >= 32U ? 0U : source >> shift;
         state.gpr[instruction.destination] = result;
         if (instruction.record)
         {

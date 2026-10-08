@@ -36,6 +36,7 @@ enum class Opcode
     rotate_left_word_and_mask_insert,
     arithmetic_shift_right_immediate,
     shift_left_word,
+    shift_right_word,
     branch,
     instruction_sync,
     compare_signed_immediate,

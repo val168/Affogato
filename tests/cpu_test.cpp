@@ -3160,6 +3160,120 @@ void divide_word_unsigned_tests()
            std::string::npos);
 }
 
+void shift_right_word_tests()
+{
+    const auto encode_srw = [](std::uint8_t destination, std::uint8_t source,
+                               std::uint8_t shift_register, bool record = false) {
+        return (31U << 26U) |
+            (static_cast<std::uint32_t>(source) << 21U) |
+            (static_cast<std::uint32_t>(destination) << 16U) |
+            (static_cast<std::uint32_t>(shift_register) << 11U) |
+            (536U << 1U) | static_cast<std::uint32_t>(record);
+    };
+
+    constexpr std::uint32_t wind_waker_word = 0x7CC95430U;
+    const DecodedInstruction wind_waker = decode(wind_waker_word);
+    assert(wind_waker.opcode == Opcode::shift_right_word);
+    assert(wind_waker.source == 6U);
+    assert(wind_waker.destination == 9U);
+    assert(wind_waker.base == 10U);
+    assert(((wind_waker_word >> 1U) & 0x3FFU) == 536U);
+    assert(!wind_waker.record);
+    const DecodedInstruction record_form = decode(encode_srw(9U, 6U, 10U, true));
+    assert(record_form.opcode == Opcode::shift_right_word);
+    assert(record_form.record);
+
+    const auto execute = [&](std::uint8_t destination, std::uint8_t source,
+                             std::uint8_t shift_register, std::uint32_t value,
+                             std::uint32_t shift_amount, bool record = false,
+                             bool so = false) {
+        EspressoCore core(8U);
+        core.state.gpr.fill(0xA5A5A5A5U);
+        core.state.gpr[source] = value;
+        core.state.gpr[shift_register] = shift_amount;
+        constexpr std::uint32_t initial_cr = 0x12345678U;
+        const std::uint32_t initial_xer = so ? 0xA00000A5U : 0x200000A5U;
+        core.state.cr = initial_cr;
+        core.state.xer = initial_xer;
+        core.state.lr = 0x11223344U;
+        core.state.ctr = 0x55667788U;
+        core.state.fpscr = 0xCAFEBABEU;
+        core.state.fpr.fill(0x0123456789ABCDEFULL);
+        core.state.fpr_ps1.fill(0xFEDCBA9876543210ULL);
+        const std::uint32_t word = encode_srw(destination, source, shift_register, record);
+        core.memory.write32_be(0U, word);
+        const auto original_gprs = core.state.gpr;
+        const auto original_fpr = core.state.fpr;
+        const auto original_fpr_ps1 = core.state.fpr_ps1;
+        const std::uint32_t amount = shift_amount & 0x3FU;
+        const std::uint32_t expected = amount >= 32U ? 0U : value >> amount;
+
+        const RunResult run_result = core.run(1U);
+        assert(run_result.steps == 1U);
+        assert(run_result.reason == StopReason::instruction_limit);
+        assert(core.state.gpr[destination] == expected);
+        for (std::uint32_t reg = 0; reg < 32U; ++reg)
+        {
+            if (reg != destination)
+            {
+                assert(core.state.gpr[reg] == original_gprs[reg]);
+            }
+        }
+        if (record)
+        {
+            const std::uint32_t expected_cr0 = (expected & 0x80000000U) != 0U
+                ? (0x8U | static_cast<std::uint32_t>(so))
+                : expected == 0U ? (0x2U | static_cast<std::uint32_t>(so))
+                                 : (0x4U | static_cast<std::uint32_t>(so));
+            assert(((core.state.cr >> 28U) & 0xFU) == expected_cr0);
+            assert((core.state.cr & 0x0FFFFFFFU) == (initial_cr & 0x0FFFFFFFU));
+        }
+        else
+        {
+            assert(core.state.cr == initial_cr);
+        }
+        assert(core.state.xer == initial_xer);
+        assert(core.state.lr == 0x11223344U);
+        assert(core.state.ctr == 0x55667788U);
+        assert(core.state.fpscr == 0xCAFEBABEU);
+        assert(core.state.fpr == original_fpr);
+        assert(core.state.fpr_ps1 == original_fpr_ps1);
+        assert(core.memory.read32_be(0U) == word);
+        return std::pair{expected, run_result};
+    };
+
+    assert(execute(9U, 6U, 10U, 0x7FFFFFFFU, 20U).first == 0x000007FFU);
+    assert(execute(3U, 4U, 5U, 0x80000000U, 1U).first == 0x40000000U);
+    assert(execute(3U, 4U, 5U, 0xFFFFFFFFU, 4U).first == 0x0FFFFFFFU);
+    assert(execute(3U, 4U, 5U, 0x12345678U, 0U).first == 0x12345678U);
+    assert(execute(3U, 4U, 5U, 1U, 1U).first == 0U);
+    assert(execute(3U, 4U, 5U, 0xFFFFFFFFU, 31U).first == 1U);
+    assert(execute(3U, 4U, 5U, 0xFFFFFFFFU, 32U).first == 0U);
+    assert(execute(3U, 4U, 5U, 0xFFFFFFFFU, 33U).first == 0U);
+    assert(execute(3U, 4U, 5U, 0xFFFFFFFFU, 63U).first == 0U);
+    assert(execute(3U, 4U, 5U, 0x12345678U, 64U).first == 0x12345678U);
+    assert(execute(3U, 4U, 5U, 0x80000000U, 65U).first == 0x40000000U);
+
+    // Destination/source and destination/shift-register aliasing use old values.
+    assert(execute(5U, 5U, 6U, 0x80000000U, 1U).first == 0x40000000U);
+    assert(execute(6U, 5U, 6U, 0x80000000U, 1U).first == 0x40000000U);
+    assert(execute(5U, 5U, 5U, 4U, 4U).first == 0U);
+
+    (void)execute(7U, 4U, 5U, 0U, 0U, true); // EQ
+    (void)execute(7U, 4U, 5U, 2U, 1U, true); // GT
+    (void)execute(7U, 4U, 5U, 0xFFFFFFFFU, 0U, true); // LT
+    (void)execute(7U, 4U, 5U, 0xFFFFFFFFU, 0U, true, true); // LT | SO
+
+    const auto wind_result = execute(9U, 6U, 10U, 0x7FFFFFFFU, 0x14U);
+    assert(wind_result.first == 0x000007FFU);
+    const std::string trace = format_instruction_history(wind_result.second);
+    assert(trace.find("srw r6=0x7FFFFFFF r10=0x00000014 -> r9=0x000007FF") !=
+           std::string::npos);
+    const auto record_trace = execute(7U, 4U, 5U, 8U, 1U, true);
+    assert(format_instruction_history(record_trace.second).find("srw.") !=
+           std::string::npos);
+}
+
 void or_immediate_shifted_tests()
 {
     const auto encode_oris = [](std::uint8_t destination, std::uint8_t source,
@@ -6047,6 +6161,7 @@ int main(int argc, char* argv[])
     integer_alu_tests();
     multiply_high_word_unsigned_tests();
     divide_word_unsigned_tests();
+    shift_right_word_tests();
     or_immediate_shifted_tests();
     extend_sign_byte_tests();
     leaf_function_abi_tests();
