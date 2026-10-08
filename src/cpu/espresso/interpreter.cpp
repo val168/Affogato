@@ -446,6 +446,7 @@ void set_record_result(CpuState& state, std::uint32_t value)
     case Opcode::subtract_from: return "subf";
     case Opcode::subtract_from_carrying: return "subfc";
     case Opcode::negate: return "neg";
+    case Opcode::extend_sign_byte: return "extsb";
     case Opcode::ori: return "ori";
     case Opcode::xor_immediate: return "xori";
     case Opcode::xor_immediate_shifted: return "xoris";
@@ -546,6 +547,7 @@ void add_history_source(
     if ((instruction.opcode == Opcode::multiply_low_word ||
          instruction.opcode == Opcode::count_leading_zeros ||
          instruction.opcode == Opcode::negate ||
+         instruction.opcode == Opcode::extend_sign_byte ||
          instruction.opcode == Opcode::rotate_left_word_and_mask_insert ||
          instruction.opcode == Opcode::rotate_left_word_and_mask) && instruction.record)
     {
@@ -760,6 +762,7 @@ void add_history_source(
         add_history_source(entry, state, instruction.source);
         break;
     case Opcode::negate:
+    case Opcode::extend_sign_byte:
         add_history_source(entry, state, instruction.source);
         break;
     case Opcode::shift_left_word:
@@ -799,6 +802,7 @@ void add_history_source(
     case Opcode::subtract_from_carrying:
     case Opcode::multiply_low_word:
     case Opcode::negate:
+    case Opcode::extend_sign_byte:
     case Opcode::ori:
     case Opcode::xor_immediate:
     case Opcode::xor_immediate_shifted:
@@ -1225,6 +1229,20 @@ StepResult EspressoCore::step()
     {
         const std::uint32_t source = state.gpr[instruction.source];
         const std::uint32_t result = 0U - source;
+        state.gpr[instruction.destination] = result;
+        if (instruction.record)
+        {
+            set_record_result(state, result);
+        }
+        break;
+    }
+
+    case Opcode::extend_sign_byte:
+    {
+        const std::uint32_t source = state.gpr[instruction.source];
+        const std::uint32_t low_byte = source & 0xFFU;
+        const std::uint32_t result = low_byte |
+            ((low_byte & 0x80U) != 0U ? 0xFFFFFF00U : 0U);
         state.gpr[instruction.destination] = result;
         if (instruction.record)
         {

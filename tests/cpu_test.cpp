@@ -2933,6 +2933,111 @@ void integer_alu_tests()
     assert((arithmetic_shift_core.state.xer & 0x20000000U) != 0);
 }
 
+void extend_sign_byte_tests()
+{
+    const auto encode_extsb = [](std::uint8_t destination, std::uint8_t source,
+                                 bool record = false, std::uint8_t reserved = 0U) {
+        return (31U << 26U) |
+            (static_cast<std::uint32_t>(source) << 21U) |
+            (static_cast<std::uint32_t>(destination) << 16U) |
+            (static_cast<std::uint32_t>(reserved & 0x1FU) << 11U) |
+            (954U << 1U) | static_cast<std::uint32_t>(record);
+    };
+
+    constexpr std::uint32_t wind_waker_word = 0x7D8C0775U;
+    const DecodedInstruction wind_waker = decode(wind_waker_word);
+    assert(wind_waker.opcode == Opcode::extend_sign_byte);
+    assert(wind_waker.source == 12U);
+    assert(wind_waker.destination == 12U);
+    assert(wind_waker.record);
+    assert(((wind_waker_word >> 1U) & 0x3FFU) == 954U);
+    assert(decode(encode_extsb(6U, 5U)).opcode == Opcode::extend_sign_byte);
+    assert(!decode(encode_extsb(6U, 5U)).record);
+    assert(decode(encode_extsb(6U, 5U, false, 1U)).opcode == Opcode::unsupported);
+    const std::uint32_t extsh_word = (31U << 26U) | (922U << 1U);
+    assert(decode(extsh_word).opcode == Opcode::unsupported);
+
+    const auto execute = [&](std::uint8_t destination, std::uint8_t source,
+                             std::uint32_t input, bool record, bool so) {
+        EspressoCore core(8U);
+        core.state.gpr.fill(0x76543210U);
+        core.state.gpr[source] = input;
+        constexpr std::uint32_t initial_cr = 0x12345678U;
+        const std::uint32_t initial_xer = so ? 0xA00000A5U : 0x200000A5U;
+        core.state.cr = initial_cr;
+        core.state.xer = initial_xer;
+        core.state.lr = 0x11223344U;
+        core.state.ctr = 0x55667788U;
+        core.state.fpscr = 0xCAFEBABEU;
+        core.state.fpr.fill(0x0123456789ABCDEFULL);
+        core.state.fpr_ps1.fill(0xFEDCBA9876543210ULL);
+        core.memory.write32_be(0U, encode_extsb(destination, source, record));
+        const auto original_gprs = core.state.gpr;
+        const auto original_fpr = core.state.fpr;
+        const auto original_fpr_ps1 = core.state.fpr_ps1;
+        const auto original_memory = core.memory.read32_be(0U);
+
+        const std::uint32_t byte = input & 0xFFU;
+        const std::uint32_t expected = byte |
+            ((byte & 0x80U) != 0U ? 0xFFFFFF00U : 0U);
+        const RunResult result = core.run(1U);
+        assert(result.steps == 1U);
+        assert(result.reason == StopReason::instruction_limit);
+        assert(core.state.gpr[destination] == expected);
+        for (std::uint32_t reg = 0; reg < 32U; ++reg)
+        {
+            if (reg != destination)
+            {
+                assert(core.state.gpr[reg] == original_gprs[reg]);
+            }
+        }
+        if (record)
+        {
+            const std::uint32_t cr0 = ((core.state.cr >> 28U) & 0xFU);
+            const std::uint32_t expected_cr0 = (expected & 0x80000000U) != 0U
+                ? (0x8U | static_cast<std::uint32_t>(so))
+                : expected == 0U ? (0x2U | static_cast<std::uint32_t>(so))
+                                 : (0x4U | static_cast<std::uint32_t>(so));
+            assert(cr0 == expected_cr0);
+            assert((core.state.cr & 0x0FFFFFFFU) == (initial_cr & 0x0FFFFFFFU));
+        }
+        else
+        {
+            assert(core.state.cr == initial_cr);
+        }
+        assert(core.state.xer == initial_xer);
+        assert(core.state.lr == 0x11223344U);
+        assert(core.state.ctr == 0x55667788U);
+        assert(core.state.fpscr == 0xCAFEBABEU);
+        assert(core.state.fpr == original_fpr);
+        assert(core.state.fpr_ps1 == original_fpr_ps1);
+        assert(core.memory.read32_be(0U) == original_memory);
+        return result;
+    };
+
+    assert(execute(6U, 5U, 0x00000000U, false, false).steps == 1U);
+    assert(execute(6U, 5U, 0x00000001U, false, false).steps == 1U);
+    assert(execute(6U, 5U, 0x0000007FU, false, false).steps == 1U);
+    assert(execute(6U, 5U, 0x00000080U, false, false).steps == 1U);
+    assert(execute(6U, 5U, 0x000000FFU, false, false).steps == 1U);
+    assert(execute(6U, 5U, 0x1234567FU, false, false).steps == 1U);
+    assert(execute(6U, 5U, 0x12345680U, false, false).steps == 1U);
+    assert(execute(6U, 5U, 0xABCDEF81U, false, false).steps == 1U);
+
+    // Rc=1 updates only CR0 and propagates the existing XER.SO bit.
+    (void)execute(6U, 5U, 1U, true, false);          // GT
+    (void)execute(6U, 5U, 0U, true, false);          // EQ
+    (void)execute(6U, 5U, 0x80U, true, false);       // LT
+    (void)execute(6U, 5U, 0x80U, true, true);        // LT | SO
+    (void)execute(6U, 5U, 1U, true, true);           // GT | SO
+
+    // Source/destination aliasing is the Wind Waker case; record form changes
+    // CR0 even though the integer value remains one.
+    const RunResult wind_waker_result = execute(12U, 12U, 1U, true, false);
+    const std::string trace = format_instruction_history(wind_waker_result);
+    assert(trace.find("extsb. r12=0x00000001 -> r12=0x00000001") != std::string::npos);
+}
+
 void leaf_function_abi_tests()
 {
     EspressoCore core(0x20);
@@ -5641,6 +5746,7 @@ int main(int argc, char* argv[])
     guest_memory_tests();
     interpreter_tests();
     integer_alu_tests();
+    extend_sign_byte_tests();
     leaf_function_abi_tests();
     floating_point_load_tests();
     floating_point_single_update_tests();
