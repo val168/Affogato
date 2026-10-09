@@ -55,6 +55,10 @@ struct Gx2RuntimeState
     std::array<std::uint32_t, 8U> cb_blend_control{};
     std::array<bool, 4U> cb_blend_constant_valid{};
     std::array<std::uint32_t, 4U> cb_blend_constant{};
+    bool sx_alpha_test_control_valid{};
+    std::uint32_t sx_alpha_test_control{};
+    bool sx_alpha_ref_valid{};
+    std::uint32_t sx_alpha_ref{};
     std::vector<Gx2Command> pending_commands;
 };
 

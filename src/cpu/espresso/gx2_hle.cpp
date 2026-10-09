@@ -40,6 +40,8 @@ constexpr std::uint32_t cb_blend_red_register = 0x00028414U;
 constexpr std::uint32_t cb_blend_green_register = 0x00028418U;
 constexpr std::uint32_t cb_blend_blue_register = 0x0002841CU;
 constexpr std::uint32_t cb_blend_alpha_register = 0x00028420U;
+constexpr std::uint32_t sx_alpha_test_control_register = 0x00028410U;
+constexpr std::uint32_t sx_alpha_ref_register = 0x00028438U;
 
 std::uint32_t fpr_float_argument_bits(
     const EspressoCore& core,
@@ -48,6 +50,14 @@ std::uint32_t fpr_float_argument_bits(
     const double value = std::bit_cast<double>(core.state.fpr[register_index]);
     const float single_value = static_cast<float>(value);
     return std::bit_cast<std::uint32_t>(single_value);
+}
+
+std::uint32_t pack_alpha_test_control(
+    std::uint32_t alpha_test,
+    std::uint32_t compare_function)
+{
+    const std::uint32_t enabled = alpha_test != 0U ? 1U : 0U;
+    return (compare_function & 0x7U) | (enabled << 3U);
 }
 
 std::uint32_t pack_stencil_ref_mask(
@@ -593,6 +603,36 @@ void register_gx2_hle(HleDispatcher& dispatcher)
             }
             // This void setter records logical Latte state only. The current
             // coherent GuestMemory model has no cache or renderer side effect.
+        });
+
+    dispatcher.register_function(
+        "gx2",
+        "GX2SetAlphaTest",
+        [](EspressoCore& core) {
+            if (!core.gx2.initialized)
+            {
+                throw HleExecutionError(
+                    "gx2::GX2SetAlphaTest: GX2 has not been initialized");
+            }
+
+            const std::uint32_t control = pack_alpha_test_control(
+                core.state.gpr[3], core.state.gpr[4]);
+            const std::uint32_t reference = fpr_float_argument_bits(core, 1U);
+
+            core.gx2.sx_alpha_test_control = control;
+            core.gx2.sx_alpha_test_control_valid = true;
+            core.gx2.sx_alpha_ref = reference;
+            core.gx2.sx_alpha_ref_valid = true;
+            core.gx2.pending_commands.push_back({
+                Gx2CommandType::set_context_register,
+                sx_alpha_test_control_register,
+                control});
+            core.gx2.pending_commands.push_back({
+                Gx2CommandType::set_context_register,
+                sx_alpha_ref_register,
+                reference});
+            // Void setter: alphaTest/func come from r3/r4 and ref from f1.
+            // It records Latte state without changing guest CPU or memory.
         });
 }
 
