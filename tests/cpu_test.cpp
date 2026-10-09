@@ -9480,6 +9480,153 @@ void store_halfword_indexed_tests()
     assert(!fault_result.instruction_history.front().has_stored_halfword_value);
 }
 
+void store_floating_as_integer_word_indexed_tests()
+{
+    const auto encode_stfiwx = [](std::uint8_t frs, std::uint8_t ra,
+                                  std::uint8_t rb, bool reserved_bit = false) {
+        return (31U << 26U) |
+            (static_cast<std::uint32_t>(frs) << 21U) |
+            (static_cast<std::uint32_t>(ra) << 16U) |
+            (static_cast<std::uint32_t>(rb) << 11U) |
+            (983U << 1U) | static_cast<std::uint32_t>(reserved_bit);
+    };
+
+    constexpr std::uint32_t wind_waker_word = 0x7C0007AEU;
+    const DecodedInstruction decoded = decode(wind_waker_word);
+    assert(decoded.opcode == Opcode::store_floating_as_integer_word_indexed);
+    assert(decoded.fp_register == 0U);
+    assert(decoded.base == 0U);
+    assert(decoded.source == 0U);
+    assert(decoded.raw == wind_waker_word);
+    assert(((wind_waker_word >> 1U) & 0x3FFU) == 983U);
+    assert(encode_stfiwx(0U, 0U, 0U) == wind_waker_word);
+    const DecodedInstruction general = decode(encode_stfiwx(31U, 29U, 30U));
+    assert(general.opcode == Opcode::store_floating_as_integer_word_indexed);
+    assert(general.fp_register == 31U && general.base == 29U && general.source == 30U);
+    assert(decode(encode_stfiwx(3U, 4U, 5U, true)).opcode == Opcode::unsupported);
+
+    // RA=0 is literal zero, while RB=0 still reads GPR0 as the index.
+    EspressoCore zero_base(0x100U);
+    zero_base.state.gpr[0] = 0x40U;
+    zero_base.state.fpr[6] = 0x11223344A1B2C3D4ULL;
+    zero_base.state.fpr_ps1[6] = 0xBBBBBBBBDEADBEEFULL;
+    zero_base.memory.write8(0x3FU, 0xA5U);
+    zero_base.memory.write8(0x44U, 0x5AU);
+    zero_base.memory.write32_be(0U, encode_stfiwx(6U, 0U, 0U));
+    const auto gprs_before = zero_base.state.gpr;
+    const auto fprs_before = zero_base.state.fpr;
+    const auto ps1_before = zero_base.state.fpr_ps1;
+    const std::uint32_t cr_before = zero_base.state.cr;
+    const std::uint32_t xer_before = zero_base.state.xer;
+    const std::uint32_t fpscr_before = zero_base.state.fpscr;
+    const std::uint32_t lr_before = zero_base.state.lr;
+    const std::uint32_t ctr_before = zero_base.state.ctr;
+    const RunResult raw_result = zero_base.run(1U);
+    assert(raw_result.reason == StopReason::instruction_limit && raw_result.steps == 1U);
+    assert(zero_base.state.cia == 4U);
+    assert(zero_base.memory.read32_be(0x40U) == 0xA1B2C3D4U);
+    assert(zero_base.memory.read8(0x3FU) == 0xA5U);
+    assert(zero_base.memory.read8(0x44U) == 0x5AU);
+    assert(zero_base.state.gpr == gprs_before);
+    assert(zero_base.state.fpr == fprs_before);
+    assert(zero_base.state.fpr_ps1 == ps1_before);
+    assert(zero_base.state.cr == cr_before && zero_base.state.xer == xer_before);
+    assert(zero_base.state.fpscr == fpscr_before);
+    assert(zero_base.state.lr == lr_before && zero_base.state.ctr == ctr_before);
+    const InstructionHistoryEntry& history = raw_result.instruction_history.front();
+    assert(history.opcode_name == "stfiwx");
+    assert(history.has_fp_source && history.fp_source_register == 6U);
+    assert(history.fp_source_value == 0x11223344A1B2C3D4ULL);
+    assert(history.source_count == 1U && history.source_registers[0] == 0U);
+    assert(history.source_values[0] == 0x40U);
+    assert(history.has_effective_address && history.effective_address == 0x40U);
+    assert(history.has_stored_integer_word_value &&
+           history.stored_integer_word_value == 0xA1B2C3D4U);
+    const std::string trace = format_instruction_history(raw_result);
+    assert(trace.find("stfiwx r0=0x00000040 f6=") != std::string::npos);
+    assert(trace.find("0x11223344A1B2C3D4") != std::string::npos);
+    assert(trace.find("[0x00000040] -> mem32=0xA1B2C3D4") != std::string::npos);
+
+    // Nonzero RA contributes its GPR value; the FPR supplies only the low word.
+    EspressoCore nonzero_base(0x100U);
+    nonzero_base.state.gpr[4] = 0x80U;
+    nonzero_base.state.gpr[5] = 0x20U;
+    nonzero_base.state.fpr[3] = 0xFFF80000FFFFFFF9ULL;
+    nonzero_base.memory.write32_be(0U, encode_stfiwx(3U, 4U, 5U));
+    assert(nonzero_base.step() == StepResult::executed);
+    assert(nonzero_base.memory.read32_be(0xA0U) == 0xFFFFFFF9U);
+    assert(nonzero_base.state.gpr[4] == 0x80U && nonzero_base.state.gpr[5] == 0x20U);
+
+    // Common fctiwz -> stfiwx producer/consumer sequence stores 1920 exactly.
+    EspressoCore conversion_chain(0x100U);
+    conversion_chain.state.gpr[0] = 0x80U;
+    conversion_chain.state.fpr[13] = std::bit_cast<std::uint64_t>(1920.0);
+    conversion_chain.memory.write32_be(0U, 0xFC00681EU); // fctiwz f0,f13
+    conversion_chain.memory.write32_be(4U, wind_waker_word); // stfiwx f0,r0,r0
+    const RunResult chain_result = conversion_chain.run(2U);
+    assert(chain_result.steps == 2U);
+    assert(chain_result.reason == StopReason::instruction_limit);
+    assert(conversion_chain.state.cia == 8U);
+    assert(conversion_chain.state.fpr[0] == 0xFFF8000000000780ULL);
+    assert(conversion_chain.memory.read32_be(0x80U) == 0x00000780U);
+    assert(conversion_chain.memory.read8(0x80U) == 0x00U);
+    assert(conversion_chain.memory.read8(0x81U) == 0x00U);
+    assert(conversion_chain.memory.read8(0x82U) == 0x07U);
+    assert(conversion_chain.memory.read8(0x83U) == 0x80U);
+
+    // Exact Wind Waker state/address, with a mapped synthetic stack target.
+    EspressoCore wind_waker(0x100U);
+    wind_waker.state.gpr[0] = 0x100FEEC0U;
+    wind_waker.state.fpr[0] = 0xFFF8000000000780ULL;
+    wind_waker.state.fpr_ps1[0] = 0xDEADBEEF01234567ULL;
+    wind_waker.memory.map_region(0x100FEE80U, 0x100U);
+    wind_waker.memory.write32_be(0U, wind_waker_word);
+    const std::uint32_t wind_fpscr = wind_waker.state.fpscr;
+    const RunResult wind_result = wind_waker.run(1U);
+    assert(wind_result.reason == StopReason::instruction_limit);
+    assert(wind_waker.memory.read32_be(0x100FEEC0U) == 0x00000780U);
+    assert(wind_waker.state.cia == 4U);
+    assert(wind_waker.state.gpr[0] == 0x100FEEC0U);
+    assert(wind_waker.state.fpr[0] == 0xFFF8000000000780ULL);
+    assert(wind_waker.state.fpr_ps1[0] == 0xDEADBEEF01234567ULL);
+    assert(wind_waker.state.fpscr == wind_fpscr);
+    const std::string wind_trace = format_instruction_history(wind_result);
+    assert(wind_trace.find("stfiwx") != std::string::npos);
+    assert(wind_trace.find("0xFFF8000000000780") != std::string::npos);
+    assert(wind_trace.find("0x100FEEC0") != std::string::npos);
+    assert(wind_trace.find("0x00000780") != std::string::npos);
+
+    // A partial word mapping faults atomically and leaves the faulting CIA/registers intact.
+    EspressoCore fault(0x20U);
+    fault.state.gpr[5] = 0x1EU;
+    fault.state.fpr[7] = 0x01234567CAFEBABEULL;
+    fault.memory.write8(0x1EU, 0xAAU);
+    fault.memory.write8(0x1FU, 0xBBU);
+    fault.memory.write32_be(0U, encode_stfiwx(7U, 0U, 5U));
+    const auto fault_gprs = fault.state.gpr;
+    const auto fault_fprs = fault.state.fpr;
+    const auto fault_ps1 = fault.state.fpr_ps1;
+    const std::uint32_t fault_fpscr = fault.state.fpscr;
+    const RunResult fault_result = fault.run(1U);
+    assert(fault_result.reason == StopReason::memory_fault);
+    assert(fault_result.detail.find("write 4 byte(s)") != std::string::npos);
+    assert(fault_result.detail.find("rA=0 (0x00000000), rB=5 (0x0000001E)") !=
+           std::string::npos);
+    assert(fault.state.cia == 0U);
+    assert(fault.memory.read8(0x1EU) == 0xAAU && fault.memory.read8(0x1FU) == 0xBBU);
+    assert(fault.state.gpr == fault_gprs && fault.state.fpr == fault_fprs);
+    assert(fault.state.fpr_ps1 == fault_ps1 && fault.state.fpscr == fault_fpscr);
+    assert(fault_result.instruction_history.size() == 1U);
+    const InstructionHistoryEntry& failed = fault_result.instruction_history.front();
+    assert(failed.opcode_name == "stfiwx" && !failed.completed);
+    assert(failed.has_effective_address && failed.effective_address == 0x1EU);
+    assert(failed.has_fp_source && failed.fp_source_value == 0x01234567CAFEBABEULL);
+    assert(!failed.has_stored_integer_word_value);
+    const std::string fault_trace = format_instruction_history(fault_result);
+    assert(fault_trace.find("stfiwx") != std::string::npos);
+    assert(fault_trace.find("[did not complete]") != std::string::npos);
+}
+
 void load_halfword_zero_indexed_tests()
 {
     const auto encode_lhzx = [](std::uint8_t destination, std::uint8_t base,
@@ -11386,6 +11533,7 @@ int main(int argc, char* argv[])
     load_store_tests();
     store_halfword_update_tests();
     store_halfword_indexed_tests();
+    store_floating_as_integer_word_indexed_tests();
     load_halfword_zero_indexed_tests();
     load_byte_zero_indexed_tests();
     load_halfword_algebraic_tests();

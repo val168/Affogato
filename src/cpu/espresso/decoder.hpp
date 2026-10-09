@@ -78,6 +78,7 @@ enum class Opcode
     store_word_indexed,
     store_byte_indexed,
     store_halfword_indexed,
+    store_floating_as_integer_word_indexed,
     load_byte_zero,
     load_byte_update,
     store_byte,

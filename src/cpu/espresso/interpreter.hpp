@@ -85,6 +85,8 @@ struct InstructionHistoryEntry
     std::uint64_t stored_double_value{};
     bool has_stored_halfword_value{};
     std::uint16_t stored_halfword_value{};
+    bool has_stored_integer_word_value{};
+    std::uint32_t stored_integer_word_value{};
     bool has_paired_fp_state{};
     std::uint8_t paired_fp_destination_register{};
     std::uint8_t paired_fp_source_a_register{};

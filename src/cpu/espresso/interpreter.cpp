@@ -428,7 +428,8 @@ void set_record_result(CpuState& state, std::uint32_t value)
             instruction.opcode == Opcode::load_halfword_algebraic_indexed ||
             instruction.opcode == Opcode::store_word_indexed ||
             instruction.opcode == Opcode::store_byte_indexed ||
-            instruction.opcode == Opcode::store_halfword_indexed;
+            instruction.opcode == Opcode::store_halfword_indexed ||
+            instruction.opcode == Opcode::store_floating_as_integer_word_indexed;
         const bool memory_instruction = indexed ||
             instruction.opcode == Opcode::load_word_zero ||
             instruction.opcode == Opcode::load_word_update ||
@@ -443,6 +444,7 @@ void set_record_result(CpuState& state, std::uint32_t value)
             instruction.opcode == Opcode::store_halfword ||
             instruction.opcode == Opcode::store_halfword_update ||
             instruction.opcode == Opcode::store_halfword_indexed ||
+            instruction.opcode == Opcode::store_floating_as_integer_word_indexed ||
             instruction.opcode == Opcode::load_multiple_word ||
             instruction.opcode == Opcode::load_string_word_immediate ||
             instruction.opcode == Opcode::store_string_word_immediate ||
@@ -546,6 +548,7 @@ void set_record_result(CpuState& state, std::uint32_t value)
     case Opcode::store_word_indexed: return "stwx";
     case Opcode::store_byte_indexed: return "stbx";
     case Opcode::store_halfword_indexed: return "sthx";
+    case Opcode::store_floating_as_integer_word_indexed: return "stfiwx";
     case Opcode::load_byte_zero: return "lbz";
     case Opcode::load_byte_update: return "lbzu";
     case Opcode::store_byte: return "stb";
@@ -776,7 +779,8 @@ void add_history_source(
         opcode == Opcode::load_halfword_zero_indexed ||
         opcode == Opcode::load_halfword_algebraic_indexed ||
         opcode == Opcode::store_word_indexed ||
-        opcode == Opcode::store_byte_indexed || opcode == Opcode::store_halfword_indexed)
+        opcode == Opcode::store_byte_indexed || opcode == Opcode::store_halfword_indexed ||
+        opcode == Opcode::store_floating_as_integer_word_indexed)
     {
         const std::uint32_t base = instruction.base == 0U
             ? 0U : state.gpr[instruction.base];
@@ -805,7 +809,8 @@ void add_history_source(
         entry.fp_destination_register = instruction.fp_register;
     }
     else if (opcode == Opcode::store_single || opcode == Opcode::store_single_update ||
-             opcode == Opcode::store_double || opcode == Opcode::store_double_update)
+             opcode == Opcode::store_double || opcode == Opcode::store_double_update ||
+             opcode == Opcode::store_floating_as_integer_word_indexed)
     {
         entry.has_fp_source = true;
         entry.fp_source_register = instruction.fp_register;
@@ -893,6 +898,7 @@ void add_history_source(
     case Opcode::store_word_indexed:
     case Opcode::store_byte_indexed:
     case Opcode::store_halfword_indexed:
+    case Opcode::store_floating_as_integer_word_indexed:
         if (instruction.base != 0)
         {
             add_history_source(entry, state, instruction.base);
@@ -1336,6 +1342,11 @@ std::string format_instruction_history(const RunResult& result)
         {
             text << " -> mem16=0x" << std::hex << std::setw(4)
                  << entry.stored_halfword_value;
+        }
+        if (entry.has_stored_integer_word_value && entry.completed)
+        {
+            text << " -> mem32=0x" << std::hex << std::setw(8)
+                 << entry.stored_integer_word_value;
         }
         if (!entry.completed)
         {
@@ -3076,6 +3087,20 @@ StepResult EspressoCore::step()
         memory.write16_be(address, value);
         pending_history_entry_.has_stored_halfword_value = true;
         pending_history_entry_.stored_halfword_value = value;
+        break;
+    }
+
+    case Opcode::store_floating_as_integer_word_indexed:
+    {
+        const std::uint32_t base = instruction.base == 0U
+            ? 0U : state.gpr[instruction.base];
+        const std::uint32_t index = state.gpr[instruction.source];
+        const std::uint32_t address = base + index;
+        const std::uint64_t raw_source = state.fpr[instruction.fp_register];
+        const std::uint32_t value = static_cast<std::uint32_t>(raw_source);
+        memory.write32_be(address, value);
+        pending_history_entry_.has_stored_integer_word_value = true;
+        pending_history_entry_.stored_integer_word_value = value;
         break;
     }
 
