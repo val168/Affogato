@@ -165,6 +165,7 @@ public:
         state.reset();
         current_thread_address = 0;
         fs_initialized = false;
+        nn_save_initialized = false;
         fs_clients.clear();
         next_fs_client_handle = 1U;
         guest_heap_cursor = 0;
@@ -216,6 +217,7 @@ public:
     HleDispatcher hle;
     std::uint32_t current_thread_address{};
     bool fs_initialized{};
+    bool nn_save_initialized{};
     std::vector<FsClientRegistration> fs_clients;
     std::uint32_t next_fs_client_handle{1U};
     std::uint32_t guest_heap_cursor{};

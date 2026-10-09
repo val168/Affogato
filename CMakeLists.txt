@@ -33,6 +33,7 @@ add_library(affogato_cpu STATIC
     src/cpu/espresso/rpx_loader.cpp
     src/cpu/espresso/interpreter.cpp
     src/cpu/espresso/nn_olv_hle.cpp
+    src/cpu/espresso/nn_save_hle.cpp
     src/emulator.cpp
 )
 

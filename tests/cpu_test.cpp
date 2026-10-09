@@ -5,6 +5,7 @@
 #include "cpu/espresso/guest_mutex.hpp"
 #include "cpu/espresso/interpreter.hpp"
 #include "cpu/espresso/nn_olv_hle.hpp"
+#include "cpu/espresso/nn_save_hle.hpp"
 #include "cpu/espresso/rpx_loader.hpp"
 #include "cpu_state_test.hpp"
 #include "emulator.hpp"
@@ -6941,6 +6942,220 @@ void fs_init_hle_tests()
     assert(second.fs_initialized);
 }
 
+void nn_save_init_hle_tests()
+{
+    constexpr std::uint32_t return_address = 0x0274226CU;
+    constexpr std::uint32_t memory_size = 0x10000U;
+    constexpr std::uint32_t client_address = 0x2003U;
+    constexpr std::uint32_t client_body = 0x2040U;
+    constexpr std::uint32_t client_size = 0x1700U;
+
+    const auto invoke = [](EspressoCore& core,
+                           std::uint32_t import,
+                           std::uint32_t stale_r3,
+                           std::uint32_t stale_r4,
+                           std::uint32_t lr) {
+        core.state.cia = import;
+        core.state.lr = lr;
+        core.state.gpr[3] = stale_r3;
+        core.state.gpr[4] = stale_r4;
+        return core.run(1U);
+    };
+    const auto snapshot_memory = [](const EspressoCore& core) {
+        std::vector<std::uint8_t> bytes(core.memory.size());
+        core.memory.read_bytes(0U, bytes);
+        return bytes;
+    };
+
+    EspressoCore core(memory_size);
+    register_nn_save_hle(core.hle);
+    assert(!core.nn_save_initialized);
+    const std::uint32_t save_init = core.hle.bind_import("nn_save", "SAVEInit");
+
+    // Populate unrelated per-session state and guest objects so the test can
+    // prove SAVEInit changes only its lifecycle flag and status return.
+    core.memory.fill_bytes(0U, memory_size, 0xA5U);
+    core.memory.fill_bytes(client_address, client_size, 0x5AU);
+    core.memory.fill_bytes(0x5000U, 0x6A0U, 0x3CU);
+    core.memory.fill_bytes(0x6000U, 0x3CU, 0xC3U);
+    core.fs_initialized = true;
+    core.fs_clients.push_back({client_address, client_body, 1U});
+    core.next_fs_client_handle = 2U;
+    core.current_thread_address = 0x5000U;
+    core.configure_guest_heap(0x8000U, 0xA000U);
+    core.base_heap_handles[1] = 0x8100U;
+    core.mem2_heap_region_begin = 0x8200U;
+    core.mem2_heap_region_end = 0x9000U;
+
+    for (std::uint32_t reg = 0; reg < core.state.gpr.size(); ++reg)
+    {
+        core.state.gpr[reg] = 0xA1000000U + reg * 0x101U;
+    }
+    for (std::uint32_t reg = 0; reg < core.state.fpr.size(); ++reg)
+    {
+        core.state.fpr[reg] = 0x1111000000000000ULL + reg;
+        core.state.fpr_ps1[reg] = 0x2222000000000000ULL + reg;
+    }
+    core.state.cr = 0x12345678U;
+    core.state.xer = 0xA00000A5U;
+    core.state.ctr = 0xCAFEBABEU;
+    core.state.fpscr = 0x5A5AA55AU;
+
+    constexpr std::uint32_t application_client_callback_offset =
+        0x1448U + 0x14U;
+    core.memory.write32_be(
+        client_body + application_client_callback_offset, 0x02742028U);
+    core.memory.write32_be(
+        client_body + application_client_callback_offset + 4U, 0U);
+    core.memory.write32_be(
+        client_body + application_client_callback_offset + 8U, 0U);
+    core.memory.write32_be(
+        client_body + application_client_callback_offset + 0x0CU,
+        client_body + application_client_callback_offset);
+    core.memory.write32_be(
+        client_body + application_client_callback_offset + 0x18U, 11U);
+    core.memory.write32_be(
+        client_body + application_client_callback_offset + 0x1CU, client_address);
+
+    const auto initial_gprs = core.state.gpr;
+    const auto initial_fprs = core.state.fpr;
+    const auto initial_ps1 = core.state.fpr_ps1;
+    const auto initial_fs_clients = core.fs_clients;
+    const auto initial_memory = snapshot_memory(core);
+    const std::uint32_t initial_next_handle = core.next_fs_client_handle;
+    const std::uint32_t initial_thread = core.current_thread_address;
+    const std::uint32_t initial_cr = core.state.cr;
+    const std::uint32_t initial_xer = core.state.xer;
+    const std::uint32_t initial_ctr = core.state.ctr;
+    const std::uint32_t initial_fpscr = core.state.fpscr;
+    const std::uint32_t initial_heap_cursor = core.guest_heap_cursor;
+    const std::uint32_t initial_heap_limit = core.guest_heap_limit;
+    const auto initial_base_heap_handles = core.base_heap_handles;
+    const std::uint32_t initial_mem2_begin = core.mem2_heap_region_begin;
+    const std::uint32_t initial_mem2_end = core.mem2_heap_region_end;
+
+    // Current Wind Waker values are stale registers, not SAVEInit arguments.
+    const RunResult first = invoke(
+        core, save_init, 0xFFFFFFFFU, 0xFFFFFFFCU, return_address);
+    assert(first.reason == StopReason::instruction_limit);
+    assert(first.steps == 1U);
+    assert(core.nn_save_initialized);
+    assert(core.state.gpr[3] == 0U);
+    assert(core.state.gpr[4] == 0xFFFFFFFCU);
+    assert(core.state.cia == return_address);
+    assert(core.state.lr == return_address);
+    assert(core.state.cr == initial_cr);
+    assert(core.state.xer == initial_xer);
+    assert(core.state.ctr == initial_ctr);
+    assert(core.state.fpscr == initial_fpscr);
+    assert(core.state.fpr == initial_fprs);
+    assert(core.state.fpr_ps1 == initial_ps1);
+    for (std::size_t reg = 0; reg < core.state.gpr.size(); ++reg)
+    {
+        if (reg != 3U && reg != 4U)
+        {
+            assert(core.state.gpr[reg] == initial_gprs[reg]);
+        }
+    }
+    assert(snapshot_memory(core) == initial_memory);
+    assert(core.fs_initialized);
+    assert(core.fs_clients.size() == initial_fs_clients.size());
+    assert(core.fs_clients[0].client_address == initial_fs_clients[0].client_address);
+    assert(core.fs_clients[0].body_address == initial_fs_clients[0].body_address);
+    assert(core.fs_clients[0].synthetic_handle == initial_fs_clients[0].synthetic_handle);
+    assert(core.next_fs_client_handle == initial_next_handle);
+    assert(core.current_thread_address == initial_thread);
+    assert(core.guest_heap_cursor == initial_heap_cursor);
+    assert(core.guest_heap_limit == initial_heap_limit);
+    assert(core.base_heap_handles == initial_base_heap_handles);
+    assert(core.mem2_heap_region_begin == initial_mem2_begin);
+    assert(core.mem2_heap_region_end == initial_mem2_end);
+    assert(core.memory.read32_be(client_body + 0x1444U) == 0x5A5A5A5AU);
+    assert(core.memory.read32_be(client_body + application_client_callback_offset) ==
+           0x02742028U);
+
+    // Repeated initialization succeeds and always returns SAVE_STATUS_OK,
+    // irrespective of the stale value supplied in r3.
+    for (const std::uint32_t stale_r3 : {0xDEADBEEFU, 0x12345678U, client_address})
+    {
+        const RunResult repeated = invoke(
+            core, save_init, stale_r3, 0x100FEE68U, return_address + 4U);
+        assert(repeated.reason == StopReason::instruction_limit);
+        assert(repeated.steps == 1U);
+        assert(core.nn_save_initialized);
+        assert(core.state.gpr[3] == 0U);
+        assert(core.state.gpr[4] == 0x100FEE68U);
+        assert(core.state.cia == return_address + 4U);
+        assert(snapshot_memory(core) == initial_memory);
+        assert(core.fs_clients.size() == 1U);
+        assert(core.next_fs_client_handle == initial_next_handle);
+    }
+
+    core.configure_guest_heap(0x9000U, 0xA000U);
+    assert(core.nn_save_initialized);
+    core.reset();
+    assert(!core.nn_save_initialized);
+    assert(!core.fs_initialized);
+    assert(core.fs_clients.empty());
+    assert(core.next_fs_client_handle == 1U);
+
+    // Reset does not discard registered HLE handlers, so the same core can
+    // initialize a fresh nn_save session without re-registering exports.
+    const RunResult after_reset = invoke(
+        core, save_init, 0xFFFFFFFFU, 0xFFFFFFFCU, return_address + 8U);
+    assert(after_reset.reason == StopReason::instruction_limit);
+    assert(core.nn_save_initialized);
+    assert(core.state.gpr[3] == 0U);
+    assert(core.state.gpr[4] == 0xFFFFFFFCU);
+    assert(core.state.cia == return_address + 8U);
+
+    EspressoCore other(0x1000U);
+    register_nn_save_hle(other.hle);
+    const std::uint32_t other_save_init =
+        other.hle.bind_import("nn_save", "SAVEInit");
+    assert(!other.nn_save_initialized);
+    const RunResult other_result = invoke(
+        other, other_save_init, 0x04021164U, 0x100FEE68U, return_address);
+    assert(other_result.reason == StopReason::instruction_limit);
+    assert(other.nn_save_initialized);
+    assert(core.nn_save_initialized);
+    other.reset();
+    assert(!other.nn_save_initialized);
+    assert(core.nn_save_initialized);
+
+    // Exercise the normal Emulator registration and RPX import-binding path:
+    // the synthetic guest calls the exact nn_save::SAVEInit import.
+    RpxImportOptions import_options;
+    import_options.library = "nn_save";
+    RpxRelocationSymbol import_symbol{
+        "SAVEInit", import_options.section_address + import_options.slot_offset,
+        1U, 2U, 8U, 0};
+    RpxRelocationOptions relocation;
+    relocation.type = 10U;
+    relocation.offset = 4U;
+    relocation.branch_instruction = 0x48000001U;
+    const auto import_rpx = make_minimal_compressed_rpx(
+        0x02000000U, 16U, import_symbol, relocation, import_options);
+    affogato::Emulator emulator(0x40000U);
+    assert(!emulator.core().nn_save_initialized);
+    static_cast<void>(emulator.load_rpx(import_rpx));
+    const auto emulator_result = emulator.run(3U);
+    assert(emulator_result.execution.reason == StopReason::instruction_limit);
+    assert(emulator_result.execution.steps == 3U);
+    assert(emulator.core().nn_save_initialized);
+    assert(emulator.core().state.gpr[3] == 0U);
+    assert(emulator.core().state.cia == 0x02000008U);
+
+    affogato::Emulator independent_emulator(0x40000U);
+    assert(!independent_emulator.core().nn_save_initialized);
+    static_cast<void>(independent_emulator.load_rpx(import_rpx));
+    assert(!independent_emulator.core().nn_save_initialized);
+    const auto independent_result = independent_emulator.run(3U);
+    assert(independent_result.execution.reason == StopReason::instruction_limit);
+    assert(independent_emulator.core().nn_save_initialized);
+    assert(emulator.core().nn_save_initialized);
+}
+
 void fs_add_client_hle_tests()
 {
     constexpr std::uint32_t client_size = 0x1700U;
@@ -11006,9 +11221,10 @@ int main(int argc, char* argv[])
             const auto image = emulator.load_rpx(file);
             std::cout << "Loaded RPX entry point 0x" << std::hex << image.entry_point
                       << " (" << std::dec << image.loaded_sections << " sections)\n";
+            const auto& core = emulator.core();
+            const bool nn_save_initialized_before_run = core.nn_save_initialized;
             const auto session_result = emulator.run(rpx_instruction_limit);
             const auto& execution = session_result.execution;
-            const auto& core = emulator.core();
             std::cout << "Stopped after " << execution.steps << " instructions at CIA 0x"
                       << std::hex << execution.cia << std::dec << ": ";
             switch (execution.reason)
@@ -11033,9 +11249,14 @@ int main(int argc, char* argv[])
             std::cout << " (guest r3=" << session_result.gpr3 << ")\n";
             std::cout << "Guest GPR3: 0x" << std::hex << core.state.gpr[3]
                       << "  GPR4: 0x" << core.state.gpr[4] << std::dec << '\n';
+            std::cout << "nn_save initialized before execution: "
+                      << (nn_save_initialized_before_run ? "true" : "false")
+                      << "  after: "
+                      << (core.nn_save_initialized ? "true" : "false") << '\n';
             std::cout << "FS initialized: "
                       << (core.fs_initialized ? "true" : "false")
-                      << "  registered clients: " << core.fs_clients.size() << '\n';
+                      << "  registered clients: " << core.fs_clients.size()
+                      << "  next client handle: " << core.next_fs_client_handle << '\n';
             if (!core.fs_clients.empty())
             {
                 constexpr std::uint32_t fs_client_body_fsm_offset = 0x1448U;
@@ -11133,6 +11354,7 @@ int main(int argc, char* argv[])
     memcpy_hle_tests();
     os_block_move_hle_tests();
     os_get_system_info_hle_tests();
+    nn_save_init_hle_tests();
     fs_init_hle_tests();
     fs_add_client_hle_tests();
     fs_set_state_change_notification_hle_tests();
