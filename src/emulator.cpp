@@ -40,7 +40,8 @@ cpu::espresso::RpxLoadResult Emulator::load_rpx(std::span<const std::uint8_t> fi
     static_cast<void>(cpu::espresso::initialize_default_guest_thread(
         core_, stack_start, stack_end));
     // Cafe OS normally establishes default heaps during pre-initialization.
-    // Affogato creates only the MEM2 base heap required by current guest code.
+    // Affogato creates synthetic foreground FRMH and MEM2 EXPH heaps in the
+    // loader-selected free interval; the physical OS bucket is not modeled.
     static_cast<void>(cpu::espresso::initialize_default_guest_heaps(core_));
     has_loaded_image_ = true;
     return loaded_image_;

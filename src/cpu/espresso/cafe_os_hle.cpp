@@ -51,11 +51,18 @@ constexpr std::uint32_t os_thread_queue_head_offset = 0x00U;
 constexpr std::uint32_t os_thread_queue_tail_offset = 0x04U;
 constexpr std::uint32_t os_thread_queue_parent_offset = 0x08U;
 constexpr std::uint32_t mem2_base_heap_index = 1U;
+constexpr std::uint32_t foreground_base_heap_index = 8U;
 constexpr std::uint32_t mem2_expanded_heap_tag = 0x45585048U; // EXPH
 constexpr std::uint32_t mem2_expanded_heap_header_size = 0x54U;
 constexpr std::uint32_t mem2_expanded_heap_block_header_size = 0x14U;
+constexpr std::uint32_t foreground_frame_heap_tag = 0x46524D48U; // FRMH
+constexpr std::uint32_t foreground_frame_heap_header_size = 0x4CU;
 constexpr std::uint32_t mem_exp_heap_data_start_offset = 0x18U;
 constexpr std::uint32_t mem_exp_heap_data_end_offset = 0x1CU;
+constexpr std::uint32_t frame_heap_flags_offset = 0x30U;
+constexpr std::uint32_t frame_heap_head_offset = 0x40U;
+constexpr std::uint32_t frame_heap_tail_offset = 0x44U;
+constexpr std::uint32_t frame_heap_previous_state_offset = 0x48U;
 constexpr std::uint32_t mem_exp_heap_free_list_head_offset = 0x40U;
 constexpr std::uint32_t mem_exp_heap_block_size_offset = 0x04U;
 constexpr std::uint32_t mem_exp_heap_block_next_offset = 0x0CU;
@@ -325,6 +332,66 @@ void visit_validated_exp_heap_free_blocks(
     return static_cast<std::uint32_t>(largest);
 }
 
+[[nodiscard]] std::uint32_t allocatable_size_for_frame_heap(
+    const GuestMemory& memory,
+    std::uint32_t heap,
+    std::uint32_t alignment)
+{
+    constexpr std::uint64_t guest_address_space_end = std::uint64_t{1} << 32U;
+    if (heap == 0U)
+    {
+        throw HleExecutionError(
+            "MEMGetAllocatableSizeForFrmHeapEx received null heap handle");
+    }
+    if (static_cast<std::uint64_t>(heap) + foreground_frame_heap_header_size >
+        guest_address_space_end)
+    {
+        throw HleExecutionError(
+            "MEMGetAllocatableSizeForFrmHeapEx heap header wraps guest address space");
+    }
+
+    std::array<std::uint8_t, foreground_frame_heap_header_size> header{};
+    try
+    {
+        memory.read_bytes(heap, header);
+    }
+    catch (const GuestMemoryFault&)
+    {
+        throw HleExecutionError(
+            "MEMGetAllocatableSizeForFrmHeapEx heap header is outside mapped guest memory");
+    }
+
+    if (memory.read32_be(heap) != foreground_frame_heap_tag)
+    {
+        throw HleExecutionError(
+            "MEMGetAllocatableSizeForFrmHeapEx handle is not an FRMH heap");
+    }
+
+    const std::uint64_t minimum_data_start =
+        static_cast<std::uint64_t>(heap) + foreground_frame_heap_header_size;
+    const std::uint32_t data_start =
+        memory.read32_be(heap + mem_exp_heap_data_start_offset);
+    const std::uint32_t data_end =
+        memory.read32_be(heap + mem_exp_heap_data_end_offset);
+    const std::uint32_t head = memory.read32_be(heap + frame_heap_head_offset);
+    const std::uint32_t tail = memory.read32_be(heap + frame_heap_tail_offset);
+    if (data_start < minimum_data_start || data_start > data_end ||
+        head < data_start || head > tail || tail > data_end)
+    {
+        throw HleExecutionError(
+            "MEMGetAllocatableSizeForFrmHeapEx has invalid frame-heap bounds");
+    }
+
+    const std::uint64_t aligned_head =
+        (static_cast<std::uint64_t>(head) + alignment - 1U) &
+        ~static_cast<std::uint64_t>(alignment - 1U);
+    if (aligned_head >= tail)
+    {
+        return 0U;
+    }
+    return static_cast<std::uint32_t>(tail - aligned_head);
+}
+
 [[nodiscard]] std::uint64_t current_os_epoch_ticks() noexcept
 {
     using namespace std::chrono;
@@ -421,6 +488,7 @@ std::uint32_t initialize_default_guest_thread(
 bool initialize_default_guest_heaps(EspressoCore& core)
 {
     if (core.base_heap_handles[mem2_base_heap_index] != 0U ||
+        core.base_heap_handles[foreground_base_heap_index] != 0U ||
         core.mem2_heap_region_begin != 0U || core.mem2_heap_region_end != 0U)
     {
         return false;
@@ -459,6 +527,32 @@ bool initialize_default_guest_heaps(EspressoCore& core)
         return false;
     }
 
+    // The loader-selected gap does not model Cafe's physical foreground
+    // bucket. Provide a synthetic FRMH below MEM2, while keeping a reserve for
+    // the legacy bump allocator and leaving the MEM2 partition unchanged.
+    const std::uint64_t lower_span = mem2_begin - allocation_begin;
+    if (lower_span <= default_bump_heap_minimum_remaining)
+    {
+        return false;
+    }
+    const std::uint64_t max_foreground_size =
+        (lower_span - default_bump_heap_minimum_remaining) & ~std::uint64_t{0xFU};
+    const std::uint64_t foreground_size =
+        std::min(aligned_mem2_size, max_foreground_size);
+    if (foreground_size < 0x50U)
+    {
+        return false;
+    }
+    const std::uint64_t foreground_begin = mem2_begin - foreground_size;
+    const std::uint64_t foreground_data_start =
+        foreground_begin + foreground_frame_heap_header_size;
+    if (foreground_begin < allocation_begin ||
+        foreground_begin - allocation_begin < default_bump_heap_minimum_remaining ||
+        foreground_data_start + 4U > mem2_begin)
+    {
+        return false;
+    }
+
     const std::uint64_t data_start =
         mem2_begin + mem2_expanded_heap_header_size;
     const std::uint64_t block_data_start =
@@ -472,21 +566,37 @@ bool initialize_default_guest_heaps(EspressoCore& core)
     const auto handle = static_cast<std::uint32_t>(mem2_begin);
     const auto heap_end = static_cast<std::uint32_t>(mem2_end);
     const auto free_block = static_cast<std::uint32_t>(data_start);
+    const auto foreground_handle = static_cast<std::uint32_t>(foreground_begin);
+    const auto foreground_start = static_cast<std::uint32_t>(foreground_data_start);
     try
     {
-        // Validate the whole reserved range before touching guest bytes. The
-        // loader selected this interval from a mapped, unoccupied gap.
+        // Validate both complete reservations before touching guest bytes.
         core.memory.validate_write_range(
             handle, static_cast<std::size_t>(mem2_end - mem2_begin));
+        core.memory.validate_write_range(
+            foreground_handle, static_cast<std::size_t>(foreground_size));
     }
     catch (const GuestMemoryFault&)
     {
         return false;
     }
 
+    core.memory.zero_fill(foreground_handle, foreground_frame_heap_header_size);
+    core.memory.write32_be(foreground_handle, foreground_frame_heap_tag);
+    core.memory.write32_be(foreground_handle + mem_exp_heap_data_start_offset,
+                           foreground_start);
+    core.memory.write32_be(foreground_handle + mem_exp_heap_data_end_offset,
+                           handle);
+    core.memory.write32_be(foreground_handle + frame_heap_flags_offset, 0U);
+    core.memory.write32_be(foreground_handle + frame_heap_head_offset,
+                           foreground_start);
+    core.memory.write32_be(foreground_handle + frame_heap_tail_offset, handle);
+    core.memory.write32_be(
+        foreground_handle + frame_heap_previous_state_offset, 0U);
+
     // This is a guest-visible EXPH header plus its genuine initial free block.
     // The block occupies only the upper partition; the legacy bump allocator
-    // is capped at handle, so the two allocation models cannot overlap.
+    // is capped at foreground_handle, so all three regions remain disjoint.
     core.memory.zero_fill(
         handle,
         mem2_expanded_heap_header_size + mem2_expanded_heap_block_header_size);
@@ -510,10 +620,11 @@ bool initialize_default_guest_heaps(EspressoCore& core)
     core.memory.write32_be(free_block + 0x0CU, 0U);
     core.memory.write16_be(free_block + 0x10U, mem2_free_block_tag);
 
-    core.guest_heap_limit = handle;
+    core.guest_heap_limit = foreground_handle;
     core.mem2_heap_region_begin = handle;
     core.mem2_heap_region_end = heap_end;
     core.base_heap_handles[mem2_base_heap_index] = handle;
+    core.base_heap_handles[foreground_base_heap_index] = foreground_handle;
     return true;
 }
 
@@ -642,6 +753,32 @@ void register_coreinit_hle(HleDispatcher& dispatcher)
             core.state.gpr[3] = type < base_heap_count
                 ? core.base_heap_handles[type]
                 : 0U;
+        });
+    dispatcher.register_function(
+        "coreinit",
+        "MEMGetAllocatableSizeForFrmHeapEx",
+        [](EspressoCore& core) {
+            const std::uint32_t heap = core.state.gpr[3];
+            const std::int32_t alignment =
+                std::bit_cast<std::int32_t>(core.state.gpr[4]);
+            if (alignment == 0)
+            {
+                throw HleExecutionError(
+                    "MEMGetAllocatableSizeForFrmHeapEx received zero alignment");
+            }
+            if (alignment < 0)
+            {
+                throw HleExecutionError(
+                    "MEMGetAllocatableSizeForFrmHeapEx negative alignment behavior is not modeled");
+            }
+            const auto unsigned_alignment = static_cast<std::uint32_t>(alignment);
+            if ((unsigned_alignment & (unsigned_alignment - 1U)) != 0U)
+            {
+                throw HleExecutionError(
+                    "MEMGetAllocatableSizeForFrmHeapEx alignment must be a power of two");
+            }
+            core.state.gpr[3] = allocatable_size_for_frame_heap(
+                core.memory, heap, unsigned_alignment);
         });
     dispatcher.register_function(
         "coreinit",
