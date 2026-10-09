@@ -42,6 +42,7 @@ constexpr std::uint32_t cb_blend_blue_register = 0x0002841CU;
 constexpr std::uint32_t cb_blend_alpha_register = 0x00028420U;
 constexpr std::uint32_t sx_alpha_test_control_register = 0x00028410U;
 constexpr std::uint32_t sx_alpha_ref_register = 0x00028438U;
+constexpr std::uint32_t cb_target_mask_register = 0x00028238U;
 
 std::uint32_t fpr_float_argument_bits(
     const EspressoCore& core,
@@ -58,6 +59,17 @@ std::uint32_t pack_alpha_test_control(
 {
     const std::uint32_t enabled = alpha_test != 0U ? 1U : 0U;
     return (compare_function & 0x7U) | (enabled << 3U);
+}
+
+std::uint32_t pack_target_channel_masks(
+    const std::array<std::uint32_t, 8U>& masks)
+{
+    std::uint32_t packed = 0U;
+    for (std::size_t index = 0; index < masks.size(); ++index)
+    {
+        packed |= (masks[index] & 0xFU) << static_cast<unsigned>(index * 4U);
+    }
+    return packed;
 }
 
 std::uint32_t pack_stencil_ref_mask(
@@ -633,6 +645,38 @@ void register_gx2_hle(HleDispatcher& dispatcher)
                 reference});
             // Void setter: alphaTest/func come from r3/r4 and ref from f1.
             // It records Latte state without changing guest CPU or memory.
+        });
+
+    dispatcher.register_function(
+        "gx2",
+        "GX2SetTargetChannelMasks",
+        [](EspressoCore& core) {
+            if (!core.gx2.initialized)
+            {
+                throw HleExecutionError(
+                    "gx2::GX2SetTargetChannelMasks: GX2 has not been initialized");
+            }
+
+            const std::array<std::uint32_t, 8U> masks{
+                core.state.gpr[3],
+                core.state.gpr[4],
+                core.state.gpr[5],
+                core.state.gpr[6],
+                core.state.gpr[7],
+                core.state.gpr[8],
+                core.state.gpr[9],
+                core.state.gpr[10],
+            };
+            const std::uint32_t packed = pack_target_channel_masks(masks);
+
+            core.gx2.cb_target_mask = packed;
+            core.gx2.cb_target_mask_valid = true;
+            core.gx2.pending_commands.push_back({
+                Gx2CommandType::set_context_register,
+                cb_target_mask_register,
+                packed});
+            // Void setter: r3-r10 are the eight mask arguments. No stack,
+            // FPR, or guest-memory state participates in this register write.
         });
 }
 

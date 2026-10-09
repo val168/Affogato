@@ -11822,12 +11822,30 @@ void gx2_set_alpha_test_hle_tests()
     assert(core.gx2.pa_su_sc_mode_cntl == 0x00000242U);
     assert(core.gx2.cb_color_control == 0x00CCFF00U);
     assert(core.gx2.cb_blend_control[0] == 0x25040504U);
+    assert(std::ranges::all_of(core.gx2.cb_blend_constant_valid,
+                               [](bool valid) { return valid; }));
+    assert(std::ranges::all_of(core.gx2.cb_blend_constant,
+                               [](std::uint32_t value) {
+                                   return value == 0x3F800000U;
+                               }));
     assert(core.gx2.cb_blend_constant == blend_constants_before);
     assert(core.gx2.cb_blend_constant_valid == blend_constant_valid_before);
     assert(core.state.gpr == gprs_before);
     assert(core.state.fpr == fprs_before && core.state.fpr_ps1 == ps1_before);
     assert(core.state.cr == cr_before && core.state.xer == xer_before);
     assert(core.state.ctr == ctr_before && core.state.fpscr == fpscr_before);
+    assert(core.gx2.db_depth_control == 0x00000036U);
+    assert(core.gx2.db_stencilrefmask == 0x00FFFF00U);
+    assert(core.gx2.db_stencilrefmask_bf == 0x00FFFF00U);
+    assert(core.gx2.pa_su_sc_mode_cntl == 0x00000242U);
+    assert(core.gx2.cb_color_control == 0x00CCFF00U);
+    assert(core.gx2.cb_blend_control[0] == 0x25040504U);
+    assert(std::ranges::all_of(core.gx2.cb_blend_constant,
+                               [](std::uint32_t value) {
+                                   return value == 0x3F800000U;
+                               }));
+    assert(core.gx2.sx_alpha_test_control == 0x00000004U);
+    assert(core.gx2.sx_alpha_ref == 0U);
     assert(core.state.lr == return_address && core.state.cia == return_address);
     std::vector<std::uint8_t> memory_after(core.memory.size());
     core.memory.read_bytes(0U, memory_after);
@@ -11931,6 +11949,228 @@ void gx2_set_alpha_test_hle_tests()
     assert(isolated_a.gx2.pending_commands.size() == 2U);
     assert(!isolated_b.gx2.sx_alpha_test_control_valid);
     assert(!isolated_b.gx2.sx_alpha_ref_valid);
+    assert(isolated_b.gx2.pending_commands.empty());
+}
+
+void gx2_set_target_channel_masks_hle_tests()
+{
+    constexpr std::uint32_t return_address = 0x0275090CU;
+    constexpr std::uint32_t register_address = 0x00028238U;
+    constexpr std::uint32_t attribute_address = 0x100U;
+    constexpr std::uint32_t pool_address = 0x8000U;
+    constexpr std::uint32_t pool_size = 0x8000U;
+    const auto invoke = [&](EspressoCore& core, std::uint32_t import) {
+        core.state.cia = import;
+        core.state.lr = return_address;
+        return core.run(1U);
+    };
+    const auto set_arguments = [](EspressoCore& core,
+                                  const std::array<std::uint32_t, 8U>& values) {
+        for (std::size_t index = 0; index < values.size(); ++index)
+        {
+            core.state.gpr[index + 3U] = values[index];
+        }
+    };
+
+    EspressoCore core(0x20000U);
+    register_gx2_hle(core.hle);
+    const std::uint32_t init_import = core.hle.bind_import("gx2", "GX2Init");
+    const std::uint32_t import = core.hle.bind_import(
+        "gx2", "GX2SetTargetChannelMasks");
+    const std::uint32_t wrong_library = core.hle.bind_import(
+        "coreinit", "GX2SetTargetChannelMasks");
+    const std::array<std::uint32_t, 5U> attributes{
+        1U, pool_address, 2U, pool_size, 0U};
+    for (std::size_t index = 0; index < attributes.size(); ++index)
+    {
+        core.memory.write32_be(
+            attribute_address + static_cast<std::uint32_t>(index * 4U),
+            attributes[index]);
+    }
+    core.state.gpr[3] = attribute_address;
+    assert(invoke(core, init_import).reason == StopReason::instruction_limit);
+    assert(core.gx2.initialized && !core.gx2.cb_target_mask_valid);
+    assert(core.gx2.cb_target_mask == 0U);
+
+    // Exercise the same preceding state setters used by the guest, so the new
+    // register is proven to append at the right point in the command stream.
+    constexpr std::uint32_t stack_pointer = 0x3000U;
+    core.state.gpr[1] = stack_pointer;
+    for (std::uint32_t offset = 0x08U; offset <= 0x18U; offset += 4U)
+    {
+        core.memory.write32_be(stack_pointer + offset, 0U);
+    }
+    const auto call_setter = [&](const char* name,
+                                 const std::array<std::uint32_t, 8U>& arguments) {
+        const std::uint32_t setter = core.hle.bind_import("gx2", name);
+        set_arguments(core, arguments);
+        assert(invoke(core, setter).reason == StopReason::instruction_limit);
+    };
+    call_setter("GX2SetDepthStencilControl",
+                {1U, 1U, 3U, 0U, 0U, 0U, 0U, 0U});
+    call_setter("GX2SetStencilMask",
+                {0xFFU, 0xFFU, 0U, 0xFFU, 0xFFU, 0U, 0U, 0U});
+    call_setter("GX2SetPolygonControl",
+                {0U, 0U, 1U, 0U, 2U, 2U, 0U, 0U});
+    call_setter("GX2SetColorControl",
+                {0xCCU, 0xFFU, 0U, 1U, 0U, 0U, 0U, 0U});
+    call_setter("GX2SetBlendControl",
+                {0U, 4U, 5U, 0U, 1U, 4U, 5U, 0U});
+    core.state.fpr[1] = 0x3FF0000000000000ULL;
+    core.state.fpr[2] = 0x3FF0000000000000ULL;
+    core.state.fpr[3] = 0x3FF0000000000000ULL;
+    core.state.fpr[4] = 0x3FF0000000000000ULL;
+    const std::uint32_t blend_constant = core.hle.bind_import(
+        "gx2", "GX2SetBlendConstantColor");
+    assert(invoke(core, blend_constant).reason == StopReason::instruction_limit);
+    core.state.fpr[1] = 0U;
+    call_setter("GX2SetAlphaTest", {0U, 4U, 0U, 0U, 0U, 0U, 0U, 0U});
+    assert(core.gx2.pending_commands.size() == 12U);
+    assert(core.gx2.db_depth_control == 0x00000036U);
+    assert(core.gx2.db_stencilrefmask == 0x00FFFF00U);
+    assert(core.gx2.db_stencilrefmask_bf == 0x00FFFF00U);
+    assert(core.gx2.pa_su_sc_mode_cntl == 0x00000242U);
+    assert(core.gx2.cb_color_control == 0x00CCFF00U);
+    assert(core.gx2.cb_blend_control[0] == 0x25040504U);
+    assert(core.gx2.sx_alpha_test_control == 0x00000004U);
+    assert(core.gx2.sx_alpha_ref == 0U);
+    const auto command_prefix = core.gx2.pending_commands;
+    const std::array<std::uint32_t, 12U> expected_registers{
+        0x28800U, 0x28430U, 0x28434U, 0x28814U, 0x28808U, 0x28780U,
+        0x28414U, 0x28418U, 0x2841CU, 0x28420U, 0x28410U, 0x28438U};
+    const std::array<std::uint32_t, 12U> expected_values{
+        0x00000036U, 0x00FFFF00U, 0x00FFFF00U, 0x00000242U,
+        0x00CCFF00U, 0x25040504U, 0x3F800000U, 0x3F800000U,
+        0x3F800000U, 0x3F800000U, 0x00000004U, 0x00000000U};
+    for (std::size_t index = 0; index < command_prefix.size(); ++index)
+    {
+        assert(command_prefix[index].type == Gx2CommandType::set_context_register);
+        assert(command_prefix[index].register_address == expected_registers[index]);
+        assert(command_prefix[index].value == expected_values[index]);
+    }
+    core.gx2.cb_target_mask_valid = true;
+    core.gx2.cb_target_mask = 0xDEADBEEFU;
+    core.memory.write8(pool_address, 0xA5U);
+    core.memory.write8(pool_address + pool_size / 2U, 0xC3U);
+    core.memory.write8(pool_address + pool_size - 1U, 0x5AU);
+    core.state.gpr.fill(0xD3000000U);
+    for (std::size_t index = 0; index < core.state.fpr.size(); ++index)
+    {
+        core.state.fpr[index] = 0x9000000000000000ULL + index;
+        core.state.fpr_ps1[index] = 0xA000000000000000ULL + index;
+    }
+    core.state.gpr[1] = 0xFFFFFFFFU; // No stack arguments.
+    core.state.cr = 0x12345678U;
+    core.state.xer = 0xA5A55A5AU;
+    core.state.ctr = 0x87654321U;
+    core.state.fpscr = 0x5A5AA55AU;
+    const auto fprs_before = core.state.fpr;
+    const auto ps1_before = core.state.fpr_ps1;
+    const std::uint32_t cr_before = core.state.cr;
+    const std::uint32_t xer_before = core.state.xer;
+    const std::uint32_t ctr_before = core.state.ctr;
+    const std::uint32_t fpscr_before = core.state.fpscr;
+    std::vector<std::uint8_t> memory_before(core.memory.size());
+    core.memory.read_bytes(0U, memory_before);
+
+    const auto check_masks = [&](const std::array<std::uint32_t, 8U>& masks,
+                                 std::uint32_t expected) {
+        set_arguments(core, masks);
+        const auto gprs_before_call = core.state.gpr;
+        const std::size_t previous_count = core.gx2.pending_commands.size();
+        assert(invoke(core, import).reason == StopReason::instruction_limit);
+        assert(core.state.gpr == gprs_before_call);
+        assert(core.gx2.cb_target_mask_valid);
+        assert(core.gx2.cb_target_mask == expected);
+        assert(core.gx2.pending_commands.size() == previous_count + 1U);
+        const Gx2Command& command = core.gx2.pending_commands.back();
+        assert(command.type == Gx2CommandType::set_context_register);
+        assert(command.register_address == register_address);
+        assert(command.value == expected);
+        assert(core.state.cia == return_address);
+    };
+    check_masks({0xFU, 0U, 0U, 0U, 0U, 0U, 0U, 0U}, 0x0000000FU);
+    assert(core.gx2.pending_commands.size() == 13U);
+    for (std::size_t index = 0; index < command_prefix.size(); ++index)
+    {
+        assert(core.gx2.pending_commands[index].type == command_prefix[index].type);
+        assert(core.gx2.pending_commands[index].register_address ==
+               command_prefix[index].register_address);
+        assert(core.gx2.pending_commands[index].value == command_prefix[index].value);
+    }
+    check_masks({1U, 2U, 3U, 4U, 5U, 6U, 7U, 8U}, 0x87654321U);
+    check_masks({0xFU, 0xFU, 0xFU, 0xFU, 0xFU, 0xFU, 0xFU, 0xFU},
+                0xFFFFFFFFU);
+    check_masks({0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U}, 0U);
+    check_masks({0x12345671U, 0xABCDEF82U, 0x13572463U, 0x24681354U,
+                 0xDEADBEE5U, 0x87654326U, 0x11111117U, 0x22222228U},
+                0x87654321U);
+    check_masks({0U, 0U, 0U, 0U, 0U, 0U, 0U, 0xFU}, 0xF0000000U);
+    check_masks({1U, 0U, 0U, 0U, 0U, 0U, 0U, 0U}, 1U);
+    check_masks({2U, 0U, 0U, 0U, 0U, 0U, 0U, 0U}, 2U);
+    check_masks({4U, 0U, 0U, 0U, 0U, 0U, 0U, 0U}, 4U);
+    check_masks({8U, 0U, 0U, 0U, 0U, 0U, 0U, 0U}, 8U);
+    assert(core.state.fpr == fprs_before && core.state.fpr_ps1 == ps1_before);
+    assert(core.state.cr == cr_before && core.state.xer == xer_before);
+    assert(core.state.ctr == ctr_before && core.state.fpscr == fpscr_before);
+    assert(core.gx2.db_depth_control == 0x00000036U);
+    assert(core.gx2.db_stencilrefmask == 0x00FFFF00U);
+    assert(core.gx2.db_stencilrefmask_bf == 0x00FFFF00U);
+    assert(core.gx2.pa_su_sc_mode_cntl == 0x00000242U);
+    assert(core.gx2.cb_color_control == 0x00CCFF00U);
+    assert(core.gx2.cb_blend_control[0] == 0x25040504U);
+    assert(std::ranges::all_of(core.gx2.cb_blend_constant,
+                               [](std::uint32_t value) {
+                                   return value == 0x3F800000U;
+                               }));
+    assert(core.gx2.sx_alpha_test_control == 0x00000004U);
+    assert(core.gx2.sx_alpha_ref == 0U);
+    assert(core.memory.read8(pool_address) == 0xA5U);
+    assert(core.memory.read8(pool_address + pool_size / 2U) == 0xC3U);
+    assert(core.memory.read8(pool_address + pool_size - 1U) == 0x5AU);
+    std::vector<std::uint8_t> memory_after(core.memory.size());
+    core.memory.read_bytes(0U, memory_after);
+    assert(memory_after == memory_before);
+
+    EspressoCore uninitialized(0x1000U);
+    register_gx2_hle(uninitialized.hle);
+    const std::uint32_t uninitialized_import = uninitialized.hle.bind_import(
+        "gx2", "GX2SetTargetChannelMasks");
+    uninitialized.state.gpr.fill(0xDEAD0000U);
+    const auto uninitialized_gprs = uninitialized.state.gpr;
+    const RunResult uninitialized_result = invoke(uninitialized, uninitialized_import);
+    assert(uninitialized_result.reason == StopReason::hle_error);
+    assert(uninitialized_result.detail.find("gx2::GX2SetTargetChannelMasks") !=
+           std::string::npos);
+    assert(uninitialized.state.gpr == uninitialized_gprs);
+    assert(!uninitialized.gx2.cb_target_mask_valid);
+    assert(uninitialized.gx2.cb_target_mask == 0U);
+    assert(uninitialized.gx2.pending_commands.empty());
+
+    core.state.cia = wrong_library;
+    core.state.lr = return_address;
+    assert(core.run(1U).reason == StopReason::unimplemented_hle_call);
+    assert(core.run(1U).hle_call == "coreinit::GX2SetTargetChannelMasks");
+    core.reset();
+    assert(!core.gx2.initialized && !core.gx2.cb_target_mask_valid);
+    assert(core.gx2.cb_target_mask == 0U);
+    assert(core.gx2.pending_commands.empty());
+
+    EspressoCore isolated_a(0x1000U);
+    EspressoCore isolated_b(0x1000U);
+    register_gx2_hle(isolated_a.hle);
+    register_gx2_hle(isolated_b.hle);
+    isolated_a.gx2.initialized = true;
+    isolated_b.gx2.initialized = true;
+    const std::uint32_t isolated_import = isolated_a.hle.bind_import(
+        "gx2", "GX2SetTargetChannelMasks");
+    set_arguments(isolated_a, {0xFU, 0U, 0U, 0U, 0U, 0U, 0U, 0U});
+    assert(invoke(isolated_a, isolated_import).reason == StopReason::instruction_limit);
+    assert(isolated_a.gx2.cb_target_mask_valid &&
+           isolated_a.gx2.cb_target_mask == 0xFU);
+    assert(isolated_a.gx2.pending_commands.size() == 1U);
+    assert(!isolated_b.gx2.cb_target_mask_valid);
+    assert(isolated_b.gx2.cb_target_mask == 0U);
     assert(isolated_b.gx2.pending_commands.empty());
 }
 
@@ -14404,6 +14644,7 @@ int main(int argc, char* argv[])
     gx2_set_blend_control_hle_tests();
     gx2_set_blend_constant_color_hle_tests();
     gx2_set_alpha_test_hle_tests();
+    gx2_set_target_channel_masks_hle_tests();
     mem_get_total_free_size_for_exp_heap_hle_tests();
     mem_get_allocatable_size_for_exp_heap_ex_hle_tests();
     compare_and_conditional_branch_tests();
