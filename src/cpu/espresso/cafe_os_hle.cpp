@@ -12,6 +12,7 @@
 #include <optional>
 #include <set>
 #include <stdexcept>
+#include <string>
 
 namespace affogato::cpu::espresso
 {
@@ -63,6 +64,8 @@ constexpr std::uint32_t frame_heap_flags_offset = 0x30U;
 constexpr std::uint32_t frame_heap_head_offset = 0x40U;
 constexpr std::uint32_t frame_heap_tail_offset = 0x44U;
 constexpr std::uint32_t frame_heap_previous_state_offset = 0x48U;
+constexpr std::uint32_t mem_heap_flag_zero_allocated = 1U << 0U;
+constexpr std::uint32_t mem_heap_flag_debug_mode = 1U << 1U;
 constexpr std::uint32_t mem_exp_heap_free_list_head_offset = 0x40U;
 constexpr std::uint32_t mem_exp_heap_block_size_offset = 0x04U;
 constexpr std::uint32_t mem_exp_heap_block_next_offset = 0x0CU;
@@ -332,22 +335,30 @@ void visit_validated_exp_heap_free_blocks(
     return static_cast<std::uint32_t>(largest);
 }
 
-[[nodiscard]] std::uint32_t allocatable_size_for_frame_heap(
+struct ValidatedFrameHeap
+{
+    std::uint32_t flags{};
+    std::uint32_t data_start{};
+    std::uint32_t data_end{};
+    std::uint32_t head{};
+    std::uint32_t tail{};
+};
+
+[[nodiscard]] ValidatedFrameHeap validate_frame_heap(
     const GuestMemory& memory,
     std::uint32_t heap,
-    std::uint32_t alignment)
+    const char* function_name)
 {
     constexpr std::uint64_t guest_address_space_end = std::uint64_t{1} << 32U;
+    const std::string function(function_name);
     if (heap == 0U)
     {
-        throw HleExecutionError(
-            "MEMGetAllocatableSizeForFrmHeapEx received null heap handle");
+        throw HleExecutionError(function + " received null heap handle");
     }
     if (static_cast<std::uint64_t>(heap) + foreground_frame_heap_header_size >
         guest_address_space_end)
     {
-        throw HleExecutionError(
-            "MEMGetAllocatableSizeForFrmHeapEx heap header wraps guest address space");
+        throw HleExecutionError(function + " heap header wraps guest address space");
     }
 
     std::array<std::uint8_t, foreground_frame_heap_header_size> header{};
@@ -357,39 +368,156 @@ void visit_validated_exp_heap_free_blocks(
     }
     catch (const GuestMemoryFault&)
     {
-        throw HleExecutionError(
-            "MEMGetAllocatableSizeForFrmHeapEx heap header is outside mapped guest memory");
+        throw HleExecutionError(function + " heap header is outside mapped guest memory");
     }
 
     if (memory.read32_be(heap) != foreground_frame_heap_tag)
     {
-        throw HleExecutionError(
-            "MEMGetAllocatableSizeForFrmHeapEx handle is not an FRMH heap");
+        throw HleExecutionError(function + " handle is not an FRMH heap");
     }
 
     const std::uint64_t minimum_data_start =
         static_cast<std::uint64_t>(heap) + foreground_frame_heap_header_size;
-    const std::uint32_t data_start =
-        memory.read32_be(heap + mem_exp_heap_data_start_offset);
-    const std::uint32_t data_end =
-        memory.read32_be(heap + mem_exp_heap_data_end_offset);
-    const std::uint32_t head = memory.read32_be(heap + frame_heap_head_offset);
-    const std::uint32_t tail = memory.read32_be(heap + frame_heap_tail_offset);
-    if (data_start < minimum_data_start || data_start > data_end ||
-        head < data_start || head > tail || tail > data_end)
+    const ValidatedFrameHeap result{
+        .flags = memory.read32_be(heap + frame_heap_flags_offset),
+        .data_start = memory.read32_be(heap + mem_exp_heap_data_start_offset),
+        .data_end = memory.read32_be(heap + mem_exp_heap_data_end_offset),
+        .head = memory.read32_be(heap + frame_heap_head_offset),
+        .tail = memory.read32_be(heap + frame_heap_tail_offset),
+    };
+    if (result.data_start < minimum_data_start ||
+        result.data_start > result.data_end || result.head < result.data_start ||
+        result.head > result.tail || result.tail > result.data_end)
     {
-        throw HleExecutionError(
-            "MEMGetAllocatableSizeForFrmHeapEx has invalid frame-heap bounds");
+        throw HleExecutionError(function + " has invalid frame-heap bounds");
     }
+    return result;
+}
+
+[[nodiscard]] std::uint32_t allocatable_size_for_frame_heap(
+    const GuestMemory& memory,
+    std::uint32_t heap,
+    std::uint32_t alignment)
+{
+    const ValidatedFrameHeap frame_heap = validate_frame_heap(
+        memory, heap, "MEMGetAllocatableSizeForFrmHeapEx");
 
     const std::uint64_t aligned_head =
-        (static_cast<std::uint64_t>(head) + alignment - 1U) &
+        (static_cast<std::uint64_t>(frame_heap.head) + alignment - 1U) &
         ~static_cast<std::uint64_t>(alignment - 1U);
-    if (aligned_head >= tail)
+    if (aligned_head >= frame_heap.tail)
     {
         return 0U;
     }
-    return static_cast<std::uint32_t>(tail - aligned_head);
+    return static_cast<std::uint32_t>(frame_heap.tail - aligned_head);
+}
+
+[[nodiscard]] std::uint32_t allocate_from_frame_heap(
+    GuestMemory& memory,
+    std::uint32_t heap,
+    std::uint32_t requested_size,
+    std::int32_t signed_alignment)
+{
+    if (signed_alignment == 0)
+    {
+        throw HleExecutionError(
+            "MEMAllocFromFrmHeapEx received zero alignment");
+    }
+    if (signed_alignment == std::numeric_limits<std::int32_t>::min())
+    {
+        throw HleExecutionError(
+            "MEMAllocFromFrmHeapEx alignment magnitude is not representable");
+    }
+    const std::uint32_t alignment = static_cast<std::uint32_t>(
+        signed_alignment < 0 ? -signed_alignment : signed_alignment);
+    if ((alignment & (alignment - 1U)) != 0U)
+    {
+        throw HleExecutionError(
+            "MEMAllocFromFrmHeapEx alignment magnitude must be a power of two");
+    }
+
+    const ValidatedFrameHeap frame_heap = validate_frame_heap(
+        memory, heap, "MEMAllocFromFrmHeapEx");
+    if ((frame_heap.flags & mem_heap_flag_debug_mode) != 0U)
+    {
+        throw HleExecutionError(
+            "MEMAllocFromFrmHeapEx does not support DEBUG_MODE without heap fill-value APIs");
+    }
+
+    // Decaf documents that coreinit converts a zero-byte request to one byte.
+    // It does not round ordinary requested sizes up to a word boundary.
+    const std::uint64_t effective_size = requested_size == 0U
+        ? 1U
+        : static_cast<std::uint64_t>(requested_size);
+    const std::uint64_t old_head = frame_heap.head;
+    const std::uint64_t old_tail = frame_heap.tail;
+    std::uint64_t allocation_start{};
+    std::uint64_t updated_boundary{};
+    const bool allocate_from_head = signed_alignment > 0;
+
+    if (allocate_from_head)
+    {
+        allocation_start =
+            (old_head + alignment - 1U) &
+            ~static_cast<std::uint64_t>(alignment - 1U);
+        updated_boundary = allocation_start + effective_size;
+        if (allocation_start < old_head || updated_boundary > old_tail ||
+            updated_boundary > std::numeric_limits<std::uint32_t>::max())
+        {
+            return 0U;
+        }
+    }
+    else
+    {
+        if (effective_size > old_tail)
+        {
+            return 0U;
+        }
+        const std::uint64_t candidate = old_tail - effective_size;
+        allocation_start = candidate &
+            ~static_cast<std::uint64_t>(alignment - 1U);
+        updated_boundary = allocation_start;
+        if (allocation_start < old_head ||
+            allocation_start + effective_size > old_tail)
+        {
+            return 0U;
+        }
+    }
+
+    constexpr std::uint64_t guest_address_space_end = std::uint64_t{1} << 32U;
+    const std::uint64_t allocation_end = allocation_start + effective_size;
+    if (allocation_start >= guest_address_space_end ||
+        allocation_end > guest_address_space_end)
+    {
+        return 0U;
+    }
+    try
+    {
+        memory.validate_write_range(
+            static_cast<std::uint32_t>(allocation_start),
+            static_cast<std::size_t>(effective_size));
+        memory.validate_write_range(
+            heap + (allocate_from_head ? frame_heap_head_offset : frame_heap_tail_offset),
+            sizeof(std::uint32_t));
+    }
+    catch (const GuestMemoryFault&)
+    {
+        throw HleExecutionError(
+            "MEMAllocFromFrmHeapEx allocation or heap boundary is outside writable guest memory");
+    }
+
+    // GuestMemory's complete-range validation above makes ZERO_ALLOCATED
+    // writes safe before the single guest-visible head/tail commit.
+    if ((frame_heap.flags & mem_heap_flag_zero_allocated) != 0U)
+    {
+        memory.zero_fill(
+            static_cast<std::uint32_t>(allocation_start),
+            static_cast<std::size_t>(effective_size));
+    }
+    memory.write32_be(
+        heap + (allocate_from_head ? frame_heap_head_offset : frame_heap_tail_offset),
+        static_cast<std::uint32_t>(updated_boundary));
+    return static_cast<std::uint32_t>(allocation_start);
 }
 
 [[nodiscard]] std::uint64_t current_os_epoch_ticks() noexcept
@@ -779,6 +907,17 @@ void register_coreinit_hle(HleDispatcher& dispatcher)
             }
             core.state.gpr[3] = allocatable_size_for_frame_heap(
                 core.memory, heap, unsigned_alignment);
+        });
+    dispatcher.register_function(
+        "coreinit",
+        "MEMAllocFromFrmHeapEx",
+        [](EspressoCore& core) {
+            const std::uint32_t heap = core.state.gpr[3];
+            const std::uint32_t size = core.state.gpr[4];
+            const std::int32_t alignment =
+                std::bit_cast<std::int32_t>(core.state.gpr[5]);
+            core.state.gpr[3] = allocate_from_frame_heap(
+                core.memory, heap, size, alignment);
         });
     dispatcher.register_function(
         "coreinit",
