@@ -7212,6 +7212,325 @@ void fs_add_client_hle_tests()
            fatal_status);
 }
 
+void fs_set_state_change_notification_hle_tests()
+{
+    constexpr std::uint32_t client_size = 0x1700U;
+    constexpr std::uint32_t client_a = 0x2003U;
+    constexpr std::uint32_t client_b = 0x4007U;
+    constexpr std::uint32_t body_a = 0x2040U;
+    constexpr std::uint32_t body_b = 0x4040U;
+    constexpr std::uint32_t fsm_offset = 0x1448U;
+    constexpr std::uint32_t enabled_offset = 0x10U;
+    constexpr std::uint32_t info_offset = 0x14U;
+    constexpr std::uint32_t info_size = 0x24U;
+    constexpr std::uint32_t message_data_offset = 0x0CU;
+    constexpr std::uint32_t message_type_offset = 0x18U;
+    constexpr std::uint32_t client_pointer_offset = 0x1CU;
+    constexpr std::uint32_t state_offset = 0x20U;
+    constexpr std::uint32_t params = 0x6000U;
+    constexpr std::uint32_t queue = 0x8000U;
+    constexpr std::uint32_t queue_messages = 0x8100U;
+    constexpr std::uint32_t return_address = 0x02742268U;
+    constexpr std::uint32_t notification_message_type = 11U;
+
+    const auto invoke = [&](EspressoCore& core,
+                            std::uint32_t import,
+                            std::uint32_t client,
+                            std::uint32_t info) {
+        core.state.cia = import;
+        core.state.lr = return_address;
+        core.state.gpr[3] = client;
+        core.state.gpr[4] = info;
+        return core.run(1U);
+    };
+    const auto snapshot = [](const EspressoCore& core,
+                             std::uint32_t address,
+                             std::uint32_t size) {
+        std::vector<std::uint8_t> bytes(size);
+        core.memory.read_bytes(address, bytes);
+        return bytes;
+    };
+    const auto put_be32 = [](std::vector<std::uint8_t>& bytes,
+                             std::size_t offset,
+                             std::uint32_t value) {
+        bytes[offset] = static_cast<std::uint8_t>(value >> 24U);
+        bytes[offset + 1U] = static_cast<std::uint8_t>(value >> 16U);
+        bytes[offset + 2U] = static_cast<std::uint8_t>(value >> 8U);
+        bytes[offset + 3U] = static_cast<std::uint8_t>(value);
+    };
+    const auto write_params = [](EspressoCore& core,
+                                 std::uint32_t address,
+                                 std::uint32_t callback,
+                                 std::uint32_t param,
+                                 std::uint32_t queue_pointer) {
+        core.memory.write32_be(address, callback);
+        core.memory.write32_be(address + 4U, param);
+        core.memory.write32_be(address + 8U, queue_pointer);
+    };
+
+    EspressoCore core(0x20000U);
+    register_coreinit_hle(core.hle);
+    const std::uint32_t fs_init = core.hle.bind_import("coreinit", "FSInit");
+    const std::uint32_t fs_add = core.hle.bind_import("coreinit", "FSAddClient");
+    const std::uint32_t initialize_queue =
+        core.hle.bind_import("coreinit", "OSInitMessageQueue");
+    const std::uint32_t set_notification = core.hle.bind_import(
+        "coreinit", "FSSetStateChangeNotification");
+
+    core.state.cia = fs_init;
+    core.state.lr = return_address;
+    assert(core.step() == StepResult::executed);
+    assert(core.fs_initialized);
+    for (const std::uint32_t client : {client_a, client_b})
+    {
+        core.state.cia = fs_add;
+        core.state.lr = return_address;
+        core.state.gpr[3] = client;
+        core.state.gpr[4] = 0U;
+        assert(core.step() == StepResult::executed);
+        assert(core.state.gpr[3] == 0U);
+    }
+    assert(core.fs_clients.size() == 2U);
+    assert(core.fs_clients[0].body_address == body_a);
+    assert(core.fs_clients[1].body_address == body_b);
+
+    core.state.cia = initialize_queue;
+    core.state.lr = return_address;
+    core.state.gpr[3] = queue;
+    core.state.gpr[4] = queue_messages;
+    core.state.gpr[5] = 8U;
+    assert(core.step() == StepResult::executed);
+    const auto queue_before = snapshot(core, queue, 0x3CU);
+
+    const std::uint32_t body_fsm_a = body_a + fsm_offset;
+    const std::uint32_t state_info_a = body_fsm_a + info_offset;
+    const std::uint32_t body_fsm_b = body_b + fsm_offset;
+    const std::uint32_t state_info_b = body_fsm_b + info_offset;
+    core.memory.write32_be(state_info_a + 0x10U, 0xA1A2A3A4U);
+    core.memory.write32_be(state_info_a + 0x14U, 0xB1B2B3B4U);
+    core.memory.write32_be(state_info_a + state_offset, 0xC1C2C3C4U);
+    core.memory.write32_be(state_info_b + 0x10U, 0xD1D2D3D4U);
+    core.memory.write32_be(state_info_b + 0x14U, 0xE1E2E3E4U);
+    core.memory.write32_be(state_info_b + state_offset, 0xF1F2F3F4U);
+
+    // The real Wind Waker argument block registers a callback and leaves both
+    // the user parameter and queue null.
+    write_params(core, params, 0x02742028U, 0U, 0U);
+    const auto input_before = snapshot(core, params, 12U);
+    auto expected_a = snapshot(core, client_a, client_size);
+    put_be32(expected_a, body_a - client_a + fsm_offset + enabled_offset, 1U);
+    put_be32(expected_a, body_a - client_a + fsm_offset + info_offset,
+             0x02742028U);
+    put_be32(expected_a, body_a - client_a + fsm_offset + info_offset + 4U, 0U);
+    put_be32(expected_a, body_a - client_a + fsm_offset + info_offset + 8U, 0U);
+    put_be32(expected_a, body_a - client_a + fsm_offset + info_offset +
+                              message_data_offset,
+             state_info_a);
+    put_be32(expected_a, body_a - client_a + fsm_offset + info_offset +
+                              message_type_offset,
+             notification_message_type);
+    put_be32(expected_a, body_a - client_a + fsm_offset + info_offset +
+                              client_pointer_offset,
+             client_a);
+
+    for (std::uint32_t reg = 0; reg < core.state.gpr.size(); ++reg)
+    {
+        core.state.gpr[reg] = 0xA1000000U + reg * 0x101U;
+    }
+    for (std::uint32_t reg = 0; reg < core.state.fpr.size(); ++reg)
+    {
+        core.state.fpr[reg] = 0x1111000000000000ULL + reg;
+        core.state.fpr_ps1[reg] = 0x2222000000000000ULL + reg;
+    }
+    core.state.gpr[3] = client_a;
+    core.state.gpr[4] = params;
+    core.state.cr = 0x12345678U;
+    core.state.xer = 0xA00000A5U;
+    core.state.ctr = 0xCAFEBABEU;
+    core.state.fpscr = 0x5A5AA55AU;
+    core.state.lr = return_address;
+    const auto gprs_before = core.state.gpr;
+    const auto fprs_before = core.state.fpr;
+    const auto ps1_before = core.state.fpr_ps1;
+    const auto registrations_before = core.fs_clients;
+    const std::uint32_t next_handle_before = core.next_fs_client_handle;
+    const std::uint32_t heap_cursor_before = core.guest_heap_cursor;
+    const std::uint32_t cr_before = core.state.cr;
+    const std::uint32_t xer_before = core.state.xer;
+    const std::uint32_t ctr_before = core.state.ctr;
+    const std::uint32_t fpscr_before = core.state.fpscr;
+    const std::uint32_t lr_before = core.state.lr;
+
+    const RunResult registered =
+        invoke(core, set_notification, client_a, params);
+    assert(registered.reason == StopReason::instruction_limit);
+    assert(registered.steps == 1U);
+    assert(core.state.cia == return_address);
+    assert(core.state.lr == lr_before);
+    assert(core.state.gpr == gprs_before);
+    assert(core.state.fpr == fprs_before);
+    assert(core.state.fpr_ps1 == ps1_before);
+    assert(core.state.cr == cr_before);
+    assert(core.state.xer == xer_before);
+    assert(core.state.ctr == ctr_before);
+    assert(core.state.fpscr == fpscr_before);
+    assert(core.guest_heap_cursor == heap_cursor_before);
+    assert(core.next_fs_client_handle == next_handle_before);
+    assert(core.fs_clients.size() == registrations_before.size());
+    for (std::size_t index = 0; index < registrations_before.size(); ++index)
+    {
+        assert(core.fs_clients[index].client_address ==
+               registrations_before[index].client_address);
+        assert(core.fs_clients[index].body_address ==
+               registrations_before[index].body_address);
+        assert(core.fs_clients[index].synthetic_handle ==
+               registrations_before[index].synthetic_handle);
+    }
+    assert(snapshot(core, client_a, client_size) == expected_a);
+    assert(snapshot(core, params, 12U) == input_before);
+    assert(snapshot(core, queue, 0x3CU) == queue_before);
+    assert(core.memory.read32_be(body_fsm_a) == 1U);
+    assert(core.memory.read32_be(body_fsm_a + 4U) == 1U);
+    assert(core.memory.read32_be(body_fsm_a + 0x0CU) == 0U);
+    assert(core.memory.read32_be(state_info_a + state_offset) == 0xC1C2C3C4U);
+
+    // Replacement refreshes the registered metadata but preserves the opaque
+    // embedded-message words and state field. The supplied real queue pointer
+    // is stored as-is and is not modified or used for delivery.
+    constexpr std::uint32_t replacement_params = params + 0x20U;
+    write_params(core, replacement_params, 0x02001000U, 0x11223344U, queue);
+    const auto replacement_input = snapshot(core, replacement_params, 12U);
+    auto expected_replacement = snapshot(core, client_a, client_size);
+    put_be32(expected_replacement,
+             body_a - client_a + fsm_offset + info_offset, 0x02001000U);
+    put_be32(expected_replacement,
+             body_a - client_a + fsm_offset + info_offset + 4U, 0x11223344U);
+    put_be32(expected_replacement,
+             body_a - client_a + fsm_offset + info_offset + 8U, queue);
+    put_be32(expected_replacement,
+             body_a - client_a + fsm_offset + info_offset + message_data_offset,
+             state_info_a);
+    put_be32(expected_replacement,
+             body_a - client_a + fsm_offset + info_offset + message_type_offset,
+             notification_message_type);
+    put_be32(expected_replacement,
+             body_a - client_a + fsm_offset + info_offset + client_pointer_offset,
+             client_a);
+    const RunResult replaced =
+        invoke(core, set_notification, client_a, replacement_params);
+    assert(replaced.reason == StopReason::instruction_limit);
+    assert(core.state.cia == return_address);
+    assert(snapshot(core, client_a, client_size) == expected_replacement);
+    assert(snapshot(core, replacement_params, 12U) == replacement_input);
+    assert(snapshot(core, queue, 0x3CU) == queue_before);
+    assert(core.memory.read32_be(state_info_a + state_offset) == 0xC1C2C3C4U);
+
+    // A null parameter pointer only clears the enable flag. All 0x24 bytes of
+    // the previous state-change info remain byte-for-byte unchanged.
+    const auto info_before_disable = snapshot(core, state_info_a, info_size);
+    auto expected_disabled = snapshot(core, client_a, client_size);
+    put_be32(expected_disabled, body_a - client_a + fsm_offset + enabled_offset, 0U);
+    const RunResult disabled = invoke(core, set_notification, client_a, 0U);
+    assert(disabled.reason == StopReason::instruction_limit);
+    assert(snapshot(core, client_a, client_size) == expected_disabled);
+    assert(snapshot(core, state_info_a, info_size) == info_before_disable);
+
+    // Re-enable with an all-zero parameter block: a non-null info pointer
+    // enables notifications even when callback, param, and queue are null.
+    constexpr std::uint32_t zero_params = params + 0x40U;
+    write_params(core, zero_params, 0U, 0U, 0U);
+    const auto zero_input = snapshot(core, zero_params, 12U);
+    auto expected_reenabled = snapshot(core, client_a, client_size);
+    put_be32(expected_reenabled, body_a - client_a + fsm_offset + enabled_offset, 1U);
+    put_be32(expected_reenabled, body_a - client_a + fsm_offset + info_offset, 0U);
+    put_be32(expected_reenabled, body_a - client_a + fsm_offset + info_offset + 4U, 0U);
+    put_be32(expected_reenabled, body_a - client_a + fsm_offset + info_offset + 8U, 0U);
+    put_be32(expected_reenabled,
+             body_a - client_a + fsm_offset + info_offset + message_data_offset,
+             state_info_a);
+    put_be32(expected_reenabled,
+             body_a - client_a + fsm_offset + info_offset + message_type_offset,
+             notification_message_type);
+    put_be32(expected_reenabled,
+             body_a - client_a + fsm_offset + info_offset + client_pointer_offset,
+             client_a);
+    const RunResult reenabled = invoke(core, set_notification, client_a, zero_params);
+    assert(reenabled.reason == StopReason::instruction_limit);
+    assert(snapshot(core, client_a, client_size) == expected_reenabled);
+    assert(snapshot(core, zero_params, 12U) == zero_input);
+    assert(core.memory.read32_be(state_info_a + state_offset) == 0xC1C2C3C4U);
+
+    // The second registered FSClient has independent state-change metadata.
+    constexpr std::uint32_t params_b = params + 0x60U;
+    write_params(core, params_b, 0x03002000U, 0x55667788U, 0x88776655U);
+    const auto client_a_before_b = snapshot(core, client_a, client_size);
+    auto expected_b = snapshot(core, client_b, client_size);
+    put_be32(expected_b, body_b - client_b + fsm_offset + enabled_offset, 1U);
+    put_be32(expected_b, body_b - client_b + fsm_offset + info_offset, 0x03002000U);
+    put_be32(expected_b, body_b - client_b + fsm_offset + info_offset + 4U,
+             0x55667788U);
+    put_be32(expected_b, body_b - client_b + fsm_offset + info_offset + 8U,
+             0x88776655U);
+    put_be32(expected_b, body_b - client_b + fsm_offset + info_offset +
+                             message_data_offset,
+             state_info_b);
+    put_be32(expected_b, body_b - client_b + fsm_offset + info_offset +
+                             message_type_offset,
+             notification_message_type);
+    put_be32(expected_b, body_b - client_b + fsm_offset + info_offset +
+                             client_pointer_offset,
+             client_b);
+    const RunResult registered_b = invoke(core, set_notification, client_b, params_b);
+    assert(registered_b.reason == StopReason::instruction_limit);
+    assert(snapshot(core, client_a, client_size) == client_a_before_b);
+    assert(snapshot(core, client_b, client_size) == expected_b);
+
+    // Invalid parameter memory faults before any client-side mutation.
+    const auto before_unmapped = snapshot(core, client_a, client_size);
+    core.state.cia = set_notification;
+    core.state.lr = return_address;
+    core.state.gpr[3] = client_a;
+    core.state.gpr[4] = 0x1FFF8U;
+    const RunResult unmapped_params = core.run(1U);
+    assert(unmapped_params.reason == StopReason::memory_fault);
+    assert(snapshot(core, client_a, client_size) == before_unmapped);
+
+    // Address-space wrap in the full 12-byte parameter read has the same
+    // transactional behavior.
+    core.state.cia = set_notification;
+    core.state.lr = return_address;
+    core.state.gpr[3] = client_a;
+    core.state.gpr[4] = 0xFFFFFFFCU;
+    const RunResult wrapping_params = core.run(1U);
+    assert(wrapping_params.reason == StopReason::memory_fault);
+    assert(snapshot(core, client_a, client_size) == before_unmapped);
+
+    // Null and unregistered client pointers are HLE contract errors and leave
+    // both registered clients untouched.
+    for (const std::uint32_t invalid_client : {0U, 0x7003U})
+    {
+        core.state.cia = set_notification;
+        core.state.lr = return_address;
+        core.state.gpr[3] = invalid_client;
+        core.state.gpr[4] = params;
+        const RunResult invalid = core.run(1U);
+        assert(invalid.reason == StopReason::hle_error);
+        assert(snapshot(core, client_a, client_size) == before_unmapped);
+        assert(snapshot(core, client_b, client_size) == expected_b);
+    }
+
+    EspressoCore uninitialized(0x8000U);
+    register_coreinit_hle(uninitialized.hle);
+    const std::uint32_t uninitialized_import = uninitialized.hle.bind_import(
+        "coreinit", "FSSetStateChangeNotification");
+    uninitialized.state.cia = uninitialized_import;
+    uninitialized.state.lr = return_address;
+    uninitialized.state.gpr[3] = client_a;
+    uninitialized.state.gpr[4] = 0U;
+    assert(uninitialized.run(1U).reason == StopReason::hle_error);
+    assert(uninitialized.memory.read8(0x100U) == 0U);
+}
+
 void os_get_system_time_hle_tests()
 {
     using Clock = std::chrono::system_clock;
@@ -10724,6 +11043,11 @@ int main(int argc, char* argv[])
                 constexpr std::uint32_t fs_client_body_mutex_offset = 0x1560U;
                 constexpr std::uint32_t fs_client_body_alarm_offset = 0x1590U;
                 constexpr std::uint32_t fs_client_body_link_offset = 0x1614U;
+                constexpr std::uint32_t fs_client_body_state_notification_fsm_offset =
+                    0x1448U;
+                constexpr std::uint32_t fs_state_notification_enabled_offset = 0x10U;
+                constexpr std::uint32_t fs_state_notification_info_offset = 0x14U;
+                constexpr std::uint32_t fs_state_notification_message_offset = 0x0CU;
                 const auto& registration = core.fs_clients.front();
                 const std::uint32_t body = registration.body_address;
                 std::cout << "FSAddClient: client=0x" << std::hex
@@ -10747,6 +11071,26 @@ int main(int argc, char* argv[])
                           << ",0x"
                           << core.memory.read32_be(body + fs_client_body_link_offset + 4U)
                           << ")" << std::dec << '\n';
+                const std::uint32_t fsm =
+                    body + fs_client_body_state_notification_fsm_offset;
+                const std::uint32_t info =
+                    fsm + fs_state_notification_info_offset;
+                std::cout << "FSSetStateChangeNotification: enabled="
+                          << core.memory.read32_be(
+                                 fsm + fs_state_notification_enabled_offset)
+                          << " callback=0x" << std::hex
+                          << core.memory.read32_be(info)
+                          << " param=0x" << core.memory.read32_be(info + 4U)
+                          << " queue=0x" << core.memory.read32_be(info + 8U)
+                          << " message.data=0x"
+                          << core.memory.read32_be(
+                                 info + fs_state_notification_message_offset)
+                          << " message.type=0x"
+                          << core.memory.read32_be(
+                                 info + fs_state_notification_message_offset + 0x0CU)
+                          << " client=0x" << core.memory.read32_be(info + 0x1CU)
+                          << " state=0x" << core.memory.read32_be(info + 0x20U)
+                          << std::dec << '\n';
             }
             std::cout << affogato::cpu::espresso::format_instruction_history(execution) << '\n';
         }
@@ -10791,6 +11135,7 @@ int main(int argc, char* argv[])
     os_get_system_info_hle_tests();
     fs_init_hle_tests();
     fs_add_client_hle_tests();
+    fs_set_state_change_notification_hle_tests();
     os_get_system_time_hle_tests();
     os_set_exception_callback_hle_tests();
     os_get_thread_priority_hle_tests();
