@@ -31,6 +31,7 @@ constexpr std::uint64_t guest_address_space_end = std::uint64_t{1} << 32U;
 constexpr std::uint32_t db_depth_control_register = 0x00028800U;
 constexpr std::uint32_t db_stencilrefmask_register = 0x00028430U;
 constexpr std::uint32_t db_stencilrefmask_bf_register = 0x00028434U;
+constexpr std::uint32_t pa_su_sc_mode_cntl_register = 0x00028814U;
 
 std::uint32_t pack_stencil_ref_mask(
     std::uint32_t mask,
@@ -40,6 +41,32 @@ std::uint32_t pack_stencil_ref_mask(
     return (reference & 0xFFU) |
            ((mask & 0xFFU) << 8U) |
            ((write_mask & 0xFFU) << 16U);
+}
+
+std::uint32_t pack_polygon_control(
+    std::uint32_t front_face,
+    std::uint32_t cull_front,
+    std::uint32_t cull_back,
+    std::uint32_t polygon_mode,
+    std::uint32_t polygon_mode_front,
+    std::uint32_t polygon_mode_back,
+    std::uint32_t polygon_offset_front_enable,
+    std::uint32_t polygon_offset_back_enable,
+    std::uint32_t polygon_offset_parallel_enable)
+{
+    const auto boolean_bit = [](std::uint32_t value) {
+        return value != 0U ? 1U : 0U;
+    };
+
+    return boolean_bit(cull_front) |
+           (boolean_bit(cull_back) << 1U) |
+           (boolean_bit(front_face) << 2U) |
+           ((polygon_mode & 0x3U) << 3U) |
+           ((polygon_mode_front & 0x7U) << 5U) |
+           ((polygon_mode_back & 0x7U) << 8U) |
+           (boolean_bit(polygon_offset_front_enable) << 11U) |
+           (boolean_bit(polygon_offset_back_enable) << 12U) |
+           (boolean_bit(polygon_offset_parallel_enable) << 13U);
 }
 
 struct ParsedGx2Attributes
@@ -350,6 +377,59 @@ void register_gx2_hle(HleDispatcher& dispatcher)
                 Gx2CommandType::set_context_register,
                 db_stencilrefmask_bf_register,
                 back_value});
+            // This API is void: preserve all guest CPU state and return via LR.
+        });
+
+    dispatcher.register_function(
+        "gx2",
+        "GX2SetPolygonControl",
+        [](EspressoCore& core) {
+            if (!core.gx2.initialized)
+            {
+                throw HleExecutionError(
+                    "gx2::GX2SetPolygonControl: GX2 has not been initialized");
+            }
+
+            const std::uint32_t front_face = core.state.gpr[3];
+            const std::uint32_t cull_front = core.state.gpr[4];
+            const std::uint32_t cull_back = core.state.gpr[5];
+            const std::uint32_t polygon_mode = core.state.gpr[6];
+            const std::uint32_t polygon_mode_front = core.state.gpr[7];
+            const std::uint32_t polygon_mode_back = core.state.gpr[8];
+            const std::uint32_t polygon_offset_front_enable = core.state.gpr[9];
+            const std::uint32_t polygon_offset_back_enable = core.state.gpr[10];
+
+            constexpr std::uint32_t stack_argument_offset = 0x08U;
+            const std::uint64_t stack_pointer = core.state.gpr[1];
+            const std::uint64_t stack_argument_address =
+                stack_pointer + stack_argument_offset;
+            if (stack_argument_address + sizeof(std::uint32_t) > guest_address_space_end)
+            {
+                throw HleExecutionError(
+                    "gx2::GX2SetPolygonControl: stack argument wraps guest address space");
+            }
+
+            // Gather the ninth ABI argument before touching the register mirror
+            // or command queue. GPR11 is not an argument register here.
+            const std::uint32_t polygon_offset_parallel_enable =
+                core.memory.read32_be(static_cast<std::uint32_t>(stack_argument_address));
+            const std::uint32_t packed = pack_polygon_control(
+                front_face,
+                cull_front,
+                cull_back,
+                polygon_mode,
+                polygon_mode_front,
+                polygon_mode_back,
+                polygon_offset_front_enable,
+                polygon_offset_back_enable,
+                polygon_offset_parallel_enable);
+
+            core.gx2.pa_su_sc_mode_cntl = packed;
+            core.gx2.pa_su_sc_mode_cntl_valid = true;
+            core.gx2.pending_commands.push_back({
+                Gx2CommandType::set_context_register,
+                pa_su_sc_mode_cntl_register,
+                packed});
             // This API is void: preserve all guest CPU state and return via LR.
         });
 }

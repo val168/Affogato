@@ -46,6 +46,8 @@ struct Gx2RuntimeState
     std::uint32_t db_stencilrefmask{};
     bool db_stencilrefmask_bf_valid{};
     std::uint32_t db_stencilrefmask_bf{};
+    bool pa_su_sc_mode_cntl_valid{};
+    std::uint32_t pa_su_sc_mode_cntl{};
     std::vector<Gx2Command> pending_commands;
 };
 

@@ -9767,6 +9767,7 @@ void gx2_init_hle_tests()
     assert(core.gx2.flip_request_count == 0U && core.gx2.flip_execute_count == 0U);
     assert(!core.gx2.db_stencilrefmask_valid && core.gx2.db_stencilrefmask == 0U);
     assert(!core.gx2.db_stencilrefmask_bf_valid && core.gx2.db_stencilrefmask_bf == 0U);
+    assert(!core.gx2.pa_su_sc_mode_cntl_valid && core.gx2.pa_su_sc_mode_cntl == 0U);
     assert(core.gx2.pending_commands.empty());
     assert(core.state.gpr == gprs_before);
     assert(core.state.fpr == fprs_before && core.state.fpr_ps1 == ps1_before);
@@ -10559,6 +10560,304 @@ void gx2_set_stencil_mask_hle_tests()
     assert(core.gx2.db_stencilrefmask_bf == 0U);
     assert(!core.gx2.db_depth_control_valid);
     assert(core.gx2.db_depth_control == 0U);
+    assert(core.gx2.pending_commands.empty());
+}
+
+void gx2_set_polygon_control_hle_tests()
+{
+    constexpr std::uint32_t return_address = 0x02750828U;
+    constexpr std::uint32_t pool_address = 0x8000U;
+    constexpr std::uint32_t stack_pointer = 0x100FED30U;
+    constexpr std::uint32_t polygon_argument_address = stack_pointer + 0x08U;
+    constexpr std::uint32_t db_depth_control_address = 0x00028800U;
+    constexpr std::uint32_t db_stencilrefmask_address = 0x00028430U;
+    constexpr std::uint32_t db_stencilrefmask_bf_address = 0x00028434U;
+    constexpr std::uint32_t pa_su_sc_mode_cntl_address = 0x00028814U;
+
+    const auto invoke = [](EspressoCore& core, std::uint32_t import) {
+        core.state.cia = import;
+        core.state.lr = return_address;
+        return core.run(1U);
+    };
+    const auto set_arguments = [](EspressoCore& core,
+                                  const std::array<std::uint32_t, 8>& values) {
+        for (std::size_t index = 0; index < values.size(); ++index)
+        {
+            core.state.gpr[index + 3U] = values[index];
+        }
+    };
+
+    EspressoCore core(0x20000U);
+    core.memory.map_region(stack_pointer, 0x20U);
+    register_gx2_hle(core.hle);
+    const std::uint32_t depth_import = core.hle.bind_import(
+        "gx2", "GX2SetDepthStencilControl");
+    const std::uint32_t stencil_import = core.hle.bind_import(
+        "gx2", "GX2SetStencilMask");
+    const std::uint32_t polygon_import = core.hle.bind_import(
+        "gx2", "GX2SetPolygonControl");
+    const std::uint32_t wrong_library = core.hle.bind_import(
+        "coreinit", "GX2SetPolygonControl");
+    core.gx2.initialized = true;
+    core.gx2.main_core_id = 1U;
+    core.gx2.command_buffer_pool_base = pool_address;
+    core.gx2.command_buffer_pool_size = 0x8000U;
+    core.gx2.command_buffer_pool_owned = false;
+
+    // Build the exact preceding logical command sequence with the existing
+    // depth-control and stencil-mask handlers.
+    core.state.gpr[1] = stack_pointer;
+    set_arguments(core, {1U, 1U, 3U, 0U, 0U, 0U, 0U, 0U});
+    for (std::uint32_t offset = 0x08U; offset <= 0x18U; offset += 4U)
+    {
+        core.memory.write32_be(stack_pointer + offset, 0U);
+    }
+    assert(invoke(core, depth_import).reason == StopReason::instruction_limit);
+    set_arguments(core, {0xFFU, 0xFFU, 0U, 0xFFU, 0xFFU, 0U, 0U, 0U});
+    assert(invoke(core, stencil_import).reason == StopReason::instruction_limit);
+    assert(core.gx2.pending_commands.size() == 3U);
+    assert(core.gx2.db_depth_control_valid && core.gx2.db_depth_control == 0x36U);
+    assert(core.gx2.db_stencilrefmask_valid &&
+           core.gx2.db_stencilrefmask == 0x00FFFF00U);
+    assert(core.gx2.db_stencilrefmask_bf_valid &&
+           core.gx2.db_stencilrefmask_bf == 0x00FFFF00U);
+
+    core.memory.write8(pool_address, 0xA5U);
+    core.memory.write8(pool_address + 0x4000U, 0x5AU);
+    core.memory.write8(pool_address + 0x7FFFU, 0xC3U);
+    for (std::size_t index = 0; index < core.state.gpr.size(); ++index)
+    {
+        core.state.gpr[index] = 0xC7000000U + static_cast<std::uint32_t>(index) * 0x101U;
+    }
+    for (std::size_t index = 0; index < core.state.fpr.size(); ++index)
+    {
+        core.state.fpr[index] = 0x5555000000000000ULL + index;
+        core.state.fpr_ps1[index] = 0x6666000000000000ULL + index;
+    }
+    core.state.cr = 0x12345678U;
+    core.state.xer = 0xA5A55A5AU;
+    core.state.ctr = 0x87654321U;
+    core.state.fpscr = 0x5A5AA55AU;
+    core.state.gpr[1] = stack_pointer;
+    set_arguments(core, {0U, 0U, 1U, 0U, 2U, 2U, 0U, 0U});
+    core.state.gpr[11] = 0xFFFFFFFFU; // Not the ninth ABI argument.
+    core.memory.write32_be(polygon_argument_address, 0U);
+
+    const auto gprs_before = core.state.gpr;
+    const auto fprs_before = core.state.fpr;
+    const auto ps1_before = core.state.fpr_ps1;
+    const std::uint32_t cr_before = core.state.cr;
+    const std::uint32_t xer_before = core.state.xer;
+    const std::uint32_t ctr_before = core.state.ctr;
+    const std::uint32_t fpscr_before = core.state.fpscr;
+    const std::uint32_t lr_before = return_address;
+    const Gx2RuntimeState gx2_before = core.gx2;
+    const std::uint32_t heap_cursor_before = core.guest_heap_cursor;
+    const std::uint32_t heap_limit_before = core.guest_heap_limit;
+    const auto heap_handles_before = core.base_heap_handles;
+    const std::uint32_t mem2_begin_before = core.mem2_heap_region_begin;
+    const std::uint32_t mem2_end_before = core.mem2_heap_region_end;
+    const bool fs_initialized_before = core.fs_initialized;
+    const auto fs_clients_before = core.fs_clients;
+    const bool save_initialized_before = core.nn_save_initialized;
+    std::vector<std::uint8_t> flat_memory_before(core.memory.size());
+    core.memory.read_bytes(0U, flat_memory_before);
+    std::array<std::uint8_t, 0x20U> stack_bytes_before{};
+    core.memory.read_bytes(stack_pointer, stack_bytes_before);
+
+    const RunResult wind_waker_result = invoke(core, polygon_import);
+    assert(wind_waker_result.reason == StopReason::instruction_limit);
+    assert(wind_waker_result.steps == 1U);
+    assert(core.gx2.pa_su_sc_mode_cntl_valid);
+    assert(core.gx2.pa_su_sc_mode_cntl == 0x00000242U);
+    assert(core.gx2.pending_commands.size() == 4U);
+    assert(core.gx2.pending_commands[0].register_address == db_depth_control_address);
+    assert(core.gx2.pending_commands[0].value == 0x00000036U);
+    assert(core.gx2.pending_commands[1].register_address == db_stencilrefmask_address);
+    assert(core.gx2.pending_commands[1].value == 0x00FFFF00U);
+    assert(core.gx2.pending_commands[2].register_address == db_stencilrefmask_bf_address);
+    assert(core.gx2.pending_commands[2].value == 0x00FFFF00U);
+    assert(core.gx2.pending_commands[3].type == Gx2CommandType::set_context_register);
+    assert(core.gx2.pending_commands[3].register_address == pa_su_sc_mode_cntl_address);
+    assert(core.gx2.pending_commands[3].value == 0x00000242U);
+    assert(core.state.gpr == gprs_before);
+    assert(core.state.fpr == fprs_before && core.state.fpr_ps1 == ps1_before);
+    assert(core.state.cr == cr_before && core.state.xer == xer_before);
+    assert(core.state.ctr == ctr_before && core.state.fpscr == fpscr_before);
+    assert(core.state.lr == lr_before && core.state.cia == return_address);
+    assert(core.gx2.initialized == gx2_before.initialized);
+    assert(core.gx2.main_core_id == gx2_before.main_core_id);
+    assert(core.gx2.command_buffer_pool_base == gx2_before.command_buffer_pool_base);
+    assert(core.gx2.command_buffer_pool_size == gx2_before.command_buffer_pool_size);
+    assert(core.gx2.command_buffer_pool_owned == gx2_before.command_buffer_pool_owned);
+    assert(core.gx2.argc == gx2_before.argc && core.gx2.argv == gx2_before.argv);
+    assert(core.gx2.profile_mode == gx2_before.profile_mode);
+    assert(core.gx2.toss_stage == gx2_before.toss_stage);
+    assert(core.gx2.app_io_thread_stack_size == gx2_before.app_io_thread_stack_size);
+    assert(core.gx2.gpu_timeout_ms == gx2_before.gpu_timeout_ms);
+    assert(core.gx2.hang_state == gx2_before.hang_state);
+    assert(core.gx2.hang_response == gx2_before.hang_response);
+    assert(core.gx2.hang_reset_swap_timeout == gx2_before.hang_reset_swap_timeout);
+    assert(core.gx2.hang_reset_swaps_outstanding ==
+           gx2_before.hang_reset_swaps_outstanding);
+    assert(core.gx2.swap_interval == gx2_before.swap_interval);
+    assert(core.gx2.flip_request_count == gx2_before.flip_request_count);
+    assert(core.gx2.flip_execute_count == gx2_before.flip_execute_count);
+    assert(core.gx2.db_depth_control_valid == gx2_before.db_depth_control_valid);
+    assert(core.gx2.db_depth_control == gx2_before.db_depth_control);
+    assert(core.gx2.db_stencilrefmask_valid == gx2_before.db_stencilrefmask_valid);
+    assert(core.gx2.db_stencilrefmask == gx2_before.db_stencilrefmask);
+    assert(core.gx2.db_stencilrefmask_bf_valid == gx2_before.db_stencilrefmask_bf_valid);
+    assert(core.gx2.db_stencilrefmask_bf == gx2_before.db_stencilrefmask_bf);
+    assert(core.guest_heap_cursor == heap_cursor_before);
+    assert(core.guest_heap_limit == heap_limit_before);
+    assert(core.base_heap_handles == heap_handles_before);
+    assert(core.mem2_heap_region_begin == mem2_begin_before);
+    assert(core.mem2_heap_region_end == mem2_end_before);
+    assert(core.fs_initialized == fs_initialized_before);
+    assert(core.fs_clients.size() == fs_clients_before.size());
+    assert(core.nn_save_initialized == save_initialized_before);
+    std::vector<std::uint8_t> flat_memory_after(core.memory.size());
+    core.memory.read_bytes(0U, flat_memory_after);
+    assert(flat_memory_after == flat_memory_before);
+    std::array<std::uint8_t, 0x20U> stack_bytes_after{};
+    core.memory.read_bytes(stack_pointer, stack_bytes_after);
+    assert(stack_bytes_after == stack_bytes_before);
+    assert(core.memory.read8(pool_address) == 0xA5U);
+    assert(core.memory.read8(pool_address + 0x4000U) == 0x5AU);
+    assert(core.memory.read8(pool_address + 0x7FFFU) == 0xC3U);
+
+    // Distinct fields verify all bit positions and that arg9 comes from the
+    // stack, not contradictory scratch-register r11.
+    set_arguments(core, {1U, 1U, 0U, 1U, 1U, 2U, 1U, 0U});
+    core.state.gpr[11] = 0U;
+    core.memory.write32_be(polygon_argument_address, 1U);
+    assert(invoke(core, polygon_import).reason == StopReason::instruction_limit);
+    assert(core.gx2.pa_su_sc_mode_cntl == 0x00002A2DU);
+    assert(core.gx2.pending_commands.size() == 5U);
+    assert(core.gx2.pending_commands[4].register_address == pa_su_sc_mode_cntl_address);
+    assert(core.gx2.pending_commands[4].value == 0x00002A2DU);
+    core.memory.write32_be(polygon_argument_address, 0U);
+    assert(invoke(core, polygon_import).reason == StopReason::instruction_limit);
+    assert(core.gx2.pa_su_sc_mode_cntl == 0x00000A2DU);
+
+    // Decaf forwards polyMode into the two-bit hardware field. Exercise its
+    // truncation alongside boolean normalization and the three-bit enums.
+    set_arguments(core, {
+        0x12345678U, 2U, 0xFFFFFFFFU, 3U,
+        0xFFFFFFFAU, 0xFFFFFFF9U, 2U, 3U});
+    core.state.gpr[11] = 0xFFFFFFFFU;
+    core.memory.write32_be(polygon_argument_address, 0xFFFFFFFFU);
+    assert(invoke(core, polygon_import).reason == StopReason::instruction_limit);
+    assert(core.gx2.pa_su_sc_mode_cntl == 0x0000395FU);
+
+    set_arguments(core, {0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U});
+    core.memory.write32_be(polygon_argument_address, 0U);
+    assert(invoke(core, polygon_import).reason == StopReason::instruction_limit);
+    assert(core.gx2.pa_su_sc_mode_cntl_valid);
+    assert(core.gx2.pa_su_sc_mode_cntl == 0U);
+    assert(core.gx2.pending_commands.back().value == 0U);
+    const std::size_t command_count_before_repeat = core.gx2.pending_commands.size();
+    assert(invoke(core, polygon_import).reason == StopReason::instruction_limit);
+    assert(core.gx2.pending_commands.size() == command_count_before_repeat + 1U);
+
+    EspressoCore uninitialized(0x1000U);
+    register_gx2_hle(uninitialized.hle);
+    const std::uint32_t uninitialized_import = uninitialized.hle.bind_import(
+        "gx2", "GX2SetPolygonControl");
+    uninitialized.state.gpr[1] = 0xFFFFFFFFU;
+    set_arguments(uninitialized, {1U, 1U, 1U, 1U, 1U, 1U, 1U, 1U});
+    const auto uninitialized_gprs = uninitialized.state.gpr;
+    const RunResult uninitialized_result = invoke(uninitialized, uninitialized_import);
+    assert(uninitialized_result.reason == StopReason::hle_error);
+    assert(uninitialized_result.detail.find("gx2::GX2SetPolygonControl") !=
+           std::string::npos);
+    assert(uninitialized.state.gpr == uninitialized_gprs);
+    assert(!uninitialized.gx2.pa_su_sc_mode_cntl_valid);
+    assert(uninitialized.gx2.pa_su_sc_mode_cntl == 0U);
+    assert(uninitialized.gx2.pending_commands.empty());
+
+    EspressoCore unmapped(0x1000U);
+    register_gx2_hle(unmapped.hle);
+    const std::uint32_t unmapped_import = unmapped.hle.bind_import(
+        "gx2", "GX2SetPolygonControl");
+    unmapped.gx2.initialized = true;
+    unmapped.gx2.pa_su_sc_mode_cntl_valid = true;
+    unmapped.gx2.pa_su_sc_mode_cntl = 0xDEADBEEFU;
+    unmapped.gx2.pending_commands.push_back({
+        Gx2CommandType::set_context_register, pa_su_sc_mode_cntl_address, 0xDEADBEEFU});
+    const Gx2RuntimeState unmapped_gx2_before = unmapped.gx2;
+    unmapped.state.gpr[1] = 0x1FF8U;
+    const auto unmapped_gprs = unmapped.state.gpr;
+    const RunResult unmapped_result = invoke(unmapped, unmapped_import);
+    assert(unmapped_result.reason == StopReason::memory_fault);
+    assert(unmapped.state.gpr == unmapped_gprs);
+    assert(unmapped.gx2.pa_su_sc_mode_cntl_valid ==
+           unmapped_gx2_before.pa_su_sc_mode_cntl_valid);
+    assert(unmapped.gx2.pa_su_sc_mode_cntl == unmapped_gx2_before.pa_su_sc_mode_cntl);
+    assert(unmapped.gx2.pending_commands.size() ==
+           unmapped_gx2_before.pending_commands.size());
+    assert(unmapped.gx2.pending_commands[0].value ==
+           unmapped_gx2_before.pending_commands[0].value);
+
+    EspressoCore wrapping(0x1000U);
+    register_gx2_hle(wrapping.hle);
+    const std::uint32_t wrapping_import = wrapping.hle.bind_import(
+        "gx2", "GX2SetPolygonControl");
+    wrapping.gx2.initialized = true;
+    wrapping.gx2.pa_su_sc_mode_cntl_valid = true;
+    wrapping.gx2.pa_su_sc_mode_cntl = 0xDEADBEEFU;
+    wrapping.gx2.pending_commands.push_back({
+        Gx2CommandType::set_context_register, pa_su_sc_mode_cntl_address, 0xDEADBEEFU});
+    wrapping.state.gpr[1] = 0xFFFFFFF8U;
+    const RunResult wrapping_result = invoke(wrapping, wrapping_import);
+    assert(wrapping_result.reason == StopReason::hle_error);
+    assert(wrapping_result.detail.find("wraps guest address space") != std::string::npos);
+    assert(wrapping.gx2.pa_su_sc_mode_cntl_valid);
+    assert(wrapping.gx2.pa_su_sc_mode_cntl == 0xDEADBEEFU);
+    assert(wrapping.gx2.pending_commands.size() == 1U);
+    assert(wrapping.gx2.pending_commands[0].value == 0xDEADBEEFU);
+
+    // A mapping of exactly four bytes is sufficient; there is no later stack
+    // read after argument nine.
+    EspressoCore boundary(0x100U);
+    boundary.memory.map_region(0x2000U, sizeof(std::uint32_t));
+    boundary.memory.write32_be(0x2000U, 1U);
+    register_gx2_hle(boundary.hle);
+    const std::uint32_t boundary_import = boundary.hle.bind_import(
+        "gx2", "GX2SetPolygonControl");
+    boundary.gx2.initialized = true;
+    boundary.state.gpr[1] = 0x1FF8U;
+    set_arguments(boundary, {0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U});
+    assert(invoke(boundary, boundary_import).reason == StopReason::instruction_limit);
+    assert(boundary.gx2.pa_su_sc_mode_cntl == 0x00002000U);
+
+    EspressoCore independent(0x1000U);
+    register_gx2_hle(independent.hle);
+    independent.gx2.initialized = true;
+    const std::uint32_t independent_import = independent.hle.bind_import(
+        "gx2", "GX2SetPolygonControl");
+    independent.state.gpr[1] = 0x100U;
+    independent.memory.write32_be(0x108U, 0U);
+    set_arguments(independent, {0U, 0U, 1U, 0U, 2U, 2U, 0U, 0U});
+    assert(invoke(independent, independent_import).reason == StopReason::instruction_limit);
+    assert(independent.gx2.pa_su_sc_mode_cntl_valid);
+    assert(independent.gx2.pa_su_sc_mode_cntl == 0x242U);
+    assert(independent.gx2.pending_commands.size() == 1U);
+    assert(core.gx2.pa_su_sc_mode_cntl_valid);
+    assert(core.gx2.pa_su_sc_mode_cntl == 0U);
+    assert(core.gx2.pending_commands.size() == command_count_before_repeat + 1U);
+
+    core.state.cia = wrong_library;
+    core.state.lr = return_address;
+    const RunResult wrong_library_result = core.run(1U);
+    assert(wrong_library_result.reason == StopReason::unimplemented_hle_call);
+    assert(wrong_library_result.hle_call == "coreinit::GX2SetPolygonControl");
+
+    core.reset();
+    assert(!core.gx2.initialized);
+    assert(!core.gx2.pa_su_sc_mode_cntl_valid);
+    assert(core.gx2.pa_su_sc_mode_cntl == 0U);
     assert(core.gx2.pending_commands.empty());
 }
 
@@ -13027,6 +13326,7 @@ int main(int argc, char* argv[])
     gx2_init_hle_tests();
     gx2_set_depth_stencil_control_hle_tests();
     gx2_set_stencil_mask_hle_tests();
+    gx2_set_polygon_control_hle_tests();
     mem_get_total_free_size_for_exp_heap_hle_tests();
     mem_get_allocatable_size_for_exp_heap_ex_hle_tests();
     compare_and_conditional_branch_tests();
