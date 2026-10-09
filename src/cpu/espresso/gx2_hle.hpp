@@ -1,11 +1,24 @@
 #pragma once
 
 #include <cstdint>
+#include <vector>
 
 namespace affogato::cpu::espresso
 {
 
 class HleDispatcher;
+
+enum class Gx2CommandType
+{
+    set_context_register,
+};
+
+struct Gx2Command
+{
+    Gx2CommandType type{};
+    std::uint32_t register_address{};
+    std::uint32_t value{};
+};
 
 struct Gx2RuntimeState
 {
@@ -27,6 +40,9 @@ struct Gx2RuntimeState
     std::uint32_t swap_interval{};
     std::uint32_t flip_request_count{};
     std::uint32_t flip_execute_count{};
+    bool db_depth_control_valid{};
+    std::uint32_t db_depth_control{};
+    std::vector<Gx2Command> pending_commands;
 };
 
 void register_gx2_hle(HleDispatcher& dispatcher);

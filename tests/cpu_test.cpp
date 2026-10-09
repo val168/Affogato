@@ -10071,6 +10071,248 @@ void gx2_init_hle_tests()
     assert(emulator.core().gx2.command_buffer_pool_size == 0x00400000U);
 }
 
+void gx2_set_depth_stencil_control_hle_tests()
+{
+    constexpr std::uint32_t return_address = 0x027507BCU;
+    constexpr std::uint32_t stack_address = 0x3000U;
+    constexpr std::uint32_t pool_address = 0x8000U;
+    constexpr std::uint32_t db_depth_control_address = 0x00028800U;
+
+    const auto invoke = [](EspressoCore& core, std::uint32_t import) {
+        core.state.cia = import;
+        core.state.lr = return_address;
+        return core.run(1U);
+    };
+    const auto write_stack_arguments = [](EspressoCore& core,
+                                          std::uint32_t address,
+                                          const std::array<std::uint32_t, 5>& values) {
+        for (std::size_t index = 0; index < values.size(); ++index)
+        {
+            core.memory.write32_be(
+                address + 0x08U + static_cast<std::uint32_t>(index * 4U),
+                values[index]);
+        }
+    };
+    const auto set_first_eight_arguments = [](EspressoCore& core,
+                                               const std::array<std::uint32_t, 8>& values) {
+        for (std::size_t index = 0; index < values.size(); ++index)
+        {
+            core.state.gpr[index + 3U] = values[index];
+        }
+    };
+
+    EspressoCore core(0x20000U);
+    register_gx2_hle(core.hle);
+    const std::uint32_t gx2_init = core.hle.bind_import("gx2", "GX2Init");
+    const std::uint32_t setter = core.hle.bind_import(
+        "gx2", "GX2SetDepthStencilControl");
+    const std::uint32_t wrong_library = core.hle.bind_import(
+        "coreinit", "GX2SetDepthStencilControl");
+
+    // Initialize GX2 through its real HLE before testing the setter.
+    core.memory.write32_be(0x100U, 1U);
+    core.memory.write32_be(0x104U, pool_address);
+    core.memory.write32_be(0x108U, 2U);
+    core.memory.write32_be(0x10CU, 0x8000U);
+    core.memory.write32_be(0x110U, 0U);
+    core.state.gpr[3] = 0x100U;
+    assert(invoke(core, gx2_init).reason == StopReason::instruction_limit);
+    assert(core.gx2.initialized);
+
+    // The setter may append a modeled command, but must not alter GX2
+    // initialization, pool ownership, or any other lifecycle state.
+    core.gx2.pending_commands.push_back({
+        Gx2CommandType::set_context_register, 0x00028804U, 0xCAFEBABEU});
+    core.memory.write8(pool_address, 0xA5U);
+    core.memory.write8(pool_address + 0x4000U, 0x5AU);
+    core.memory.write8(pool_address + 0x7FFFU, 0xC3U);
+    core.state.gpr[1] = stack_address;
+    write_stack_arguments(core, stack_address, {0U, 0U, 0U, 0U, 0U});
+    for (std::size_t index = 0; index < core.state.gpr.size(); ++index)
+    {
+        core.state.gpr[index] = 0xA5000000U + static_cast<std::uint32_t>(index) * 0x101U;
+    }
+    for (std::size_t index = 0; index < core.state.fpr.size(); ++index)
+    {
+        core.state.fpr[index] = 0x1111000000000000ULL + index;
+        core.state.fpr_ps1[index] = 0x2222000000000000ULL + index;
+    }
+    core.state.gpr[1] = stack_address;
+    set_first_eight_arguments(core, {1U, 1U, 3U, 0U, 0U, 0U, 0U, 0U});
+    const auto gprs_before = core.state.gpr;
+    const auto fprs_before = core.state.fpr;
+    const auto ps1_before = core.state.fpr_ps1;
+    const std::uint32_t cr_before = core.state.cr = 0x12345678U;
+    const std::uint32_t xer_before = core.state.xer = 0xA5A55A5AU;
+    const std::uint32_t ctr_before = core.state.ctr = 0x87654321U;
+    const std::uint32_t fpscr_before = core.state.fpscr = 0x5A5AA55AU;
+    const std::uint32_t lr_before = return_address;
+    const Gx2RuntimeState lifecycle_before = core.gx2;
+    std::vector<std::uint8_t> guest_memory_before(core.memory.size());
+    core.memory.read_bytes(0U, guest_memory_before);
+
+    const RunResult wind_waker_result = invoke(core, setter);
+    assert(wind_waker_result.reason == StopReason::instruction_limit);
+    assert(wind_waker_result.steps == 1U);
+    assert(core.gx2.db_depth_control_valid);
+    assert(core.gx2.db_depth_control == 0x00000036U);
+    assert(core.gx2.pending_commands.size() == 2U);
+    assert(core.gx2.pending_commands[0].register_address == 0x00028804U);
+    assert(core.gx2.pending_commands[0].value == 0xCAFEBABEU);
+    assert(core.gx2.pending_commands[1].type == Gx2CommandType::set_context_register);
+    assert(core.gx2.pending_commands[1].register_address == db_depth_control_address);
+    assert(core.gx2.pending_commands[1].value == 0x00000036U);
+    assert(core.state.gpr == gprs_before);
+    assert(core.state.fpr == fprs_before && core.state.fpr_ps1 == ps1_before);
+    assert(core.state.cr == cr_before && core.state.xer == xer_before);
+    assert(core.state.ctr == ctr_before && core.state.fpscr == fpscr_before);
+    assert(core.state.lr == lr_before && core.state.cia == return_address);
+    assert(core.gx2.initialized == lifecycle_before.initialized);
+    assert(core.gx2.main_core_id == lifecycle_before.main_core_id);
+    assert(core.gx2.command_buffer_pool_base == lifecycle_before.command_buffer_pool_base);
+    assert(core.gx2.command_buffer_pool_size == lifecycle_before.command_buffer_pool_size);
+    assert(core.gx2.command_buffer_pool_owned == lifecycle_before.command_buffer_pool_owned);
+    assert(core.gx2.argc == lifecycle_before.argc && core.gx2.argv == lifecycle_before.argv);
+    assert(core.gx2.profile_mode == lifecycle_before.profile_mode);
+    assert(core.gx2.toss_stage == lifecycle_before.toss_stage);
+    assert(core.gx2.app_io_thread_stack_size == lifecycle_before.app_io_thread_stack_size);
+    assert(core.gx2.gpu_timeout_ms == lifecycle_before.gpu_timeout_ms);
+    assert(core.gx2.hang_state == lifecycle_before.hang_state);
+    assert(core.gx2.hang_response == lifecycle_before.hang_response);
+    assert(core.gx2.hang_reset_swap_timeout == lifecycle_before.hang_reset_swap_timeout);
+    assert(core.gx2.hang_reset_swaps_outstanding ==
+           lifecycle_before.hang_reset_swaps_outstanding);
+    assert(core.gx2.swap_interval == lifecycle_before.swap_interval);
+    assert(core.gx2.flip_request_count == lifecycle_before.flip_request_count);
+    assert(core.gx2.flip_execute_count == lifecycle_before.flip_execute_count);
+    assert(core.memory.read8(pool_address) == 0xA5U);
+    assert(core.memory.read8(pool_address + 0x4000U) == 0x5AU);
+    assert(core.memory.read8(pool_address + 0x7FFFU) == 0xC3U);
+    std::vector<std::uint8_t> guest_memory_after(core.memory.size());
+    core.memory.read_bytes(0U, guest_memory_after);
+    assert(guest_memory_after == guest_memory_before);
+
+    // Distinct field values make the stack-argument order observable. In
+    // particular, the API presents ZPass/ZFail/Fail while the packed register
+    // stores Fail/ZPass/ZFail.
+    set_first_eight_arguments(core, {
+        1U, 0U, 0xFFFFFFFEU, 1U, 1U, 0xFFFFFFFDU, 6U, 7U});
+    write_stack_arguments(core, stack_address, {
+        0xFFFFFFFAU, 0xFFFFFFFCU, 0xFFFFFFFBU, 0xFFFFFFFCU, 0xFFFFFFFDU});
+    const RunResult full_field_result = invoke(core, setter);
+    assert(full_field_result.reason == StopReason::instruction_limit);
+    assert(core.gx2.db_depth_control == 0x8ECF95E3U);
+    assert(core.gx2.pending_commands.size() == 3U);
+    assert(core.gx2.pending_commands[2].register_address == db_depth_control_address);
+    assert(core.gx2.pending_commands[2].value == 0x8ECF95E3U);
+
+    // Repeating an identical call still emits an ordered command; it is not
+    // coalesced into the state mirror.
+    const RunResult repeated_result = invoke(core, setter);
+    assert(repeated_result.reason == StopReason::instruction_limit);
+    assert(core.gx2.pending_commands.size() == 4U);
+    assert(core.gx2.pending_commands[3].value == 0x8ECF95E3U);
+    assert(core.gx2.db_depth_control == 0x8ECF95E3U);
+
+    // BOOL arguments normalize any nonzero value to one.
+    set_first_eight_arguments(core, {0xFFFFFFFFU, 2U, 0U, 3U, 4U, 0U, 0U, 0U});
+    write_stack_arguments(core, stack_address, {0U, 0U, 0U, 0U, 0U});
+    assert(invoke(core, setter).reason == StopReason::instruction_limit);
+    assert(core.gx2.db_depth_control == 0x00000087U);
+
+    // A second EspressoCore has its own state and command sequence.
+    EspressoCore independent(0x10000U);
+    register_gx2_hle(independent.hle);
+    const std::uint32_t independent_setter = independent.hle.bind_import(
+        "gx2", "GX2SetDepthStencilControl");
+    independent.gx2.initialized = true;
+    independent.state.gpr[1] = 0x1000U;
+    write_stack_arguments(independent, 0x1000U, {0U, 0U, 0U, 0U, 0U});
+    assert(invoke(independent, independent_setter).reason == StopReason::instruction_limit);
+    assert(independent.gx2.pending_commands.size() == 1U);
+    assert(independent.gx2.db_depth_control_valid);
+    assert(core.gx2.pending_commands.size() == 5U);
+
+    // Initialization is mandatory and checked before even consulting the
+    // caller's stack pointer or changing the command/register state.
+    EspressoCore uninitialized(0x1000U);
+    register_gx2_hle(uninitialized.hle);
+    const std::uint32_t uninitialized_setter = uninitialized.hle.bind_import(
+        "gx2", "GX2SetDepthStencilControl");
+    uninitialized.state.gpr[1] = 0xFFFFFFFFU;
+    uninitialized.state.gpr[3] = 0xDEADBEEFU;
+    const auto uninitialized_gprs = uninitialized.state.gpr;
+    const RunResult uninitialized_result = invoke(uninitialized, uninitialized_setter);
+    assert(uninitialized_result.reason == StopReason::hle_error);
+    assert(uninitialized_result.detail.find("gx2::GX2SetDepthStencilControl") !=
+           std::string::npos);
+    assert(uninitialized.state.gpr == uninitialized_gprs);
+    assert(!uninitialized.gx2.db_depth_control_valid);
+    assert(uninitialized.gx2.pending_commands.empty());
+
+    // Guest-memory faults while reading stack arguments happen before any GX2
+    // mutation. The final word crosses out of this core's mapped flat memory.
+    EspressoCore unmapped_stack(0x20000U);
+    register_gx2_hle(unmapped_stack.hle);
+    const std::uint32_t unmapped_setter = unmapped_stack.hle.bind_import(
+        "gx2", "GX2SetDepthStencilControl");
+    unmapped_stack.gx2.initialized = true;
+    unmapped_stack.gx2.db_depth_control_valid = true;
+    unmapped_stack.gx2.db_depth_control = 0x12345678U;
+    unmapped_stack.gx2.pending_commands.push_back({
+        Gx2CommandType::set_context_register, 0x28800U, 0x12345678U});
+    const Gx2RuntimeState unmapped_gx2_before = unmapped_stack.gx2;
+    unmapped_stack.state.gpr[1] = 0x1FFF0U;
+    set_first_eight_arguments(unmapped_stack, {1U, 1U, 3U, 1U, 1U, 1U, 1U, 1U});
+    const auto unmapped_gprs = unmapped_stack.state.gpr;
+    const RunResult unmapped_result = invoke(unmapped_stack, unmapped_setter);
+    assert(unmapped_result.reason == StopReason::memory_fault);
+    assert(unmapped_stack.state.gpr == unmapped_gprs);
+    assert(unmapped_stack.gx2.db_depth_control_valid ==
+           unmapped_gx2_before.db_depth_control_valid);
+    assert(unmapped_stack.gx2.db_depth_control == unmapped_gx2_before.db_depth_control);
+    assert(unmapped_stack.gx2.pending_commands.size() ==
+           unmapped_gx2_before.pending_commands.size());
+    assert(unmapped_stack.gx2.pending_commands[0].value ==
+           unmapped_gx2_before.pending_commands[0].value);
+
+    EspressoCore wrapping_stack(0x1000U);
+    register_gx2_hle(wrapping_stack.hle);
+    const std::uint32_t wrapping_setter = wrapping_stack.hle.bind_import(
+        "gx2", "GX2SetDepthStencilControl");
+    wrapping_stack.gx2.initialized = true;
+    wrapping_stack.gx2.db_depth_control_valid = true;
+    wrapping_stack.gx2.db_depth_control = 0x87654321U;
+    wrapping_stack.gx2.pending_commands.push_back({
+        Gx2CommandType::set_context_register, 0x28800U, 0x87654321U});
+    const Gx2RuntimeState wrapping_gx2_before = wrapping_stack.gx2;
+    wrapping_stack.state.gpr[1] = 0xFFFFFFF0U;
+    const auto wrapping_gprs = wrapping_stack.state.gpr;
+    const RunResult wrapping_result = invoke(wrapping_stack, wrapping_setter);
+    assert(wrapping_result.reason == StopReason::hle_error);
+    assert(wrapping_result.detail.find("wrap guest address space") != std::string::npos);
+    assert(wrapping_stack.state.gpr == wrapping_gprs);
+    assert(wrapping_stack.gx2.db_depth_control_valid ==
+           wrapping_gx2_before.db_depth_control_valid);
+    assert(wrapping_stack.gx2.db_depth_control == wrapping_gx2_before.db_depth_control);
+    assert(wrapping_stack.gx2.pending_commands.size() ==
+           wrapping_gx2_before.pending_commands.size());
+    assert(wrapping_stack.gx2.pending_commands[0].value ==
+           wrapping_gx2_before.pending_commands[0].value);
+
+    // Import names are exact: this symbol belongs to gx2, not coreinit.
+    core.state.cia = wrong_library;
+    core.state.lr = return_address;
+    const RunResult wrong_library_result = core.run(1U);
+    assert(wrong_library_result.reason == StopReason::unimplemented_hle_call);
+    assert(wrong_library_result.hle_call == "coreinit::GX2SetDepthStencilControl");
+
+    core.reset();
+    assert(!core.gx2.db_depth_control_valid);
+    assert(core.gx2.db_depth_control == 0U);
+    assert(core.gx2.pending_commands.empty());
+}
+
 void compare_and_conditional_branch_tests()
 {
     EspressoCore unsigned_compare_core(8);
@@ -12534,6 +12776,7 @@ int main(int argc, char* argv[])
     mem_get_allocatable_size_for_frm_heap_ex_hle_tests();
     mem_alloc_from_frm_heap_ex_hle_tests();
     gx2_init_hle_tests();
+    gx2_set_depth_stencil_control_hle_tests();
     mem_get_total_free_size_for_exp_heap_hle_tests();
     mem_get_allocatable_size_for_exp_heap_ex_hle_tests();
     compare_and_conditional_branch_tests();

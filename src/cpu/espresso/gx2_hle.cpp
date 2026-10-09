@@ -28,6 +28,7 @@ constexpr std::uint32_t command_buffer_alignment = 0x40U;
 constexpr std::uint32_t default_app_io_stack_size = 0x1000U;
 constexpr std::size_t maximum_attribute_pairs = 64U;
 constexpr std::uint64_t guest_address_space_end = std::uint64_t{1} << 32U;
+constexpr std::uint32_t db_depth_control_register = 0x00028800U;
 
 struct ParsedGx2Attributes
 {
@@ -228,6 +229,77 @@ void register_gx2_hle(HleDispatcher& dispatcher)
             Gx2RuntimeState initialized = initialize_gx2(core, attributes);
             core.gx2 = initialized;
             // GX2Init is void: preserve all guest GPRs including r3.
+        });
+
+    dispatcher.register_function(
+        "gx2",
+        "GX2SetDepthStencilControl",
+        [](EspressoCore& core) {
+            if (!core.gx2.initialized)
+            {
+                throw HleExecutionError(
+                    "gx2::GX2SetDepthStencilControl: GX2 has not been initialized");
+            }
+
+            const std::uint32_t depth_test = core.state.gpr[3];
+            const std::uint32_t depth_write = core.state.gpr[4];
+            const std::uint32_t depth_compare = core.state.gpr[5];
+            const std::uint32_t stencil_test = core.state.gpr[6];
+            const std::uint32_t backface_stencil = core.state.gpr[7];
+            const std::uint32_t front_stencil_func = core.state.gpr[8];
+            const std::uint32_t front_stencil_zpass = core.state.gpr[9];
+            const std::uint32_t front_stencil_zfail = core.state.gpr[10];
+
+            constexpr std::uint32_t stack_argument_base_offset = 0x08U;
+            constexpr std::uint32_t stack_argument_last_offset = 0x18U;
+            const std::uint64_t stack_pointer = core.state.gpr[1];
+            const std::uint64_t last_stack_argument =
+                stack_pointer + stack_argument_last_offset;
+            if (last_stack_argument + sizeof(std::uint32_t) > guest_address_space_end)
+            {
+                throw HleExecutionError(
+                    "gx2::GX2SetDepthStencilControl: stack arguments wrap guest address space");
+            }
+
+            // Read every stack-passed argument before changing GX2 state. A
+            // failed guest read therefore leaves the register mirror/queue intact.
+            const std::uint32_t front_stencil_fail = core.memory.read32_be(
+                static_cast<std::uint32_t>(stack_pointer + stack_argument_base_offset));
+            const std::uint32_t back_stencil_func = core.memory.read32_be(
+                static_cast<std::uint32_t>(stack_pointer + 0x0CU));
+            const std::uint32_t back_stencil_zpass = core.memory.read32_be(
+                static_cast<std::uint32_t>(stack_pointer + 0x10U));
+            const std::uint32_t back_stencil_zfail = core.memory.read32_be(
+                static_cast<std::uint32_t>(stack_pointer + 0x14U));
+            const std::uint32_t back_stencil_fail = core.memory.read32_be(
+                static_cast<std::uint32_t>(stack_pointer + stack_argument_last_offset));
+
+            const auto boolean_bit = [](std::uint32_t value) {
+                return value != 0U ? 1U : 0U;
+            };
+            const std::uint32_t packed =
+                boolean_bit(stencil_test) |
+                (boolean_bit(depth_test) << 1U) |
+                (boolean_bit(depth_write) << 2U) |
+                ((depth_compare & 0x7U) << 4U) |
+                (boolean_bit(backface_stencil) << 7U) |
+                ((front_stencil_func & 0x7U) << 8U) |
+                ((front_stencil_fail & 0x7U) << 11U) |
+                ((front_stencil_zpass & 0x7U) << 14U) |
+                ((front_stencil_zfail & 0x7U) << 17U) |
+                ((back_stencil_func & 0x7U) << 20U) |
+                ((back_stencil_fail & 0x7U) << 23U) |
+                ((back_stencil_zpass & 0x7U) << 26U) |
+                ((back_stencil_zfail & 0x7U) << 29U);
+
+            core.gx2.db_depth_control = packed;
+            core.gx2.db_depth_control_valid = true;
+            core.gx2.pending_commands.push_back({
+                Gx2CommandType::set_context_register,
+                db_depth_control_register,
+                packed});
+            // GX2SetDepthStencilControl is void. Guest arguments and all CPU
+            // state are preserved; the dispatcher returns through LR.
         });
 }
 
