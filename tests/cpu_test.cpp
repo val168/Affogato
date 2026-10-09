@@ -11411,6 +11411,242 @@ void gx2_set_blend_control_hle_tests()
     assert(core.gx2.pending_commands.empty());
 }
 
+void gx2_set_blend_constant_color_hle_tests()
+{
+    constexpr std::uint32_t return_address = 0x027508B4U;
+    constexpr std::uint32_t attribute_address = 0x100U;
+    constexpr std::uint32_t pool_address = 0x8000U;
+    constexpr std::uint32_t pool_size = 0x8000U;
+    constexpr std::array<std::uint32_t, 4U> color_registers{
+        0x00028414U, 0x00028418U, 0x0002841CU, 0x00028420U};
+
+    const auto invoke = [&](EspressoCore& core, std::uint32_t import) {
+        core.state.cia = import;
+        core.state.lr = return_address;
+        return core.run(1U);
+    };
+    const auto set_color = [](EspressoCore& core,
+                              const std::array<std::uint64_t, 4U>& ps0) {
+        for (std::size_t index = 0; index < ps0.size(); ++index)
+        {
+            core.state.fpr[index + 1U] = ps0[index];
+        }
+    };
+    const auto setup_initialized_core = [&](EspressoCore& core) {
+        register_gx2_hle(core.hle);
+        const std::uint32_t init_import = core.hle.bind_import("gx2", "GX2Init");
+        const std::array<std::uint32_t, 5U> attributes{
+            1U, pool_address, 2U, pool_size, 0U};
+        for (std::size_t index = 0; index < attributes.size(); ++index)
+        {
+            core.memory.write32_be(
+                attribute_address + static_cast<std::uint32_t>(index * 4U),
+                attributes[index]);
+        }
+        core.state.gpr[3] = attribute_address;
+        assert(invoke(core, init_import).reason == StopReason::instruction_limit);
+        assert(core.gx2.initialized);
+        assert(std::ranges::none_of(core.gx2.cb_blend_constant_valid,
+                                    [](bool valid) { return valid; }));
+        assert(std::ranges::all_of(core.gx2.cb_blend_constant,
+                                   [](std::uint32_t value) { return value == 0U; }));
+        assert(core.gx2.pending_commands.empty());
+    };
+
+    EspressoCore core(0x20000U);
+    setup_initialized_core(core);
+    const std::uint32_t import = core.hle.bind_import(
+        "gx2", "GX2SetBlendConstantColor");
+    const std::uint32_t wrong_library = core.hle.bind_import(
+        "coreinit", "GX2SetBlendConstantColor");
+    assert(import != 0U);
+
+    // Seed the state produced by the preceding GX2 initialization setters.
+    // Their own handler tests cover their input semantics; here we ensure the
+    // new float setter preserves their mirrors and appends after their commands.
+    core.gx2.db_depth_control_valid = true;
+    core.gx2.db_depth_control = 0x00000036U;
+    core.gx2.db_stencilrefmask_valid = true;
+    core.gx2.db_stencilrefmask = 0x00FFFF00U;
+    core.gx2.db_stencilrefmask_bf_valid = true;
+    core.gx2.db_stencilrefmask_bf = 0x00FFFF00U;
+    core.gx2.pa_su_sc_mode_cntl_valid = true;
+    core.gx2.pa_su_sc_mode_cntl = 0x00000242U;
+    core.gx2.cb_color_control_valid = true;
+    core.gx2.cb_color_control = 0x00CCFF00U;
+    core.gx2.cb_blend_control_valid[0] = true;
+    core.gx2.cb_blend_control[0] = 0x25040504U;
+    core.gx2.pending_commands = {
+        {Gx2CommandType::set_context_register, 0x00028800U, 0x00000036U},
+        {Gx2CommandType::set_context_register, 0x00028430U, 0x00FFFF00U},
+        {Gx2CommandType::set_context_register, 0x00028434U, 0x00FFFF00U},
+        {Gx2CommandType::set_context_register, 0x00028814U, 0x00000242U},
+        {Gx2CommandType::set_context_register, 0x00028808U, 0x00CCFF00U},
+        {Gx2CommandType::set_context_register, 0x00028780U, 0x25040504U},
+    };
+    const Gx2RuntimeState gx2_before = core.gx2;
+
+    core.memory.write8(pool_address, 0xA5U);
+    core.memory.write8(pool_address + pool_size / 2U, 0x5AU);
+    core.memory.write8(pool_address + pool_size - 1U, 0xC3U);
+    core.state.gpr.fill(0xD1000000U);
+    for (std::size_t index = 0; index < core.state.fpr.size(); ++index)
+    {
+        core.state.fpr[index] = 0x9999000000000000ULL + index;
+        core.state.fpr_ps1[index] = 0xAAAA000000000000ULL + index;
+    }
+    // ABI order is f1=R, f2=G, f3=B, f4=A; GPRs and f5+ are decoys.
+    set_color(core, {
+        0x3FD0000000000000ULL, // 0.25
+        0xBFE0000000000000ULL, // -0.5
+        0x4000000000000000ULL, // 2.0
+        0x8000000000000000ULL, // -0.0
+    });
+    core.state.fpr_ps1[1] = 0x4058C00000000000ULL; // Contradictory 99.0.
+    core.state.fpr_ps1[3] = 0xC008000000000000ULL; // Contradictory -3.0.
+    core.state.gpr[1] = 0xFFFFFFFFU; // No stack arguments or stack access.
+    core.state.cr = 0x12345678U;
+    core.state.xer = 0xA5A55A5AU;
+    core.state.ctr = 0x87654321U;
+    core.state.fpscr = 0x5A5AA55AU;
+    const auto gprs_before = core.state.gpr;
+    const auto fprs_before = core.state.fpr;
+    const auto ps1_before = core.state.fpr_ps1;
+    const std::uint32_t cr_before = core.state.cr;
+    const std::uint32_t xer_before = core.state.xer;
+    const std::uint32_t ctr_before = core.state.ctr;
+    const std::uint32_t fpscr_before = core.state.fpscr;
+    std::vector<std::uint8_t> memory_before(core.memory.size());
+    core.memory.read_bytes(0U, memory_before);
+
+    assert(invoke(core, import).reason == StopReason::instruction_limit);
+    assert(core.state.gpr == gprs_before);
+    assert(core.state.fpr == fprs_before);
+    assert(core.state.fpr_ps1 == ps1_before);
+    assert(core.state.cr == cr_before && core.state.xer == xer_before);
+    assert(core.state.ctr == ctr_before && core.state.fpscr == fpscr_before);
+    assert(core.state.lr == return_address && core.state.cia == return_address);
+    assert((core.gx2.cb_blend_constant == std::array<std::uint32_t, 4U>{
+        0x3E800000U, 0xBF000000U, 0x40000000U, 0x80000000U}));
+    assert(std::ranges::all_of(core.gx2.cb_blend_constant_valid,
+                               [](bool valid) { return valid; }));
+    assert(core.gx2.pending_commands.size() == gx2_before.pending_commands.size() + 4U);
+    for (std::size_t index = 0; index < color_registers.size(); ++index)
+    {
+        const Gx2Command& command = core.gx2.pending_commands[6U + index];
+        assert(command.type == Gx2CommandType::set_context_register);
+        assert(command.register_address == color_registers[index]);
+        assert(command.value == core.gx2.cb_blend_constant[index]);
+    }
+    assert(core.gx2.db_depth_control == gx2_before.db_depth_control);
+    assert(core.gx2.db_stencilrefmask == gx2_before.db_stencilrefmask);
+    assert(core.gx2.db_stencilrefmask_bf == gx2_before.db_stencilrefmask_bf);
+    assert(core.gx2.pa_su_sc_mode_cntl == gx2_before.pa_su_sc_mode_cntl);
+    assert(core.gx2.cb_color_control == gx2_before.cb_color_control);
+    assert(core.gx2.cb_blend_control == gx2_before.cb_blend_control);
+    assert(core.gx2.command_buffer_pool_base == gx2_before.command_buffer_pool_base);
+    assert(core.gx2.command_buffer_pool_size == gx2_before.command_buffer_pool_size);
+    std::vector<std::uint8_t> memory_after(core.memory.size());
+    core.memory.read_bytes(0U, memory_after);
+    assert(memory_after == memory_before);
+    assert(core.memory.read8(pool_address) == 0xA5U);
+    assert(core.memory.read8(pool_address + pool_size / 2U) == 0x5AU);
+    assert(core.memory.read8(pool_address + pool_size - 1U) == 0xC3U);
+
+    // Exact Wind Waker call: f1-f4 are all binary64 1.0, producing binary32
+    // Latte payloads; stale r3 is preserved because this is a void FP-ABI call.
+    core.state.fpr[1] = 0x3FF0000000000000ULL;
+    core.state.fpr[2] = 0x3FF0000000000000ULL;
+    core.state.fpr[3] = 0x3FF0000000000000ULL;
+    core.state.fpr[4] = 0x3FF0000000000000ULL;
+    core.state.gpr[3] = 0U;
+    const std::size_t command_count_before_wind_waker =
+        core.gx2.pending_commands.size();
+    assert(invoke(core, import).reason == StopReason::instruction_limit);
+    assert(core.state.gpr[3] == 0U);
+    assert((core.gx2.cb_blend_constant == std::array<std::uint32_t, 4U>{
+        0x3F800000U, 0x3F800000U, 0x3F800000U, 0x3F800000U}));
+    assert(core.gx2.pending_commands.size() == command_count_before_wind_waker + 4U);
+    for (std::size_t index = 0; index < color_registers.size(); ++index)
+    {
+        assert(core.gx2.pending_commands[command_count_before_wind_waker + index]
+                   .register_address == color_registers[index]);
+        assert(core.gx2.pending_commands[command_count_before_wind_waker + index]
+                   .value == 0x3F800000U);
+    }
+    const std::size_t duplicate_before = core.gx2.pending_commands.size();
+    assert(invoke(core, import).reason == StopReason::instruction_limit);
+    assert(core.gx2.pending_commands.size() == duplicate_before + 4U);
+
+    // Binary32 narrowing follows the same host conversion semantics used by
+    // Affogato's lfs/stfs paths (including ties-to-even under default rounding).
+    core.state.fpr[1] = std::bit_cast<std::uint64_t>(1.0 + 0x1p-24);
+    core.state.fpr[2] = std::bit_cast<std::uint64_t>(
+        std::nextafter(1.0 + 0x1p-24, 2.0));
+    core.state.fpr[3] = 0x7FF0000000000000ULL;
+    core.state.fpr[4] = 0xFFF0000000000000ULL;
+    assert(invoke(core, import).reason == StopReason::instruction_limit);
+    assert((core.gx2.cb_blend_constant == std::array<std::uint32_t, 4U>{
+        0x3F800000U, 0x3F800001U, 0x7F800000U, 0xFF800000U}));
+
+    // A fresh, uninitialized core must reject the call before reading FPRs or
+    // touching its command stream/mirrors.
+    EspressoCore uninitialized(0x1000U);
+    register_gx2_hle(uninitialized.hle);
+    const std::uint32_t uninitialized_import = uninitialized.hle.bind_import(
+        "gx2", "GX2SetBlendConstantColor");
+    uninitialized.state.gpr.fill(0xDEAD0000U);
+    uninitialized.state.gpr[1] = 0xFFFFFFFFU;
+    set_color(uninitialized, {
+        0x3FF0000000000000ULL, 0x3FF0000000000000ULL,
+        0x3FF0000000000000ULL, 0x3FF0000000000000ULL});
+    const auto uninitialized_gprs = uninitialized.state.gpr;
+    const auto uninitialized_fprs = uninitialized.state.fpr;
+    const RunResult uninitialized_result = invoke(uninitialized, uninitialized_import);
+    assert(uninitialized_result.reason == StopReason::hle_error);
+    assert(uninitialized_result.detail.find("gx2::GX2SetBlendConstantColor") !=
+           std::string::npos);
+    assert(uninitialized.state.gpr == uninitialized_gprs);
+    assert(uninitialized.state.fpr == uninitialized_fprs);
+    assert(std::ranges::none_of(uninitialized.gx2.cb_blend_constant_valid,
+                                [](bool valid) { return valid; }));
+    assert(std::ranges::all_of(uninitialized.gx2.cb_blend_constant,
+                               [](std::uint32_t value) { return value == 0U; }));
+    assert(uninitialized.gx2.pending_commands.empty());
+
+    // The API is registered only in gx2, and reset clears per-core mirrors.
+    core.state.cia = wrong_library;
+    core.state.lr = return_address;
+    assert(core.run(1U).reason == StopReason::unimplemented_hle_call);
+    assert(core.run(1U).hle_call == "coreinit::GX2SetBlendConstantColor");
+    core.reset();
+    assert(!core.gx2.initialized);
+    assert(std::ranges::none_of(core.gx2.cb_blend_constant_valid,
+                                [](bool valid) { return valid; }));
+    assert(std::ranges::all_of(core.gx2.cb_blend_constant,
+                               [](std::uint32_t value) { return value == 0U; }));
+    assert(core.gx2.pending_commands.empty());
+
+    EspressoCore isolated_a(0x1000U);
+    EspressoCore isolated_b(0x1000U);
+    register_gx2_hle(isolated_a.hle);
+    register_gx2_hle(isolated_b.hle);
+    isolated_a.gx2.initialized = true;
+    isolated_b.gx2.initialized = true;
+    const std::uint32_t isolated_import = isolated_a.hle.bind_import(
+        "gx2", "GX2SetBlendConstantColor");
+    set_color(isolated_a, {
+        0x3FF0000000000000ULL, 0x3FF0000000000000ULL,
+        0x3FF0000000000000ULL, 0x3FF0000000000000ULL});
+    assert(invoke(isolated_a, isolated_import).reason == StopReason::instruction_limit);
+    assert((isolated_a.gx2.cb_blend_constant == std::array<std::uint32_t, 4U>{
+        0x3F800000U, 0x3F800000U, 0x3F800000U, 0x3F800000U}));
+    assert(isolated_a.gx2.pending_commands.size() == 4U);
+    assert(std::ranges::none_of(isolated_b.gx2.cb_blend_constant_valid,
+                                [](bool valid) { return valid; }));
+    assert(isolated_b.gx2.pending_commands.empty());
+}
+
 void compare_and_conditional_branch_tests()
 {
     EspressoCore unsigned_compare_core(8);
@@ -13879,6 +14115,7 @@ int main(int argc, char* argv[])
     gx2_set_polygon_control_hle_tests();
     gx2_set_color_control_hle_tests();
     gx2_set_blend_control_hle_tests();
+    gx2_set_blend_constant_color_hle_tests();
     mem_get_total_free_size_for_exp_heap_hle_tests();
     mem_get_allocatable_size_for_exp_heap_ex_hle_tests();
     compare_and_conditional_branch_tests();

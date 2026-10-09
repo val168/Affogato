@@ -53,6 +53,8 @@ struct Gx2RuntimeState
     std::uint32_t cb_color_control{};
     std::array<bool, 8U> cb_blend_control_valid{};
     std::array<std::uint32_t, 8U> cb_blend_control{};
+    std::array<bool, 4U> cb_blend_constant_valid{};
+    std::array<std::uint32_t, 4U> cb_blend_constant{};
     std::vector<Gx2Command> pending_commands;
 };
 

@@ -4,6 +4,8 @@
 #include "cpu/espresso/hle_dispatcher.hpp"
 #include "cpu/espresso/interpreter.hpp"
 
+#include <bit>
+#include <cstddef>
 #include <cstdint>
 #include <string>
 
@@ -34,6 +36,19 @@ constexpr std::uint32_t db_stencilrefmask_bf_register = 0x00028434U;
 constexpr std::uint32_t pa_su_sc_mode_cntl_register = 0x00028814U;
 constexpr std::uint32_t cb_color_control_register = 0x00028808U;
 constexpr std::uint32_t cb_blend0_control_register = 0x00028780U;
+constexpr std::uint32_t cb_blend_red_register = 0x00028414U;
+constexpr std::uint32_t cb_blend_green_register = 0x00028418U;
+constexpr std::uint32_t cb_blend_blue_register = 0x0002841CU;
+constexpr std::uint32_t cb_blend_alpha_register = 0x00028420U;
+
+std::uint32_t fpr_float_argument_bits(
+    const EspressoCore& core,
+    std::size_t register_index)
+{
+    const double value = std::bit_cast<double>(core.state.fpr[register_index]);
+    const float single_value = static_cast<float>(value);
+    return std::bit_cast<std::uint32_t>(single_value);
+}
 
 std::uint32_t pack_stencil_ref_mask(
     std::uint32_t mask,
@@ -539,6 +554,45 @@ void register_gx2_hle(HleDispatcher& dispatcher)
                 packed});
             // This void setter records logical per-target Latte state only.
             // Raw PM4 and renderer blending are intentionally deferred.
+        });
+
+    dispatcher.register_function(
+        "gx2",
+        "GX2SetBlendConstantColor",
+        [](EspressoCore& core) {
+            if (!core.gx2.initialized)
+            {
+                throw HleExecutionError(
+                    "gx2::GX2SetBlendConstantColor: GX2 has not been initialized");
+            }
+
+            // The Cafe floating-point ABI passes these float arguments in
+            // f1-f4. Affogato stores PS0 as binary64, so narrow the numeric
+            // value to binary32 and retain its IEEE-754 payload for Latte.
+            const std::array<std::uint32_t, 4U> values{
+                fpr_float_argument_bits(core, 1U),
+                fpr_float_argument_bits(core, 2U),
+                fpr_float_argument_bits(core, 3U),
+                fpr_float_argument_bits(core, 4U),
+            };
+            constexpr std::array<std::uint32_t, 4U> registers{
+                cb_blend_red_register,
+                cb_blend_green_register,
+                cb_blend_blue_register,
+                cb_blend_alpha_register,
+            };
+
+            core.gx2.cb_blend_constant = values;
+            core.gx2.cb_blend_constant_valid.fill(true);
+            for (std::size_t index = 0; index < values.size(); ++index)
+            {
+                core.gx2.pending_commands.push_back({
+                    Gx2CommandType::set_context_register,
+                    registers[index],
+                    values[index]});
+            }
+            // This void setter records logical Latte state only. The current
+            // coherent GuestMemory model has no cache or renderer side effect.
         });
 }
 
