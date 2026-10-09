@@ -29,6 +29,18 @@ constexpr std::uint32_t default_app_io_stack_size = 0x1000U;
 constexpr std::size_t maximum_attribute_pairs = 64U;
 constexpr std::uint64_t guest_address_space_end = std::uint64_t{1} << 32U;
 constexpr std::uint32_t db_depth_control_register = 0x00028800U;
+constexpr std::uint32_t db_stencilrefmask_register = 0x00028430U;
+constexpr std::uint32_t db_stencilrefmask_bf_register = 0x00028434U;
+
+std::uint32_t pack_stencil_ref_mask(
+    std::uint32_t mask,
+    std::uint32_t write_mask,
+    std::uint32_t reference)
+{
+    return (reference & 0xFFU) |
+           ((mask & 0xFFU) << 8U) |
+           ((write_mask & 0xFFU) << 16U);
+}
 
 struct ParsedGx2Attributes
 {
@@ -300,6 +312,45 @@ void register_gx2_hle(HleDispatcher& dispatcher)
                 packed});
             // GX2SetDepthStencilControl is void. Guest arguments and all CPU
             // state are preserved; the dispatcher returns through LR.
+        });
+
+    dispatcher.register_function(
+        "gx2",
+        "GX2SetStencilMask",
+        [](EspressoCore& core) {
+            if (!core.gx2.initialized)
+            {
+                throw HleExecutionError(
+                    "gx2::GX2SetStencilMask: GX2 has not been initialized");
+            }
+
+            const std::uint32_t front_mask = core.state.gpr[3] & 0xFFU;
+            const std::uint32_t front_write_mask = core.state.gpr[4] & 0xFFU;
+            const std::uint32_t front_reference = core.state.gpr[5] & 0xFFU;
+            const std::uint32_t back_mask = core.state.gpr[6] & 0xFFU;
+            const std::uint32_t back_write_mask = core.state.gpr[7] & 0xFFU;
+            const std::uint32_t back_reference = core.state.gpr[8] & 0xFFU;
+
+            // Compute the complete pair before mutating the current register
+            // mirrors or appending either command.
+            const std::uint32_t front_value = pack_stencil_ref_mask(
+                front_mask, front_write_mask, front_reference);
+            const std::uint32_t back_value = pack_stencil_ref_mask(
+                back_mask, back_write_mask, back_reference);
+
+            core.gx2.db_stencilrefmask = front_value;
+            core.gx2.db_stencilrefmask_valid = true;
+            core.gx2.db_stencilrefmask_bf = back_value;
+            core.gx2.db_stencilrefmask_bf_valid = true;
+            core.gx2.pending_commands.push_back({
+                Gx2CommandType::set_context_register,
+                db_stencilrefmask_register,
+                front_value});
+            core.gx2.pending_commands.push_back({
+                Gx2CommandType::set_context_register,
+                db_stencilrefmask_bf_register,
+                back_value});
+            // This API is void: preserve all guest CPU state and return via LR.
         });
 }
 

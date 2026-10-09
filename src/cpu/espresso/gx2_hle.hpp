@@ -42,6 +42,10 @@ struct Gx2RuntimeState
     std::uint32_t flip_execute_count{};
     bool db_depth_control_valid{};
     std::uint32_t db_depth_control{};
+    bool db_stencilrefmask_valid{};
+    std::uint32_t db_stencilrefmask{};
+    bool db_stencilrefmask_bf_valid{};
+    std::uint32_t db_stencilrefmask_bf{};
     std::vector<Gx2Command> pending_commands;
 };
 

@@ -9765,6 +9765,9 @@ void gx2_init_hle_tests()
     assert(core.gx2.hang_reset_swaps_outstanding == 3U);
     assert(core.gx2.swap_interval == 1U);
     assert(core.gx2.flip_request_count == 0U && core.gx2.flip_execute_count == 0U);
+    assert(!core.gx2.db_stencilrefmask_valid && core.gx2.db_stencilrefmask == 0U);
+    assert(!core.gx2.db_stencilrefmask_bf_valid && core.gx2.db_stencilrefmask_bf == 0U);
+    assert(core.gx2.pending_commands.empty());
     assert(core.state.gpr == gprs_before);
     assert(core.state.fpr == fprs_before && core.state.fpr_ps1 == ps1_before);
     assert(core.state.cr == cr_before && core.state.xer == xer_before);
@@ -10308,6 +10311,252 @@ void gx2_set_depth_stencil_control_hle_tests()
     assert(wrong_library_result.hle_call == "coreinit::GX2SetDepthStencilControl");
 
     core.reset();
+    assert(!core.gx2.db_depth_control_valid);
+    assert(core.gx2.db_depth_control == 0U);
+    assert(core.gx2.pending_commands.empty());
+}
+
+void gx2_set_stencil_mask_hle_tests()
+{
+    constexpr std::uint32_t return_address = 0x027507D8U;
+    constexpr std::uint32_t pool_address = 0x8000U;
+    constexpr std::uint32_t db_depth_control_address = 0x00028800U;
+    constexpr std::uint32_t db_stencilrefmask_address = 0x00028430U;
+    constexpr std::uint32_t db_stencilrefmask_bf_address = 0x00028434U;
+
+    const auto invoke = [](EspressoCore& core, std::uint32_t import) {
+        core.state.cia = import;
+        core.state.lr = return_address;
+        return core.run(1U);
+    };
+    const auto set_arguments = [](EspressoCore& core,
+                                  const std::array<std::uint32_t, 6>& values) {
+        for (std::size_t index = 0; index < values.size(); ++index)
+        {
+            core.state.gpr[index + 3U] = values[index];
+        }
+    };
+
+    EspressoCore core(0x20000U);
+    register_gx2_hle(core.hle);
+    const std::uint32_t gx2_init = core.hle.bind_import("gx2", "GX2Init");
+    const std::uint32_t depth_import = core.hle.bind_import(
+        "gx2", "GX2SetDepthStencilControl");
+    const std::uint32_t stencil_import = core.hle.bind_import(
+        "gx2", "GX2SetStencilMask");
+    const std::uint32_t wrong_library = core.hle.bind_import(
+        "coreinit", "GX2SetStencilMask");
+    core.memory.write32_be(0x100U, 1U);
+    core.memory.write32_be(0x104U, pool_address);
+    core.memory.write32_be(0x108U, 2U);
+    core.memory.write32_be(0x10CU, 0x8000U);
+    core.memory.write32_be(0x110U, 0U);
+    core.state.gpr[3] = 0x100U;
+    assert(invoke(core, gx2_init).reason == StopReason::instruction_limit);
+    assert(core.gx2.initialized);
+    assert(!core.gx2.db_stencilrefmask_valid);
+    assert(!core.gx2.db_stencilrefmask_bf_valid);
+    assert(core.gx2.pending_commands.empty());
+
+    // Reproduce the preceding depth-control write so the stencil setter must
+    // preserve the already queued command and its register mirror.
+    constexpr std::uint32_t stack_address = 0x3000U;
+    core.state.gpr[1] = stack_address;
+    set_arguments(core, {1U, 1U, 3U, 0U, 0U, 0U});
+    core.state.gpr[9] = 0U;
+    core.state.gpr[10] = 0U;
+    core.memory.write32_be(stack_address + 0x08U, 0U);
+    core.memory.write32_be(stack_address + 0x0CU, 0U);
+    core.memory.write32_be(stack_address + 0x10U, 0U);
+    core.memory.write32_be(stack_address + 0x14U, 0U);
+    core.memory.write32_be(stack_address + 0x18U, 0U);
+    assert(invoke(core, depth_import).reason == StopReason::instruction_limit);
+    assert(core.gx2.db_depth_control_valid);
+    assert(core.gx2.db_depth_control == 0x00000036U);
+    assert(core.gx2.pending_commands.size() == 1U);
+    assert(core.gx2.pending_commands[0].register_address == db_depth_control_address);
+    assert(core.gx2.pending_commands[0].value == 0x00000036U);
+
+    core.memory.write8(pool_address, 0xA5U);
+    core.memory.write8(pool_address + 0x4000U, 0x5AU);
+    core.memory.write8(pool_address + 0x7FFFU, 0xC3U);
+    for (std::size_t index = 0; index < core.state.gpr.size(); ++index)
+    {
+        core.state.gpr[index] = 0xB6000000U + static_cast<std::uint32_t>(index) * 0x101U;
+    }
+    for (std::size_t index = 0; index < core.state.fpr.size(); ++index)
+    {
+        core.state.fpr[index] = 0x3333000000000000ULL + index;
+        core.state.fpr_ps1[index] = 0x4444000000000000ULL + index;
+    }
+    core.state.cr = 0x89ABCDEFU;
+    core.state.xer = 0xA5A55A5AU;
+    core.state.ctr = 0x87654321U;
+    core.state.fpscr = 0x5A5AA55AU;
+    core.state.lr = return_address;
+    core.state.gpr[1] = 0xFFFFFFFFU; // The six-register API must not touch the stack.
+    set_arguments(core, {0xFFU, 0xFFU, 0U, 0xFFU, 0xFFU, 0U});
+
+    const auto gprs_before = core.state.gpr;
+    const auto fprs_before = core.state.fpr;
+    const auto ps1_before = core.state.fpr_ps1;
+    const std::uint32_t cr_before = core.state.cr;
+    const std::uint32_t xer_before = core.state.xer;
+    const std::uint32_t ctr_before = core.state.ctr;
+    const std::uint32_t fpscr_before = core.state.fpscr;
+    const std::uint32_t lr_before = core.state.lr;
+    const Gx2RuntimeState gx2_before = core.gx2;
+    const std::uint32_t heap_cursor_before = core.guest_heap_cursor;
+    const std::uint32_t heap_limit_before = core.guest_heap_limit;
+    const auto heap_handles_before = core.base_heap_handles;
+    const std::uint32_t mem2_begin_before = core.mem2_heap_region_begin;
+    const std::uint32_t mem2_end_before = core.mem2_heap_region_end;
+    const bool fs_initialized_before = core.fs_initialized;
+    const auto fs_clients_before = core.fs_clients;
+    const bool save_initialized_before = core.nn_save_initialized;
+    std::vector<std::uint8_t> memory_before(core.memory.size());
+    core.memory.read_bytes(0U, memory_before);
+
+    const RunResult wind_waker_result = invoke(core, stencil_import);
+    assert(wind_waker_result.reason == StopReason::instruction_limit);
+    assert(wind_waker_result.steps == 1U);
+    assert(core.gx2.db_stencilrefmask_valid);
+    assert(core.gx2.db_stencilrefmask == 0x00FFFF00U);
+    assert(core.gx2.db_stencilrefmask_bf_valid);
+    assert(core.gx2.db_stencilrefmask_bf == 0x00FFFF00U);
+    assert(core.gx2.db_depth_control_valid == gx2_before.db_depth_control_valid);
+    assert(core.gx2.db_depth_control == 0x00000036U);
+    assert(core.gx2.pending_commands.size() == 3U);
+    assert(core.gx2.pending_commands[0].register_address == db_depth_control_address);
+    assert(core.gx2.pending_commands[0].value == 0x00000036U);
+    assert(core.gx2.pending_commands[1].type == Gx2CommandType::set_context_register);
+    assert(core.gx2.pending_commands[1].register_address == db_stencilrefmask_address);
+    assert(core.gx2.pending_commands[1].value == 0x00FFFF00U);
+    assert(core.gx2.pending_commands[2].type == Gx2CommandType::set_context_register);
+    assert(core.gx2.pending_commands[2].register_address == db_stencilrefmask_bf_address);
+    assert(core.gx2.pending_commands[2].value == 0x00FFFF00U);
+    assert(core.state.gpr == gprs_before);
+    assert(core.state.fpr == fprs_before && core.state.fpr_ps1 == ps1_before);
+    assert(core.state.cr == cr_before && core.state.xer == xer_before);
+    assert(core.state.ctr == ctr_before && core.state.fpscr == fpscr_before);
+    assert(core.state.lr == lr_before && core.state.cia == return_address);
+    assert(core.gx2.initialized == gx2_before.initialized);
+    assert(core.gx2.main_core_id == gx2_before.main_core_id);
+    assert(core.gx2.command_buffer_pool_base == gx2_before.command_buffer_pool_base);
+    assert(core.gx2.command_buffer_pool_size == gx2_before.command_buffer_pool_size);
+    assert(core.gx2.command_buffer_pool_owned == gx2_before.command_buffer_pool_owned);
+    assert(core.gx2.argc == gx2_before.argc && core.gx2.argv == gx2_before.argv);
+    assert(core.gx2.profile_mode == gx2_before.profile_mode);
+    assert(core.gx2.toss_stage == gx2_before.toss_stage);
+    assert(core.gx2.app_io_thread_stack_size == gx2_before.app_io_thread_stack_size);
+    assert(core.gx2.gpu_timeout_ms == gx2_before.gpu_timeout_ms);
+    assert(core.gx2.hang_state == gx2_before.hang_state);
+    assert(core.gx2.hang_response == gx2_before.hang_response);
+    assert(core.gx2.hang_reset_swap_timeout == gx2_before.hang_reset_swap_timeout);
+    assert(core.gx2.hang_reset_swaps_outstanding ==
+           gx2_before.hang_reset_swaps_outstanding);
+    assert(core.gx2.swap_interval == gx2_before.swap_interval);
+    assert(core.gx2.flip_request_count == gx2_before.flip_request_count);
+    assert(core.gx2.flip_execute_count == gx2_before.flip_execute_count);
+    assert(core.guest_heap_cursor == heap_cursor_before);
+    assert(core.guest_heap_limit == heap_limit_before);
+    assert(core.base_heap_handles == heap_handles_before);
+    assert(core.mem2_heap_region_begin == mem2_begin_before);
+    assert(core.mem2_heap_region_end == mem2_end_before);
+    assert(core.fs_initialized == fs_initialized_before);
+    assert(core.fs_clients.size() == fs_clients_before.size());
+    for (std::size_t index = 0; index < fs_clients_before.size(); ++index)
+    {
+        assert(core.fs_clients[index].client_address ==
+               fs_clients_before[index].client_address);
+        assert(core.fs_clients[index].body_address == fs_clients_before[index].body_address);
+        assert(core.fs_clients[index].synthetic_handle ==
+               fs_clients_before[index].synthetic_handle);
+    }
+    assert(core.nn_save_initialized == save_initialized_before);
+    assert(core.memory.read8(pool_address) == 0xA5U);
+    assert(core.memory.read8(pool_address + 0x4000U) == 0x5AU);
+    assert(core.memory.read8(pool_address + 0x7FFFU) == 0xC3U);
+    std::vector<std::uint8_t> memory_after(core.memory.size());
+    core.memory.read_bytes(0U, memory_after);
+    assert(memory_after == memory_before);
+
+    // Asymmetric inputs verify uint8 truncation, function-vs-register field
+    // ordering, and that front/back do not get swapped.
+    set_arguments(core, {
+        0x12345612U, 0x87654334U, 0xABCDEF56U,
+        0x111111ABU, 0x222222CDU, 0x333333EFU});
+    assert(invoke(core, stencil_import).reason == StopReason::instruction_limit);
+    assert(core.gx2.db_stencilrefmask == 0x00341256U);
+    assert(core.gx2.db_stencilrefmask_bf == 0x00CDABEFU);
+    assert(core.gx2.pending_commands.size() == 5U);
+    assert(core.gx2.pending_commands[3].register_address == db_stencilrefmask_address);
+    assert(core.gx2.pending_commands[3].value == 0x00341256U);
+    assert(core.gx2.pending_commands[4].register_address == db_stencilrefmask_bf_address);
+    assert(core.gx2.pending_commands[4].value == 0x00CDABEFU);
+
+    // Zero and all-ones are valid register contents, not validity sentinels.
+    set_arguments(core, {0U, 0U, 0U, 0U, 0U, 0U});
+    assert(invoke(core, stencil_import).reason == StopReason::instruction_limit);
+    assert(core.gx2.db_stencilrefmask_valid && core.gx2.db_stencilrefmask == 0U);
+    assert(core.gx2.db_stencilrefmask_bf_valid && core.gx2.db_stencilrefmask_bf == 0U);
+    assert(core.gx2.pending_commands.size() == 7U);
+    set_arguments(core, {0xFFU, 0xFFU, 0xFFU, 0xFFU, 0xFFU, 0xFFU});
+    assert(invoke(core, stencil_import).reason == StopReason::instruction_limit);
+    assert(core.gx2.db_stencilrefmask == 0x00FFFFFFU);
+    assert(core.gx2.db_stencilrefmask_bf == 0x00FFFFFFU);
+    assert(core.gx2.pending_commands.size() == 9U);
+    assert(invoke(core, stencil_import).reason == StopReason::instruction_limit);
+    assert(core.gx2.pending_commands.size() == 11U);
+
+    EspressoCore uninitialized(0x1000U);
+    register_gx2_hle(uninitialized.hle);
+    const std::uint32_t uninitialized_stencil = uninitialized.hle.bind_import(
+        "gx2", "GX2SetStencilMask");
+    for (std::size_t index = 0; index < 6U; ++index)
+    {
+        uninitialized.state.gpr[index + 3U] = 0xDEAD0000U + static_cast<std::uint32_t>(index);
+    }
+    uninitialized.state.gpr[1] = 0xFFFFFFFFU;
+    const auto uninitialized_gprs = uninitialized.state.gpr;
+    const RunResult uninitialized_result = invoke(uninitialized, uninitialized_stencil);
+    assert(uninitialized_result.reason == StopReason::hle_error);
+    assert(uninitialized_result.detail.find("gx2::GX2SetStencilMask") !=
+           std::string::npos);
+    assert(uninitialized.state.gpr == uninitialized_gprs);
+    assert(!uninitialized.gx2.db_stencilrefmask_valid);
+    assert(uninitialized.gx2.db_stencilrefmask == 0U);
+    assert(!uninitialized.gx2.db_stencilrefmask_bf_valid);
+    assert(uninitialized.gx2.db_stencilrefmask_bf == 0U);
+    assert(uninitialized.gx2.pending_commands.empty());
+
+    EspressoCore independent(0x1000U);
+    register_gx2_hle(independent.hle);
+    independent.gx2.initialized = true;
+    independent.state.gpr[1] = 0xFFFFFFFFU;
+    const std::uint32_t independent_stencil = independent.hle.bind_import(
+        "gx2", "GX2SetStencilMask");
+    set_arguments(independent, {1U, 2U, 3U, 4U, 5U, 6U});
+    assert(invoke(independent, independent_stencil).reason == StopReason::instruction_limit);
+    assert(independent.gx2.db_stencilrefmask_valid);
+    assert(independent.gx2.db_stencilrefmask == 0x00020103U);
+    assert(independent.gx2.db_stencilrefmask_bf_valid);
+    assert(independent.gx2.db_stencilrefmask_bf == 0x00050406U);
+    assert(independent.gx2.pending_commands.size() == 2U);
+    assert(!core.gx2.db_stencilrefmask_valid ||
+           core.gx2.db_stencilrefmask == 0x00FFFFFFU);
+
+    core.state.cia = wrong_library;
+    core.state.lr = return_address;
+    const RunResult wrong_library_result = core.run(1U);
+    assert(wrong_library_result.reason == StopReason::unimplemented_hle_call);
+    assert(wrong_library_result.hle_call == "coreinit::GX2SetStencilMask");
+
+    core.reset();
+    assert(!core.gx2.db_stencilrefmask_valid);
+    assert(core.gx2.db_stencilrefmask == 0U);
+    assert(!core.gx2.db_stencilrefmask_bf_valid);
+    assert(core.gx2.db_stencilrefmask_bf == 0U);
     assert(!core.gx2.db_depth_control_valid);
     assert(core.gx2.db_depth_control == 0U);
     assert(core.gx2.pending_commands.empty());
@@ -12777,6 +13026,7 @@ int main(int argc, char* argv[])
     mem_alloc_from_frm_heap_ex_hle_tests();
     gx2_init_hle_tests();
     gx2_set_depth_stencil_control_hle_tests();
+    gx2_set_stencil_mask_hle_tests();
     mem_get_total_free_size_for_exp_heap_hle_tests();
     mem_get_allocatable_size_for_exp_heap_ex_hle_tests();
     compare_and_conditional_branch_tests();
