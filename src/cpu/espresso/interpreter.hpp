@@ -1,6 +1,7 @@
 #pragma once
 
 #include "cpu/espresso/cpu_state.hpp"
+#include "cpu/espresso/gx2_hle.hpp"
 #include "cpu/espresso/guest_memory.hpp"
 #include "cpu/espresso/hle_dispatcher.hpp"
 
@@ -168,6 +169,7 @@ public:
         current_thread_address = 0;
         fs_initialized = false;
         nn_save_initialized = false;
+        gx2 = {};
         fs_clients.clear();
         next_fs_client_handle = 1U;
         guest_heap_cursor = 0;
@@ -220,6 +222,7 @@ public:
     std::uint32_t current_thread_address{};
     bool fs_initialized{};
     bool nn_save_initialized{};
+    Gx2RuntimeState gx2{};
     std::vector<FsClientRegistration> fs_clients;
     std::uint32_t next_fs_client_handle{1U};
     std::uint32_t guest_heap_cursor{};

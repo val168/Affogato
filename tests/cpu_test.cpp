@@ -21,6 +21,7 @@
 #include <iostream>
 #include <iterator>
 #include <optional>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -9659,6 +9660,417 @@ void mem_get_allocatable_size_for_exp_heap_ex_hle_tests()
     assert(fresh.state.gpr[3] == positive_32);
 }
 
+void gx2_init_hle_tests()
+{
+    constexpr std::uint32_t return_address = 0x0274BD9CU;
+    constexpr std::uint32_t attributes_address = 0x1000U;
+    constexpr std::uint32_t pool_address = 0x8000U;
+    constexpr std::uint32_t pool_size = 0x8000U;
+    constexpr std::uint32_t gx2_init_end = 0U;
+    constexpr std::uint32_t gx2_init_command_buffer_base = 1U;
+    constexpr std::uint32_t gx2_init_command_buffer_pool_size = 2U;
+    constexpr std::uint32_t gx2_init_argc = 7U;
+    constexpr std::uint32_t gx2_init_argv = 8U;
+    constexpr std::uint32_t gx2_init_profile_mode = 9U;
+    constexpr std::uint32_t gx2_init_toss_stage = 10U;
+    constexpr std::uint32_t gx2_init_app_io_thread_stack_size = 11U;
+
+    const auto write_stream = [](EspressoCore& core,
+                                 std::uint32_t address,
+                                 std::span<const std::uint32_t> words) {
+        for (std::size_t index = 0; index < words.size(); ++index)
+        {
+            core.memory.write32_be(
+                address + static_cast<std::uint32_t>(index * sizeof(std::uint32_t)),
+                words[index]);
+        }
+    };
+    const auto invoke = [&](EspressoCore& core,
+                            std::uint32_t import,
+                            std::uint32_t attributes) {
+        core.state.gpr[3] = attributes;
+        core.state.lr = return_address;
+        core.state.cia = import;
+        return core.run(1U);
+    };
+
+    EspressoCore core(0x20000U);
+    register_gx2_hle(core.hle);
+    const std::uint32_t gx2_init = core.hle.bind_import("gx2", "GX2Init");
+    const std::array<std::uint32_t, 9> wind_waker_attributes{
+        gx2_init_command_buffer_base, pool_address,
+        gx2_init_command_buffer_pool_size, pool_size,
+        gx2_init_argc, 0U,
+        gx2_init_argv, 0U,
+        gx2_init_end};
+    write_stream(core, attributes_address, wind_waker_attributes);
+    const std::array<std::uint8_t, 36> attribute_bytes_before = [&] {
+        std::array<std::uint8_t, 36> bytes{};
+        core.memory.read_bytes(attributes_address, bytes);
+        return bytes;
+    }();
+    core.memory.write8(pool_address, 0xA5U);
+    core.memory.write8(pool_address + pool_size / 2U, 0x5AU);
+    core.memory.write8(pool_address + pool_size - 1U, 0xC3U);
+    const std::uint32_t initial_cursor = 0x18000U;
+    core.configure_guest_heap(initial_cursor, 0x1F000U);
+    core.current_thread_address = 0x1100U;
+    core.fs_initialized = true;
+    core.nn_save_initialized = true;
+    core.base_heap_handles[1] = 0x1800U;
+    core.mem2_heap_region_begin = 0x1900U;
+    core.mem2_heap_region_end = 0x1A00U;
+    for (std::uint32_t reg = 0; reg < core.state.gpr.size(); ++reg)
+    {
+        core.state.gpr[reg] = 0xA5000000U + reg * 0x101U;
+    }
+    for (std::uint32_t reg = 0; reg < core.state.fpr.size(); ++reg)
+    {
+        core.state.fpr[reg] = 0x1111000000000000ULL + reg;
+        core.state.fpr_ps1[reg] = 0x2222000000000000ULL + reg;
+    }
+    core.state.cr = 0x12345678U;
+    core.state.xer = 0xA00000A5U;
+    core.state.ctr = 0xCAFEBABEU;
+    core.state.fpscr = 0x5A5AA55AU;
+    core.state.gpr[3] = attributes_address;
+    const auto gprs_before = core.state.gpr;
+    const auto fprs_before = core.state.fpr;
+    const auto ps1_before = core.state.fpr_ps1;
+    const std::uint32_t cr_before = core.state.cr;
+    const std::uint32_t xer_before = core.state.xer;
+    const std::uint32_t ctr_before = core.state.ctr;
+    const std::uint32_t fpscr_before = core.state.fpscr;
+    const std::uint32_t lr_before = return_address;
+    const std::uint32_t thread_before = core.current_thread_address;
+    const auto handles_before = core.base_heap_handles;
+    const std::uint32_t mem2_begin_before = core.mem2_heap_region_begin;
+    const std::uint32_t mem2_end_before = core.mem2_heap_region_end;
+    assert(!core.gx2.initialized);
+    const RunResult current_result = invoke(core, gx2_init, attributes_address);
+    assert(current_result.reason == StopReason::instruction_limit);
+    assert(current_result.steps == 1U);
+    assert(core.gx2.initialized);
+    assert(core.gx2.main_core_id == 1U);
+    assert(core.gx2.command_buffer_pool_base == pool_address);
+    assert(core.gx2.command_buffer_pool_size == pool_size);
+    assert(!core.gx2.command_buffer_pool_owned);
+    assert(core.gx2.argc == 0U && core.gx2.argv == 0U);
+    assert(core.gx2.profile_mode == 0U && core.gx2.toss_stage == 0U);
+    assert(core.gx2.app_io_thread_stack_size == 0x1000U);
+    assert(core.gx2.gpu_timeout_ms == 10000U);
+    assert(core.gx2.hang_state == 0U);
+    assert(core.gx2.hang_response == 1U);
+    assert(core.gx2.hang_reset_swap_timeout == 1000U);
+    assert(core.gx2.hang_reset_swaps_outstanding == 3U);
+    assert(core.gx2.swap_interval == 1U);
+    assert(core.gx2.flip_request_count == 0U && core.gx2.flip_execute_count == 0U);
+    assert(core.state.gpr == gprs_before);
+    assert(core.state.fpr == fprs_before && core.state.fpr_ps1 == ps1_before);
+    assert(core.state.cr == cr_before && core.state.xer == xer_before);
+    assert(core.state.ctr == ctr_before && core.state.fpscr == fpscr_before);
+    assert(core.state.lr == lr_before && core.state.cia == return_address);
+    assert(core.current_thread_address == thread_before);
+    assert(core.guest_heap_cursor == initial_cursor);
+    assert(core.base_heap_handles == handles_before);
+    assert(core.mem2_heap_region_begin == mem2_begin_before);
+    assert(core.mem2_heap_region_end == mem2_end_before);
+    std::array<std::uint8_t, 36> attribute_bytes_after{};
+    core.memory.read_bytes(attributes_address, attribute_bytes_after);
+    assert(attribute_bytes_after == attribute_bytes_before);
+    assert(core.memory.read8(pool_address) == 0xA5U);
+    assert(core.memory.read8(pool_address + pool_size / 2U) == 0x5AU);
+    assert(core.memory.read8(pool_address + pool_size - 1U) == 0xC3U);
+
+    // Exact Wind Waker inputs live in sparse guest regions in this small
+    // fixture, so the regression need not allocate the full default memory.
+    EspressoCore wind_waker(0x1000U);
+    constexpr std::uint32_t real_attributes_address = 0x100FEE20U;
+    constexpr std::uint32_t real_pool_address = 0x06A23700U;
+    constexpr std::uint32_t real_pool_size = 0x00400000U;
+    wind_waker.memory.map_region(real_attributes_address, 9U * sizeof(std::uint32_t));
+    wind_waker.memory.map_region(real_pool_address, real_pool_size);
+    const std::array<std::uint32_t, 9> exact_wind_waker_attributes{
+        gx2_init_command_buffer_base, real_pool_address,
+        gx2_init_command_buffer_pool_size, real_pool_size,
+        gx2_init_argc, 0U,
+        gx2_init_argv, 0U,
+        gx2_init_end};
+    write_stream(wind_waker, real_attributes_address, exact_wind_waker_attributes);
+    wind_waker.memory.write8(real_pool_address, 0xA1U);
+    wind_waker.memory.write8(real_pool_address + real_pool_size / 2U, 0xB2U);
+    wind_waker.memory.write8(real_pool_address + real_pool_size - 1U, 0xC3U);
+    const auto exact_stream_before = [&] {
+        std::array<std::uint8_t, 36> bytes{};
+        wind_waker.memory.read_bytes(real_attributes_address, bytes);
+        return bytes;
+    }();
+    register_gx2_hle(wind_waker.hle);
+    const auto exact_import = wind_waker.hle.bind_import("gx2", "GX2Init");
+    const auto coreinit_import = wind_waker.hle.bind_import("coreinit", "GX2Init");
+    const std::uint32_t exact_cursor_before = wind_waker.guest_heap_cursor;
+    const RunResult exact_result = invoke(
+        wind_waker, exact_import, real_attributes_address);
+    assert(exact_result.reason == StopReason::instruction_limit);
+    assert(wind_waker.gx2.initialized);
+    assert(wind_waker.gx2.main_core_id == 1U);
+    assert(wind_waker.gx2.command_buffer_pool_base == 0x06A23700U);
+    assert(wind_waker.gx2.command_buffer_pool_size == 0x00400000U);
+    assert(static_cast<std::uint64_t>(wind_waker.gx2.command_buffer_pool_base) +
+           wind_waker.gx2.command_buffer_pool_size == 0x06E23700ULL);
+    assert(!wind_waker.gx2.command_buffer_pool_owned);
+    assert(wind_waker.gx2.argc == 0U && wind_waker.gx2.argv == 0U);
+    assert(wind_waker.gx2.profile_mode == 0U && wind_waker.gx2.toss_stage == 0U);
+    assert(wind_waker.gx2.app_io_thread_stack_size == 0x1000U);
+    assert(wind_waker.state.gpr[3] == real_attributes_address);
+    assert(wind_waker.state.cia == return_address);
+    assert(wind_waker.guest_heap_cursor == exact_cursor_before);
+    std::array<std::uint8_t, 36> exact_stream_after{};
+    wind_waker.memory.read_bytes(real_attributes_address, exact_stream_after);
+    assert(exact_stream_after == exact_stream_before);
+    assert(wind_waker.memory.read8(real_pool_address) == 0xA1U);
+    assert(wind_waker.memory.read8(real_pool_address + real_pool_size / 2U) == 0xB2U);
+    assert(wind_waker.memory.read8(real_pool_address + real_pool_size - 1U) == 0xC3U);
+    wind_waker.state.cia = coreinit_import;
+    wind_waker.state.lr = return_address + 4U;
+    const RunResult wrong_library = wind_waker.run(1U);
+    assert(wrong_library.reason == StopReason::unimplemented_hle_call);
+    assert(wrong_library.hle_call == "coreinit::GX2Init");
+
+    // An explicit base with no size attribute keeps the documented 4 MiB
+    // default rather than interpreting absence as a zero-sized pool.
+    EspressoCore default_size(0x410000U);
+    register_gx2_hle(default_size.hle);
+    const auto default_size_import = default_size.hle.bind_import("gx2", "GX2Init");
+    const std::array<std::uint32_t, 3> base_only_attributes{
+        gx2_init_command_buffer_base, 0x8000U, gx2_init_end};
+    write_stream(default_size, 0x100U, base_only_attributes);
+    assert(invoke(default_size, default_size_import, 0x100U).reason ==
+           StopReason::instruction_limit);
+    assert(default_size.gx2.command_buffer_pool_base == 0x8000U);
+    assert(default_size.gx2.command_buffer_pool_size == 0x00400000U);
+
+    // Cemu's repeated-init policy is a successful no-op, even for a bad r3.
+    const Gx2RuntimeState initialized_state = core.gx2;
+    core.state.gpr[3] = 0xFFFFFFFFU;
+    core.state.cia = gx2_init;
+    core.state.lr = return_address + 4U;
+    assert(core.step() == StepResult::executed);
+    assert(core.gx2.initialized);
+    assert(core.gx2.command_buffer_pool_base == initialized_state.command_buffer_pool_base);
+    assert(core.gx2.command_buffer_pool_size == initialized_state.command_buffer_pool_size);
+    assert(core.state.gpr[3] == 0xFFFFFFFFU);
+    assert(core.state.cia == return_address + 4U);
+
+    // Attributes are sequential, duplicate known IDs replace earlier values,
+    // unknown pairs are skipped, and argv remains opaque.
+    EspressoCore parsed(0x30000U);
+    register_gx2_hle(parsed.hle);
+    const auto parsed_import = parsed.hle.bind_import("gx2", "GX2Init");
+    const std::array<std::uint32_t, 19> richer_attributes{
+        0x12345678U, 0xDEADBEEFU,
+        gx2_init_command_buffer_base, 0x8000U,
+        gx2_init_command_buffer_pool_size, 0x1000U,
+        gx2_init_command_buffer_pool_size, 0x2000U,
+        gx2_init_argc, 123U,
+        gx2_init_argv, 0xDEADBEEFU,
+        gx2_init_profile_mode, 4U,
+        gx2_init_toss_stage, 9U,
+        gx2_init_app_io_thread_stack_size, 0x8000U,
+        gx2_init_end};
+    write_stream(parsed, 0x100U, richer_attributes);
+    const RunResult parsed_result = invoke(parsed, parsed_import, 0x100U);
+    assert(parsed_result.reason == StopReason::instruction_limit);
+    assert(parsed.gx2.command_buffer_pool_base == 0x8000U);
+    assert(parsed.gx2.command_buffer_pool_size == 0x2000U); // Decaf minimum
+    assert(!parsed.gx2.command_buffer_pool_owned);
+    assert(parsed.gx2.argc == 123U && parsed.gx2.argv == 0xDEADBEEFU);
+    assert(parsed.gx2.profile_mode == 4U && parsed.gx2.toss_stage == 9U);
+    assert(parsed.gx2.app_io_thread_stack_size == 0x8000U);
+
+    // A null stream uses defaults and the existing guest bump allocator, with
+    // ownership recorded in the session state and no host allocation.
+    EspressoCore fallback(0x500000U);
+    register_gx2_hle(fallback.hle);
+    const auto fallback_import = fallback.hle.bind_import("gx2", "GX2Init");
+    fallback.configure_guest_heap(0x1000U, 0x480000U);
+    fallback.memory.write8(0x1000U, 0xD1U);
+    fallback.memory.write8(0x201000U, 0xD2U);
+    fallback.memory.write8(0x400FFFU, 0xD3U);
+    const RunResult fallback_result = invoke(fallback, fallback_import, 0U);
+    assert(fallback_result.reason == StopReason::instruction_limit);
+    assert(fallback.gx2.initialized);
+    assert(fallback.gx2.command_buffer_pool_base == 0x1000U);
+    assert(fallback.gx2.command_buffer_pool_size == 0x00400000U);
+    assert(fallback.gx2.command_buffer_pool_owned);
+    assert(fallback.guest_heap_cursor == 0x401000U);
+    assert((fallback.gx2.command_buffer_pool_base & 0xFFU) == 0U);
+    assert(fallback.gx2.argc == 0U && fallback.gx2.argv == 0U);
+    assert(fallback.memory.read8(0x1000U) == 0xD1U);
+    assert(fallback.memory.read8(0x201000U) == 0xD2U);
+    assert(fallback.memory.read8(0x400FFFU) == 0xD3U);
+
+    // A custom size without a base also uses the 0x100-aligned bump allocator.
+    EspressoCore custom_fallback(0x10000U);
+    register_gx2_hle(custom_fallback.hle);
+    const auto custom_import = custom_fallback.hle.bind_import("gx2", "GX2Init");
+    custom_fallback.configure_guest_heap(0x1001U, 0x9000U);
+    const std::array<std::uint32_t, 3> custom_size_attributes{
+        gx2_init_command_buffer_pool_size, 0x3000U, gx2_init_end};
+    write_stream(custom_fallback, 0x100U, custom_size_attributes);
+    const RunResult custom_result = invoke(custom_fallback, custom_import, 0x100U);
+    assert(custom_result.reason == StopReason::instruction_limit);
+    assert(custom_fallback.gx2.command_buffer_pool_base == 0x1100U);
+    assert(custom_fallback.gx2.command_buffer_pool_size == 0x3000U);
+    assert(custom_fallback.gx2.command_buffer_pool_owned);
+    assert(custom_fallback.guest_heap_cursor == 0x4100U);
+
+    // The END word is the final readable word: no value or following word is
+    // accessed after termination.
+    EspressoCore final_end(0x100U);
+    final_end.memory.map_region(0x2000U, 4U);
+    final_end.memory.map_region(0x3000U, 0x400000U);
+    final_end.memory.write32_be(0x2000U, gx2_init_end);
+    final_end.configure_guest_heap(0x3000U, 0x403000U);
+    register_gx2_hle(final_end.hle);
+    const auto final_end_import = final_end.hle.bind_import("gx2", "GX2Init");
+    const RunResult final_end_result = invoke(final_end, final_end_import, 0x2000U);
+    assert(final_end_result.reason == StopReason::instruction_limit);
+    assert(final_end.gx2.initialized);
+
+    const auto expect_init_error = [&](EspressoCore& failing,
+                                       std::uint32_t import,
+                                       std::uint32_t attributes) {
+        const Gx2RuntimeState before = failing.gx2;
+        const std::uint32_t cursor_before = failing.guest_heap_cursor;
+        const RunResult result = invoke(failing, import, attributes);
+        assert(result.reason == StopReason::hle_error);
+        assert(result.detail.find("gx2::GX2Init") != std::string::npos);
+        assert(!failing.gx2.initialized);
+        assert(failing.gx2.command_buffer_pool_base == before.command_buffer_pool_base);
+        assert(failing.gx2.command_buffer_pool_size == before.command_buffer_pool_size);
+        assert(failing.guest_heap_cursor == cursor_before);
+    };
+
+    EspressoCore no_heap(0x10000U);
+    register_gx2_hle(no_heap.hle);
+    const auto no_heap_import = no_heap.hle.bind_import("gx2", "GX2Init");
+    no_heap.configure_guest_heap(0x1000U, 0x2000U);
+    expect_init_error(no_heap, no_heap_import, 0U);
+
+    EspressoCore bad_pool(0x10000U);
+    register_gx2_hle(bad_pool.hle);
+    const auto bad_pool_import = bad_pool.hle.bind_import("gx2", "GX2Init");
+    const std::array<std::uint32_t, 5> bad_pool_attributes{
+        gx2_init_command_buffer_base, 0xF000U,
+        gx2_init_command_buffer_pool_size, 0x2000U,
+        gx2_init_end};
+    write_stream(bad_pool, 0x100U, bad_pool_attributes);
+    expect_init_error(bad_pool, bad_pool_import, 0x100U);
+
+    EspressoCore wrapping_pool(0x10000U);
+    register_gx2_hle(wrapping_pool.hle);
+    const auto wrapping_import = wrapping_pool.hle.bind_import("gx2", "GX2Init");
+    const std::array<std::uint32_t, 5> wrapping_pool_attributes{
+        gx2_init_command_buffer_base, 0xFFFFF000U,
+        gx2_init_command_buffer_pool_size, 0x2000U,
+        gx2_init_end};
+    write_stream(wrapping_pool, 0x100U, wrapping_pool_attributes);
+    expect_init_error(wrapping_pool, wrapping_import, 0x100U);
+
+    EspressoCore misaligned_pool(0x10000U);
+    register_gx2_hle(misaligned_pool.hle);
+    const auto misaligned_import = misaligned_pool.hle.bind_import("gx2", "GX2Init");
+    const std::array<std::uint32_t, 5> misaligned_attributes{
+        gx2_init_command_buffer_base, 0x8004U,
+        gx2_init_command_buffer_pool_size, 0x2000U,
+        gx2_init_end};
+    write_stream(misaligned_pool, 0x100U, misaligned_attributes);
+    expect_init_error(misaligned_pool, misaligned_import, 0x100U);
+
+    EspressoCore partial_pair(0x2000U);
+    register_gx2_hle(partial_pair.hle);
+    const auto partial_import = partial_pair.hle.bind_import("gx2", "GX2Init");
+    partial_pair.memory.write32_be(0x1FFCU, gx2_init_command_buffer_base);
+    expect_init_error(partial_pair, partial_import, 0x1FFCU);
+
+    EspressoCore wrapping_attributes(0x100U);
+    wrapping_attributes.memory.map_region(0xFFFFFFFCU, 4U);
+    wrapping_attributes.memory.write32_be(0xFFFFFFFCU, gx2_init_command_buffer_base);
+    register_gx2_hle(wrapping_attributes.hle);
+    const auto wrapping_attributes_import =
+        wrapping_attributes.hle.bind_import("gx2", "GX2Init");
+    expect_init_error(wrapping_attributes, wrapping_attributes_import, 0xFFFFFFFCU);
+
+    EspressoCore unterminated(0x1000U);
+    register_gx2_hle(unterminated.hle);
+    const auto unterminated_import = unterminated.hle.bind_import("gx2", "GX2Init");
+    std::array<std::uint32_t, 2U * 65U> pairs{};
+    for (std::size_t index = 0; index < pairs.size(); index += 2U)
+    {
+        pairs[index] = 0x12345678U;
+        pairs[index + 1U] = static_cast<std::uint32_t>(index);
+    }
+    write_stream(unterminated, 0x100U, pairs);
+    expect_init_error(unterminated, unterminated_import, 0x100U);
+
+    // Explicit pool validation and failed fallback allocation are transactional.
+    EspressoCore fallback_failure(0x8000U);
+    register_gx2_hle(fallback_failure.hle);
+    const auto fallback_failure_import = fallback_failure.hle.bind_import("gx2", "GX2Init");
+    fallback_failure.configure_guest_heap(0x1000U, 0x2000U);
+    expect_init_error(fallback_failure, fallback_failure_import, 0U);
+
+    EspressoCore unmapped_fallback(0x1000U);
+    register_gx2_hle(unmapped_fallback.hle);
+    const auto unmapped_fallback_import = unmapped_fallback.hle.bind_import("gx2", "GX2Init");
+    unmapped_fallback.configure_guest_heap(0x2000U, 0x500000U);
+    expect_init_error(unmapped_fallback, unmapped_fallback_import, 0U);
+
+    // Reset and independent cores own independent lifecycle state.
+    core.reset();
+    assert(!core.gx2.initialized);
+    assert(core.gx2.command_buffer_pool_base == 0U);
+    assert(core.gx2.command_buffer_pool_size == 0U);
+    assert(!core.gx2.command_buffer_pool_owned);
+
+    EspressoCore independent(0x20000U);
+    register_gx2_hle(independent.hle);
+    const auto independent_import = independent.hle.bind_import("gx2", "GX2Init");
+    const std::array<std::uint32_t, 5> independent_attributes{
+        gx2_init_command_buffer_base, 0x10000U,
+        gx2_init_command_buffer_pool_size, 0x2000U,
+        gx2_init_end};
+    write_stream(independent, 0x100U, independent_attributes);
+    assert(invoke(independent, independent_import, 0x100U).reason ==
+           StopReason::instruction_limit);
+    assert(independent.gx2.initialized);
+    assert(!core.gx2.initialized);
+
+    // Verify normal Emulator/RPX import registration, rather than relying only
+    // on direct HLE registration in these focused unit tests.
+    RpxImportOptions import_options;
+    import_options.library = "gx2";
+    RpxRelocationSymbol import_symbol{
+        "GX2Init", import_options.section_address + import_options.slot_offset,
+        1U, 2U, 8U, 0};
+    RpxRelocationOptions relocation;
+    relocation.type = 10U;
+    relocation.offset = 4U;
+    relocation.branch_instruction = 0x48000001U;
+    const auto import_rpx = make_minimal_compressed_rpx(
+        0x02000000U, 16U, import_symbol, relocation, import_options);
+    affogato::Emulator emulator;
+    static_cast<void>(emulator.load_rpx(import_rpx));
+    const auto emulator_result = emulator.run(3U);
+    assert(emulator_result.execution.steps == 3U);
+    assert(emulator_result.execution.reason == StopReason::instruction_limit);
+    assert(emulator.core().gx2.initialized);
+    assert(emulator.core().gx2.command_buffer_pool_owned);
+    assert(emulator.core().state.gpr[3] == 5U);
+    assert(emulator.core().gx2.command_buffer_pool_size == 0x00400000U);
+}
+
 void compare_and_conditional_branch_tests()
 {
     EspressoCore unsigned_compare_core(8);
@@ -12121,6 +12533,7 @@ int main(int argc, char* argv[])
     mem_get_base_heap_handle_hle_tests();
     mem_get_allocatable_size_for_frm_heap_ex_hle_tests();
     mem_alloc_from_frm_heap_ex_hle_tests();
+    gx2_init_hle_tests();
     mem_get_total_free_size_for_exp_heap_hle_tests();
     mem_get_allocatable_size_for_exp_heap_ex_hle_tests();
     compare_and_conditional_branch_tests();
