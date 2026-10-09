@@ -32,6 +32,7 @@ constexpr std::uint32_t db_depth_control_register = 0x00028800U;
 constexpr std::uint32_t db_stencilrefmask_register = 0x00028430U;
 constexpr std::uint32_t db_stencilrefmask_bf_register = 0x00028434U;
 constexpr std::uint32_t pa_su_sc_mode_cntl_register = 0x00028814U;
+constexpr std::uint32_t cb_color_control_register = 0x00028808U;
 
 std::uint32_t pack_stencil_ref_mask(
     std::uint32_t mask,
@@ -67,6 +68,23 @@ std::uint32_t pack_polygon_control(
            (boolean_bit(polygon_offset_front_enable) << 11U) |
            (boolean_bit(polygon_offset_back_enable) << 12U) |
            (boolean_bit(polygon_offset_parallel_enable) << 13U);
+}
+
+std::uint32_t pack_color_control(
+    std::uint32_t rop3,
+    std::uint32_t target_blend_enable,
+    std::uint32_t multi_write_enable,
+    std::uint32_t color_write_enable)
+{
+    const std::uint32_t multi_write = multi_write_enable != 0U ? 1U : 0U;
+    // Cafe maps disabled color writes to SPECIAL_OP::DISABLE; enabled writes
+    // select NORMAL. CB_COLOR_CONTROL has no separate color-write bit.
+    const std::uint32_t special_op = color_write_enable != 0U ? 0U : 1U;
+
+    return (multi_write << 1U) |
+           (special_op << 4U) |
+           ((target_blend_enable & 0xFFU) << 8U) |
+           ((rop3 & 0xFFU) << 16U);
 }
 
 struct ParsedGx2Attributes
@@ -431,6 +449,36 @@ void register_gx2_hle(HleDispatcher& dispatcher)
                 pa_su_sc_mode_cntl_register,
                 packed});
             // This API is void: preserve all guest CPU state and return via LR.
+        });
+
+    dispatcher.register_function(
+        "gx2",
+        "GX2SetColorControl",
+        [](EspressoCore& core) {
+            if (!core.gx2.initialized)
+            {
+                throw HleExecutionError(
+                    "gx2::GX2SetColorControl: GX2 has not been initialized");
+            }
+
+            const std::uint32_t rop3 = core.state.gpr[3];
+            const std::uint32_t target_blend_enable = core.state.gpr[4];
+            const std::uint32_t multi_write_enable = core.state.gpr[5];
+            const std::uint32_t color_write_enable = core.state.gpr[6];
+            const std::uint32_t packed = pack_color_control(
+                rop3,
+                target_blend_enable,
+                multi_write_enable,
+                color_write_enable);
+
+            core.gx2.cb_color_control = packed;
+            core.gx2.cb_color_control_valid = true;
+            core.gx2.pending_commands.push_back({
+                Gx2CommandType::set_context_register,
+                cb_color_control_register,
+                packed});
+            // This void setter records logical Latte state only. PM4 encoding,
+            // command-pool writes, and renderer translation remain deferred.
         });
 }
 

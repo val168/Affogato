@@ -9768,6 +9768,7 @@ void gx2_init_hle_tests()
     assert(!core.gx2.db_stencilrefmask_valid && core.gx2.db_stencilrefmask == 0U);
     assert(!core.gx2.db_stencilrefmask_bf_valid && core.gx2.db_stencilrefmask_bf == 0U);
     assert(!core.gx2.pa_su_sc_mode_cntl_valid && core.gx2.pa_su_sc_mode_cntl == 0U);
+    assert(!core.gx2.cb_color_control_valid && core.gx2.cb_color_control == 0U);
     assert(core.gx2.pending_commands.empty());
     assert(core.state.gpr == gprs_before);
     assert(core.state.fpr == fprs_before && core.state.fpr_ps1 == ps1_before);
@@ -10858,6 +10859,275 @@ void gx2_set_polygon_control_hle_tests()
     assert(!core.gx2.initialized);
     assert(!core.gx2.pa_su_sc_mode_cntl_valid);
     assert(core.gx2.pa_su_sc_mode_cntl == 0U);
+    assert(core.gx2.pending_commands.empty());
+}
+
+void gx2_set_color_control_hle_tests()
+{
+    constexpr std::uint32_t return_address = 0x0275087CU;
+    constexpr std::uint32_t attribute_address = 0x100U;
+    constexpr std::uint32_t pool_address = 0x8000U;
+    constexpr std::uint32_t pool_size = 0x8000U;
+    constexpr std::uint32_t stack_pointer = 0x3000U;
+    constexpr std::uint32_t cb_color_control_address = 0x00028808U;
+
+    const auto invoke = [&](EspressoCore& core, std::uint32_t import) {
+        core.state.cia = import;
+        core.state.lr = return_address;
+        return core.run(1U);
+    };
+    const auto set_color_arguments = [](EspressoCore& core,
+                                        std::uint32_t rop3,
+                                        std::uint32_t target_blend_enable,
+                                        std::uint32_t multi_write_enable,
+                                        std::uint32_t color_write_enable) {
+        core.state.gpr[3] = rop3;
+        core.state.gpr[4] = target_blend_enable;
+        core.state.gpr[5] = multi_write_enable;
+        core.state.gpr[6] = color_write_enable;
+    };
+
+    EspressoCore core(0x20000U);
+    register_gx2_hle(core.hle);
+    const std::uint32_t gx2_init_import = core.hle.bind_import("gx2", "GX2Init");
+    const std::uint32_t depth_import = core.hle.bind_import(
+        "gx2", "GX2SetDepthStencilControl");
+    const std::uint32_t stencil_import = core.hle.bind_import(
+        "gx2", "GX2SetStencilMask");
+    const std::uint32_t polygon_import = core.hle.bind_import(
+        "gx2", "GX2SetPolygonControl");
+    const std::uint32_t color_import = core.hle.bind_import(
+        "gx2", "GX2SetColorControl");
+    const std::uint32_t wrong_library_import = core.hle.bind_import(
+        "coreinit", "GX2SetColorControl");
+    assert(color_import != 0U);
+
+    // Initialize the modeled pool through GX2Init, then create the preceding
+    // four startup writes through their real setters in guest order.
+    const std::array<std::uint32_t, 5> attributes{
+        1U, pool_address, 2U, pool_size, 0U};
+    for (std::size_t index = 0; index < attributes.size(); ++index)
+    {
+        core.memory.write32_be(
+            attribute_address + static_cast<std::uint32_t>(index * 4U),
+            attributes[index]);
+    }
+    assert(!core.gx2.cb_color_control_valid && core.gx2.cb_color_control == 0U);
+    core.state.gpr[3] = attribute_address;
+    assert(invoke(core, gx2_init_import).reason == StopReason::instruction_limit);
+    assert(core.gx2.initialized);
+    assert(!core.gx2.cb_color_control_valid && core.gx2.cb_color_control == 0U);
+    assert(core.gx2.pending_commands.empty());
+
+    core.state.gpr[1] = stack_pointer;
+    for (std::uint32_t offset = 0x08U; offset <= 0x18U; offset += 4U)
+    {
+        core.memory.write32_be(stack_pointer + offset, 0U);
+    }
+    const std::array<std::uint32_t, 8> depth_args{1U, 1U, 3U, 0U, 0U, 0U, 0U, 0U};
+    for (std::size_t index = 0; index < depth_args.size(); ++index)
+    {
+        core.state.gpr[index + 3U] = depth_args[index];
+    }
+    assert(invoke(core, depth_import).reason == StopReason::instruction_limit);
+    const std::array<std::uint32_t, 6> stencil_args{0xFFU, 0xFFU, 0U, 0xFFU, 0xFFU, 0U};
+    for (std::size_t index = 0; index < stencil_args.size(); ++index)
+    {
+        core.state.gpr[index + 3U] = stencil_args[index];
+    }
+    assert(invoke(core, stencil_import).reason == StopReason::instruction_limit);
+    const std::array<std::uint32_t, 8> polygon_args{0U, 0U, 1U, 0U, 2U, 2U, 0U, 0U};
+    for (std::size_t index = 0; index < polygon_args.size(); ++index)
+    {
+        core.state.gpr[index + 3U] = polygon_args[index];
+    }
+    core.memory.write32_be(stack_pointer + 0x08U, 0U);
+    assert(invoke(core, polygon_import).reason == StopReason::instruction_limit);
+    assert(core.gx2.pending_commands.size() == 4U);
+    assert(core.gx2.db_depth_control_valid && core.gx2.db_depth_control == 0x36U);
+    assert(core.gx2.db_stencilrefmask_valid &&
+           core.gx2.db_stencilrefmask == 0x00FFFF00U);
+    assert(core.gx2.db_stencilrefmask_bf_valid &&
+           core.gx2.db_stencilrefmask_bf == 0x00FFFF00U);
+    assert(core.gx2.pa_su_sc_mode_cntl_valid &&
+           core.gx2.pa_su_sc_mode_cntl == 0x00000242U);
+
+    core.memory.write8(pool_address, 0xA5U);
+    core.memory.write8(pool_address + pool_size / 2U, 0x5AU);
+    core.memory.write8(pool_address + pool_size - 1U, 0xC3U);
+    for (std::size_t index = 0; index < core.state.gpr.size(); ++index)
+    {
+        core.state.gpr[index] = 0xC8000000U + static_cast<std::uint32_t>(index) * 0x101U;
+    }
+    for (std::size_t index = 0; index < core.state.fpr.size(); ++index)
+    {
+        core.state.fpr[index] = 0x7777000000000000ULL + index;
+        core.state.fpr_ps1[index] = 0x8888000000000000ULL + index;
+    }
+    core.state.cr = 0x13579BDFU;
+    core.state.xer = 0xA5A55A5AU;
+    core.state.ctr = 0x2468ACE0U;
+    core.state.fpscr = 0x5A5AA55AU;
+    core.state.gpr[1] = 0xFFFFFFFFU; // This API must not touch the stack.
+    set_color_arguments(core, 0xCCU, 0xFFU, 0U, 1U);
+
+    const auto gprs_before = core.state.gpr;
+    const auto fprs_before = core.state.fpr;
+    const auto ps1_before = core.state.fpr_ps1;
+    const std::uint32_t cr_before = core.state.cr;
+    const std::uint32_t xer_before = core.state.xer;
+    const std::uint32_t ctr_before = core.state.ctr;
+    const std::uint32_t fpscr_before = core.state.fpscr;
+    const Gx2RuntimeState gx2_before = core.gx2;
+    const std::uint32_t heap_cursor_before = core.guest_heap_cursor;
+    const std::uint32_t heap_limit_before = core.guest_heap_limit;
+    const auto heap_handles_before = core.base_heap_handles;
+    const std::uint32_t mem2_begin_before = core.mem2_heap_region_begin;
+    const std::uint32_t mem2_end_before = core.mem2_heap_region_end;
+    const bool fs_initialized_before = core.fs_initialized;
+    const auto fs_clients_before = core.fs_clients;
+    const bool save_initialized_before = core.nn_save_initialized;
+    std::vector<std::uint8_t> memory_before(core.memory.size());
+    core.memory.read_bytes(0U, memory_before);
+
+    const RunResult wind_waker_result = invoke(core, color_import);
+    assert(wind_waker_result.reason == StopReason::instruction_limit);
+    assert(wind_waker_result.steps == 1U);
+    assert(core.state.gpr == gprs_before);
+    assert(core.state.gpr[3] == 0x000000CCU);
+    assert(core.state.gpr[4] == 0x000000FFU);
+    assert(core.state.gpr[5] == 0U && core.state.gpr[6] == 1U);
+    assert(core.state.fpr == fprs_before && core.state.fpr_ps1 == ps1_before);
+    assert(core.state.cr == cr_before && core.state.xer == xer_before);
+    assert(core.state.ctr == ctr_before && core.state.fpscr == fpscr_before);
+    assert(core.state.lr == return_address && core.state.cia == return_address);
+    assert(core.gx2.cb_color_control_valid);
+    assert(core.gx2.cb_color_control == 0x00CCFF00U);
+    assert(core.gx2.pending_commands.size() == 5U);
+    assert(core.gx2.pending_commands[0].register_address == 0x00028800U);
+    assert(core.gx2.pending_commands[0].value == 0x00000036U);
+    assert(core.gx2.pending_commands[1].register_address == 0x00028430U);
+    assert(core.gx2.pending_commands[1].value == 0x00FFFF00U);
+    assert(core.gx2.pending_commands[2].register_address == 0x00028434U);
+    assert(core.gx2.pending_commands[2].value == 0x00FFFF00U);
+    assert(core.gx2.pending_commands[3].register_address == 0x00028814U);
+    assert(core.gx2.pending_commands[3].value == 0x00000242U);
+    assert(core.gx2.pending_commands[4].type == Gx2CommandType::set_context_register);
+    assert(core.gx2.pending_commands[4].register_address == cb_color_control_address);
+    assert(core.gx2.pending_commands[4].value == 0x00CCFF00U);
+    assert(core.gx2.initialized == gx2_before.initialized);
+    assert(core.gx2.main_core_id == gx2_before.main_core_id);
+    assert(core.gx2.command_buffer_pool_base == gx2_before.command_buffer_pool_base);
+    assert(core.gx2.command_buffer_pool_size == gx2_before.command_buffer_pool_size);
+    assert(core.gx2.command_buffer_pool_owned == gx2_before.command_buffer_pool_owned);
+    assert(core.gx2.argc == gx2_before.argc && core.gx2.argv == gx2_before.argv);
+    assert(core.gx2.profile_mode == gx2_before.profile_mode);
+    assert(core.gx2.toss_stage == gx2_before.toss_stage);
+    assert(core.gx2.app_io_thread_stack_size == gx2_before.app_io_thread_stack_size);
+    assert(core.gx2.gpu_timeout_ms == gx2_before.gpu_timeout_ms);
+    assert(core.gx2.hang_state == gx2_before.hang_state);
+    assert(core.gx2.hang_response == gx2_before.hang_response);
+    assert(core.gx2.hang_reset_swap_timeout == gx2_before.hang_reset_swap_timeout);
+    assert(core.gx2.hang_reset_swaps_outstanding ==
+           gx2_before.hang_reset_swaps_outstanding);
+    assert(core.gx2.swap_interval == gx2_before.swap_interval);
+    assert(core.gx2.flip_request_count == gx2_before.flip_request_count);
+    assert(core.gx2.flip_execute_count == gx2_before.flip_execute_count);
+    assert(core.gx2.db_depth_control_valid == gx2_before.db_depth_control_valid);
+    assert(core.gx2.db_depth_control == gx2_before.db_depth_control);
+    assert(core.gx2.db_stencilrefmask_valid == gx2_before.db_stencilrefmask_valid);
+    assert(core.gx2.db_stencilrefmask == gx2_before.db_stencilrefmask);
+    assert(core.gx2.db_stencilrefmask_bf_valid ==
+           gx2_before.db_stencilrefmask_bf_valid);
+    assert(core.gx2.db_stencilrefmask_bf == gx2_before.db_stencilrefmask_bf);
+    assert(core.gx2.pa_su_sc_mode_cntl_valid == gx2_before.pa_su_sc_mode_cntl_valid);
+    assert(core.gx2.pa_su_sc_mode_cntl == gx2_before.pa_su_sc_mode_cntl);
+    assert(core.guest_heap_cursor == heap_cursor_before);
+    assert(core.guest_heap_limit == heap_limit_before);
+    assert(core.base_heap_handles == heap_handles_before);
+    assert(core.mem2_heap_region_begin == mem2_begin_before);
+    assert(core.mem2_heap_region_end == mem2_end_before);
+    assert(core.fs_initialized == fs_initialized_before);
+    assert(core.fs_clients.size() == fs_clients_before.size());
+    assert(core.nn_save_initialized == save_initialized_before);
+    std::vector<std::uint8_t> memory_after(core.memory.size());
+    core.memory.read_bytes(0U, memory_after);
+    assert(memory_after == memory_before);
+    assert(core.memory.read8(pool_address) == 0xA5U);
+    assert(core.memory.read8(pool_address + pool_size / 2U) == 0x5AU);
+    assert(core.memory.read8(pool_address + pool_size - 1U) == 0xC3U);
+
+    const auto invoke_configuration = [&](std::uint32_t rop3,
+                                          std::uint32_t target_blend,
+                                          std::uint32_t multi_write,
+                                          std::uint32_t color_write,
+                                          std::uint32_t expected) {
+        set_color_arguments(core, rop3, target_blend, multi_write, color_write);
+        const std::size_t old_count = core.gx2.pending_commands.size();
+        assert(invoke(core, color_import).reason == StopReason::instruction_limit);
+        assert(core.gx2.cb_color_control_valid);
+        assert(core.gx2.cb_color_control == expected);
+        assert(core.gx2.pending_commands.size() == old_count + 1U);
+        assert(core.gx2.pending_commands.back().register_address ==
+               cb_color_control_address);
+        assert(core.gx2.pending_commands.back().value == expected);
+    };
+
+    invoke_configuration(0xAAU, 0xA5U, 1U, 0U, 0x00AAA512U);
+    invoke_configuration(0xAAU, 0xA5U, 1U, 1U, 0x00AAA502U);
+    invoke_configuration(0x12345612U, 0x123456A5U, 2U, 0xFFFFFFFFU,
+                         0x0012A502U);
+    invoke_configuration(0U, 0U, 0U, 0U, 0x00000010U);
+    invoke_configuration(0U, 0U, 0U, 1U, 0U);
+    const std::size_t before_duplicate = core.gx2.pending_commands.size();
+    invoke_configuration(0U, 0U, 0U, 1U, 0U);
+    assert(core.gx2.pending_commands.size() == before_duplicate + 1U);
+
+    EspressoCore uninitialized(0x1000U);
+    register_gx2_hle(uninitialized.hle);
+    const std::uint32_t uninitialized_import = uninitialized.hle.bind_import(
+        "gx2", "GX2SetColorControl");
+    uninitialized.state.gpr.fill(0xDEAD0000U);
+    uninitialized.state.gpr[1] = 0xFFFFFFFFU;
+    set_color_arguments(uninitialized, 0xCCU, 0xFFU, 0U, 1U);
+    const auto uninitialized_gprs = uninitialized.state.gpr;
+    const RunResult uninitialized_result = invoke(uninitialized, uninitialized_import);
+    assert(uninitialized_result.reason == StopReason::hle_error);
+    assert(uninitialized_result.detail.find("gx2::GX2SetColorControl") !=
+           std::string::npos);
+    assert(uninitialized.state.gpr == uninitialized_gprs);
+    assert(!uninitialized.gx2.cb_color_control_valid);
+    assert(uninitialized.gx2.cb_color_control == 0U);
+    assert(uninitialized.gx2.pending_commands.empty());
+
+    EspressoCore independent_a(0x1000U);
+    EspressoCore independent_b(0x1000U);
+    register_gx2_hle(independent_a.hle);
+    register_gx2_hle(independent_b.hle);
+    independent_a.gx2.initialized = true;
+    independent_b.gx2.initialized = true;
+    const std::uint32_t independent_import = independent_a.hle.bind_import(
+        "gx2", "GX2SetColorControl");
+    set_color_arguments(independent_a, 0xCCU, 0xFFU, 0U, 1U);
+    assert(invoke(independent_a, independent_import).reason ==
+           StopReason::instruction_limit);
+    assert(independent_a.gx2.cb_color_control_valid);
+    assert(independent_a.gx2.cb_color_control == 0x00CCFF00U);
+    assert(independent_a.gx2.pending_commands.size() == 1U);
+    assert(!independent_b.gx2.cb_color_control_valid);
+    assert(independent_b.gx2.cb_color_control == 0U);
+    assert(independent_b.gx2.pending_commands.empty());
+
+    core.state.cia = wrong_library_import;
+    core.state.lr = return_address;
+    const RunResult wrong_library_result = core.run(1U);
+    assert(wrong_library_result.reason == StopReason::unimplemented_hle_call);
+    assert(wrong_library_result.hle_call == "coreinit::GX2SetColorControl");
+
+    core.reset();
+    assert(!core.gx2.initialized);
+    assert(!core.gx2.cb_color_control_valid);
+    assert(core.gx2.cb_color_control == 0U);
     assert(core.gx2.pending_commands.empty());
 }
 
@@ -13327,6 +13597,7 @@ int main(int argc, char* argv[])
     gx2_set_depth_stencil_control_hle_tests();
     gx2_set_stencil_mask_hle_tests();
     gx2_set_polygon_control_hle_tests();
+    gx2_set_color_control_hle_tests();
     mem_get_total_free_size_for_exp_heap_hle_tests();
     mem_get_allocatable_size_for_exp_heap_ex_hle_tests();
     compare_and_conditional_branch_tests();
