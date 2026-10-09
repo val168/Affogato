@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <vector>
 
@@ -50,6 +51,8 @@ struct Gx2RuntimeState
     std::uint32_t pa_su_sc_mode_cntl{};
     bool cb_color_control_valid{};
     std::uint32_t cb_color_control{};
+    std::array<bool, 8U> cb_blend_control_valid{};
+    std::array<std::uint32_t, 8U> cb_blend_control{};
     std::vector<Gx2Command> pending_commands;
 };
 

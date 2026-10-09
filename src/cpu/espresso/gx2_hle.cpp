@@ -33,6 +33,7 @@ constexpr std::uint32_t db_stencilrefmask_register = 0x00028430U;
 constexpr std::uint32_t db_stencilrefmask_bf_register = 0x00028434U;
 constexpr std::uint32_t pa_su_sc_mode_cntl_register = 0x00028814U;
 constexpr std::uint32_t cb_color_control_register = 0x00028808U;
+constexpr std::uint32_t cb_blend0_control_register = 0x00028780U;
 
 std::uint32_t pack_stencil_ref_mask(
     std::uint32_t mask,
@@ -85,6 +86,26 @@ std::uint32_t pack_color_control(
            (special_op << 4U) |
            ((target_blend_enable & 0xFFU) << 8U) |
            ((rop3 & 0xFFU) << 16U);
+}
+
+std::uint32_t pack_blend_control(
+    std::uint32_t color_source_blend,
+    std::uint32_t color_destination_blend,
+    std::uint32_t color_combine,
+    std::uint32_t use_alpha_blend,
+    std::uint32_t alpha_source_blend,
+    std::uint32_t alpha_destination_blend,
+    std::uint32_t alpha_combine)
+{
+    const std::uint32_t separate_alpha = use_alpha_blend != 0U ? 1U : 0U;
+
+    return (color_source_blend & 0x1FU) |
+           ((color_combine & 0x7U) << 5U) |
+           ((color_destination_blend & 0x1FU) << 8U) |
+           ((alpha_source_blend & 0x1FU) << 16U) |
+           ((alpha_combine & 0x7U) << 21U) |
+           ((alpha_destination_blend & 0x1FU) << 24U) |
+           (separate_alpha << 29U);
 }
 
 struct ParsedGx2Attributes
@@ -479,6 +500,45 @@ void register_gx2_hle(HleDispatcher& dispatcher)
                 packed});
             // This void setter records logical Latte state only. PM4 encoding,
             // command-pool writes, and renderer translation remain deferred.
+        });
+
+    dispatcher.register_function(
+        "gx2",
+        "GX2SetBlendControl",
+        [](EspressoCore& core) {
+            if (!core.gx2.initialized)
+            {
+                throw HleExecutionError(
+                    "gx2::GX2SetBlendControl: GX2 has not been initialized");
+            }
+
+            const std::uint32_t target = core.state.gpr[3];
+            if (target > 7U)
+            {
+                throw HleExecutionError(
+                    "gx2::GX2SetBlendControl: invalid render target");
+            }
+
+            const std::uint32_t packed = pack_blend_control(
+                core.state.gpr[4],
+                core.state.gpr[5],
+                core.state.gpr[6],
+                core.state.gpr[7],
+                core.state.gpr[8],
+                core.state.gpr[9],
+                core.state.gpr[10]);
+            const std::size_t target_index = static_cast<std::size_t>(target);
+            const std::uint32_t register_address =
+                cb_blend0_control_register + target * sizeof(std::uint32_t);
+
+            core.gx2.cb_blend_control[target_index] = packed;
+            core.gx2.cb_blend_control_valid[target_index] = true;
+            core.gx2.pending_commands.push_back({
+                Gx2CommandType::set_context_register,
+                register_address,
+                packed});
+            // This void setter records logical per-target Latte state only.
+            // Raw PM4 and renderer blending are intentionally deferred.
         });
 }
 
