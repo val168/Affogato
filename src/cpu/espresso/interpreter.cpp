@@ -492,6 +492,7 @@ void set_record_result(CpuState& state, std::uint32_t value)
     case Opcode::subtract_from: return "subf";
     case Opcode::subtract_from_carrying: return "subfc";
     case Opcode::subtract_from_extended: return "subfe";
+    case Opcode::subtract_from_zero_extended: return "subfze";
     case Opcode::negate: return "neg";
     case Opcode::extend_sign_byte: return "extsb";
     case Opcode::extend_sign_halfword: return "extsh";
@@ -613,6 +614,7 @@ void add_history_source(
          instruction.opcode == Opcode::add_carrying ||
          instruction.opcode == Opcode::add_to_zero_extended ||
          instruction.opcode == Opcode::subtract_from_extended ||
+         instruction.opcode == Opcode::subtract_from_zero_extended ||
          instruction.opcode == Opcode::count_leading_zeros ||
          instruction.opcode == Opcode::negate ||
          instruction.opcode == Opcode::extend_sign_byte ||
@@ -879,6 +881,7 @@ void add_history_source(
         add_history_source(entry, state, instruction.source);
         break;
     case Opcode::add_to_zero_extended:
+    case Opcode::subtract_from_zero_extended:
         add_history_source(entry, state, instruction.base);
         break;
     case Opcode::negate:
@@ -930,6 +933,7 @@ void add_history_source(
     case Opcode::subtract_from:
     case Opcode::subtract_from_carrying:
     case Opcode::subtract_from_extended:
+    case Opcode::subtract_from_zero_extended:
     case Opcode::multiply_low_word:
     case Opcode::multiply_high_word_unsigned:
     case Opcode::divide_word_unsigned:
@@ -1379,12 +1383,14 @@ StepResult EspressoCore::step()
     if (instruction.opcode == Opcode::subtract_from_carrying ||
         instruction.opcode == Opcode::subtract_from_extended ||
         instruction.opcode == Opcode::add_carrying ||
-        instruction.opcode == Opcode::add_to_zero_extended)
+        instruction.opcode == Opcode::add_to_zero_extended ||
+        instruction.opcode == Opcode::subtract_from_zero_extended)
     {
         pending_history_entry_.has_carry_result = true;
     }
     if (instruction.opcode == Opcode::subtract_from_extended ||
-        instruction.opcode == Opcode::add_to_zero_extended)
+        instruction.opcode == Opcode::add_to_zero_extended ||
+        instruction.opcode == Opcode::subtract_from_zero_extended)
     {
         pending_history_entry_.has_carry_input = true;
         pending_history_entry_.carry_input = (state.xer & xer_carry_mask) != 0U;
@@ -1648,6 +1654,32 @@ StepResult EspressoCore::step()
         const std::uint32_t carry_in = (state.xer & xer_carry_mask) != 0U ? 1U : 0U;
         const std::uint64_t sum = static_cast<std::uint64_t>(static_cast<std::uint32_t>(~ra)) +
             static_cast<std::uint64_t>(rb) + carry_in;
+        const std::uint32_t result = static_cast<std::uint32_t>(sum);
+        const bool carry_out = (sum >> 32U) != 0U;
+        state.gpr[instruction.destination] = result;
+        if (carry_out)
+        {
+            state.xer |= xer_carry_mask;
+        }
+        else
+        {
+            state.xer &= ~xer_carry_mask;
+        }
+        if (instruction.record)
+        {
+            set_record_result(state, result);
+        }
+        break;
+    }
+
+    case Opcode::subtract_from_zero_extended:
+    {
+        const std::uint32_t ra = state.gpr[instruction.base];
+        const std::uint32_t carry_in =
+            (state.xer & xer_carry_mask) != 0U ? 1U : 0U;
+        const std::uint32_t complement = ~ra;
+        const std::uint64_t sum =
+            static_cast<std::uint64_t>(complement) + carry_in;
         const std::uint32_t result = static_cast<std::uint32_t>(sum);
         const bool carry_out = (sum >> 32U) != 0U;
         state.gpr[instruction.destination] = result;
