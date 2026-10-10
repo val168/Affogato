@@ -61,6 +61,51 @@ constexpr std::uint32_t gx2_buffering_mode_single = 1U;
 constexpr std::uint32_t gx2_buffering_mode_double = 2U;
 constexpr std::uint32_t gx2_buffering_mode_triple = 3U;
 
+struct TvDimensions
+{
+    std::uint32_t width{};
+    std::uint32_t height{};
+};
+
+TvDimensions get_tv_dimensions(std::uint32_t render_mode, const char* api_name)
+{
+    if (render_mode != gx2_tv_render_mode_wide_1080p)
+    {
+        throw HleExecutionError(
+            std::string("gx2::") + api_name + ": unsupported TV render mode " +
+            std::to_string(render_mode));
+    }
+    return {1920U, 1080U};
+}
+
+void validate_tv_surface_format(
+    std::uint32_t surface_format,
+    const char* api_name)
+{
+    if (surface_format != gx2_surface_format_unorm_r8_g8_b8_a8)
+    {
+        throw HleExecutionError(
+            std::string("gx2::") + api_name + ": unsupported surface format " +
+            std::to_string(surface_format));
+    }
+}
+
+std::uint32_t get_tv_buffer_count(
+    std::uint32_t buffering_mode,
+    const char* api_name)
+{
+    switch (buffering_mode)
+    {
+    case gx2_buffering_mode_single: return 1U;
+    case gx2_buffering_mode_double: return 2U;
+    case gx2_buffering_mode_triple: return 3U;
+    default:
+        throw HleExecutionError(
+            std::string("gx2::") + api_name + ": invalid buffering mode " +
+            std::to_string(buffering_mode));
+    }
+}
+
 std::uint32_t fpr_float_argument_bits(
     const EspressoCore& core,
     std::size_t register_index)
@@ -112,34 +157,15 @@ std::uint32_t calculate_tv_size(
     std::uint32_t surface_format,
     std::uint32_t buffering_mode)
 {
-    if (render_mode != gx2_tv_render_mode_wide_1080p)
-    {
-        throw HleExecutionError(
-            "gx2::GX2CalcTVSize: unsupported TV render mode " +
-            std::to_string(render_mode));
-    }
-    if (surface_format != gx2_surface_format_unorm_r8_g8_b8_a8)
-    {
-        throw HleExecutionError(
-            "gx2::GX2CalcTVSize: unsupported surface format " +
-            std::to_string(surface_format));
-    }
+    constexpr const char* api_name = "GX2CalcTVSize";
+    const TvDimensions dimensions = get_tv_dimensions(render_mode, api_name);
+    validate_tv_surface_format(surface_format, api_name);
+    const std::uint32_t buffer_count =
+        get_tv_buffer_count(buffering_mode, api_name);
 
-    std::uint32_t buffer_count = 0U;
-    switch (buffering_mode)
-    {
-    case gx2_buffering_mode_single: buffer_count = 1U; break;
-    case gx2_buffering_mode_double: buffer_count = 2U; break;
-    case gx2_buffering_mode_triple: buffer_count = 3U; break;
-    default:
-        throw HleExecutionError(
-            "gx2::GX2CalcTVSize: invalid buffering mode " +
-            std::to_string(buffering_mode));
-    }
-
-    constexpr std::uint64_t width = 1920U;
-    constexpr std::uint64_t height = 1080U;
     constexpr std::uint64_t bytes_per_pixel = 4U;
+    const std::uint64_t width = dimensions.width;
+    const std::uint64_t height = dimensions.height;
     const std::uint64_t size =
         width * height * bytes_per_pixel * buffer_count;
     if (size > std::numeric_limits<std::uint32_t>::max())
@@ -873,6 +899,34 @@ void register_gx2_hle(HleDispatcher& dispatcher)
             validate_output(out_unk, "unkOut output");
             core.memory.write32_be(out_size, size);
             core.memory.write32_be(out_unk, 0U);
+        });
+
+    dispatcher.register_function(
+        "gx2",
+        "GX2SetTVBuffer",
+        [](EspressoCore& core) {
+            const std::uint32_t buffer = core.state.gpr[3];
+            const std::uint32_t size = core.state.gpr[4];
+            const std::uint32_t render_mode = core.state.gpr[5];
+            const std::uint32_t surface_format = core.state.gpr[6];
+            const std::uint32_t buffering_mode = core.state.gpr[7];
+
+            constexpr const char* api_name = "GX2SetTVBuffer";
+            const TvDimensions dimensions =
+                get_tv_dimensions(render_mode, api_name);
+            validate_tv_surface_format(surface_format, api_name);
+            (void)get_tv_buffer_count(buffering_mode, api_name);
+
+            // This API only records display metadata. The guest owns the buffer;
+            // no memory access, allocation, cache action, or PM4 emission occurs.
+            core.gx2.tv_scan_buffer_configured = true;
+            core.gx2.tv_scan_buffer_address = buffer;
+            core.gx2.tv_scan_buffer_size = size;
+            core.gx2.tv_render_mode = render_mode;
+            core.gx2.tv_surface_format = surface_format;
+            core.gx2.tv_buffering_mode = buffering_mode;
+            core.gx2.tv_scan_width = dimensions.width;
+            core.gx2.tv_scan_height = dimensions.height;
         });
 }
 

@@ -19,6 +19,8 @@ struct Gx2Command
     Gx2CommandType type{};
     std::uint32_t register_address{};
     std::uint32_t value{};
+
+    bool operator==(const Gx2Command&) const = default;
 };
 
 struct Gx2RuntimeState
@@ -41,6 +43,14 @@ struct Gx2RuntimeState
     std::uint32_t swap_interval{};
     std::uint32_t flip_request_count{};
     std::uint32_t flip_execute_count{};
+    bool tv_scan_buffer_configured{};
+    std::uint32_t tv_scan_buffer_address{};
+    std::uint32_t tv_scan_buffer_size{};
+    std::uint32_t tv_render_mode{};
+    std::uint32_t tv_surface_format{};
+    std::uint32_t tv_buffering_mode{};
+    std::uint32_t tv_scan_width{};
+    std::uint32_t tv_scan_height{};
     bool db_depth_control_valid{};
     std::uint32_t db_depth_control{};
     bool db_stencilrefmask_valid{};
@@ -69,6 +79,8 @@ struct Gx2RuntimeState
     bool context_state_profiling_enabled{};
     bool context_state_shadow_display_list_requested{};
     std::vector<Gx2Command> pending_commands;
+
+    bool operator==(const Gx2RuntimeState&) const = default;
 };
 
 void register_gx2_hle(HleDispatcher& dispatcher);

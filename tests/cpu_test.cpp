@@ -12984,59 +12984,7 @@ void gx2_calc_tv_size_hle_tests()
     };
     const auto assert_gx2_equal = [](const Gx2RuntimeState& lhs,
                                      const Gx2RuntimeState& rhs) {
-        assert(lhs.initialized == rhs.initialized);
-        assert(lhs.main_core_id == rhs.main_core_id);
-        assert(lhs.command_buffer_pool_base == rhs.command_buffer_pool_base);
-        assert(lhs.command_buffer_pool_size == rhs.command_buffer_pool_size);
-        assert(lhs.command_buffer_pool_owned == rhs.command_buffer_pool_owned);
-        assert(lhs.argc == rhs.argc && lhs.argv == rhs.argv);
-        assert(lhs.profile_mode == rhs.profile_mode && lhs.toss_stage == rhs.toss_stage);
-        assert(lhs.app_io_thread_stack_size == rhs.app_io_thread_stack_size);
-        assert(lhs.gpu_timeout_ms == rhs.gpu_timeout_ms);
-        assert(lhs.hang_state == rhs.hang_state && lhs.hang_response == rhs.hang_response);
-        assert(lhs.hang_reset_swap_timeout == rhs.hang_reset_swap_timeout);
-        assert(lhs.hang_reset_swaps_outstanding == rhs.hang_reset_swaps_outstanding);
-        assert(lhs.swap_interval == rhs.swap_interval);
-        assert(lhs.flip_request_count == rhs.flip_request_count);
-        assert(lhs.flip_execute_count == rhs.flip_execute_count);
-        assert(lhs.db_depth_control_valid == rhs.db_depth_control_valid);
-        assert(lhs.db_depth_control == rhs.db_depth_control);
-        assert(lhs.db_stencilrefmask_valid == rhs.db_stencilrefmask_valid);
-        assert(lhs.db_stencilrefmask == rhs.db_stencilrefmask);
-        assert(lhs.db_stencilrefmask_bf_valid == rhs.db_stencilrefmask_bf_valid);
-        assert(lhs.db_stencilrefmask_bf == rhs.db_stencilrefmask_bf);
-        assert(lhs.pa_su_sc_mode_cntl_valid == rhs.pa_su_sc_mode_cntl_valid);
-        assert(lhs.pa_su_sc_mode_cntl == rhs.pa_su_sc_mode_cntl);
-        assert(lhs.cb_color_control_valid == rhs.cb_color_control_valid);
-        assert(lhs.cb_color_control == rhs.cb_color_control);
-        assert(lhs.cb_blend_control_valid == rhs.cb_blend_control_valid);
-        assert(lhs.cb_blend_control == rhs.cb_blend_control);
-        assert(lhs.cb_blend_constant_valid == rhs.cb_blend_constant_valid);
-        assert(lhs.cb_blend_constant == rhs.cb_blend_constant);
-        assert(lhs.sx_alpha_test_control_valid == rhs.sx_alpha_test_control_valid);
-        assert(lhs.sx_alpha_test_control == rhs.sx_alpha_test_control);
-        assert(lhs.sx_alpha_ref_valid == rhs.sx_alpha_ref_valid);
-        assert(lhs.sx_alpha_ref == rhs.sx_alpha_ref);
-        assert(lhs.cb_target_mask_valid == rhs.cb_target_mask_valid);
-        assert(lhs.cb_target_mask == rhs.cb_target_mask);
-        assert(lhs.db_alpha_to_mask_valid == rhs.db_alpha_to_mask_valid);
-        assert(lhs.db_alpha_to_mask == rhs.db_alpha_to_mask);
-        assert(lhs.context_state_shadowing_enabled ==
-               rhs.context_state_shadowing_enabled);
-        assert(lhs.current_context_state == rhs.current_context_state);
-        assert(lhs.current_context_state_flags == rhs.current_context_state_flags);
-        assert(lhs.context_state_profiling_enabled ==
-               rhs.context_state_profiling_enabled);
-        assert(lhs.context_state_shadow_display_list_requested ==
-               rhs.context_state_shadow_display_list_requested);
-        assert(lhs.pending_commands.size() == rhs.pending_commands.size());
-        for (std::size_t i = 0; i < lhs.pending_commands.size(); ++i)
-        {
-            assert(lhs.pending_commands[i].type == rhs.pending_commands[i].type);
-            assert(lhs.pending_commands[i].register_address ==
-                   rhs.pending_commands[i].register_address);
-            assert(lhs.pending_commands[i].value == rhs.pending_commands[i].value);
-        }
+        assert(lhs == rhs);
     };
 
     EspressoCore core(0x20000U);
@@ -13279,6 +13227,326 @@ void gx2_calc_tv_size_hle_tests()
     result = core.run(1U);
     assert(result.reason == StopReason::unimplemented_hle_call);
     assert(result.hle_call == "coreinit::GX2CalcTVSize");
+}
+
+void gx2_set_tv_buffer_hle_tests()
+{
+    constexpr std::uint32_t buffer_address = 0x0A001000U;
+    constexpr std::uint32_t buffer_size = 0x00FD2000U;
+    constexpr std::uint32_t buffer_end = 0x0AFD3000U;
+    constexpr std::uint32_t render_mode = 5U;
+    constexpr std::uint32_t surface_format = 0x1AU;
+    constexpr std::uint32_t double_buffering = 2U;
+    constexpr std::uint32_t return_address = 0x02751AFCU;
+    constexpr std::uint32_t context_address = 0x50000U;
+    constexpr std::uint32_t context_size = 0xA100U;
+    constexpr std::uint32_t command_pool_address = 0x40000U;
+    constexpr std::uint32_t flat_capacity = 0x20000U;
+
+    const auto set_arguments = [](EspressoCore& core,
+                                  std::uint32_t buffer,
+                                  std::uint32_t size,
+                                  std::uint32_t mode,
+                                  std::uint32_t format,
+                                  std::uint32_t buffering) {
+        core.state.gpr[3] = buffer;
+        core.state.gpr[4] = size;
+        core.state.gpr[5] = mode;
+        core.state.gpr[6] = format;
+        core.state.gpr[7] = buffering;
+    };
+    const auto invoke = [&](EspressoCore& core, std::uint32_t import) {
+        core.state.cia = import;
+        core.state.lr = return_address;
+        return core.run(1U);
+    };
+    const auto expect_tv_metadata = [](const Gx2RuntimeState& state,
+                                       std::uint32_t buffer,
+                                       std::uint32_t size,
+                                       std::uint32_t buffering) {
+        assert(state.tv_scan_buffer_configured);
+        assert(state.tv_scan_buffer_address == buffer);
+        assert(state.tv_scan_buffer_size == size);
+        assert(state.tv_render_mode == render_mode);
+        assert(state.tv_surface_format == surface_format);
+        assert(state.tv_buffering_mode == buffering);
+        assert(state.tv_scan_width == 1920U);
+        assert(state.tv_scan_height == 1080U);
+    };
+
+    EspressoCore core(flat_capacity);
+    register_gx2_hle(core.hle);
+    const std::uint32_t import = core.hle.bind_import("gx2", "GX2SetTVBuffer");
+    assert(import != 0U);
+    const std::uint32_t wrong_library_import =
+        core.hle.bind_import("coreinit", "GX2SetTVBuffer");
+    assert(wrong_library_import != import);
+    core.state.cia = wrong_library_import;
+    core.state.lr = return_address;
+    const RunResult wrong_library_result = core.run(1U);
+    assert(wrong_library_result.reason == StopReason::unimplemented_hle_call);
+    assert(wrong_library_result.hle_call == "coreinit::GX2SetTVBuffer");
+    assert(!core.gx2.initialized); // This display registration has no init guard.
+
+    core.memory.map_region(buffer_address, 1U);
+    core.memory.map_region(buffer_address + buffer_size / 2U, 1U);
+    core.memory.map_region(buffer_end - 1U, 1U);
+    core.memory.write8(buffer_address, 0xA5U);
+    core.memory.write8(buffer_address + buffer_size / 2U, 0xC3U);
+    core.memory.write8(buffer_end - 1U, 0x5AU);
+    core.memory.map_region(context_address, context_size);
+    core.memory.write_bytes(context_address,
+                            std::vector<std::uint8_t>(context_size, 0x73U));
+    core.memory.map_region(command_pool_address, 0x1000U);
+    core.memory.write8(command_pool_address, 0x11U);
+    core.memory.write8(command_pool_address + 0x800U, 0x22U);
+    core.memory.write8(command_pool_address + 0xFFFU, 0x33U);
+
+    core.gx2.main_core_id = 1U;
+    core.gx2.command_buffer_pool_base = command_pool_address;
+    core.gx2.command_buffer_pool_size = 0x1000U;
+    core.gx2.swap_interval = 3U;
+    core.gx2.flip_request_count = 4U;
+    core.gx2.flip_execute_count = 5U;
+    core.gx2.context_state_shadowing_enabled = true;
+    core.gx2.current_context_state = context_address;
+    core.gx2.current_context_state_flags = 0xA5A5U;
+    core.gx2.context_state_profiling_enabled = true;
+    core.gx2.context_state_shadow_display_list_requested = true;
+    core.gx2.cb_color_control_valid = true;
+    core.gx2.cb_color_control = 0x12345678U;
+    core.gx2.pending_commands = {
+        {Gx2CommandType::set_context_register, 0x28800U, 0x11223344U},
+        {Gx2CommandType::set_context_register, 0x28410U, 0x55667788U},
+    };
+
+    core.configure_guest_heap(0x1000U, 0x3000U);
+    core.guest_heap_cursor = 0x1800U;
+    core.base_heap_handles[0] = 0x10203040U;
+    core.mem2_heap_region_begin = 0x12000000U;
+    core.mem2_heap_region_end = 0x12100000U;
+    core.fs_initialized = true;
+    core.nn_save_initialized = true;
+
+    core.state.gpr.fill(0xD3000000U);
+    core.state.gpr[1] = 0xFFFFFFFFU; // No stack arguments are read.
+    for (std::size_t i = 0; i < core.state.fpr.size(); ++i)
+    {
+        core.state.fpr[i] = 0x7FF8123456780000ULL + i;
+        core.state.fpr_ps1[i] = 0xFFF0123456780000ULL + i;
+    }
+    core.state.cr = 0x12345678U;
+    core.state.xer = 0xA5A55A5AU;
+    core.state.ctr = 0x87654321U;
+    core.state.fpscr = 0x5A5AA55AU;
+    set_arguments(core, buffer_address, buffer_size, render_mode,
+                  surface_format, double_buffering);
+
+    const std::uint32_t expected_fs_clients =
+        static_cast<std::uint32_t>(core.fs_clients.size());
+    const Gx2RuntimeState gx2_before = core.gx2;
+    std::vector<std::uint8_t> flat_memory_before(core.memory.size());
+    core.memory.read_bytes(0U, flat_memory_before);
+    std::vector<std::uint8_t> context_before(context_size);
+    core.memory.read_bytes(context_address, context_before);
+    const std::array<std::uint8_t, 3U> buffer_sentinels_before{
+        core.memory.read8(buffer_address),
+        core.memory.read8(buffer_address + buffer_size / 2U),
+        core.memory.read8(buffer_end - 1U),
+    };
+    const std::array<std::uint8_t, 3U> command_pool_before{
+        core.memory.read8(command_pool_address),
+        core.memory.read8(command_pool_address + 0x800U),
+        core.memory.read8(command_pool_address + 0xFFFU),
+    };
+
+    const auto invoke_and_assert_preserved = [&]() {
+        Gx2RuntimeState expected_gx2_state = gx2_before;
+        expected_gx2_state.tv_scan_buffer_configured = true;
+        expected_gx2_state.tv_scan_buffer_address = core.state.gpr[3];
+        expected_gx2_state.tv_scan_buffer_size = core.state.gpr[4];
+        expected_gx2_state.tv_render_mode = core.state.gpr[5];
+        expected_gx2_state.tv_surface_format = core.state.gpr[6];
+        expected_gx2_state.tv_buffering_mode = core.state.gpr[7];
+        expected_gx2_state.tv_scan_width = 1920U;
+        expected_gx2_state.tv_scan_height = 1080U;
+        const auto gprs_before = core.state.gpr;
+        const auto fprs_before = core.state.fpr;
+        const auto ps1_before = core.state.fpr_ps1;
+        const std::uint32_t cr_before = core.state.cr;
+        const std::uint32_t xer_before = core.state.xer;
+        const std::uint32_t ctr_before = core.state.ctr;
+        const std::uint32_t fpscr_before = core.state.fpscr;
+        const std::uint32_t heap_cursor_before = core.guest_heap_cursor;
+        const std::uint32_t heap_limit_before = core.guest_heap_limit;
+        const auto heap_handles_before = core.base_heap_handles;
+        const std::uint32_t mem2_begin_before = core.mem2_heap_region_begin;
+        const std::uint32_t mem2_end_before = core.mem2_heap_region_end;
+        const RunResult run_result = invoke(core, import);
+        assert(run_result.reason == StopReason::instruction_limit);
+        assert(run_result.steps == 1U);
+        assert(core.state.cia == return_address && core.state.lr == return_address);
+        assert(core.gx2 == expected_gx2_state);
+        assert(core.state.gpr == gprs_before);
+        assert(core.state.fpr == fprs_before && core.state.fpr_ps1 == ps1_before);
+        assert(core.state.cr == cr_before && core.state.xer == xer_before);
+        assert(core.state.ctr == ctr_before && core.state.fpscr == fpscr_before);
+        assert(core.guest_heap_cursor == heap_cursor_before);
+        assert(core.guest_heap_limit == heap_limit_before);
+        assert(core.base_heap_handles == heap_handles_before);
+        assert(core.mem2_heap_region_begin == mem2_begin_before);
+        assert(core.mem2_heap_region_end == mem2_end_before);
+        assert(static_cast<std::uint32_t>(core.fs_clients.size()) == expected_fs_clients);
+        assert(core.fs_initialized && core.nn_save_initialized);
+        std::vector<std::uint8_t> flat_memory_after(core.memory.size());
+        core.memory.read_bytes(0U, flat_memory_after);
+        assert(flat_memory_after == flat_memory_before);
+        std::vector<std::uint8_t> context_after(context_size);
+        core.memory.read_bytes(context_address, context_after);
+        assert(context_after == context_before);
+        assert((std::array<std::uint8_t, 3U>{
+                    core.memory.read8(buffer_address),
+                    core.memory.read8(buffer_address + buffer_size / 2U),
+                    core.memory.read8(buffer_end - 1U)}) == buffer_sentinels_before);
+        assert((std::array<std::uint8_t, 3U>{
+                    core.memory.read8(command_pool_address),
+                    core.memory.read8(command_pool_address + 0x800U),
+                    core.memory.read8(command_pool_address + 0xFFFU)}) ==
+               command_pool_before);
+        return run_result;
+    };
+
+    RunResult result = invoke_and_assert_preserved();
+    expect_tv_metadata(core.gx2, buffer_address, buffer_size, double_buffering);
+    Gx2RuntimeState expected_gx2 = gx2_before;
+    expected_gx2.tv_scan_buffer_configured = true;
+    expected_gx2.tv_scan_buffer_address = buffer_address;
+    expected_gx2.tv_scan_buffer_size = buffer_size;
+    expected_gx2.tv_render_mode = render_mode;
+    expected_gx2.tv_surface_format = surface_format;
+    expected_gx2.tv_buffering_mode = double_buffering;
+    expected_gx2.tv_scan_width = 1920U;
+    expected_gx2.tv_scan_height = 1080U;
+    assert(core.gx2 == expected_gx2);
+    assert(core.gx2.pending_commands == gx2_before.pending_commands);
+    assert(buffer_address + buffer_size == buffer_end);
+
+    // A repeated identical call is idempotent; reconfiguration replaces the
+    // latest registration without emitting commands or touching image memory.
+    result = invoke_and_assert_preserved();
+    assert(core.gx2 == expected_gx2);
+    set_arguments(core, 0x20000000U, 0x11111111U, render_mode,
+                  surface_format, 1U);
+    result = invoke_and_assert_preserved();
+    expect_tv_metadata(core.gx2, 0x20000000U, 0x11111111U, 1U);
+    set_arguments(core, 0x30000000U, 0x22222222U, render_mode,
+                  surface_format, 3U);
+    result = invoke_and_assert_preserved();
+    expect_tv_metadata(core.gx2, 0x30000000U, 0x22222222U, 3U);
+    assert(core.gx2.pending_commands == gx2_before.pending_commands);
+
+    // Null, unmapped, mismatched-size, zero-size, and wrapping ranges are only
+    // retained as metadata; registration does not dereference the pointer.
+    set_arguments(core, 0U, 0xABCDEF01U, render_mode, surface_format, 2U);
+    result = invoke_and_assert_preserved();
+    expect_tv_metadata(core.gx2, 0U, 0xABCDEF01U, 2U);
+    set_arguments(core, 0xDEAD0000U, 0x12345678U, render_mode,
+                  surface_format, 2U);
+    result = invoke_and_assert_preserved();
+    expect_tv_metadata(core.gx2, 0xDEAD0000U, 0x12345678U, 2U);
+    set_arguments(core, 0xFFFFFFF0U, 0x1000U, render_mode,
+                  surface_format, 2U);
+    result = invoke_and_assert_preserved();
+    expect_tv_metadata(core.gx2, 0xFFFFFFF0U, 0x1000U, 2U);
+    set_arguments(core, 0xFFFFFFFFU, 0U, render_mode, surface_format, 2U);
+    result = invoke_and_assert_preserved();
+    expect_tv_metadata(core.gx2, 0xFFFFFFFFU, 0U, 2U);
+
+    // Each unsupported enum is rejected transactionally, before metadata is
+    // changed. The HLE does not alter guest state or memory on these errors.
+    const auto expect_invalid = [&](std::uint32_t mode,
+                                    std::uint32_t format,
+                                    std::uint32_t buffering) {
+        const Gx2RuntimeState previous_gx2 = core.gx2;
+        set_arguments(core, 0xDEAD0000U, 0x12345678U, mode, format, buffering);
+        const auto gprs_before = core.state.gpr;
+        const auto fprs_before = core.state.fpr;
+        const auto ps1_before = core.state.fpr_ps1;
+        const std::uint32_t cr_before = core.state.cr;
+        const std::uint32_t xer_before = core.state.xer;
+        const std::uint32_t ctr_before = core.state.ctr;
+        const std::uint32_t fpscr_before = core.state.fpscr;
+        core.state.cia = import;
+        core.state.lr = return_address;
+        const RunResult failure = core.run(1U);
+        assert(failure.reason == StopReason::hle_error);
+        assert(failure.detail.find("gx2::GX2SetTVBuffer") != std::string::npos);
+        assert(core.gx2 == previous_gx2);
+        assert(core.state.gpr == gprs_before);
+        assert(core.state.fpr == fprs_before && core.state.fpr_ps1 == ps1_before);
+        assert(core.state.cr == cr_before && core.state.xer == xer_before);
+        assert(core.state.ctr == ctr_before && core.state.fpscr == fpscr_before);
+        assert(core.state.lr == return_address);
+        std::vector<std::uint8_t> flat_memory_after(core.memory.size());
+        core.memory.read_bytes(0U, flat_memory_after);
+        assert(flat_memory_after == flat_memory_before);
+    };
+    expect_invalid(4U, surface_format, 2U);
+    expect_invalid(render_mode, 0x1BU, 2U);
+    expect_invalid(render_mode, surface_format, 0U);
+
+    core.reset();
+    assert(!core.gx2.tv_scan_buffer_configured);
+    assert(core.gx2.tv_scan_buffer_address == 0U);
+    assert(core.gx2.tv_scan_buffer_size == 0U);
+    assert(core.gx2.tv_render_mode == 0U);
+    assert(core.gx2.tv_surface_format == 0U);
+    assert(core.gx2.tv_buffering_mode == 0U);
+    assert(core.gx2.tv_scan_width == 0U && core.gx2.tv_scan_height == 0U);
+
+    // The registration metadata belongs to each EspressoCore instance.
+    EspressoCore isolated_a(0x1000U);
+    EspressoCore isolated_b(0x1000U);
+    register_gx2_hle(isolated_a.hle);
+    register_gx2_hle(isolated_b.hle);
+    const std::uint32_t import_a =
+        isolated_a.hle.bind_import("gx2", "GX2SetTVBuffer");
+    const std::uint32_t import_b =
+        isolated_b.hle.bind_import("gx2", "GX2SetTVBuffer");
+    set_arguments(isolated_a, 0x10000000U, 0x10101010U,
+                  render_mode, surface_format, 1U);
+    set_arguments(isolated_b, 0x20000000U, 0x20202020U,
+                  render_mode, surface_format, 2U);
+    assert(invoke(isolated_a, import_a).reason == StopReason::instruction_limit);
+    assert(invoke(isolated_b, import_b).reason == StopReason::instruction_limit);
+    expect_tv_metadata(isolated_a.gx2, 0x10000000U, 0x10101010U, 1U);
+    expect_tv_metadata(isolated_b.gx2, 0x20000000U, 0x20202020U, 2U);
+
+    // Existing GX2CalcTVSize output feeds the same supported registration path.
+    EspressoCore integration(0x2000U);
+    register_gx2_hle(integration.hle);
+    constexpr std::uint32_t size_out = 0x1000U;
+    constexpr std::uint32_t unk_out = 0x1004U;
+    integration.state.gpr[3] = render_mode;
+    integration.state.gpr[4] = surface_format;
+    integration.state.gpr[5] = double_buffering;
+    integration.state.gpr[6] = size_out;
+    integration.state.gpr[7] = unk_out;
+    integration.state.cia =
+        integration.hle.bind_import("gx2", "GX2CalcTVSize");
+    integration.state.lr = return_address;
+    const RunResult calc_result = integration.run(1U);
+    assert(calc_result.reason == StopReason::instruction_limit);
+    assert(calc_result.steps == 1U && integration.state.cia == return_address);
+    assert(integration.memory.read32_be(size_out) == buffer_size);
+    assert(integration.memory.read32_be(unk_out) == 0U);
+    set_arguments(integration, buffer_address, integration.memory.read32_be(size_out),
+                  render_mode, surface_format, double_buffering);
+    assert(invoke(integration,
+                  integration.hle.bind_import("gx2", "GX2SetTVBuffer")).reason ==
+           StopReason::instruction_limit);
+    expect_tv_metadata(integration.gx2, buffer_address, buffer_size,
+                       double_buffering);
 }
 
 void compare_and_conditional_branch_tests()
@@ -15756,6 +16024,7 @@ int main(int argc, char* argv[])
     gx2_set_alpha_to_mask_hle_tests();
     gx2_setup_context_state_ex_hle_tests();
     gx2_calc_tv_size_hle_tests();
+    gx2_set_tv_buffer_hle_tests();
     mem_get_total_free_size_for_exp_heap_hle_tests();
     mem_get_allocatable_size_for_exp_heap_ex_hle_tests();
     compare_and_conditional_branch_tests();
