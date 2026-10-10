@@ -7,6 +7,7 @@
 #include <bit>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <string>
 
 namespace affogato::cpu::espresso
@@ -54,6 +55,11 @@ static_assert(gx2_context_shadow_state_size == gx2_context_profiling_offset);
 static_assert(gx2_context_display_list_offset +
                   gx2_context_display_list_capacity ==
               gx2_context_state_size);
+constexpr std::uint32_t gx2_tv_render_mode_wide_1080p = 5U;
+constexpr std::uint32_t gx2_surface_format_unorm_r8_g8_b8_a8 = 0x1AU;
+constexpr std::uint32_t gx2_buffering_mode_single = 1U;
+constexpr std::uint32_t gx2_buffering_mode_double = 2U;
+constexpr std::uint32_t gx2_buffering_mode_triple = 3U;
 
 std::uint32_t fpr_float_argument_bits(
     const EspressoCore& core,
@@ -99,6 +105,49 @@ std::uint32_t pack_alpha_to_mask(
     }
 
     return (offsets << 8U) | (enabled != 0U ? 1U : 0U);
+}
+
+std::uint32_t calculate_tv_size(
+    std::uint32_t render_mode,
+    std::uint32_t surface_format,
+    std::uint32_t buffering_mode)
+{
+    if (render_mode != gx2_tv_render_mode_wide_1080p)
+    {
+        throw HleExecutionError(
+            "gx2::GX2CalcTVSize: unsupported TV render mode " +
+            std::to_string(render_mode));
+    }
+    if (surface_format != gx2_surface_format_unorm_r8_g8_b8_a8)
+    {
+        throw HleExecutionError(
+            "gx2::GX2CalcTVSize: unsupported surface format " +
+            std::to_string(surface_format));
+    }
+
+    std::uint32_t buffer_count = 0U;
+    switch (buffering_mode)
+    {
+    case gx2_buffering_mode_single: buffer_count = 1U; break;
+    case gx2_buffering_mode_double: buffer_count = 2U; break;
+    case gx2_buffering_mode_triple: buffer_count = 3U; break;
+    default:
+        throw HleExecutionError(
+            "gx2::GX2CalcTVSize: invalid buffering mode " +
+            std::to_string(buffering_mode));
+    }
+
+    constexpr std::uint64_t width = 1920U;
+    constexpr std::uint64_t height = 1080U;
+    constexpr std::uint64_t bytes_per_pixel = 4U;
+    const std::uint64_t size =
+        width * height * bytes_per_pixel * buffer_count;
+    if (size > std::numeric_limits<std::uint32_t>::max())
+    {
+        throw HleExecutionError(
+            "gx2::GX2CalcTVSize: calculated size overflows uint32_t");
+    }
+    return static_cast<std::uint32_t>(size);
 }
 
 std::uint32_t pack_stencil_ref_mask(
@@ -785,6 +834,45 @@ void register_gx2_hle(HleDispatcher& dispatcher)
             core.gx2.context_state_profiling_enabled = profiling_enabled;
             core.gx2.context_state_shadow_display_list_requested =
                 shadow_display_list_requested;
+        });
+
+    dispatcher.register_function(
+        "gx2",
+        "GX2CalcTVSize",
+        [](EspressoCore& core) {
+            const std::uint32_t render_mode = core.state.gpr[3];
+            const std::uint32_t surface_format = core.state.gpr[4];
+            const std::uint32_t buffering_mode = core.state.gpr[5];
+            const std::uint32_t out_size = core.state.gpr[6];
+            const std::uint32_t out_unk = core.state.gpr[7];
+            const std::uint32_t size = calculate_tv_size(
+                render_mode, surface_format, buffering_mode);
+
+            const auto validate_output = [&](std::uint32_t address,
+                                             const char* name) {
+                if (address == 0U)
+                {
+                    throw HleExecutionError(
+                        std::string("gx2::GX2CalcTVSize: ") + name +
+                        " pointer is null");
+                }
+                if (static_cast<std::uint64_t>(address) +
+                        sizeof(std::uint32_t) >
+                    guest_address_space_end)
+                {
+                    throw HleExecutionError(
+                        std::string("gx2::GX2CalcTVSize: ") + name +
+                        " pointer range wraps the guest address space");
+                }
+                core.memory.validate_write_range(address, sizeof(std::uint32_t));
+            };
+
+            // Preflight both outputs before either is written. If pointers
+            // alias, the following writes intentionally retain API order.
+            validate_output(out_size, "size output");
+            validate_output(out_unk, "unkOut output");
+            core.memory.write32_be(out_size, size);
+            core.memory.write32_be(out_unk, 0U);
         });
 }
 
