@@ -12412,6 +12412,346 @@ void gx2_set_alpha_to_mask_hle_tests()
     assert(isolated_a.gx2.pending_commands.size() == 1U);
 }
 
+void gx2_setup_context_state_ex_hle_tests()
+{
+    constexpr std::uint32_t context_address = 0x06E23900U;
+    constexpr std::uint32_t context_size = 0xA100U;
+    constexpr std::uint32_t profiling_offset = 0x9800U;
+    constexpr std::uint32_t display_list_size_offset = 0x9804U;
+    constexpr std::uint32_t display_list_offset = 0x9E00U;
+    constexpr std::uint32_t display_list_capacity = 0x300U;
+    constexpr std::uint32_t return_address = 0x0274BE78U;
+    constexpr std::uint32_t pool_address = 0x8000U;
+    constexpr std::uint32_t pool_size = 0x8000U;
+    constexpr std::uint32_t attribute_address = 0x100U;
+
+    const auto invoke = [&](EspressoCore& core, std::uint32_t import) {
+        core.state.cia = import;
+        core.state.lr = return_address;
+        return core.run(1U);
+    };
+    const auto initialize_gx2 = [&](EspressoCore& core) {
+        const std::array<std::uint32_t, 5U> attributes{
+            1U, pool_address, 2U, pool_size, 0U};
+        for (std::size_t i = 0; i < attributes.size(); ++i)
+        {
+            core.memory.write32_be(
+                attribute_address + static_cast<std::uint32_t>(i * 4U),
+                attributes[i]);
+        }
+        core.state.gpr[3] = attribute_address;
+        const auto result = invoke(
+            core, core.hle.bind_import("gx2", "GX2Init"));
+        assert(result.reason == StopReason::instruction_limit);
+        assert(core.gx2.initialized);
+    };
+    const auto seed_sparse_context = [](EspressoCore& core,
+                                       std::uint32_t address,
+                                       std::size_t size,
+                                       std::uint8_t value) {
+        core.memory.map_region(address, size);
+        std::vector<std::uint8_t> bytes(size, value);
+        core.memory.write_bytes(address, bytes);
+    };
+    const auto assert_same_command = [](const Gx2Command& lhs,
+                                        const Gx2Command& rhs) {
+        assert(lhs.type == rhs.type);
+        assert(lhs.register_address == rhs.register_address);
+        assert(lhs.value == rhs.value);
+    };
+
+    EspressoCore core(0x20000U);
+    register_gx2_hle(core.hle);
+    const std::uint32_t import = core.hle.bind_import(
+        "gx2", "GX2SetupContextStateEx");
+    assert(import != 0U);
+    assert(core.hle.bind_import("coreinit", "GX2SetupContextStateEx") != import);
+    initialize_gx2(core);
+    core.configure_guest_heap(0x1000U, 0x7000U);
+    seed_sparse_context(core, context_address, context_size, 0xCCU);
+
+    // Retain distinctive modeled GX2 state and command history across setup.
+    core.gx2.db_depth_control_valid = true;
+    core.gx2.db_depth_control = 0x12345678U;
+    core.gx2.db_alpha_to_mask_valid = true;
+    core.gx2.db_alpha_to_mask = 0x87654321U;
+    core.gx2.pending_commands = {
+        {Gx2CommandType::set_context_register, 0x00028800U, 0x12345678U},
+        {Gx2CommandType::set_context_register, 0x00028D44U, 0x87654321U},
+    };
+    const auto pending_before = core.gx2.pending_commands;
+    std::vector<std::uint8_t> flat_memory_before(core.memory.size());
+    core.memory.read_bytes(0U, flat_memory_before);
+    core.memory.write8(pool_address, 0xA5U);
+    core.memory.write8(pool_address + pool_size / 2U, 0xC3U);
+    core.memory.write8(pool_address + pool_size - 1U, 0x5AU);
+    // Snapshot after sentinel writes; setup must not modify the command pool.
+    core.memory.read_bytes(0U, flat_memory_before);
+
+    core.state.gpr.fill(0xD3000000U);
+    core.state.gpr[3] = context_address;
+    core.state.gpr[4] = 0U;
+    for (std::size_t i = 0; i < core.state.fpr.size(); ++i)
+    {
+        core.state.fpr[i] = 0x7FF8123456780000ULL + i;
+        core.state.fpr_ps1[i] = 0xFFF0123456780000ULL + i;
+    }
+    core.state.cr = 0x12345678U;
+    core.state.xer = 0xA5A55A5AU;
+    core.state.ctr = 0x87654321U;
+    core.state.fpscr = 0x5A5AA55AU;
+    const auto gprs_before = core.state.gpr;
+    const auto fprs_before = core.state.fpr;
+    const auto ps1_before = core.state.fpr_ps1;
+    const std::uint32_t cr_before = core.state.cr;
+    const std::uint32_t xer_before = core.state.xer;
+    const std::uint32_t ctr_before = core.state.ctr;
+    const std::uint32_t fpscr_before = core.state.fpscr;
+    const auto gx2_before = core.gx2;
+
+    const RunResult setup_result = invoke(core, import);
+    assert(setup_result.reason == StopReason::instruction_limit);
+    assert(setup_result.steps == 1U);
+    assert(core.state.cia == return_address && core.state.lr == return_address);
+    assert(core.state.gpr == gprs_before);
+    assert(core.state.fpr == fprs_before && core.state.fpr_ps1 == ps1_before);
+    assert(core.state.cr == cr_before && core.state.xer == xer_before);
+    assert(core.state.ctr == ctr_before && core.state.fpscr == fpscr_before);
+    assert(core.gx2.context_state_shadowing_enabled);
+    assert(core.gx2.current_context_state == context_address);
+    assert(core.gx2.current_context_state_flags == 0U);
+    assert(!core.gx2.context_state_profiling_enabled);
+    assert(core.gx2.context_state_shadow_display_list_requested);
+    assert(core.gx2.pending_commands.size() == pending_before.size());
+    for (std::size_t i = 0; i < pending_before.size(); ++i)
+    {
+        assert_same_command(core.gx2.pending_commands[i], pending_before[i]);
+    }
+    assert(core.gx2.db_depth_control_valid == gx2_before.db_depth_control_valid);
+    assert(core.gx2.db_depth_control == gx2_before.db_depth_control);
+    assert(core.gx2.main_core_id == gx2_before.main_core_id);
+    assert(core.gx2.command_buffer_pool_base == gx2_before.command_buffer_pool_base);
+    assert(core.gx2.command_buffer_pool_size == gx2_before.command_buffer_pool_size);
+    assert(core.gx2.command_buffer_pool_owned == gx2_before.command_buffer_pool_owned);
+    assert(core.gx2.argc == gx2_before.argc && core.gx2.argv == gx2_before.argv);
+    assert(core.gx2.profile_mode == gx2_before.profile_mode);
+    assert(core.gx2.toss_stage == gx2_before.toss_stage);
+    assert(core.gx2.app_io_thread_stack_size == gx2_before.app_io_thread_stack_size);
+    assert(core.gx2.gpu_timeout_ms == gx2_before.gpu_timeout_ms);
+    assert(core.gx2.hang_state == gx2_before.hang_state);
+    assert(core.gx2.hang_response == gx2_before.hang_response);
+    assert(core.gx2.hang_reset_swap_timeout == gx2_before.hang_reset_swap_timeout);
+    assert(core.gx2.hang_reset_swaps_outstanding ==
+           gx2_before.hang_reset_swaps_outstanding);
+    assert(core.gx2.swap_interval == gx2_before.swap_interval);
+    assert(core.gx2.flip_request_count == gx2_before.flip_request_count);
+    assert(core.gx2.flip_execute_count == gx2_before.flip_execute_count);
+    assert(core.gx2.db_stencilrefmask_valid == gx2_before.db_stencilrefmask_valid);
+    assert(core.gx2.db_stencilrefmask == gx2_before.db_stencilrefmask);
+    assert(core.gx2.db_stencilrefmask_bf_valid ==
+           gx2_before.db_stencilrefmask_bf_valid);
+    assert(core.gx2.db_stencilrefmask_bf == gx2_before.db_stencilrefmask_bf);
+    assert(core.gx2.pa_su_sc_mode_cntl_valid ==
+           gx2_before.pa_su_sc_mode_cntl_valid);
+    assert(core.gx2.pa_su_sc_mode_cntl == gx2_before.pa_su_sc_mode_cntl);
+    assert(core.gx2.cb_color_control_valid == gx2_before.cb_color_control_valid);
+    assert(core.gx2.cb_color_control == gx2_before.cb_color_control);
+    assert(core.gx2.cb_blend_control_valid == gx2_before.cb_blend_control_valid);
+    assert(core.gx2.cb_blend_control == gx2_before.cb_blend_control);
+    assert(core.gx2.cb_blend_constant_valid == gx2_before.cb_blend_constant_valid);
+    assert(core.gx2.cb_blend_constant == gx2_before.cb_blend_constant);
+    assert(core.gx2.sx_alpha_test_control_valid ==
+           gx2_before.sx_alpha_test_control_valid);
+    assert(core.gx2.sx_alpha_test_control == gx2_before.sx_alpha_test_control);
+    assert(core.gx2.sx_alpha_ref_valid == gx2_before.sx_alpha_ref_valid);
+    assert(core.gx2.sx_alpha_ref == gx2_before.sx_alpha_ref);
+    assert(core.gx2.cb_target_mask_valid == gx2_before.cb_target_mask_valid);
+    assert(core.gx2.cb_target_mask == gx2_before.cb_target_mask);
+    assert(core.gx2.db_alpha_to_mask_valid == gx2_before.db_alpha_to_mask_valid);
+    assert(core.gx2.db_alpha_to_mask == gx2_before.db_alpha_to_mask);
+    assert(core.memory.read8(pool_address) == 0xA5U);
+    assert(core.memory.read8(pool_address + pool_size / 2U) == 0xC3U);
+    assert(core.memory.read8(pool_address + pool_size - 1U) == 0x5AU);
+    std::vector<std::uint8_t> flat_memory_after(core.memory.size());
+    core.memory.read_bytes(0U, flat_memory_after);
+    assert(flat_memory_after == flat_memory_before);
+    assert(core.guest_heap_cursor == 0x1000U && core.guest_heap_limit == 0x7000U);
+
+    assert((context_address & 0xFFU) == 0U);
+    assert(context_address + context_size == 0x06E2DA00U);
+    assert(context_address + profiling_offset == 0x06E2D100U);
+    assert(context_address + display_list_size_offset == 0x06E2D104U);
+    assert(context_address + display_list_offset == 0x06E2D700U);
+    assert(core.memory.read32_be(context_address + profiling_offset) == 0U);
+    assert(core.memory.read32_be(context_address + display_list_size_offset) == 0U);
+    constexpr std::array<std::uint32_t, 17U> zero_offsets{
+        0x0000U, 0x2BFCU, 0x2C00U, 0x3BFCU, 0x3C00U, 0x5BFCU,
+        0x5C00U, 0x5DFFU, 0x5E00U, 0x94FCU, 0x9500U, 0x97FCU,
+        0x9808U, 0x9DFFU, 0x9E00U, 0xA0FCU, 0xA0FFU,
+    };
+    for (const std::uint32_t offset : zero_offsets)
+    {
+        assert(core.memory.read8(context_address + offset) == 0U);
+    }
+    std::vector<std::uint8_t> display_list(display_list_capacity, 0xFFU);
+    core.memory.read_bytes(context_address + display_list_offset, display_list);
+    assert(std::ranges::all_of(display_list, [](std::uint8_t byte) {
+        return byte == 0U;
+    }));
+
+    // Profiling is bit 0 only; bit 1 suppresses a display list, and unknown
+    // high flag bits are retained in runtime metadata rather than rejected.
+    std::vector<std::uint8_t> refill(context_size, 0xCCU);
+    core.memory.write_bytes(context_address, refill);
+    core.state.gpr[3] = context_address;
+    core.state.gpr[4] = 0x80000003U;
+    assert(invoke(core, import).reason == StopReason::instruction_limit);
+    assert(core.gx2.current_context_state_flags == 0x80000003U);
+    assert(core.gx2.context_state_profiling_enabled);
+    assert(!core.gx2.context_state_shadow_display_list_requested);
+    assert(core.memory.read32_be(context_address + profiling_offset) == 1U);
+    assert(core.memory.read32_be(context_address + display_list_size_offset) == 0U);
+    std::vector<std::uint8_t> initialized(context_size);
+    core.memory.read_bytes(context_address, initialized);
+    for (std::size_t i = 0; i < initialized.size(); ++i)
+    {
+        const bool profiling_byte = i >= profiling_offset && i < profiling_offset + 4U;
+        const std::uint8_t expected = profiling_byte && i == profiling_offset + 3U
+                                          ? 1U
+                                          : 0U;
+        assert(initialized[i] == expected);
+    }
+    assert(core.gx2.pending_commands.size() == pending_before.size());
+
+    // NoShadowDisplayList alone does not mean profiling is enabled.
+    core.state.gpr[3] = context_address;
+    core.state.gpr[4] = 2U;
+    assert(invoke(core, import).reason == StopReason::instruction_limit);
+    assert(core.gx2.current_context_state_flags == 2U);
+    assert(!core.gx2.context_state_profiling_enabled);
+    assert(!core.gx2.context_state_shadow_display_list_requested);
+    assert(core.memory.read32_be(context_address + profiling_offset) == 0U);
+
+    // Uninitialized GX2 is rejected before touching the supplied object.
+    EspressoCore uninitialized(0x20000U);
+    register_gx2_hle(uninitialized.hle);
+    uninitialized.memory.map_region(context_address, context_size);
+    std::vector<std::uint8_t> untouched(context_size, 0xA5U);
+    uninitialized.memory.write_bytes(context_address, untouched);
+    uninitialized.state.gpr[3] = context_address;
+    uninitialized.state.gpr[4] = 1U;
+    const RunResult uninitialized_result = invoke(
+        uninitialized,
+        uninitialized.hle.bind_import("gx2", "GX2SetupContextStateEx"));
+    assert(uninitialized_result.reason == StopReason::hle_error);
+    assert(uninitialized_result.detail.find("gx2::GX2SetupContextStateEx") !=
+           std::string::npos);
+    std::vector<std::uint8_t> unchanged(context_size);
+    uninitialized.memory.read_bytes(context_address, unchanged);
+    assert(unchanged == untouched);
+    assert(!uninitialized.gx2.context_state_shadowing_enabled);
+    assert(uninitialized.gx2.pending_commands.empty());
+
+    // Null and wrapping guest ranges fail without committing runtime metadata.
+    const auto expect_invalid_pointer = [&](std::uint32_t pointer) {
+        EspressoCore invalid(0x20000U);
+        register_gx2_hle(invalid.hle);
+        initialize_gx2(invalid);
+        invalid.gx2.current_context_state = 0x12345678U;
+        invalid.gx2.current_context_state_flags = 0x55U;
+        invalid.gx2.context_state_shadowing_enabled = true;
+        invalid.gx2.context_state_profiling_enabled = true;
+        invalid.gx2.context_state_shadow_display_list_requested = false;
+        invalid.gx2.pending_commands.push_back(
+            {Gx2CommandType::set_context_register, 0x1234U, 0x5678U});
+        const auto old_gx2 = invalid.gx2;
+        invalid.state.gpr[3] = pointer;
+        invalid.state.gpr[4] = 0U;
+        const RunResult result = invoke(
+            invalid,
+            invalid.hle.bind_import("gx2", "GX2SetupContextStateEx"));
+        assert(result.reason == StopReason::hle_error);
+        assert(result.detail.find("GX2SetupContextStateEx") != std::string::npos);
+        assert(invalid.gx2.current_context_state == old_gx2.current_context_state);
+        assert(invalid.gx2.current_context_state_flags ==
+               old_gx2.current_context_state_flags);
+        assert(invalid.gx2.context_state_shadowing_enabled ==
+               old_gx2.context_state_shadowing_enabled);
+        assert(invalid.gx2.context_state_profiling_enabled ==
+               old_gx2.context_state_profiling_enabled);
+        assert(invalid.gx2.context_state_shadow_display_list_requested ==
+               old_gx2.context_state_shadow_display_list_requested);
+        assert(invalid.gx2.pending_commands.size() ==
+               old_gx2.pending_commands.size());
+        assert_same_command(invalid.gx2.pending_commands[0],
+                            old_gx2.pending_commands[0]);
+    };
+    expect_invalid_pointer(0U);
+    expect_invalid_pointer(0xFFFFF000U);
+
+    // Partial mapped ranges fault before any of their bytes are zeroed and
+    // before runtime state or pending commands are changed.
+    constexpr std::uint32_t partial_address = 0x07000000U;
+    EspressoCore partial(0x20000U);
+    register_gx2_hle(partial.hle);
+    initialize_gx2(partial);
+    seed_sparse_context(partial, partial_address, context_size - 1U, 0x6BU);
+    partial.gx2.current_context_state = 0x11112222U;
+    partial.gx2.current_context_state_flags = 0x33334444U;
+    partial.gx2.context_state_shadowing_enabled = true;
+    partial.gx2.context_state_profiling_enabled = true;
+    partial.gx2.context_state_shadow_display_list_requested = false;
+    partial.gx2.pending_commands.push_back(
+        {Gx2CommandType::set_context_register, 0xABCU, 0xDEFU});
+    const auto partial_commands_before = partial.gx2.pending_commands;
+    partial.state.gpr[3] = partial_address;
+    partial.state.gpr[4] = 0U;
+    const RunResult partial_result = invoke(
+        partial,
+        partial.hle.bind_import("gx2", "GX2SetupContextStateEx"));
+    assert(partial_result.reason == StopReason::memory_fault);
+    assert(partial_result.detail.find("write") != std::string::npos);
+    std::vector<std::uint8_t> partial_after(context_size - 1U);
+    partial.memory.read_bytes(partial_address, partial_after);
+    assert(std::ranges::all_of(partial_after, [](std::uint8_t byte) {
+        return byte == 0x6BU;
+    }));
+    assert(partial.gx2.current_context_state == 0x11112222U);
+    assert(partial.gx2.current_context_state_flags == 0x33334444U);
+    assert(partial.gx2.context_state_shadowing_enabled);
+    assert(partial.gx2.context_state_profiling_enabled);
+    assert(!partial.gx2.context_state_shadow_display_list_requested);
+    assert(partial.gx2.pending_commands.size() == partial_commands_before.size());
+    assert_same_command(partial.gx2.pending_commands[0], partial_commands_before[0]);
+
+    // A second core owns independent guest bytes and current-context metadata.
+    EspressoCore other(0x20000U);
+    register_gx2_hle(other.hle);
+    initialize_gx2(other);
+    other.memory.map_region(context_address, context_size);
+    other.memory.fill_bytes(context_address, context_size, 0x7EU);
+    other.state.gpr[3] = context_address;
+    other.state.gpr[4] = 1U;
+    assert(invoke(other, other.hle.bind_import(
+               "gx2", "GX2SetupContextStateEx")).reason ==
+           StopReason::instruction_limit);
+    assert(other.gx2.current_context_state == context_address);
+    assert(other.gx2.context_state_profiling_enabled);
+    assert(core.gx2.current_context_state == context_address);
+    assert(core.gx2.current_context_state_flags == 2U);
+    assert(!core.gx2.context_state_profiling_enabled);
+    assert(core.memory.read32_be(context_address + profiling_offset) == 0U);
+    assert(other.memory.read32_be(context_address + profiling_offset) == 1U);
+
+    core.reset();
+    assert(!core.gx2.context_state_shadowing_enabled);
+    assert(core.gx2.current_context_state == 0U);
+    assert(core.gx2.current_context_state_flags == 0U);
+    assert(!core.gx2.context_state_profiling_enabled);
+    assert(!core.gx2.context_state_shadow_display_list_requested);
+    assert(core.gx2.pending_commands.empty());
+}
+
 void compare_and_conditional_branch_tests()
 {
     EspressoCore unsigned_compare_core(8);
@@ -14884,6 +15224,7 @@ int main(int argc, char* argv[])
     gx2_set_alpha_test_hle_tests();
     gx2_set_target_channel_masks_hle_tests();
     gx2_set_alpha_to_mask_hle_tests();
+    gx2_setup_context_state_ex_hle_tests();
     mem_get_total_free_size_for_exp_heap_hle_tests();
     mem_get_allocatable_size_for_exp_heap_ex_hle_tests();
     compare_and_conditional_branch_tests();

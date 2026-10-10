@@ -63,6 +63,11 @@ struct Gx2RuntimeState
     std::uint32_t cb_target_mask{};
     bool db_alpha_to_mask_valid{};
     std::uint32_t db_alpha_to_mask{};
+    bool context_state_shadowing_enabled{};
+    std::uint32_t current_context_state{};
+    std::uint32_t current_context_state_flags{};
+    bool context_state_profiling_enabled{};
+    bool context_state_shadow_display_list_requested{};
     std::vector<Gx2Command> pending_commands;
 };
 

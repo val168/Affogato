@@ -44,6 +44,16 @@ constexpr std::uint32_t sx_alpha_test_control_register = 0x00028410U;
 constexpr std::uint32_t sx_alpha_ref_register = 0x00028438U;
 constexpr std::uint32_t cb_target_mask_register = 0x00028238U;
 constexpr std::uint32_t db_alpha_to_mask_register = 0x00028D44U;
+constexpr std::uint32_t gx2_context_state_size = 0xA100U;
+constexpr std::uint32_t gx2_context_shadow_state_size = 0x9800U;
+constexpr std::uint32_t gx2_context_profiling_offset = 0x9800U;
+constexpr std::uint32_t gx2_context_display_list_size_offset = 0x9804U;
+constexpr std::uint32_t gx2_context_display_list_offset = 0x9E00U;
+constexpr std::uint32_t gx2_context_display_list_capacity = 0x300U;
+static_assert(gx2_context_shadow_state_size == gx2_context_profiling_offset);
+static_assert(gx2_context_display_list_offset +
+                  gx2_context_display_list_capacity ==
+              gx2_context_state_size);
 
 std::uint32_t fpr_float_argument_bits(
     const EspressoCore& core,
@@ -718,6 +728,63 @@ void register_gx2_hle(HleDispatcher& dispatcher)
                 value});
             // The mode selects offset fields even while alpha-to-mask is
             // disabled. The void setter does not access guest memory or FPRs.
+        });
+
+    dispatcher.register_function(
+        "gx2",
+        "GX2SetupContextStateEx",
+        [](EspressoCore& core) {
+            if (!core.gx2.initialized)
+            {
+                throw HleExecutionError(
+                    "gx2::GX2SetupContextStateEx: GX2 has not been initialized");
+            }
+
+            const std::uint32_t context_state = core.state.gpr[3];
+            const std::uint32_t flags = core.state.gpr[4];
+            if (context_state == 0U)
+            {
+                throw HleExecutionError(
+                    "gx2::GX2SetupContextStateEx: context state pointer is null");
+            }
+
+            const std::uint64_t end =
+                static_cast<std::uint64_t>(context_state) +
+                gx2_context_state_size;
+            if (end > guest_address_space_end)
+            {
+                throw HleExecutionError(
+                    "gx2::GX2SetupContextStateEx: context state range wraps "
+                    "the guest address space");
+            }
+
+            // Validate before touching either guest bytes or runtime metadata.
+            // zero_fill validates again and performs an all-or-nothing range
+            // write under GuestMemory's mapped-region contract.
+            core.memory.validate_write_range(
+                context_state, gx2_context_state_size);
+
+            const bool profiling_enabled = (flags & 1U) != 0U;
+            const bool shadow_display_list_requested = (flags & 2U) == 0U;
+            core.memory.zero_fill(context_state, gx2_context_state_size);
+            core.memory.write32_be(
+                context_state + gx2_context_profiling_offset,
+                profiling_enabled ? 1U : 0U);
+            // Real Cafe creates a restore display list unless suppressed.
+            // Affogato has no authentic PM4/display-list generator yet, so a
+            // zero size intentionally selects the future direct-shadow restore
+            // path instead of exposing fabricated command bytes.
+            core.memory.write32_be(
+                context_state + gx2_context_display_list_size_offset, 0U);
+            // Context setup is modeled logically for now. The full Cafe
+            // default-register stream requires GPU shadow execution; preserve
+            // existing register mirrors and pending ordered commands.
+            core.gx2.current_context_state = context_state;
+            core.gx2.current_context_state_flags = flags;
+            core.gx2.context_state_shadowing_enabled = true;
+            core.gx2.context_state_profiling_enabled = profiling_enabled;
+            core.gx2.context_state_shadow_display_list_requested =
+                shadow_display_list_requested;
         });
 }
 
