@@ -928,6 +928,21 @@ void register_gx2_hle(HleDispatcher& dispatcher)
             core.gx2.tv_scan_width = dimensions.width;
             core.gx2.tv_scan_height = dimensions.height;
         });
+
+    dispatcher.register_function(
+        "gx2",
+        "GX2SetTVScale",
+        [](EspressoCore& core) {
+            const std::uint32_t width = core.state.gpr[3];
+            const std::uint32_t height = core.state.gpr[4];
+
+            // Retain the requested logical output scale independently from
+            // scan-buffer dimensions. No Cafe display/AVM or renderer effects
+            // are modeled here.
+            core.gx2.tv_scale_configured = true;
+            core.gx2.tv_scale_width = width;
+            core.gx2.tv_scale_height = height;
+        });
 }
 
 } // namespace affogato::cpu::espresso

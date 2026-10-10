@@ -51,6 +51,9 @@ struct Gx2RuntimeState
     std::uint32_t tv_buffering_mode{};
     std::uint32_t tv_scan_width{};
     std::uint32_t tv_scan_height{};
+    bool tv_scale_configured{};
+    std::uint32_t tv_scale_width{};
+    std::uint32_t tv_scale_height{};
     bool db_depth_control_valid{};
     std::uint32_t db_depth_control{};
     bool db_stencilrefmask_valid{};

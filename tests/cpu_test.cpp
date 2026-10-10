@@ -13549,6 +13549,246 @@ void gx2_set_tv_buffer_hle_tests()
                        double_buffering);
 }
 
+void gx2_set_tv_scale_hle_tests()
+{
+    constexpr std::uint32_t return_address = 0x02751BA0U;
+    constexpr std::uint32_t buffer_address = 0x0A001000U;
+    constexpr std::uint32_t buffer_size = 0x00FD2000U;
+    constexpr std::uint32_t buffer_end = buffer_address + buffer_size;
+    constexpr std::uint32_t render_mode = 5U;
+    constexpr std::uint32_t surface_format = 0x1AU;
+    constexpr std::uint32_t buffering_mode = 2U;
+
+    const auto invoke = [](EspressoCore& core, std::uint32_t import) {
+        core.state.cia = import;
+        core.state.lr = return_address;
+        return core.run(1U);
+    };
+    const auto set_scale_args = [](EspressoCore& core,
+                                   std::uint32_t width,
+                                   std::uint32_t height) {
+        core.state.gpr[3] = width;
+        core.state.gpr[4] = height;
+    };
+
+    // The API is available without GX2Init or a registered scan buffer, and
+    // accepts zero as a configured value rather than an unset sentinel.
+    EspressoCore standalone(0x1000U);
+    register_gx2_hle(standalone.hle);
+    const std::uint32_t standalone_import =
+        standalone.hle.bind_import("gx2", "GX2SetTVScale");
+    assert(standalone_import != 0U);
+    assert(!standalone.gx2.initialized);
+    assert(!standalone.gx2.tv_scale_configured);
+    assert(standalone.gx2.tv_scale_width == 0U);
+    assert(standalone.gx2.tv_scale_height == 0U);
+    standalone.state.gpr[1] = 0xFFFFFFFFU; // The HLE uses no stack arguments.
+    set_scale_args(standalone, 0U, 0U);
+    assert(invoke(standalone, standalone_import).reason ==
+           StopReason::instruction_limit);
+    assert(standalone.state.cia == return_address);
+    assert(standalone.gx2.tv_scale_configured);
+    assert(standalone.gx2.tv_scale_width == 0U);
+    assert(standalone.gx2.tv_scale_height == 0U);
+    assert(!standalone.gx2.tv_scan_buffer_configured);
+
+    const std::uint32_t wrong_library_import =
+        standalone.hle.bind_import("coreinit", "GX2SetTVScale");
+    assert(wrong_library_import != standalone_import);
+    assert(invoke(standalone, wrong_library_import).reason ==
+           StopReason::unimplemented_hle_call);
+
+    // Reproduce the display setup path: CalcTVSize -> SetTVBuffer -> SetTVScale.
+    // The TV scan metadata and scale dimensions are separate state groups.
+    EspressoCore core(0x4000U);
+    register_gx2_hle(core.hle);
+    const std::uint32_t calc_import =
+        core.hle.bind_import("gx2", "GX2CalcTVSize");
+    const std::uint32_t buffer_import =
+        core.hle.bind_import("gx2", "GX2SetTVBuffer");
+    const std::uint32_t scale_import =
+        core.hle.bind_import("gx2", "GX2SetTVScale");
+    assert(calc_import != 0U && buffer_import != 0U && scale_import != 0U);
+
+    constexpr std::uint32_t size_out = 0x1000U;
+    constexpr std::uint32_t unk_out = 0x1004U;
+    core.state.gpr[3] = render_mode;
+    core.state.gpr[4] = surface_format;
+    core.state.gpr[5] = buffering_mode;
+    core.state.gpr[6] = size_out;
+    core.state.gpr[7] = unk_out;
+    assert(invoke(core, calc_import).reason == StopReason::instruction_limit);
+    assert(core.memory.read32_be(size_out) == buffer_size);
+    assert(core.memory.read32_be(unk_out) == 0U);
+
+    // Representative scan-buffer sentinels are sparse-backed and must remain
+    // untouched by both registration and scale configuration.
+    constexpr std::array<std::uint32_t, 3U> buffer_probe_addresses{
+        buffer_address, buffer_address + buffer_size / 2U, buffer_end - 1U};
+    constexpr std::array<std::uint8_t, 3U> buffer_probe_values{
+        0xA5U, 0xC3U, 0x5AU};
+    for (const std::uint32_t address : buffer_probe_addresses)
+    {
+        core.memory.map_region(address, 1U);
+    }
+    for (std::size_t i = 0; i < buffer_probe_addresses.size(); ++i)
+    {
+        core.memory.write8(buffer_probe_addresses[i], buffer_probe_values[i]);
+    }
+    core.state.gpr[3] = buffer_address;
+    core.state.gpr[4] = core.memory.read32_be(size_out);
+    core.state.gpr[5] = render_mode;
+    core.state.gpr[6] = surface_format;
+    core.state.gpr[7] = buffering_mode;
+    assert(invoke(core, buffer_import).reason == StopReason::instruction_limit);
+    assert(core.gx2.tv_scan_buffer_configured);
+    assert(core.gx2.tv_scan_buffer_address == buffer_address);
+    assert(core.gx2.tv_scan_buffer_size == buffer_size);
+    assert(core.gx2.tv_render_mode == render_mode);
+    assert(core.gx2.tv_surface_format == surface_format);
+    assert(core.gx2.tv_buffering_mode == buffering_mode);
+    assert(core.gx2.tv_scan_width == 1920U);
+    assert(core.gx2.tv_scan_height == 1080U);
+
+    constexpr std::uint32_t context_address = 0x50000U;
+    constexpr std::uint32_t context_size = 0x100U;
+    core.memory.map_region(context_address, context_size);
+    core.memory.write_bytes(context_address,
+                            std::vector<std::uint8_t>(context_size, 0x73U));
+    core.memory.map_region(0x40000U, 0x100U); // Representative command-pool data.
+    core.memory.write8(0x40000U, 0x11U);
+    core.memory.write8(0x40080U, 0x22U);
+    core.memory.write8(0x400FFU, 0x33U);
+    core.gx2.command_buffer_pool_base = 0x40000U;
+    core.gx2.command_buffer_pool_size = 0x100U;
+    core.gx2.current_context_state = context_address;
+    core.gx2.context_state_shadowing_enabled = true;
+    core.gx2.pending_commands = {
+        {Gx2CommandType::set_context_register, 0x28800U, 0x11223344U},
+    };
+    core.configure_guest_heap(0x100U, 0x800U);
+    core.guest_heap_cursor = 0x200U;
+
+    // Contradictory floating-point values prove the HLE consumes only r3/r4.
+    core.state.gpr.fill(0xC3000000U);
+    core.state.gpr[1] = 0xFFFFFFFFU;
+    set_scale_args(core, 1920U, 1080U);
+    for (std::size_t i = 0; i < core.state.fpr.size(); ++i)
+    {
+        core.state.fpr[i] = 0x7FF8123456780000ULL + i;
+        core.state.fpr_ps1[i] = 0xFFF0123456780000ULL + i;
+    }
+    core.state.cr = 0x12345678U;
+    core.state.xer = 0xA5A55A5AU;
+    core.state.ctr = 0x87654321U;
+    core.state.fpscr = 0x5A5AA55AU;
+
+    const Gx2RuntimeState gx2_before = core.gx2;
+    Gx2RuntimeState expected_gx2 = gx2_before;
+    expected_gx2.tv_scale_configured = true;
+    expected_gx2.tv_scale_width = 1920U;
+    expected_gx2.tv_scale_height = 1080U;
+    const auto gprs_before = core.state.gpr;
+    const auto fprs_before = core.state.fpr;
+    const auto ps1_before = core.state.fpr_ps1;
+    const std::uint32_t cr_before = core.state.cr;
+    const std::uint32_t xer_before = core.state.xer;
+    const std::uint32_t ctr_before = core.state.ctr;
+    const std::uint32_t fpscr_before = core.state.fpscr;
+    const std::uint32_t heap_cursor_before = core.guest_heap_cursor;
+    std::vector<std::uint8_t> flat_memory_before(core.memory.size());
+    core.memory.read_bytes(0U, flat_memory_before);
+    std::vector<std::uint8_t> context_before(context_size);
+    core.memory.read_bytes(context_address, context_before);
+    const std::array<std::uint8_t, 3U> command_pool_before{
+        core.memory.read8(0x40000U), core.memory.read8(0x40080U),
+        core.memory.read8(0x400FFU)};
+
+    const RunResult scale_result = invoke(core, scale_import);
+    assert(scale_result.reason == StopReason::instruction_limit);
+    assert(scale_result.steps == 1U);
+    assert(core.state.cia == return_address && core.state.lr == return_address);
+    assert(core.gx2 == expected_gx2);
+    assert(core.gx2.tv_scan_width == 1920U && core.gx2.tv_scan_height == 1080U);
+    assert(core.state.gpr == gprs_before);
+    assert(core.state.fpr == fprs_before && core.state.fpr_ps1 == ps1_before);
+    assert(core.state.cr == cr_before && core.state.xer == xer_before);
+    assert(core.state.ctr == ctr_before && core.state.fpscr == fpscr_before);
+    assert(core.guest_heap_cursor == heap_cursor_before);
+    std::vector<std::uint8_t> flat_memory_after(core.memory.size());
+    core.memory.read_bytes(0U, flat_memory_after);
+    assert(flat_memory_after == flat_memory_before);
+    std::vector<std::uint8_t> context_after(context_size);
+    core.memory.read_bytes(context_address, context_after);
+    assert(context_after == context_before);
+    for (std::size_t i = 0; i < buffer_probe_addresses.size(); ++i)
+    {
+        assert(core.memory.read8(buffer_probe_addresses[i]) == buffer_probe_values[i]);
+    }
+    assert((std::array<std::uint8_t, 3U>{
+                core.memory.read8(0x40000U), core.memory.read8(0x40080U),
+                core.memory.read8(0x400FFU)}) == command_pool_before);
+
+    // Scale dimensions never overwrite scan dimensions, including mismatched
+    // and arbitrary uint32 values. Repeated calls retain only the latest pair.
+    const auto configure_and_check = [&](std::uint32_t width,
+                                         std::uint32_t height) {
+        set_scale_args(core, width, height);
+        assert(invoke(core, scale_import).reason == StopReason::instruction_limit);
+        assert(core.gx2.tv_scale_configured);
+        assert(core.gx2.tv_scale_width == width);
+        assert(core.gx2.tv_scale_height == height);
+        assert(core.gx2.tv_scan_width == 1920U);
+        assert(core.gx2.tv_scan_height == 1080U);
+        assert(core.gx2.tv_scan_buffer_address == buffer_address);
+        assert(core.gx2.tv_scan_buffer_size == buffer_size);
+    };
+    configure_and_check(1280U, 720U);
+    configure_and_check(854U, 480U);
+    configure_and_check(0U, 0U);
+    configure_and_check(0xFFFFFFFFU, 0x80000000U);
+
+    // A scale configured before a scan buffer remains independent when the
+    // buffer is registered later.
+    EspressoCore scale_first(0x1000U);
+    register_gx2_hle(scale_first.hle);
+    const std::uint32_t scale_first_import =
+        scale_first.hle.bind_import("gx2", "GX2SetTVScale");
+    const std::uint32_t scale_first_buffer_import =
+        scale_first.hle.bind_import("gx2", "GX2SetTVBuffer");
+    set_scale_args(scale_first, 1280U, 720U);
+    assert(invoke(scale_first, scale_first_import).reason ==
+           StopReason::instruction_limit);
+    scale_first.state.gpr[3] = 0x20000000U;
+    scale_first.state.gpr[4] = buffer_size;
+    scale_first.state.gpr[5] = render_mode;
+    scale_first.state.gpr[6] = surface_format;
+    scale_first.state.gpr[7] = buffering_mode;
+    assert(invoke(scale_first, scale_first_buffer_import).reason ==
+           StopReason::instruction_limit);
+    assert(scale_first.gx2.tv_scale_configured);
+    assert(scale_first.gx2.tv_scale_width == 1280U);
+    assert(scale_first.gx2.tv_scale_height == 720U);
+    assert(scale_first.gx2.tv_scan_width == 1920U);
+    assert(scale_first.gx2.tv_scan_height == 1080U);
+
+    core.reset();
+    assert(!core.gx2.tv_scale_configured);
+    assert(core.gx2.tv_scale_width == 0U);
+    assert(core.gx2.tv_scale_height == 0U);
+
+    EspressoCore isolated(0x1000U);
+    register_gx2_hle(isolated.hle);
+    const std::uint32_t isolated_import =
+        isolated.hle.bind_import("gx2", "GX2SetTVScale");
+    set_scale_args(isolated, 640U, 480U);
+    assert(invoke(isolated, isolated_import).reason ==
+           StopReason::instruction_limit);
+    assert(isolated.gx2.tv_scale_width == 640U);
+    assert(isolated.gx2.tv_scale_height == 480U);
+    assert(!core.gx2.tv_scale_configured);
+}
+
 void compare_and_conditional_branch_tests()
 {
     EspressoCore unsigned_compare_core(8);
@@ -16025,6 +16265,7 @@ int main(int argc, char* argv[])
     gx2_setup_context_state_ex_hle_tests();
     gx2_calc_tv_size_hle_tests();
     gx2_set_tv_buffer_hle_tests();
+    gx2_set_tv_scale_hle_tests();
     mem_get_total_free_size_for_exp_heap_hle_tests();
     mem_get_allocatable_size_for_exp_heap_ex_hle_tests();
     compare_and_conditional_branch_tests();
