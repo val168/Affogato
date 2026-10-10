@@ -43,6 +43,7 @@ constexpr std::uint32_t cb_blend_alpha_register = 0x00028420U;
 constexpr std::uint32_t sx_alpha_test_control_register = 0x00028410U;
 constexpr std::uint32_t sx_alpha_ref_register = 0x00028438U;
 constexpr std::uint32_t cb_target_mask_register = 0x00028238U;
+constexpr std::uint32_t db_alpha_to_mask_register = 0x00028D44U;
 
 std::uint32_t fpr_float_argument_bits(
     const EspressoCore& core,
@@ -70,6 +71,24 @@ std::uint32_t pack_target_channel_masks(
         packed |= (masks[index] & 0xFU) << static_cast<unsigned>(index * 4U);
     }
     return packed;
+}
+
+std::uint32_t pack_alpha_to_mask(
+    std::uint32_t enabled,
+    std::uint32_t mode)
+{
+    std::uint32_t offsets = 0U;
+    switch (mode)
+    {
+    case 0U: offsets = 0xAAU; break;
+    case 1U: offsets = 0x78U; break;
+    case 2U: offsets = 0xC6U; break;
+    case 3U: offsets = 0x2DU; break;
+    case 4U: offsets = 0x93U; break;
+    default: break;
+    }
+
+    return (offsets << 8U) | (enabled != 0U ? 1U : 0U);
 }
 
 std::uint32_t pack_stencil_ref_mask(
@@ -677,6 +696,28 @@ void register_gx2_hle(HleDispatcher& dispatcher)
                 packed});
             // Void setter: r3-r10 are the eight mask arguments. No stack,
             // FPR, or guest-memory state participates in this register write.
+        });
+
+    dispatcher.register_function(
+        "gx2",
+        "GX2SetAlphaToMask",
+        [](EspressoCore& core) {
+            if (!core.gx2.initialized)
+            {
+                throw HleExecutionError(
+                    "gx2::GX2SetAlphaToMask: GX2 has not been initialized");
+            }
+
+            const std::uint32_t value = pack_alpha_to_mask(
+                core.state.gpr[3], core.state.gpr[4]);
+            core.gx2.db_alpha_to_mask = value;
+            core.gx2.db_alpha_to_mask_valid = true;
+            core.gx2.pending_commands.push_back({
+                Gx2CommandType::set_context_register,
+                db_alpha_to_mask_register,
+                value});
+            // The mode selects offset fields even while alpha-to-mask is
+            // disabled. The void setter does not access guest memory or FPRs.
         });
 }
 

@@ -61,6 +61,8 @@ struct Gx2RuntimeState
     std::uint32_t sx_alpha_ref{};
     bool cb_target_mask_valid{};
     std::uint32_t cb_target_mask{};
+    bool db_alpha_to_mask_valid{};
+    std::uint32_t db_alpha_to_mask{};
     std::vector<Gx2Command> pending_commands;
 };
 
