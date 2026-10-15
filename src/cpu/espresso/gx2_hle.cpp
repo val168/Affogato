@@ -69,6 +69,13 @@ struct TvDimensions
     std::uint32_t height{};
 };
 
+struct DrcScanGeometry
+{
+    std::uint32_t width{};
+    std::uint32_t height{};
+    std::uint32_t pitch{};
+};
+
 TvDimensions get_tv_dimensions(std::uint32_t render_mode, const char* api_name)
 {
     if (render_mode != gx2_tv_render_mode_wide_1080p)
@@ -106,6 +113,21 @@ std::uint32_t get_scan_buffer_count(
             std::string("gx2::") + api_name + ": invalid buffering mode " +
             std::to_string(buffering_mode));
     }
+}
+
+DrcScanGeometry get_drc_scan_geometry(
+    std::uint32_t render_mode,
+    const char* api_name)
+{
+    if (render_mode != gx2_drc_render_mode_single &&
+        render_mode != gx2_drc_render_mode_double)
+    {
+        throw HleExecutionError(
+            std::string("gx2::") + api_name +
+            ": unsupported DRC render mode " + std::to_string(render_mode));
+    }
+
+    return {854U, 480U, 864U};
 }
 
 void validate_gx2_u32_output(
@@ -206,13 +228,8 @@ std::uint32_t calculate_drc_size(
     std::uint32_t buffering_mode)
 {
     constexpr const char* api_name = "GX2CalcDRCSize";
-    if (render_mode != gx2_drc_render_mode_single &&
-        render_mode != gx2_drc_render_mode_double)
-    {
-        throw HleExecutionError(
-            std::string("gx2::") + api_name +
-            ": unsupported DRC render mode " + std::to_string(render_mode));
-    }
+    const DrcScanGeometry geometry =
+        get_drc_scan_geometry(render_mode, api_name);
 
     validate_scan_surface_format(surface_format, api_name);
     const std::uint32_t buffer_count =
@@ -220,8 +237,8 @@ std::uint32_t calculate_drc_size(
 
     // The logical DRC image is 854x480, but scan-buffer storage uses an
     // 864-pixel row pitch. Size the allocation from that padded pitch.
-    constexpr std::uint64_t scan_pitch = 864U;
-    constexpr std::uint64_t height = 480U;
+    const std::uint64_t scan_pitch = geometry.pitch;
+    const std::uint64_t height = geometry.height;
     constexpr std::uint64_t bytes_per_pixel = 4U;
     const std::uint64_t size =
         scan_pitch * height * bytes_per_pixel * buffer_count;
@@ -1004,6 +1021,35 @@ void register_gx2_hle(HleDispatcher& dispatcher)
             core.gx2.tv_scale_configured = true;
             core.gx2.tv_scale_width = width;
             core.gx2.tv_scale_height = height;
+        });
+
+    dispatcher.register_function(
+        "gx2",
+        "GX2SetDRCBuffer",
+        [](EspressoCore& core) {
+            const std::uint32_t buffer = core.state.gpr[3];
+            const std::uint32_t size = core.state.gpr[4];
+            const std::uint32_t render_mode = core.state.gpr[5];
+            const std::uint32_t surface_format = core.state.gpr[6];
+            const std::uint32_t buffering_mode = core.state.gpr[7];
+
+            constexpr const char* api_name = "GX2SetDRCBuffer";
+            const DrcScanGeometry geometry =
+                get_drc_scan_geometry(render_mode, api_name);
+            validate_scan_surface_format(surface_format, api_name);
+            (void)get_scan_buffer_count(buffering_mode, api_name);
+
+            // Registration only: the guest owns this image buffer. Affogato
+            // does not access its pixels or emit GPU/backend commands here.
+            core.gx2.drc_scan_buffer_configured = true;
+            core.gx2.drc_scan_buffer_address = buffer;
+            core.gx2.drc_scan_buffer_size = size;
+            core.gx2.drc_render_mode = render_mode;
+            core.gx2.drc_surface_format = surface_format;
+            core.gx2.drc_buffering_mode = buffering_mode;
+            core.gx2.drc_scan_width = geometry.width;
+            core.gx2.drc_scan_height = geometry.height;
+            core.gx2.drc_scan_pitch = geometry.pitch;
         });
 }
 

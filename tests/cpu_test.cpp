@@ -14011,6 +14011,270 @@ void gx2_calc_drc_size_hle_tests()
     assert(result.hle_call == "coreinit::GX2CalcDRCSize");
 }
 
+void gx2_set_drc_buffer_hle_tests()
+{
+    constexpr std::uint32_t return_address = 0x02751C14U;
+    constexpr std::uint32_t buffer_address = 0x0AFD3000U;
+    constexpr std::uint32_t buffer_size = 0x0032A000U;
+    constexpr std::uint32_t buffer_end = buffer_address + buffer_size;
+    constexpr std::uint32_t rgba8_format = 0x1AU;
+    constexpr std::uint32_t flat_probe = 0x100U;
+
+    const auto set_arguments = [](EspressoCore& core,
+                                  std::uint32_t buffer,
+                                  std::uint32_t size,
+                                  std::uint32_t render_mode,
+                                  std::uint32_t format,
+                                  std::uint32_t buffering_mode) {
+        core.state.gpr[3] = buffer;
+        core.state.gpr[4] = size;
+        core.state.gpr[5] = render_mode;
+        core.state.gpr[6] = format;
+        core.state.gpr[7] = buffering_mode;
+    };
+    const auto invoke = [](EspressoCore& core, std::uint32_t import) {
+        core.state.cia = import;
+        core.state.lr = return_address;
+        return core.run(1U);
+    };
+    const auto expect_drc = [](const Gx2RuntimeState& state,
+                               std::uint32_t buffer,
+                               std::uint32_t size,
+                               std::uint32_t mode,
+                               std::uint32_t format,
+                               std::uint32_t buffering) {
+        assert(state.drc_scan_buffer_configured);
+        assert(state.drc_scan_buffer_address == buffer);
+        assert(state.drc_scan_buffer_size == size);
+        assert(state.drc_render_mode == mode);
+        assert(state.drc_surface_format == format);
+        assert(state.drc_buffering_mode == buffering);
+        assert(state.drc_scan_width == 854U);
+        assert(state.drc_scan_height == 480U);
+        assert(state.drc_scan_pitch == 864U);
+    };
+
+    EspressoCore core(0x1000U);
+    register_gx2_hle(core.hle);
+    const std::uint32_t import =
+        core.hle.bind_import("gx2", "GX2SetDRCBuffer");
+    assert(import != 0U);
+    const std::uint32_t wrong_library =
+        core.hle.bind_import("coreinit", "GX2SetDRCBuffer");
+    assert(wrong_library != 0U && wrong_library != import);
+    assert(!core.gx2.drc_scan_buffer_configured);
+    assert(core.gx2.drc_scan_buffer_address == 0U);
+    assert(core.gx2.drc_scan_buffer_size == 0U);
+    assert(core.gx2.drc_render_mode == 0U);
+    assert(core.gx2.drc_surface_format == 0U);
+    assert(core.gx2.drc_buffering_mode == 0U);
+    assert(core.gx2.drc_scan_width == 0U);
+    assert(core.gx2.drc_scan_height == 0U);
+    assert(core.gx2.drc_scan_pitch == 0U);
+
+    // Sparse probes catch accidental scan-buffer reads/writes without mapping
+    // or allocating the complete 3.3 MiB image.
+    const std::array<std::uint32_t, 4U> image_probes{
+        buffer_address,
+        buffer_address + 1U,
+        buffer_address + buffer_size / 2U,
+        buffer_end - 1U,
+    };
+    for (std::size_t index = 0; index < image_probes.size(); ++index)
+    {
+        core.memory.map_region(image_probes[index], 1U);
+        core.memory.write8(image_probes[index],
+                           static_cast<std::uint8_t>(0x31U + index));
+    }
+    core.memory.write32_be(flat_probe, 0x12345678U);
+
+    // No GX2Init call/guard is required for metadata registration.
+    core.gx2.tv_scan_buffer_configured = true;
+    core.gx2.tv_scan_buffer_address = 0x0A001000U;
+    core.gx2.tv_scan_buffer_size = 0x00FD2000U;
+    core.gx2.tv_render_mode = 5U;
+    core.gx2.tv_surface_format = rgba8_format;
+    core.gx2.tv_buffering_mode = 2U;
+    core.gx2.tv_scan_width = 1920U;
+    core.gx2.tv_scan_height = 1080U;
+    core.gx2.tv_scale_configured = true;
+    core.gx2.tv_scale_width = 1920U;
+    core.gx2.tv_scale_height = 1080U;
+    core.gx2.pending_commands = {
+        {Gx2CommandType::set_context_register, 0x28800U, 0xAABBCCDDU},
+        {Gx2CommandType::set_context_register, 0x28430U, 0x10203040U},
+    };
+    core.gx2.command_buffer_pool_base = 0x400U;
+    core.gx2.command_buffer_pool_size = 0x400U;
+    core.memory.write8(0x400U, 0xA5U);
+    core.memory.write8(0x600U, 0x3CU);
+    core.memory.write8(0x5FFU, 0x5AU);
+    core.memory.write32_be(0x800U, 0xCAFEBABEU);
+    core.configure_guest_heap(0x100U, 0x900U);
+    core.guest_heap_cursor = 0x500U;
+    core.base_heap_handles[0] = 0x10203040U;
+
+    core.state.gpr[1] = 0xFFFFFFFFU; // There are no stack arguments.
+    set_arguments(core, buffer_address, buffer_size, 1U,
+                  rgba8_format, 2U);
+    for (std::size_t index = 0; index < core.state.fpr.size(); ++index)
+    {
+        core.state.fpr[index] = 0x3FF0000000000000ULL + index;
+        core.state.fpr_ps1[index] = 0xBFF0000000000000ULL + index;
+    }
+    core.state.cr = 0x12345678U;
+    core.state.xer = 0xA5A55A5AU;
+    core.state.ctr = 0x87654321U;
+    core.state.fpscr = 0x5A5AA55AU;
+
+    const auto gprs_before = core.state.gpr;
+    const auto fprs_before = core.state.fpr;
+    const auto ps1_before = core.state.fpr_ps1;
+    const std::uint32_t cr_before = core.state.cr;
+    const std::uint32_t xer_before = core.state.xer;
+    const std::uint32_t ctr_before = core.state.ctr;
+    const std::uint32_t fpscr_before = core.state.fpscr;
+    const Gx2RuntimeState gx2_before = core.gx2;
+    const std::uint32_t heap_cursor_before = core.guest_heap_cursor;
+    const std::uint32_t heap_limit_before = core.guest_heap_limit;
+    const auto heap_handles_before = core.base_heap_handles;
+    RunResult result = invoke(core, import);
+    assert(result.reason == StopReason::instruction_limit);
+    assert(result.steps == 1U);
+    assert(core.state.cia == return_address && core.state.lr == return_address);
+    assert(core.state.gpr == gprs_before);
+    assert(core.state.fpr == fprs_before && core.state.fpr_ps1 == ps1_before);
+    assert(core.state.cr == cr_before && core.state.xer == xer_before);
+    assert(core.state.ctr == ctr_before && core.state.fpscr == fpscr_before);
+    expect_drc(core.gx2, buffer_address, buffer_size, 1U,
+               rgba8_format, 2U);
+
+    Gx2RuntimeState expected_gx2 = gx2_before;
+    expected_gx2.drc_scan_buffer_configured = true;
+    expected_gx2.drc_scan_buffer_address = buffer_address;
+    expected_gx2.drc_scan_buffer_size = buffer_size;
+    expected_gx2.drc_render_mode = 1U;
+    expected_gx2.drc_surface_format = rgba8_format;
+    expected_gx2.drc_buffering_mode = 2U;
+    expected_gx2.drc_scan_width = 854U;
+    expected_gx2.drc_scan_height = 480U;
+    expected_gx2.drc_scan_pitch = 864U;
+    assert(core.gx2 == expected_gx2);
+    assert(core.gx2.tv_scan_buffer_address == 0x0A001000U);
+    assert(core.gx2.tv_scan_buffer_size == 0x00FD2000U);
+    assert(core.gx2.tv_scan_width == 1920U &&
+           core.gx2.tv_scan_height == 1080U);
+    assert(core.gx2.tv_scale_width == 1920U &&
+           core.gx2.tv_scale_height == 1080U);
+    assert(core.memory.read32_be(flat_probe) == 0x12345678U);
+    assert(core.memory.read8(0x400U) == 0xA5U);
+    assert(core.memory.read8(0x600U) == 0x3CU);
+    assert(core.memory.read8(0x5FFU) == 0x5AU);
+    assert(core.memory.read32_be(0x800U) == 0xCAFEBABEU);
+    for (std::size_t index = 0; index < image_probes.size(); ++index)
+    {
+        assert(core.memory.read8(image_probes[index]) ==
+               static_cast<std::uint8_t>(0x31U + index));
+    }
+    assert(core.guest_heap_cursor == heap_cursor_before);
+    assert(core.guest_heap_limit == heap_limit_before);
+    assert(core.base_heap_handles == heap_handles_before);
+
+    // Identical registration is idempotent. Later calls replace DRC metadata
+    // only and preserve the raw guest-supplied size.
+    const Gx2RuntimeState repeated_before = core.gx2;
+    set_arguments(core, buffer_address, buffer_size, 1U,
+                  rgba8_format, 2U);
+    assert(invoke(core, import).reason == StopReason::instruction_limit);
+    assert(core.gx2 == repeated_before);
+    set_arguments(core, 0x20000000U, 0x12345678U, 2U,
+                  rgba8_format, 3U);
+    assert(invoke(core, import).reason == StopReason::instruction_limit);
+    expect_drc(core.gx2, 0x20000000U, 0x12345678U, 2U,
+               rgba8_format, 3U);
+    assert(core.gx2.tv_scan_buffer_address == 0x0A001000U);
+
+    // Null, unmapped, zero-size, and wrapping pointer/size pairs are opaque
+    // registrations; the setter deliberately does not access guest memory.
+    set_arguments(core, 0U, 0U, 1U, rgba8_format, 1U);
+    assert(invoke(core, import).reason == StopReason::instruction_limit);
+    expect_drc(core.gx2, 0U, 0U, 1U, rgba8_format, 1U);
+    set_arguments(core, 0xFFFFFFF0U, 0x1000U, 2U,
+                  rgba8_format, 2U);
+    assert(invoke(core, import).reason == StopReason::instruction_limit);
+    expect_drc(core.gx2, 0xFFFFFFF0U, 0x1000U, 2U,
+               rgba8_format, 2U);
+    set_arguments(core, 0xDEAD0000U, 0x11111111U, 1U,
+                  rgba8_format, 2U);
+    assert(invoke(core, import).reason == StopReason::instruction_limit);
+    expect_drc(core.gx2, 0xDEAD0000U, 0x11111111U, 1U,
+               rgba8_format, 2U);
+
+    const auto expect_invalid = [&](std::uint32_t mode,
+                                    std::uint32_t format,
+                                    std::uint32_t buffering) {
+        const Gx2RuntimeState before = core.gx2;
+        set_arguments(core, 0x30000000U, 0x22222222U, mode,
+                      format, buffering);
+        const auto call_gprs = core.state.gpr;
+        const auto call_fprs = core.state.fpr;
+        const auto call_ps1 = core.state.fpr_ps1;
+        const std::uint32_t call_cr = core.state.cr;
+        const std::uint32_t call_xer = core.state.xer;
+        const std::uint32_t call_ctr = core.state.ctr;
+        const std::uint32_t call_fpscr = core.state.fpscr;
+        const RunResult failure = invoke(core, import);
+        assert(failure.reason == StopReason::hle_error);
+        assert(failure.detail.find("gx2::GX2SetDRCBuffer") !=
+               std::string::npos);
+        assert(core.gx2 == before);
+        assert(core.state.gpr == call_gprs);
+        assert(core.state.fpr == call_fprs && core.state.fpr_ps1 == call_ps1);
+        assert(core.state.cr == call_cr && core.state.xer == call_xer);
+        assert(core.state.ctr == call_ctr && core.state.fpscr == call_fpscr);
+        assert(core.state.lr == return_address);
+        assert(core.memory.read32_be(flat_probe) == 0x12345678U);
+        assert(core.memory.read32_be(0x800U) == 0xCAFEBABEU);
+    };
+    expect_invalid(0U, rgba8_format, 2U);
+    expect_invalid(3U, rgba8_format, 2U);
+    expect_invalid(1U, 0x1BU, 2U);
+    expect_invalid(1U, rgba8_format, 0U);
+    expect_invalid(1U, rgba8_format, 4U);
+
+    core.reset();
+    assert(!core.gx2.drc_scan_buffer_configured);
+    assert(core.gx2.drc_scan_buffer_address == 0U);
+    assert(core.gx2.drc_scan_buffer_size == 0U);
+    assert(core.gx2.drc_render_mode == 0U);
+    assert(core.gx2.drc_surface_format == 0U);
+    assert(core.gx2.drc_buffering_mode == 0U);
+    assert(core.gx2.drc_scan_width == 0U);
+    assert(core.gx2.drc_scan_height == 0U);
+    assert(core.gx2.drc_scan_pitch == 0U);
+
+    EspressoCore isolated_a(0x1000U);
+    EspressoCore isolated_b(0x1000U);
+    register_gx2_hle(isolated_a.hle);
+    register_gx2_hle(isolated_b.hle);
+    const auto import_a = isolated_a.hle.bind_import("gx2", "GX2SetDRCBuffer");
+    const auto import_b = isolated_b.hle.bind_import("gx2", "GX2SetDRCBuffer");
+    set_arguments(isolated_a, 0x10000000U, 0x100U, 1U, rgba8_format, 1U);
+    set_arguments(isolated_b, 0x20000000U, 0x200U, 2U, rgba8_format, 3U);
+    assert(invoke(isolated_a, import_a).reason == StopReason::instruction_limit);
+    assert(invoke(isolated_b, import_b).reason == StopReason::instruction_limit);
+    expect_drc(isolated_a.gx2, 0x10000000U, 0x100U, 1U,
+               rgba8_format, 1U);
+    expect_drc(isolated_b.gx2, 0x20000000U, 0x200U, 2U,
+               rgba8_format, 3U);
+
+    core.state.cia = wrong_library;
+    core.state.lr = return_address;
+    result = core.run(1U);
+    assert(result.reason == StopReason::unimplemented_hle_call);
+    assert(result.hle_call == "coreinit::GX2SetDRCBuffer");
+}
+
 void compare_and_conditional_branch_tests()
 {
     EspressoCore unsigned_compare_core(8);
@@ -16489,6 +16753,7 @@ int main(int argc, char* argv[])
     gx2_set_tv_buffer_hle_tests();
     gx2_set_tv_scale_hle_tests();
     gx2_calc_drc_size_hle_tests();
+    gx2_set_drc_buffer_hle_tests();
     mem_get_total_free_size_for_exp_heap_hle_tests();
     mem_get_allocatable_size_for_exp_heap_ex_hle_tests();
     compare_and_conditional_branch_tests();
