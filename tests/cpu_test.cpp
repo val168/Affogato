@@ -14504,6 +14504,214 @@ void gx2_set_drc_scale_hle_tests()
     assert(result.hle_call == "coreinit::GX2SetDRCScale");
 }
 
+void gx2_set_swap_interval_hle_tests()
+{
+    constexpr std::uint32_t return_address = 0x0274C3BCU;
+
+    const auto set_interval = [](EspressoCore& core, std::uint32_t interval) {
+        core.state.gpr[3] = interval;
+    };
+    const auto invoke = [](EspressoCore& core, std::uint32_t import) {
+        core.state.cia = import;
+        core.state.lr = return_address;
+        return core.run(1U);
+    };
+
+    EspressoCore fresh(0x1000U);
+    register_gx2_hle(fresh.hle);
+    const std::uint32_t fresh_import =
+        fresh.hle.bind_import("gx2", "GX2SetSwapInterval");
+    assert(fresh_import != 0U);
+    assert(!fresh.gx2.initialized);
+    assert(fresh.gx2.swap_interval == 0U);
+    set_interval(fresh, 2U);
+    const RunResult fresh_result = invoke(fresh, fresh_import);
+    assert(fresh_result.reason == StopReason::instruction_limit);
+    assert(fresh_result.steps == 1U);
+    assert(!fresh.gx2.initialized);
+    assert(fresh.gx2.swap_interval == 2U);
+    assert(fresh.state.gpr[3] == 2U);
+    assert(fresh.state.cia == return_address && fresh.state.lr == return_address);
+
+    EspressoCore core(0x1000U);
+    register_gx2_hle(core.hle);
+    const std::uint32_t import =
+        core.hle.bind_import("gx2", "GX2SetSwapInterval");
+    const std::uint32_t wrong_library =
+        core.hle.bind_import("coreinit", "GX2SetSwapInterval");
+    assert(import != 0U && wrong_library != 0U && wrong_library != import);
+
+    core.gx2.initialized = true;
+    core.gx2.main_core_id = 1U;
+    core.gx2.command_buffer_pool_base = 0x100U;
+    core.gx2.command_buffer_pool_size = 0x100U;
+    core.gx2.command_buffer_pool_owned = true;
+    core.gx2.swap_interval = 1U;
+    core.gx2.flip_request_count = 0x12345678U;
+    core.gx2.flip_execute_count = 0x87654321U;
+    core.gx2.tv_scan_buffer_configured = true;
+    core.gx2.tv_scan_buffer_address = 0x0A001000U;
+    core.gx2.tv_scan_buffer_size = 0x00FD2000U;
+    core.gx2.tv_render_mode = 5U;
+    core.gx2.tv_surface_format = 0x1AU;
+    core.gx2.tv_buffering_mode = 2U;
+    core.gx2.tv_scan_width = 1920U;
+    core.gx2.tv_scan_height = 1080U;
+    core.gx2.tv_scale_configured = true;
+    core.gx2.tv_scale_width = 1920U;
+    core.gx2.tv_scale_height = 1080U;
+    core.gx2.drc_scan_buffer_configured = true;
+    core.gx2.drc_scan_buffer_address = 0x0AFD3000U;
+    core.gx2.drc_scan_buffer_size = 0x0032A000U;
+    core.gx2.drc_render_mode = 1U;
+    core.gx2.drc_surface_format = 0x1AU;
+    core.gx2.drc_buffering_mode = 2U;
+    core.gx2.drc_scan_width = 854U;
+    core.gx2.drc_scan_height = 480U;
+    core.gx2.drc_scan_pitch = 864U;
+    core.gx2.drc_scale_configured = true;
+    core.gx2.drc_scale_width = 854U;
+    core.gx2.drc_scale_height = 480U;
+    core.gx2.context_state_shadowing_enabled = true;
+    core.gx2.current_context_state = 0x800U;
+    core.gx2.current_context_state_flags = 0x55AAU;
+    core.gx2.context_state_profiling_enabled = true;
+    core.gx2.context_state_shadow_display_list_requested = true;
+    core.gx2.db_depth_control_valid = true;
+    core.gx2.db_depth_control = 0x36U;
+    core.gx2.db_stencilrefmask_valid = true;
+    core.gx2.db_stencilrefmask = 0x00FFFF00U;
+    core.gx2.pa_su_sc_mode_cntl_valid = true;
+    core.gx2.pa_su_sc_mode_cntl = 0x1234U;
+    core.gx2.cb_color_control_valid = true;
+    core.gx2.cb_color_control = 0x4321U;
+    core.gx2.cb_blend_control_valid[3] = true;
+    core.gx2.cb_blend_control[3] = 0xABCDEFU;
+    core.gx2.cb_blend_constant_valid[2] = true;
+    core.gx2.cb_blend_constant[2] = 0x10203040U;
+    core.gx2.sx_alpha_test_control_valid = true;
+    core.gx2.sx_alpha_test_control = 0xA5U;
+    core.gx2.sx_alpha_ref_valid = true;
+    core.gx2.sx_alpha_ref = 0x3F000000U;
+    core.gx2.cb_target_mask_valid = true;
+    core.gx2.cb_target_mask = 0x76543210U;
+    core.gx2.db_alpha_to_mask_valid = true;
+    core.gx2.db_alpha_to_mask = 0xAA01U;
+    core.gx2.pending_commands = {
+        {Gx2CommandType::set_context_register, 0x28800U, 0xAABBCCDDU},
+        {Gx2CommandType::set_context_register, 0x28430U, 0x12345678U},
+    };
+    core.configure_guest_heap(0x200U, 0xF00U);
+    core.guest_heap_cursor = 0x600U;
+    core.base_heap_handles[0] = 0x10203040U;
+    core.mem2_heap_region_begin = 0x700U;
+    core.mem2_heap_region_end = 0x900U;
+    core.fs_initialized = true;
+    core.nn_save_initialized = true;
+
+    // The stack pointer is deliberately unusable: the API has only r3 input.
+    for (std::size_t index = 0; index < core.state.gpr.size(); ++index)
+    {
+        core.state.gpr[index] = 0xA5000000U +
+                                static_cast<std::uint32_t>(index) * 0x101U;
+    }
+    core.state.gpr[1] = 0xFFFFFFFFU;
+    set_interval(core, 2U);
+    for (std::size_t index = 0; index < core.state.fpr.size(); ++index)
+    {
+        core.state.fpr[index] = 0x1111000000000000ULL + index;
+        core.state.fpr_ps1[index] = 0x2222000000000000ULL + index;
+    }
+    core.state.cr = 0x12345678U;
+    core.state.xer = 0xA00000A5U;
+    core.state.ctr = 0xCAFEBABEU;
+    core.state.fpscr = 0x5A5AA55AU;
+    core.memory.write32_be(0x100U, 0xAABBCCDDU);
+    core.memory.write32_be(0x800U, 0x12345678U);
+
+    const auto gprs_before = core.state.gpr;
+    const auto fprs_before = core.state.fpr;
+    const auto ps1_before = core.state.fpr_ps1;
+    const std::uint32_t cr_before = core.state.cr;
+    const std::uint32_t xer_before = core.state.xer;
+    const std::uint32_t ctr_before = core.state.ctr;
+    const std::uint32_t fpscr_before = core.state.fpscr;
+    const Gx2RuntimeState gx2_before = core.gx2;
+    const std::uint32_t heap_cursor_before = core.guest_heap_cursor;
+    const std::uint32_t heap_limit_before = core.guest_heap_limit;
+    const auto heap_handles_before = core.base_heap_handles;
+    const std::uint32_t mem2_begin_before = core.mem2_heap_region_begin;
+    const std::uint32_t mem2_end_before = core.mem2_heap_region_end;
+    const bool fs_before = core.fs_initialized;
+    const bool save_before = core.nn_save_initialized;
+    std::vector<std::uint8_t> memory_before(core.memory.size());
+    core.memory.read_bytes(0U, memory_before);
+
+    const RunResult result = invoke(core, import);
+    assert(result.reason == StopReason::instruction_limit);
+    assert(result.steps == 1U);
+    assert(core.state.cia == return_address && core.state.lr == return_address);
+    assert(core.state.gpr == gprs_before && core.state.gpr[3] == 2U);
+    assert(core.state.fpr == fprs_before && core.state.fpr_ps1 == ps1_before);
+    assert(core.state.cr == cr_before && core.state.xer == xer_before);
+    assert(core.state.ctr == ctr_before && core.state.fpscr == fpscr_before);
+    Gx2RuntimeState expected_gx2 = gx2_before;
+    expected_gx2.swap_interval = 2U;
+    assert(core.gx2 == expected_gx2);
+    assert(core.gx2.flip_request_count == 0x12345678U);
+    assert(core.gx2.flip_execute_count == 0x87654321U);
+    assert(core.guest_heap_cursor == heap_cursor_before);
+    assert(core.guest_heap_limit == heap_limit_before);
+    assert(core.base_heap_handles == heap_handles_before);
+    assert(core.mem2_heap_region_begin == mem2_begin_before);
+    assert(core.mem2_heap_region_end == mem2_end_before);
+    assert(core.fs_initialized == fs_before && core.nn_save_initialized == save_before);
+    std::vector<std::uint8_t> memory_after(core.memory.size());
+    core.memory.read_bytes(0U, memory_after);
+    assert(memory_after == memory_before);
+
+    const auto expect_raw_interval = [&](std::uint32_t interval) {
+        set_interval(core, interval);
+        const Gx2RuntimeState before = core.gx2;
+        const auto registers = core.state.gpr;
+        const RunResult call_result = invoke(core, import);
+        assert(call_result.reason == StopReason::instruction_limit);
+        assert(core.gx2.swap_interval == interval);
+        Gx2RuntimeState expected = before;
+        expected.swap_interval = interval;
+        assert(core.gx2 == expected);
+        assert(core.state.gpr == registers);
+        assert(core.state.cia == return_address && core.state.lr == return_address);
+    };
+    expect_raw_interval(1U);
+    expect_raw_interval(0U); // Zero is a meaningful raw interval.
+    expect_raw_interval(2U); // Repeating the same value is harmless.
+    expect_raw_interval(2U);
+    expect_raw_interval(0xFFFFFFFFU); // Preserve uint32_t values without clamping.
+
+    core.reset();
+    assert(core.gx2.swap_interval == 0U);
+
+    EspressoCore isolated_a(0x1000U);
+    EspressoCore isolated_b(0x1000U);
+    register_gx2_hle(isolated_a.hle);
+    register_gx2_hle(isolated_b.hle);
+    const auto import_a = isolated_a.hle.bind_import("gx2", "GX2SetSwapInterval");
+    const auto import_b = isolated_b.hle.bind_import("gx2", "GX2SetSwapInterval");
+    set_interval(isolated_a, 1U);
+    set_interval(isolated_b, 2U);
+    assert(invoke(isolated_a, import_a).reason == StopReason::instruction_limit);
+    assert(invoke(isolated_b, import_b).reason == StopReason::instruction_limit);
+    assert(isolated_a.gx2.swap_interval == 1U);
+    assert(isolated_b.gx2.swap_interval == 2U);
+
+    core.state.cia = wrong_library;
+    core.state.lr = return_address;
+    const RunResult wrong_library_result = core.run(1U);
+    assert(wrong_library_result.reason == StopReason::unimplemented_hle_call);
+    assert(wrong_library_result.hle_call == "coreinit::GX2SetSwapInterval");
+}
+
 void compare_and_conditional_branch_tests()
 {
     EspressoCore unsigned_compare_core(8);
@@ -16984,6 +17192,7 @@ int main(int argc, char* argv[])
     gx2_calc_drc_size_hle_tests();
     gx2_set_drc_buffer_hle_tests();
     gx2_set_drc_scale_hle_tests();
+    gx2_set_swap_interval_hle_tests();
     mem_get_total_free_size_for_exp_heap_hle_tests();
     mem_get_allocatable_size_for_exp_heap_ex_hle_tests();
     compare_and_conditional_branch_tests();

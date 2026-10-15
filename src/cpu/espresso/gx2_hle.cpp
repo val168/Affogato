@@ -1065,6 +1065,17 @@ void register_gx2_hle(HleDispatcher& dispatcher)
             core.gx2.drc_scale_width = width;
             core.gx2.drc_scale_height = height;
         });
+
+    dispatcher.register_function(
+        "gx2",
+        "GX2SetSwapInterval",
+        [](EspressoCore& core) {
+            const std::uint32_t interval = core.state.gpr[3];
+
+            // Retain the raw uint32 request (Decaf semantics). VSync waits,
+            // flip scheduling, and host presentation remain deferred.
+            core.gx2.swap_interval = interval;
+        });
 }
 
 } // namespace affogato::cpu::espresso
