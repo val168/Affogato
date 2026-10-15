@@ -84,6 +84,16 @@ DecodedInstruction decode(std::uint32_t raw) noexcept
         instruction.record = (raw & 1U) != 0;
         break;
 
+    case 23: // rlwnm
+        instruction.opcode = Opcode::rotate_left_word_and_mask_register;
+        instruction.source = static_cast<std::uint8_t>(field(raw, 21, 0x1FU));
+        instruction.destination = static_cast<std::uint8_t>(field(raw, 16, 0x1FU));
+        instruction.base = static_cast<std::uint8_t>(field(raw, 11, 0x1FU));
+        instruction.mask_begin = static_cast<std::uint8_t>(field(raw, 6, 0x1FU));
+        instruction.mask_end = static_cast<std::uint8_t>(field(raw, 1, 0x1FU));
+        instruction.record = (raw & 1U) != 0U;
+        break;
+
     case 24: // ori
     case 25: // oris
         instruction.opcode = Opcode::ori;
@@ -115,6 +125,14 @@ DecodedInstruction decode(std::uint32_t raw) noexcept
 
     case 28: // andi.
         instruction.opcode = Opcode::and_immediate_record;
+        instruction.source = static_cast<std::uint8_t>(field(raw, 21, 0x1FU));
+        instruction.destination = static_cast<std::uint8_t>(field(raw, 16, 0x1FU));
+        instruction.immediate = static_cast<std::int32_t>(field(raw, 0, 0xFFFFU));
+        instruction.record = true;
+        break;
+
+    case 29: // andis.
+        instruction.opcode = Opcode::and_immediate_shifted_record;
         instruction.source = static_cast<std::uint8_t>(field(raw, 21, 0x1FU));
         instruction.destination = static_cast<std::uint8_t>(field(raw, 16, 0x1FU));
         instruction.immediate = static_cast<std::int32_t>(field(raw, 0, 0xFFFFU));
@@ -293,6 +311,24 @@ DecodedInstruction decode(std::uint32_t raw) noexcept
             instruction.source = static_cast<std::uint8_t>(field(raw, 11, 0x1FU));
             instruction.record = (raw & 1U) != 0U;
         }
+        else if (extended_opcode == 138U) // adde; OE=1 remains unsupported
+        {
+            instruction.opcode = Opcode::add_extended;
+            instruction.destination = static_cast<std::uint8_t>(field(raw, 21, 0x1FU));
+            instruction.base = static_cast<std::uint8_t>(field(raw, 16, 0x1FU));
+            instruction.source = static_cast<std::uint8_t>(field(raw, 11, 0x1FU));
+            instruction.record = (raw & 1U) != 0U;
+        }
+        else if ((extended_opcode == 232U || extended_opcode == 234U) &&
+                 field(raw, 11, 0x1FU) == 0U)
+        {
+            instruction.opcode = extended_opcode == 232U
+                ? Opcode::subtract_from_minus_one_extended
+                : Opcode::add_to_minus_one_extended;
+            instruction.destination = static_cast<std::uint8_t>(field(raw, 21, 0x1FU));
+            instruction.base = static_cast<std::uint8_t>(field(raw, 16, 0x1FU));
+            instruction.record = (raw & 1U) != 0U;
+        }
         else if (extended_opcode == 200U && field(raw, 11, 0x1FU) == 0U)
         {
             instruction.opcode = Opcode::subtract_from_zero_extended;
@@ -323,9 +359,25 @@ DecodedInstruction decode(std::uint32_t raw) noexcept
             instruction.source = static_cast<std::uint8_t>(field(raw, 11, 0x1FU));
             instruction.record = (raw & 1U) != 0U;
         }
+        else if (extended_opcode == 75U) // mulhw
+        {
+            instruction.opcode = Opcode::multiply_high_word_signed;
+            instruction.destination = static_cast<std::uint8_t>(field(raw, 21, 0x1FU));
+            instruction.base = static_cast<std::uint8_t>(field(raw, 16, 0x1FU));
+            instruction.source = static_cast<std::uint8_t>(field(raw, 11, 0x1FU));
+            instruction.record = (raw & 1U) != 0U;
+        }
         else if (extended_opcode == 459U) // divwu; OE=1 remains unsupported
         {
             instruction.opcode = Opcode::divide_word_unsigned;
+            instruction.destination = static_cast<std::uint8_t>(field(raw, 21, 0x1FU));
+            instruction.base = static_cast<std::uint8_t>(field(raw, 16, 0x1FU));
+            instruction.source = static_cast<std::uint8_t>(field(raw, 11, 0x1FU));
+            instruction.record = (raw & 1U) != 0U;
+        }
+        else if (extended_opcode == 491U) // divw; OE=1 remains unsupported
+        {
+            instruction.opcode = Opcode::divide_word_signed;
             instruction.destination = static_cast<std::uint8_t>(field(raw, 21, 0x1FU));
             instruction.base = static_cast<std::uint8_t>(field(raw, 16, 0x1FU));
             instruction.source = static_cast<std::uint8_t>(field(raw, 11, 0x1FU));
@@ -395,6 +447,14 @@ DecodedInstruction decode(std::uint32_t raw) noexcept
             instruction.shift = static_cast<std::uint8_t>(field(raw, 11, 0x1FU));
             instruction.record = (raw & 1U) != 0;
         }
+        else if (extended_opcode == 792U) // sraw
+        {
+            instruction.opcode = Opcode::arithmetic_shift_right_word;
+            instruction.source = static_cast<std::uint8_t>(field(raw, 21, 0x1FU));
+            instruction.destination = static_cast<std::uint8_t>(field(raw, 16, 0x1FU));
+            instruction.base = static_cast<std::uint8_t>(field(raw, 11, 0x1FU));
+            instruction.record = (raw & 1U) != 0U;
+        }
         else if (extended_opcode == 24) // slw
         {
             instruction.opcode = Opcode::shift_left_word;
@@ -413,13 +473,17 @@ DecodedInstruction decode(std::uint32_t raw) noexcept
         }
         else if (extended_opcode == 444 || extended_opcode == 28 ||
                  extended_opcode == 60 || extended_opcode == 316 ||
-                 extended_opcode == 284)
+                 extended_opcode == 284 || extended_opcode == 476 ||
+                 extended_opcode == 124 || extended_opcode == 412)
         {
             instruction.opcode = extended_opcode == 444 ? Opcode::bitwise_or
                 : extended_opcode == 28 ? Opcode::bitwise_and
                 : extended_opcode == 60 ? Opcode::bitwise_and_complement
                 : extended_opcode == 316 ? Opcode::bitwise_xor
-                                          : Opcode::bitwise_equivalence;
+                : extended_opcode == 284 ? Opcode::bitwise_equivalence
+                : extended_opcode == 476 ? Opcode::bitwise_nand
+                : extended_opcode == 124 ? Opcode::bitwise_nor
+                                          : Opcode::bitwise_or_complement;
             instruction.source = static_cast<std::uint8_t>(field(raw, 21, 0x1FU));
             instruction.destination =
                 static_cast<std::uint8_t>(field(raw, 16, 0x1FU));

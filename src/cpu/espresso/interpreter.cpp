@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <exception>
 #include <iomanip>
+#include <limits>
 #include <sstream>
 #include <utility>
 
@@ -368,6 +369,18 @@ void set_record_result(CpuState& state, std::uint32_t value)
     return mask;
 }
 
+void set_xer_carry(CpuState& state, bool carry) noexcept
+{
+    if (carry)
+    {
+        state.xer |= xer_carry_mask;
+    }
+    else
+    {
+        state.xer &= ~xer_carry_mask;
+    }
+}
+
 [[nodiscard]] bool read_cr_bit(const CpuState& state, std::uint8_t bit) noexcept
 {
     return ((state.cr >> (31U - bit)) & 1U) != 0;
@@ -480,19 +493,24 @@ void set_record_result(CpuState& state, std::uint32_t value)
         return "mulli";
     case Opcode::multiply_low_word: return "mullw";
     case Opcode::multiply_high_word_unsigned: return "mulhwu";
+    case Opcode::multiply_high_word_signed: return "mulhw";
     case Opcode::divide_word_unsigned: return "divwu";
+    case Opcode::divide_word_signed: return "divw";
     case Opcode::unsupported: return "unsupported";
     case Opcode::addi: return "addi";
     case Opcode::addis: return "addis";
     case Opcode::add_immediate_carry: return "addic";
     case Opcode::add_carrying: return "addc";
     case Opcode::add_to_zero_extended: return "addze";
+    case Opcode::add_extended: return "adde";
+    case Opcode::add_to_minus_one_extended: return "addme";
     case Opcode::subtract_from_immediate_carry: return "subfic";
     case Opcode::add: return "add";
     case Opcode::subtract_from: return "subf";
     case Opcode::subtract_from_carrying: return "subfc";
     case Opcode::subtract_from_extended: return "subfe";
     case Opcode::subtract_from_zero_extended: return "subfze";
+    case Opcode::subtract_from_minus_one_extended: return "subfme";
     case Opcode::negate: return "neg";
     case Opcode::extend_sign_byte: return "extsb";
     case Opcode::extend_sign_halfword: return "extsh";
@@ -506,10 +524,16 @@ void set_record_result(CpuState& state, std::uint32_t value)
     case Opcode::bitwise_and_complement: return "andc";
     case Opcode::bitwise_xor: return "xor";
     case Opcode::bitwise_equivalence: return "eqv";
+    case Opcode::bitwise_nand: return "nand";
+    case Opcode::bitwise_nor: return "nor";
+    case Opcode::bitwise_or_complement: return "orc";
     case Opcode::and_immediate_record: return "andi.";
+    case Opcode::and_immediate_shifted_record: return "andis.";
     case Opcode::rotate_left_word_and_mask: return "rlwinm";
+    case Opcode::rotate_left_word_and_mask_register: return "rlwnm";
     case Opcode::rotate_left_word_and_mask_insert: return "rlwimi";
     case Opcode::arithmetic_shift_right_immediate: return "srawi";
+    case Opcode::arithmetic_shift_right_word: return "sraw";
     case Opcode::shift_left_word: return "slw";
     case Opcode::shift_right_word: return "srw";
     case Opcode::branch: return "b";
@@ -610,10 +634,15 @@ void add_history_source(
     entry.opcode_name = opcode_name(instruction.opcode);
     if ((instruction.opcode == Opcode::multiply_low_word ||
          instruction.opcode == Opcode::multiply_high_word_unsigned ||
+         instruction.opcode == Opcode::multiply_high_word_signed ||
          instruction.opcode == Opcode::divide_word_unsigned ||
+         instruction.opcode == Opcode::divide_word_signed ||
          instruction.opcode == Opcode::add_carrying ||
+         instruction.opcode == Opcode::add_extended ||
+         instruction.opcode == Opcode::add_to_minus_one_extended ||
          instruction.opcode == Opcode::add_to_zero_extended ||
          instruction.opcode == Opcode::subtract_from_extended ||
+         instruction.opcode == Opcode::subtract_from_minus_one_extended ||
          instruction.opcode == Opcode::subtract_from_zero_extended ||
          instruction.opcode == Opcode::count_leading_zeros ||
          instruction.opcode == Opcode::negate ||
@@ -621,7 +650,12 @@ void add_history_source(
          instruction.opcode == Opcode::extend_sign_halfword ||
          instruction.opcode == Opcode::rotate_left_word_and_mask_insert ||
          instruction.opcode == Opcode::rotate_left_word_and_mask ||
-         instruction.opcode == Opcode::shift_right_word) && instruction.record)
+         instruction.opcode == Opcode::rotate_left_word_and_mask_register ||
+         instruction.opcode == Opcode::shift_right_word ||
+         instruction.opcode == Opcode::arithmetic_shift_right_word ||
+         instruction.opcode == Opcode::bitwise_nand ||
+         instruction.opcode == Opcode::bitwise_nor ||
+         instruction.opcode == Opcode::bitwise_or_complement) && instruction.record)
     {
         entry.opcode_name += '.';
     }
@@ -632,7 +666,8 @@ void add_history_source(
     }
     else if (instruction.opcode == Opcode::or_immediate_shifted ||
              instruction.opcode == Opcode::xor_immediate ||
-             instruction.opcode == Opcode::xor_immediate_shifted)
+             instruction.opcode == Opcode::xor_immediate_shifted ||
+             instruction.opcode == Opcode::and_immediate_shifted_record)
     {
         entry.has_immediate = true;
         entry.immediate_hex = true;
@@ -645,6 +680,13 @@ void add_history_source(
         entry.old_destination_value = state.gpr[instruction.destination];
         entry.has_rotate_fields = true;
         entry.rotate_shift = instruction.shift;
+        entry.rotate_mask_begin = instruction.mask_begin;
+        entry.rotate_mask_end = instruction.mask_end;
+    }
+    else if (instruction.opcode == Opcode::rotate_left_word_and_mask_register)
+    {
+        entry.has_rotate_fields = true;
+        entry.rotate_shift = static_cast<std::uint8_t>(state.gpr[instruction.base] & 0x1FU);
         entry.rotate_mask_begin = instruction.mask_begin;
         entry.rotate_mask_end = instruction.mask_end;
     }
@@ -857,6 +899,7 @@ void add_history_source(
     case Opcode::xor_immediate_shifted:
     case Opcode::count_leading_zeros:
     case Opcode::and_immediate_record:
+    case Opcode::and_immediate_shifted_record:
     case Opcode::rotate_left_word_and_mask:
     case Opcode::rotate_left_word_and_mask_insert:
     case Opcode::arithmetic_shift_right_immediate:
@@ -864,24 +907,35 @@ void add_history_source(
         break;
     case Opcode::add:
     case Opcode::add_carrying:
+    case Opcode::add_extended:
     case Opcode::subtract_from:
     case Opcode::subtract_from_carrying:
     case Opcode::subtract_from_extended:
     case Opcode::multiply_low_word:
     case Opcode::multiply_high_word_unsigned:
+    case Opcode::multiply_high_word_signed:
     case Opcode::divide_word_unsigned:
-    case Opcode::bitwise_or:
-    case Opcode::bitwise_and:
-    case Opcode::bitwise_and_complement:
-    case Opcode::bitwise_xor:
-    case Opcode::bitwise_equivalence:
+    case Opcode::divide_word_signed:
     case Opcode::compare_signed_register:
     case Opcode::compare_unsigned_register:
         add_history_source(entry, state, instruction.base);
         add_history_source(entry, state, instruction.source);
         break;
+    case Opcode::bitwise_or:
+    case Opcode::bitwise_and:
+    case Opcode::bitwise_and_complement:
+    case Opcode::bitwise_xor:
+    case Opcode::bitwise_equivalence:
+    case Opcode::bitwise_nand:
+    case Opcode::bitwise_nor:
+    case Opcode::bitwise_or_complement:
+        add_history_source(entry, state, instruction.source);
+        add_history_source(entry, state, instruction.base);
+        break;
     case Opcode::add_to_zero_extended:
+    case Opcode::add_to_minus_one_extended:
     case Opcode::subtract_from_zero_extended:
+    case Opcode::subtract_from_minus_one_extended:
         add_history_source(entry, state, instruction.base);
         break;
     case Opcode::negate:
@@ -891,6 +945,8 @@ void add_history_source(
         break;
     case Opcode::shift_left_word:
     case Opcode::shift_right_word:
+    case Opcode::arithmetic_shift_right_word:
+    case Opcode::rotate_left_word_and_mask_register:
         add_history_source(entry, state, instruction.source);
         add_history_source(entry, state, instruction.base);
         break;
@@ -915,6 +971,7 @@ void add_history_source(
     default:
         break;
     }
+
     if (store)
     {
         add_history_source(entry, state, instruction.destination);
@@ -929,14 +986,19 @@ void add_history_source(
     case Opcode::subtract_from_immediate_carry:
     case Opcode::add:
     case Opcode::add_carrying:
+    case Opcode::add_extended:
     case Opcode::add_to_zero_extended:
+    case Opcode::add_to_minus_one_extended:
     case Opcode::subtract_from:
     case Opcode::subtract_from_carrying:
     case Opcode::subtract_from_extended:
+    case Opcode::subtract_from_minus_one_extended:
     case Opcode::subtract_from_zero_extended:
     case Opcode::multiply_low_word:
     case Opcode::multiply_high_word_unsigned:
+    case Opcode::multiply_high_word_signed:
     case Opcode::divide_word_unsigned:
+    case Opcode::divide_word_signed:
     case Opcode::negate:
     case Opcode::extend_sign_byte:
     case Opcode::extend_sign_halfword:
@@ -950,10 +1012,16 @@ void add_history_source(
     case Opcode::bitwise_and_complement:
     case Opcode::bitwise_xor:
     case Opcode::bitwise_equivalence:
+    case Opcode::bitwise_nand:
+    case Opcode::bitwise_nor:
+    case Opcode::bitwise_or_complement:
     case Opcode::and_immediate_record:
+    case Opcode::and_immediate_shifted_record:
     case Opcode::rotate_left_word_and_mask:
     case Opcode::rotate_left_word_and_mask_insert:
+    case Opcode::rotate_left_word_and_mask_register:
     case Opcode::arithmetic_shift_right_immediate:
+    case Opcode::arithmetic_shift_right_word:
     case Opcode::shift_left_word:
     case Opcode::shift_right_word:
     case Opcode::load_word_zero:
@@ -995,6 +1063,7 @@ void add_history_source(
     default:
         break;
     }
+
     return entry;
 }
 
@@ -1384,13 +1453,20 @@ StepResult EspressoCore::step()
         instruction.opcode == Opcode::subtract_from_extended ||
         instruction.opcode == Opcode::add_carrying ||
         instruction.opcode == Opcode::add_to_zero_extended ||
-        instruction.opcode == Opcode::subtract_from_zero_extended)
+        instruction.opcode == Opcode::subtract_from_zero_extended ||
+        instruction.opcode == Opcode::add_extended ||
+        instruction.opcode == Opcode::add_to_minus_one_extended ||
+        instruction.opcode == Opcode::subtract_from_minus_one_extended ||
+        instruction.opcode == Opcode::arithmetic_shift_right_word)
     {
         pending_history_entry_.has_carry_result = true;
     }
     if (instruction.opcode == Opcode::subtract_from_extended ||
         instruction.opcode == Opcode::add_to_zero_extended ||
-        instruction.opcode == Opcode::subtract_from_zero_extended)
+        instruction.opcode == Opcode::subtract_from_zero_extended ||
+        instruction.opcode == Opcode::add_extended ||
+        instruction.opcode == Opcode::add_to_minus_one_extended ||
+        instruction.opcode == Opcode::subtract_from_minus_one_extended)
     {
         pending_history_entry_.has_carry_input = true;
         pending_history_entry_.carry_input = (state.xer & xer_carry_mask) != 0U;
@@ -1451,6 +1527,48 @@ StepResult EspressoCore::step()
         const std::uint32_t dividend = state.gpr[instruction.base];
         const std::uint32_t divisor = state.gpr[instruction.source];
         const std::uint32_t result = divisor == 0U ? 0U : dividend / divisor;
+        state.gpr[instruction.destination] = result;
+        if (instruction.record)
+        {
+            set_record_result(state, result);
+        }
+        break;
+    }
+
+    case Opcode::multiply_high_word_signed:
+    {
+        const std::int64_t lhs = std::bit_cast<std::int32_t>(state.gpr[instruction.base]);
+        const std::int64_t rhs = std::bit_cast<std::int32_t>(state.gpr[instruction.source]);
+        const std::int64_t product = lhs * rhs;
+        const std::uint32_t result = static_cast<std::uint32_t>(
+            static_cast<std::uint64_t>(product) >> 32U);
+        state.gpr[instruction.destination] = result;
+        if (instruction.record)
+        {
+            set_record_result(state, result);
+        }
+        break;
+    }
+
+    case Opcode::divide_word_signed:
+    {
+        const std::int32_t dividend = std::bit_cast<std::int32_t>(state.gpr[instruction.base]);
+        const std::int32_t divisor = std::bit_cast<std::int32_t>(state.gpr[instruction.source]);
+        std::uint32_t result = 0U;
+        if (divisor == 0)
+        {
+            // Deterministic Cemu-compatible non-OE behavior for architecturally
+            // exceptional division; this is not asserted to be ISA-mandated.
+            result = dividend < 0 ? 0xFFFFFFFFU : 0U;
+        }
+        else if (dividend == std::numeric_limits<std::int32_t>::min() && divisor == -1)
+        {
+            result = 0xFFFFFFFFU;
+        }
+        else
+        {
+            result = static_cast<std::uint32_t>(dividend / divisor);
+        }
         state.gpr[instruction.destination] = result;
         if (instruction.record)
         {
@@ -1614,6 +1732,39 @@ StepResult EspressoCore::step()
         break;
     }
 
+    case Opcode::add_extended:
+    {
+        const std::uint32_t a = state.gpr[instruction.base];
+        const std::uint32_t b = state.gpr[instruction.source];
+        const std::uint32_t carry_in =
+            (state.xer & xer_carry_mask) != 0U ? 1U : 0U;
+        const std::uint64_t sum = static_cast<std::uint64_t>(a) + b + carry_in;
+        const std::uint32_t result = static_cast<std::uint32_t>(sum);
+        state.gpr[instruction.destination] = result;
+        set_xer_carry(state, (sum >> 32U) != 0U);
+        if (instruction.record)
+        {
+            set_record_result(state, result);
+        }
+        break;
+    }
+
+    case Opcode::add_to_minus_one_extended:
+    {
+        const std::uint32_t a = state.gpr[instruction.base];
+        const std::uint32_t carry_in =
+            (state.xer & xer_carry_mask) != 0U ? 1U : 0U;
+        const std::uint64_t sum = static_cast<std::uint64_t>(a) + 0xFFFFFFFFULL + carry_in;
+        const std::uint32_t result = static_cast<std::uint32_t>(sum);
+        state.gpr[instruction.destination] = result;
+        set_xer_carry(state, (sum >> 32U) != 0U);
+        if (instruction.record)
+        {
+            set_record_result(state, result);
+        }
+        break;
+    }
+
     case Opcode::subtract_from:
     {
         const std::uint32_t result =
@@ -1698,6 +1849,24 @@ StepResult EspressoCore::step()
         break;
     }
 
+    case Opcode::subtract_from_minus_one_extended:
+    {
+        const std::uint32_t a = state.gpr[instruction.base];
+        const std::uint32_t carry_in =
+            (state.xer & xer_carry_mask) != 0U ? 1U : 0U;
+        const std::uint32_t complement = ~a;
+        const std::uint64_t sum =
+            static_cast<std::uint64_t>(complement) + 0xFFFFFFFFULL + carry_in;
+        const std::uint32_t result = static_cast<std::uint32_t>(sum);
+        state.gpr[instruction.destination] = result;
+        set_xer_carry(state, (sum >> 32U) != 0U);
+        if (instruction.record)
+        {
+            set_record_result(state, result);
+        }
+        break;
+    }
+
     case Opcode::ori:
         state.gpr[instruction.destination] =
             state.gpr[instruction.source] |
@@ -1741,6 +1910,9 @@ StepResult EspressoCore::step()
     case Opcode::bitwise_and_complement:
     case Opcode::bitwise_xor:
     case Opcode::bitwise_equivalence:
+    case Opcode::bitwise_nand:
+    case Opcode::bitwise_nor:
+    case Opcode::bitwise_or_complement:
     {
         const std::uint32_t lhs = state.gpr[instruction.source];
         const std::uint32_t rhs = state.gpr[instruction.base];
@@ -1749,6 +1921,9 @@ StepResult EspressoCore::step()
             : instruction.opcode == Opcode::bitwise_and ? lhs & rhs
             : instruction.opcode == Opcode::bitwise_and_complement ? lhs & ~rhs
             : instruction.opcode == Opcode::bitwise_equivalence ? ~(lhs ^ rhs)
+            : instruction.opcode == Opcode::bitwise_nand ? ~(lhs & rhs)
+            : instruction.opcode == Opcode::bitwise_nor ? ~(lhs | rhs)
+            : instruction.opcode == Opcode::bitwise_or_complement ? lhs | ~rhs
                                                                   : lhs ^ rhs;
         state.gpr[instruction.destination] = result;
         if (instruction.record)
@@ -1759,21 +1934,61 @@ StepResult EspressoCore::step()
     }
 
     case Opcode::and_immediate_record:
+    case Opcode::and_immediate_shifted_record:
     {
-        const std::uint32_t result = state.gpr[instruction.source] &
-            static_cast<std::uint32_t>(instruction.immediate);
+        const std::uint32_t immediate = static_cast<std::uint32_t>(instruction.immediate);
+        const std::uint32_t operand = instruction.opcode == Opcode::and_immediate_shifted_record
+            ? immediate << 16U
+            : immediate;
+        const std::uint32_t result = state.gpr[instruction.source] & operand;
         state.gpr[instruction.destination] = result;
         set_record_result(state, result);
         break;
     }
 
     case Opcode::rotate_left_word_and_mask:
+    case Opcode::rotate_left_word_and_mask_register:
     {
+        const std::uint32_t shift = instruction.opcode == Opcode::rotate_left_word_and_mask_register
+            ? state.gpr[instruction.base] & 0x1FU
+            : instruction.shift;
         const std::uint32_t rotated = std::rotl(
-            state.gpr[instruction.source], static_cast<int>(instruction.shift));
+            state.gpr[instruction.source], static_cast<int>(shift));
         const std::uint32_t result =
             rotated & rotate_mask(instruction.mask_begin, instruction.mask_end);
         state.gpr[instruction.destination] = result;
+        if (instruction.record)
+        {
+            set_record_result(state, result);
+        }
+        break;
+    }
+
+    case Opcode::arithmetic_shift_right_word:
+    {
+        const std::uint32_t source_bits = state.gpr[instruction.source];
+        const std::int32_t source = std::bit_cast<std::int32_t>(source_bits);
+        const std::uint32_t shift = state.gpr[instruction.base] & 0x3FU;
+        const bool negative = source < 0;
+        std::uint32_t result = source_bits;
+        bool carry = false;
+        if (shift == 0U)
+        {
+            carry = false;
+        }
+        else if (shift < 32U)
+        {
+            result = static_cast<std::uint32_t>(source >> shift);
+            const std::uint32_t dropped_mask = (std::uint32_t{1} << shift) - 1U;
+            carry = negative && (source_bits & dropped_mask) != 0U;
+        }
+        else
+        {
+            result = negative ? 0xFFFFFFFFU : 0U;
+            carry = negative;
+        }
+        state.gpr[instruction.destination] = result;
+        set_xer_carry(state, carry);
         if (instruction.record)
         {
             set_record_result(state, result);

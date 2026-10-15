@@ -4311,6 +4311,420 @@ void integer_alu_tests()
     assert((arithmetic_shift_core.state.xer & 0x20000000U) != 0);
 }
 
+[[nodiscard]] constexpr std::uint32_t encode_xo(
+    std::uint8_t destination, std::uint8_t field_a, std::uint8_t field_b,
+    std::uint32_t xo, bool record = false)
+{
+    return (31U << 26U) | (static_cast<std::uint32_t>(destination) << 21U) |
+        (static_cast<std::uint32_t>(field_a) << 16U) |
+        (static_cast<std::uint32_t>(field_b) << 11U) | (xo << 1U) |
+        static_cast<std::uint32_t>(record);
+}
+
+[[nodiscard]] constexpr std::uint32_t encode_dlogical(
+    std::uint32_t primary, std::uint8_t source, std::uint8_t destination,
+    std::uint16_t immediate)
+{
+    return (primary << 26U) | (static_cast<std::uint32_t>(source) << 21U) |
+        (static_cast<std::uint32_t>(destination) << 16U) | immediate;
+}
+
+[[nodiscard]] constexpr std::uint32_t encode_rlwnm(
+    std::uint8_t source, std::uint8_t destination, std::uint8_t shift_reg,
+    std::uint8_t begin, std::uint8_t end, bool record = false)
+{
+    return (23U << 26U) | (static_cast<std::uint32_t>(source) << 21U) |
+        (static_cast<std::uint32_t>(destination) << 16U) |
+        (static_cast<std::uint32_t>(shift_reg) << 11U) |
+        (static_cast<std::uint32_t>(begin) << 6U) |
+        (static_cast<std::uint32_t>(end) << 1U) |
+        static_cast<std::uint32_t>(record);
+}
+
+void and_immediate_shifted_record_tests()
+{
+    const auto decoded = decode(encode_dlogical(29U, 4U, 3U, 0xFFFFU));
+    assert(decoded.opcode == Opcode::and_immediate_shifted_record);
+    assert(decoded.source == 4U && decoded.destination == 3U);
+    assert(decoded.immediate == 0xFFFF && decoded.record);
+
+    EspressoCore core(8U);
+    core.state.gpr[4] = 0xA1B2C3D4U;
+    core.state.cr = 0x12345678U;
+    core.state.xer = 0x80000000U;
+    const std::uint32_t word = encode_dlogical(29U, 4U, 3U, 0xFFFFU);
+    core.memory.write32_be(0U, word);
+    const auto result = core.run(1U);
+    assert(result.steps == 1U && core.state.cia == 4U);
+    assert(core.state.gpr[3] == 0xA1B20000U);
+    assert(core.state.gpr[4] == 0xA1B2C3D4U);
+    assert(core.state.cr == 0x92345678U);
+    assert(core.state.xer == 0x80000000U);
+    assert(result.instruction_history[0].opcode_name == "andis.");
+    assert(format_instruction_history(result).find(
+        "andis. r4=0xA1B2C3D4 imm=0xFFFF -> r3=0xA1B20000") != std::string::npos);
+}
+
+void rotate_left_word_and_mask_register_tests()
+{
+    const std::uint32_t encoded = encode_rlwnm(4U, 3U, 5U, 8U, 15U);
+    const auto decoded = decode(encoded);
+    assert(decoded.opcode == Opcode::rotate_left_word_and_mask_register);
+    assert(decoded.source == 4U && decoded.destination == 3U && decoded.base == 5U);
+    assert(decoded.mask_begin == 8U && decoded.mask_end == 15U && !decoded.record);
+    assert(decode(encoded | 1U).opcode == Opcode::rotate_left_word_and_mask_register);
+    assert(decode(encoded | 1U).record);
+
+    EspressoCore core(8U);
+    core.state.gpr[4] = 0x12345678U;
+    core.state.gpr[5] = 4U;
+    core.state.cr = 0x12345678U;
+    core.memory.write32_be(0U, encoded);
+    const auto result = core.run(1U);
+    assert(core.state.gpr[3] == 0x00450000U);
+    assert(core.state.cr == 0x12345678U);
+    assert(result.instruction_history[0].source_count == 2U);
+    assert(result.instruction_history[0].source_registers[1] == 5U);
+    assert(format_instruction_history(result).find("sh=4 mb=8 me=15") != std::string::npos);
+
+    EspressoCore alias(8U);
+    alias.state.gpr[3] = 0x80000001U;
+    alias.state.gpr[4] = 33U; // low five bits are one
+    alias.memory.write32_be(0U, encode_rlwnm(3U, 3U, 4U, 0U, 31U, true));
+    const auto alias_result = alias.run(1U);
+    assert(alias.state.gpr[3] == 3U);
+    assert(((alias.state.cr >> 28U) & 0xFU) == 4U);
+    assert(alias_result.instruction_history[0].opcode_name == "rlwnm.");
+
+    EspressoCore shift_alias(8U);
+    shift_alias.state.gpr[3] = 24U;
+    shift_alias.state.gpr[4] = 0x12345678U;
+    shift_alias.memory.write32_be(0U, encode_rlwnm(4U, 3U, 3U, 0U, 31U));
+    assert(shift_alias.step() == StepResult::executed);
+    assert(shift_alias.state.gpr[3] == 0x78123456U); // old r3 supplies shift=24
+}
+
+void add_extended_tests()
+{
+    constexpr std::uint32_t ca = 0x20000000U;
+    const auto word = encode_xo(3U, 4U, 5U, 138U);
+    const auto decoded = decode(word);
+    assert(decoded.opcode == Opcode::add_extended);
+    assert(decoded.destination == 3U && decoded.base == 4U && decoded.source == 5U);
+    assert(!decoded.record);
+    assert(decode(encode_xo(3U, 4U, 5U, 138U, true)).record);
+    assert(decode(encode_xo(3U, 4U, 5U, 650U)).opcode == Opcode::unsupported);
+
+    for (const bool carry_in : {false, true})
+    {
+        EspressoCore core(8U);
+        core.state.gpr[4] = 0xFFFFFFFFU;
+        core.state.gpr[5] = 0U;
+        core.state.xer = 0xC00000A5U | (carry_in ? ca : 0U);
+        core.memory.write32_be(0U, word);
+        const std::uint32_t initial_xer = core.state.xer;
+        assert(core.step() == StepResult::executed);
+        assert(core.state.gpr[3] == (carry_in ? 0U : 0xFFFFFFFFU));
+        assert(((core.state.xer & ca) != 0U) == carry_in);
+        assert((core.state.xer & ~ca) == (initial_xer & ~ca));
+    }
+
+    EspressoCore record(8U);
+    record.state.gpr[4] = 0xFFFFFFFFU;
+    record.state.gpr[5] = 0U;
+    record.state.xer = 0x80000000U | ca;
+    record.state.cr = 0x12345678U;
+    record.memory.write32_be(0U, encode_xo(4U, 4U, 5U, 138U, true));
+    const auto trace = record.run(1U);
+    assert(record.state.gpr[4] == 0U && (record.state.xer & ca) != 0U);
+    assert(((record.state.cr >> 28U) & 0xFU) == 0x3U);
+    assert((record.state.cr & 0x0FFFFFFFU) == 0x02345678U);
+    assert(format_instruction_history(trace).find("adde.") != std::string::npos);
+    assert(format_instruction_history(trace).find("CAin=1") != std::string::npos);
+    assert(format_instruction_history(trace).find("CA=1") != std::string::npos);
+
+    EspressoCore destination_alias(8U);
+    destination_alias.state.gpr[3] = 2U;
+    destination_alias.state.gpr[4] = 3U;
+    destination_alias.state.xer = ca;
+    destination_alias.memory.write32_be(0U, encode_xo(3U, 4U, 3U, 138U));
+    assert(destination_alias.step() == StepResult::executed);
+    assert(destination_alias.state.gpr[3] == 6U);
+}
+
+void add_to_minus_one_extended_tests()
+{
+    constexpr std::uint32_t ca = 0x20000000U;
+    const auto make = [](std::uint8_t d, std::uint8_t a, std::uint8_t rb = 0U,
+                         std::uint32_t xo = 234U, bool rc = false) {
+        return encode_xo(d, a, rb, xo, rc);
+    };
+    const auto decoded = decode(make(3U, 4U));
+    assert(decoded.opcode == Opcode::add_to_minus_one_extended);
+    assert(decoded.destination == 3U && decoded.base == 4U && !decoded.record);
+    assert(decode(make(3U, 4U, 0U, 234U, true)).record);
+    assert(decode(make(3U, 4U, 1U)).opcode == Opcode::unsupported);
+    assert(decode(make(3U, 4U, 0U, 746U)).opcode == Opcode::unsupported);
+
+    const std::array<std::array<std::uint32_t, 4>, 4> cases{{
+        {0U, 0U, 0xFFFFFFFFU, 0U},
+        {0U, 1U, 0U, 1U},
+        {1U, 0U, 0U, 1U},
+        {0xFFFFFFFFU, 1U, 0xFFFFFFFFU, 1U},
+    }};
+    for (const auto& c : cases)
+    {
+        EspressoCore core(8U);
+        core.state.gpr[4] = c[0];
+        core.state.xer = c[1] != 0U ? ca : 0U;
+        core.memory.write32_be(0U, make(3U, 4U));
+        assert(core.step() == StepResult::executed);
+        assert(core.state.gpr[3] == c[2]);
+        assert(((core.state.xer & ca) != 0U) == (c[3] != 0U));
+    }
+    EspressoCore alias(8U);
+    alias.state.gpr[3] = 0U;
+    alias.state.xer = ca;
+    alias.memory.write32_be(0U, make(3U, 3U));
+    assert(alias.step() == StepResult::executed);
+    assert(alias.state.gpr[3] == 0U && (alias.state.xer & ca) != 0U);
+    EspressoCore record(8U);
+    record.state.gpr[3] = 0U;
+    record.state.xer = 0x80000000U;
+    record.memory.write32_be(0U, make(3U, 3U, 0U, 234U, true));
+    const auto record_result = record.run(1U);
+    assert(record.state.gpr[3] == 0xFFFFFFFFU);
+    assert(((record.state.cr >> 28U) & 0xFU) == 9U);
+    assert(record_result.instruction_history[0].opcode_name == "addme.");
+}
+
+void subtract_from_minus_one_extended_tests()
+{
+    constexpr std::uint32_t ca = 0x20000000U;
+    const auto make = [](std::uint8_t d, std::uint8_t a, std::uint8_t rb = 0U,
+                         std::uint32_t xo = 232U, bool rc = false) {
+        return encode_xo(d, a, rb, xo, rc);
+    };
+    const auto decoded = decode(make(3U, 4U));
+    assert(decoded.opcode == Opcode::subtract_from_minus_one_extended);
+    assert(decoded.destination == 3U && decoded.base == 4U && !decoded.record);
+    assert(decode(make(3U, 4U, 0U, 232U, true)).record);
+    assert(decode(make(3U, 4U, 1U)).opcode == Opcode::unsupported);
+    assert(decode(make(3U, 4U, 0U, 744U)).opcode == Opcode::unsupported);
+
+    const std::array<std::array<std::uint32_t, 4>, 4> cases{{
+        {0U, 0U, 0xFFFFFFFEU, 1U},
+        {0U, 1U, 0xFFFFFFFFU, 1U},
+        {0xFFFFFFFFU, 0U, 0xFFFFFFFFU, 0U},
+        {0xFFFFFFFFU, 1U, 0U, 1U},
+    }};
+    for (const auto& c : cases)
+    {
+        EspressoCore core(8U);
+        core.state.gpr[4] = c[0];
+        core.state.xer = c[1] != 0U ? ca : 0U;
+        core.memory.write32_be(0U, make(3U, 4U));
+        assert(core.step() == StepResult::executed);
+        assert(core.state.gpr[3] == c[2]);
+        assert(((core.state.xer & ca) != 0U) == (c[3] != 0U));
+    }
+    EspressoCore record(8U);
+    record.state.gpr[3] = 0U;
+    record.state.xer = 0x80000000U;
+    record.memory.write32_be(0U, make(3U, 3U, 0U, 232U, true));
+    const auto record_result = record.run(1U);
+    assert(record.state.gpr[3] == 0xFFFFFFFEU);
+    assert(((record.state.cr >> 28U) & 0xFU) == 9U);
+    assert(record_result.instruction_history[0].opcode_name == "subfme.");
+}
+
+void multiply_high_word_signed_tests()
+{
+    const std::uint32_t word = encode_xo(3U, 4U, 5U, 75U);
+    const auto decoded = decode(word);
+    assert(decoded.opcode == Opcode::multiply_high_word_signed);
+    assert(decoded.destination == 3U && decoded.base == 4U && decoded.source == 5U);
+    assert(decode(encode_xo(3U, 4U, 5U, 75U, true)).record);
+    const std::array<std::pair<std::uint32_t, std::uint32_t>, 7> cases{{
+        {0U, 0xFFFFFFFFU}, {1U, 1U}, {0xFFFFFFFFU, 2U},
+        {0xFFFFFFFFU, 0xFFFFFFFFU}, {0x80000000U, 1U},
+        {0x80000000U, 0xFFFFFFFFU}, {0x7FFFFFFFU, 0x7FFFFFFFU},
+    }};
+    for (const auto& [lhs_bits, rhs_bits] : cases)
+    {
+        EspressoCore core(8U);
+        core.state.gpr[4] = lhs_bits;
+        core.state.gpr[5] = rhs_bits;
+        core.state.cr = 0x12345678U;
+        core.state.xer = 0xE00000A5U;
+        core.memory.write32_be(0U, word);
+        const std::int64_t product =
+            static_cast<std::int64_t>(std::bit_cast<std::int32_t>(lhs_bits)) *
+            std::bit_cast<std::int32_t>(rhs_bits);
+        const std::uint32_t expected = static_cast<std::uint32_t>(
+            static_cast<std::uint64_t>(product) >> 32U);
+        assert(core.step() == StepResult::executed);
+        assert(core.state.gpr[3] == expected);
+        assert(core.state.cr == 0x12345678U && core.state.xer == 0xE00000A5U);
+    }
+    EspressoCore alias(8U);
+    alias.state.gpr[3] = 0xFFFFFFFFU;
+    alias.state.gpr[4] = 2U;
+    alias.memory.write32_be(0U, encode_xo(3U, 3U, 4U, 75U));
+    assert(alias.step() == StepResult::executed && alias.state.gpr[3] == 0xFFFFFFFFU);
+    EspressoCore rb_alias(8U);
+    rb_alias.state.gpr[4] = 0xFFFFFFFFU;
+    rb_alias.state.gpr[3] = 2U;
+    rb_alias.memory.write32_be(0U, encode_xo(3U, 4U, 3U, 75U));
+    assert(rb_alias.step() == StepResult::executed && rb_alias.state.gpr[3] == 0xFFFFFFFFU);
+}
+
+void divide_word_signed_tests()
+{
+    const std::uint32_t word = encode_xo(3U, 4U, 5U, 491U);
+    const auto decoded = decode(word);
+    assert(decoded.opcode == Opcode::divide_word_signed);
+    assert(decoded.destination == 3U && decoded.base == 4U && decoded.source == 5U);
+    assert(decode(encode_xo(3U, 4U, 5U, 491U, true)).record);
+    assert(decode(encode_xo(3U, 4U, 5U, 1003U)).opcode == Opcode::unsupported);
+
+    const std::array<std::array<std::uint32_t, 3>, 8> cases{{
+        {10U, 3U, 3U}, {0xFFFFFFF6U, 3U, 0xFFFFFFFDU},
+        {10U, 0xFFFFFFFDU, 0xFFFFFFFDU}, {0xFFFFFFF6U, 0xFFFFFFFDU, 3U},
+        {0x80000000U, 1U, 0x80000000U}, {0x7FFFFFFFU, 1U, 0x7FFFFFFFU},
+        {0xFFFFFFFFU, 0U, 0xFFFFFFFFU}, {0x80000000U, 0xFFFFFFFFU, 0xFFFFFFFFU},
+    }};
+    for (const auto& c : cases)
+    {
+        EspressoCore core(8U);
+        core.state.gpr[4] = c[0];
+        core.state.gpr[5] = c[1];
+        core.state.cr = 0x12345678U;
+        core.state.xer = 0xE00000A5U;
+        core.memory.write32_be(0U, word);
+        assert(core.step() == StepResult::executed);
+        assert(core.state.gpr[3] == c[2]);
+        assert(core.state.cr == 0x12345678U && core.state.xer == 0xE00000A5U);
+    }
+    EspressoCore positive_zero(8U);
+    positive_zero.state.gpr[4] = 1U;
+    positive_zero.state.gpr[5] = 0U;
+    positive_zero.memory.write32_be(0U, word);
+    assert(positive_zero.step() == StepResult::executed);
+    assert(positive_zero.state.gpr[3] == 0U);
+    EspressoCore alias(8U);
+    alias.state.gpr[3] = 0xFFFFFFF6U;
+    alias.state.gpr[5] = 3U;
+    alias.memory.write32_be(0U, encode_xo(3U, 3U, 5U, 491U));
+    assert(alias.step() == StepResult::executed && alias.state.gpr[3] == 0xFFFFFFFDU);
+    EspressoCore divisor_alias(8U);
+    divisor_alias.state.gpr[4] = 10U;
+    divisor_alias.state.gpr[3] = 3U;
+    divisor_alias.memory.write32_be(0U, encode_xo(3U, 4U, 3U, 491U));
+    assert(divisor_alias.step() == StepResult::executed && divisor_alias.state.gpr[3] == 3U);
+}
+
+void bitwise_nand_nor_or_complement_tests()
+{
+    struct Case { std::uint32_t xo; Opcode opcode; std::uint32_t expected; };
+    constexpr std::array<Case, 3> cases{{
+        {476U, Opcode::bitwise_nand, 0xFFFFFFFFU},
+        {124U, Opcode::bitwise_nor, 0x00000000U},
+        {412U, Opcode::bitwise_or_complement, 0x0F0F0F0FU},
+    }};
+    for (const Case& c : cases)
+    {
+        const std::uint32_t word = encode_xo(4U, 3U, 5U, c.xo);
+        const auto decoded = decode(word);
+        assert(decoded.opcode == c.opcode);
+        assert(decoded.source == 4U && decoded.destination == 3U && decoded.base == 5U);
+        assert(decode(encode_xo(4U, 3U, 5U, c.xo, true)).record);
+        EspressoCore core(8U);
+        core.state.gpr[4] = 0x0F0F0F0FU;
+        core.state.gpr[5] = 0xF0F0F0F0U;
+        core.state.cr = 0x12345678U;
+        core.state.xer = 0xE00000A5U;
+        core.memory.write32_be(0U, word);
+        const auto run_result = core.run(1U);
+        assert(run_result.steps == 1U);
+        assert(core.state.gpr[3] == c.expected);
+        assert(core.state.cr == 0x12345678U && core.state.xer == 0xE00000A5U);
+        assert(core.state.gpr[4] == 0x0F0F0F0FU && core.state.gpr[5] == 0xF0F0F0F0U);
+        assert(decode(encode_xo(4U, 4U, 5U, c.xo, true)).record);
+        const std::string trace = format_instruction_history(run_result);
+        assert(trace.find(std::string(c.opcode == Opcode::bitwise_nand ? "nand" :
+                                      c.opcode == Opcode::bitwise_nor ? "nor" : "orc") +
+                           " r4=0x0F0F0F0F r5=0xF0F0F0F0") != std::string::npos);
+    }
+    EspressoCore alias(8U);
+    alias.state.gpr[3] = 0xFFFFFFFFU;
+    alias.state.gpr[4] = 0U;
+    alias.memory.write32_be(0U, encode_xo(3U, 3U, 4U, 476U));
+    assert(alias.step() == StepResult::executed && alias.state.gpr[3] == 0xFFFFFFFFU);
+    for (const Case& c : cases)
+    {
+        EspressoCore record(8U);
+        record.state.gpr[4] = 0x0F0F0F0FU;
+        record.state.gpr[5] = 0xF0F0F0F0U;
+        record.state.cr = 0x12345678U;
+        record.state.xer = 0x80000000U;
+        record.memory.write32_be(0U, encode_xo(4U, 3U, 5U, c.xo, true));
+        const auto result = record.run(1U);
+        const std::uint32_t cr0 = (c.expected & 0x80000000U) != 0U ? 0x9U
+            : c.expected == 0U ? 0x3U : 0x5U;
+        assert(record.state.gpr[3] == c.expected);
+        assert(((record.state.cr >> 28U) & 0xFU) == cr0);
+        assert((record.state.cr & 0x0FFFFFFFU) == 0x02345678U);
+        assert(record.state.xer == 0x80000000U);
+        assert(result.instruction_history[0].opcode_name.back() == '.');
+    }
+}
+
+void arithmetic_shift_right_word_tests()
+{
+    const std::uint32_t word = encode_xo(4U, 3U, 5U, 792U);
+    const auto decoded = decode(word);
+    assert(decoded.opcode == Opcode::arithmetic_shift_right_word);
+    assert(decoded.source == 4U && decoded.destination == 3U && decoded.base == 5U);
+    assert(decode(encode_xo(4U, 3U, 5U, 792U, true)).record);
+    const std::array<std::array<std::uint32_t, 4>, 8> cases{{
+        {0x80000001U, 1U, 0xC0000000U, 1U},
+        {0x80000000U, 1U, 0xC0000000U, 0U},
+        {0x7FFFFFFFU, 1U, 0x3FFFFFFFU, 0U},
+        {0x80000001U, 0U, 0x80000001U, 0U},
+        {0x80000000U, 32U, 0xFFFFFFFFU, 1U},
+        {0x7FFFFFFFU, 32U, 0U, 0U},
+        {0x80000001U, 63U, 0xFFFFFFFFU, 1U},
+        {0x80000001U, 64U, 0x80000001U, 0U},
+    }};
+    for (const auto& c : cases)
+    {
+        EspressoCore core(8U);
+        core.state.gpr[4] = c[0];
+        core.state.gpr[5] = c[1];
+        core.state.xer = 0xC00000A5U;
+        core.memory.write32_be(0U, word);
+        assert(core.step() == StepResult::executed);
+        assert(core.state.gpr[3] == c[2]);
+        assert(((core.state.xer & 0x20000000U) != 0U) == (c[3] != 0U));
+        assert((core.state.xer & ~0x20000000U) == (0xC00000A5U & ~0x20000000U));
+    }
+    EspressoCore record(8U);
+    record.state.gpr[4] = 0x80000000U;
+    record.state.gpr[5] = 1U;
+    record.memory.write32_be(0U, encode_xo(4U, 3U, 5U, 792U, true));
+    const auto record_result = record.run(1U);
+    assert(record.state.gpr[3] == 0xC0000000U);
+    assert(((record.state.cr >> 28U) & 0xFU) == 8U);
+    assert(record_result.instruction_history[0].opcode_name == "sraw.");
+    EspressoCore alias(8U);
+    alias.state.gpr[3] = 0x80000001U;
+    alias.state.gpr[5] = 1U;
+    alias.memory.write32_be(0U, encode_xo(3U, 3U, 5U, 792U));
+    assert(alias.step() == StepResult::executed);
+    assert(alias.state.gpr[3] == 0xC0000000U);
+}
+
 void subtract_from_extended_tests()
 {
     constexpr std::uint32_t xer_ca = 0x20000000U;
@@ -17137,6 +17551,15 @@ int main(int argc, char* argv[])
     guest_memory_tests();
     interpreter_tests();
     integer_alu_tests();
+    and_immediate_shifted_record_tests();
+    rotate_left_word_and_mask_register_tests();
+    add_extended_tests();
+    add_to_minus_one_extended_tests();
+    subtract_from_minus_one_extended_tests();
+    multiply_high_word_signed_tests();
+    divide_word_signed_tests();
+    bitwise_nand_nor_or_complement_tests();
+    arithmetic_shift_right_word_tests();
     add_carrying_tests();
     add_to_zero_extended_tests();
     subtract_from_zero_extended_tests();
