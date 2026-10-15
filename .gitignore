@@ -45,6 +45,3 @@ Thumbs.db
 *.swp
 *.swo
 *~
-
-# Codex compiler instructions
-/AGENTS.md

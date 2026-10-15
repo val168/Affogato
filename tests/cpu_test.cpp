@@ -13789,6 +13789,228 @@ void gx2_set_tv_scale_hle_tests()
     assert(!core.gx2.tv_scale_configured);
 }
 
+void gx2_calc_drc_size_hle_tests()
+{
+    constexpr std::uint32_t return_address = 0x02751BE0U;
+    constexpr std::uint32_t rgba8_format = 0x1AU;
+    constexpr std::uint32_t size_output = 0x100FEDA8U;
+    constexpr std::uint32_t unk_output = 0x100FEDACU;
+    constexpr std::uint32_t tv_size_output = 0x100FEE00U;
+    constexpr std::uint32_t tv_unk_output = 0x100FEE04U;
+
+    const auto set_arguments = [](EspressoCore& core,
+                                  std::uint32_t render_mode,
+                                  std::uint32_t format,
+                                  std::uint32_t buffering_mode,
+                                  std::uint32_t out_size,
+                                  std::uint32_t out_unk) {
+        core.state.gpr[3] = render_mode;
+        core.state.gpr[4] = format;
+        core.state.gpr[5] = buffering_mode;
+        core.state.gpr[6] = out_size;
+        core.state.gpr[7] = out_unk;
+    };
+    const auto invoke = [](EspressoCore& core, std::uint32_t import) {
+        core.state.cia = import;
+        core.state.lr = return_address;
+        return core.run(1U);
+    };
+
+    // Fresh core, no GX2Init: exactly four-byte output mappings suffice.
+    EspressoCore exact(0x1000U);
+    register_gx2_hle(exact.hle);
+    const std::uint32_t exact_import =
+        exact.hle.bind_import("gx2", "GX2CalcDRCSize");
+    assert(exact_import != 0U);
+    assert(!exact.gx2.initialized);
+    exact.memory.map_region(size_output, sizeof(std::uint32_t));
+    exact.memory.map_region(unk_output, sizeof(std::uint32_t));
+    constexpr std::uint32_t unrelated_sparse = 0x21000U;
+    exact.memory.map_region(unrelated_sparse, 4U);
+    exact.memory.write32_be(unrelated_sparse, 0x76543210U);
+    exact.memory.write32_be(size_output, 0xAABBCCDDU);
+    exact.memory.write32_be(unk_output, 0x11223344U);
+    exact.state.gpr[1] = 0xFFFFFFFFU; // No stack arguments are read.
+    set_arguments(exact, 1U, rgba8_format, 2U, size_output, unk_output);
+    for (std::size_t i = 0; i < exact.state.fpr.size(); ++i)
+    {
+        exact.state.fpr[i] = 0x3FF0000000000000ULL + i;
+        exact.state.fpr_ps1[i] = 0xBFF0000000000000ULL + i;
+    }
+    const auto exact_gprs_before = exact.state.gpr;
+    const auto exact_fprs_before = exact.state.fpr;
+    const auto exact_ps1_before = exact.state.fpr_ps1;
+    exact.state.cr = 0x12345678U;
+    exact.state.xer = 0xA5A55A5AU;
+    exact.state.ctr = 0x87654321U;
+    exact.state.fpscr = 0x5A5AA55AU;
+    const auto cr_before = exact.state.cr;
+    const auto xer_before = exact.state.xer;
+    const auto ctr_before = exact.state.ctr;
+    const auto fpscr_before = exact.state.fpscr;
+    exact.gx2.initialized = true;
+    exact.gx2.tv_scan_buffer_configured = true;
+    exact.gx2.tv_scan_buffer_address = 0x0A001000U;
+    exact.gx2.tv_scan_buffer_size = 0x00FD2000U;
+    exact.gx2.tv_render_mode = 5U;
+    exact.gx2.tv_surface_format = rgba8_format;
+    exact.gx2.tv_buffering_mode = 2U;
+    exact.gx2.tv_scan_width = 1920U;
+    exact.gx2.tv_scan_height = 1080U;
+    exact.gx2.tv_scale_configured = true;
+    exact.gx2.tv_scale_width = 1920U;
+    exact.gx2.tv_scale_height = 1080U;
+    exact.gx2.pending_commands = {
+        {Gx2CommandType::set_context_register, 0x28800U, 0x12345678U},
+    };
+    exact.configure_guest_heap(0x100U, 0x900U);
+    exact.guest_heap_cursor = 0x400U;
+    exact.base_heap_handles[0] = 0x10203040U;
+    const Gx2RuntimeState gx2_before = exact.gx2;
+    const std::uint32_t heap_cursor_before = exact.guest_heap_cursor;
+    const std::uint32_t heap_limit_before = exact.guest_heap_limit;
+    const auto heap_handles_before = exact.base_heap_handles;
+    std::vector<std::uint8_t> flat_before(exact.memory.size());
+    exact.memory.read_bytes(0U, flat_before);
+
+    const RunResult exact_result = invoke(exact, exact_import);
+    assert(exact_result.reason == StopReason::instruction_limit);
+    assert(exact_result.steps == 1U);
+    assert(exact.state.cia == return_address && exact.state.lr == return_address);
+    assert(exact.state.gpr == exact_gprs_before);
+    assert(exact.state.gpr[3] == 1U);
+    assert(exact.state.gpr[4] == rgba8_format);
+    assert(exact.state.gpr[5] == 2U);
+    assert(exact.state.gpr[6] == size_output);
+    assert(exact.state.gpr[7] == unk_output);
+    assert(exact.state.fpr == exact_fprs_before);
+    assert(exact.state.fpr_ps1 == exact_ps1_before);
+    assert(exact.state.cr == cr_before && exact.state.xer == xer_before);
+    assert(exact.state.ctr == ctr_before && exact.state.fpscr == fpscr_before);
+    assert(exact.gx2 == gx2_before);
+    assert(exact.guest_heap_cursor == heap_cursor_before);
+    assert(exact.guest_heap_limit == heap_limit_before);
+    assert(exact.base_heap_handles == heap_handles_before);
+    assert(exact.memory.read32_be(size_output) == 0x0032A000U);
+    assert(exact.memory.read32_be(unk_output) == 0U);
+    assert(exact.memory.read8(size_output) == 0x00U);
+    assert(exact.memory.read8(size_output + 1U) == 0x32U);
+    assert(exact.memory.read8(size_output + 2U) == 0xA0U);
+    assert(exact.memory.read8(size_output + 3U) == 0x00U);
+    std::vector<std::uint8_t> flat_after(exact.memory.size());
+    exact.memory.read_bytes(0U, flat_after);
+    assert(flat_after == flat_before);
+    assert(exact.memory.read32_be(unrelated_sparse) == 0x76543210U);
+
+    // Compare the distinct TV and DRC allocation geometries side-by-side.
+    exact.memory.map_region(tv_size_output, 8U);
+    set_arguments(exact, 5U, rgba8_format, 2U, tv_size_output,
+                  tv_unk_output);
+    assert(invoke(exact,
+                  exact.hle.bind_import("gx2", "GX2CalcTVSize")).reason ==
+           StopReason::instruction_limit);
+    assert(exact.memory.read32_be(tv_size_output) == 0x00FD2000U);
+    assert(exact.memory.read32_be(tv_unk_output) == 0U);
+    set_arguments(exact, 1U, rgba8_format, 2U, size_output, unk_output);
+    assert(invoke(exact, exact_import).reason == StopReason::instruction_limit);
+    assert(exact.memory.read32_be(size_output) == 0x0032A000U);
+
+    // Enabled DRC modes share the 864x480 storage geometry. DRC mode 2 is
+    // independent of the buffering-mode argument, also 2 in this case.
+    const auto expect_size = [&](std::uint32_t drc_mode,
+                                 std::uint32_t buffering,
+                                 std::uint32_t expected) {
+        exact.memory.write32_be(size_output, 0xDEADBEEFU);
+        exact.memory.write32_be(unk_output, 0x12345678U);
+        set_arguments(exact, drc_mode, rgba8_format, buffering,
+                      size_output, unk_output);
+        assert(invoke(exact, exact_import).reason == StopReason::instruction_limit);
+        assert(exact.memory.read32_be(size_output) == expected);
+        assert(exact.memory.read32_be(unk_output) == 0U);
+    };
+    expect_size(1U, 1U, 0x00195000U);
+    expect_size(1U, 2U, 0x0032A000U);
+    expect_size(2U, 2U, 0x0032A000U);
+    expect_size(1U, 3U, 0x004BF000U);
+
+    // Aliased outputs follow the established API write order: size then zero.
+    exact.memory.write32_be(size_output, 0xCAFEBABEU);
+    set_arguments(exact, 1U, rgba8_format, 2U, size_output, size_output);
+    assert(invoke(exact, exact_import).reason == StopReason::instruction_limit);
+    assert(exact.memory.read32_be(size_output) == 0U);
+
+    // Invalid enums and null/wrapping pointers fail before either output write.
+    const auto expect_hle_error = [&](std::uint32_t mode,
+                                      std::uint32_t format,
+                                      std::uint32_t buffering,
+                                      std::uint32_t out_size,
+                                      std::uint32_t out_unk) {
+        exact.memory.write32_be(size_output, 0xDEADBEEFU);
+        exact.memory.write32_be(unk_output, 0x12345678U);
+        set_arguments(exact, mode, format, buffering, out_size, out_unk);
+        const RunResult result = invoke(exact, exact_import);
+        assert(result.reason == StopReason::hle_error);
+        assert(result.detail.find("gx2::GX2CalcDRCSize") != std::string::npos);
+        assert(exact.memory.read32_be(size_output) == 0xDEADBEEFU);
+        assert(exact.memory.read32_be(unk_output) == 0x12345678U);
+    };
+    expect_hle_error(0U, rgba8_format, 2U, size_output, unk_output);
+    expect_hle_error(3U, rgba8_format, 2U, size_output, unk_output);
+    expect_hle_error(1U, 0x1BU, 2U, size_output, unk_output);
+    expect_hle_error(1U, rgba8_format, 0U, size_output, unk_output);
+    expect_hle_error(1U, rgba8_format, 4U, size_output, unk_output);
+    expect_hle_error(1U, rgba8_format, 2U, 0U, unk_output);
+    expect_hle_error(1U, rgba8_format, 2U, size_output, 0U);
+    expect_hle_error(1U, rgba8_format, 2U, 0xFFFFFFFEU, unk_output);
+
+    // The second destination is preflighted before the first write, including
+    // when it is only partially mapped.
+    exact.memory.write32_be(size_output, 0xDEADBEEFU);
+    exact.memory.map_region(0x20000U, 3U);
+    set_arguments(exact, 1U, rgba8_format, 2U, size_output, 0x20000U);
+    RunResult result = invoke(exact, exact_import);
+    assert(result.reason == StopReason::memory_fault);
+    assert(exact.memory.read32_be(size_output) == 0xDEADBEEFU);
+
+    // A wholly unmapped second output also leaves the valid first word intact.
+    set_arguments(exact, 1U, rgba8_format, 2U, size_output, 0x30000U);
+    result = invoke(exact, exact_import);
+    assert(result.reason == StopReason::memory_fault);
+    assert(exact.memory.read32_be(size_output) == 0xDEADBEEFU);
+
+    // An unmapped first output likewise leaves a valid second output untouched.
+    exact.memory.write32_be(unk_output, 0x12345678U);
+    set_arguments(exact, 1U, rgba8_format, 2U, 0x30000U, unk_output);
+    result = invoke(exact, exact_import);
+    assert(result.reason == StopReason::memory_fault);
+    assert(exact.memory.read32_be(unk_output) == 0x12345678U);
+
+    // Both outputs can be separate exact four-byte mappings and adjacent in
+    // guest address space, as in the Wind Waker stack locals.
+    EspressoCore adjacent(0x1000U);
+    register_gx2_hle(adjacent.hle);
+    adjacent.memory.map_region(size_output, 4U);
+    adjacent.memory.map_region(unk_output, 4U);
+    set_arguments(adjacent, 1U, rgba8_format, 2U, size_output, unk_output);
+    assert(invoke(adjacent,
+                  adjacent.hle.bind_import("gx2", "GX2CalcDRCSize")).reason ==
+           StopReason::instruction_limit);
+    assert(adjacent.memory.read32_be(size_output) == 0x0032A000U);
+    assert(adjacent.memory.read32_be(unk_output) == 0U);
+
+    const std::uint32_t wrong_library =
+        exact.hle.bind_import("coreinit", "GX2CalcDRCSize");
+    assert(wrong_library != exact_import);
+    exact.state.gpr[3] = 1U;
+    exact.state.gpr[4] = rgba8_format;
+    exact.state.gpr[5] = 2U;
+    exact.state.gpr[6] = size_output;
+    exact.state.gpr[7] = unk_output;
+    result = invoke(exact, wrong_library);
+    assert(result.reason == StopReason::unimplemented_hle_call);
+    assert(result.hle_call == "coreinit::GX2CalcDRCSize");
+}
+
 void compare_and_conditional_branch_tests()
 {
     EspressoCore unsigned_compare_core(8);
@@ -16266,6 +16488,7 @@ int main(int argc, char* argv[])
     gx2_calc_tv_size_hle_tests();
     gx2_set_tv_buffer_hle_tests();
     gx2_set_tv_scale_hle_tests();
+    gx2_calc_drc_size_hle_tests();
     mem_get_total_free_size_for_exp_heap_hle_tests();
     mem_get_allocatable_size_for_exp_heap_ex_hle_tests();
     compare_and_conditional_branch_tests();

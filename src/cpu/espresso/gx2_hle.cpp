@@ -56,6 +56,8 @@ static_assert(gx2_context_display_list_offset +
                   gx2_context_display_list_capacity ==
               gx2_context_state_size);
 constexpr std::uint32_t gx2_tv_render_mode_wide_1080p = 5U;
+constexpr std::uint32_t gx2_drc_render_mode_single = 1U;
+constexpr std::uint32_t gx2_drc_render_mode_double = 2U;
 constexpr std::uint32_t gx2_surface_format_unorm_r8_g8_b8_a8 = 0x1AU;
 constexpr std::uint32_t gx2_buffering_mode_single = 1U;
 constexpr std::uint32_t gx2_buffering_mode_double = 2U;
@@ -78,7 +80,7 @@ TvDimensions get_tv_dimensions(std::uint32_t render_mode, const char* api_name)
     return {1920U, 1080U};
 }
 
-void validate_tv_surface_format(
+void validate_scan_surface_format(
     std::uint32_t surface_format,
     const char* api_name)
 {
@@ -90,7 +92,7 @@ void validate_tv_surface_format(
     }
 }
 
-std::uint32_t get_tv_buffer_count(
+std::uint32_t get_scan_buffer_count(
     std::uint32_t buffering_mode,
     const char* api_name)
 {
@@ -104,6 +106,28 @@ std::uint32_t get_tv_buffer_count(
             std::string("gx2::") + api_name + ": invalid buffering mode " +
             std::to_string(buffering_mode));
     }
+}
+
+void validate_gx2_u32_output(
+    EspressoCore& core,
+    std::uint32_t address,
+    const char* api_name,
+    const char* output_name)
+{
+    if (address == 0U)
+    {
+        throw HleExecutionError(
+            std::string("gx2::") + api_name + ": " + output_name +
+            " pointer is null");
+    }
+    if (static_cast<std::uint64_t>(address) + sizeof(std::uint32_t) >
+        guest_address_space_end)
+    {
+        throw HleExecutionError(
+            std::string("gx2::") + api_name + ": " + output_name +
+            " pointer range wraps the guest address space");
+    }
+    core.memory.validate_write_range(address, sizeof(std::uint32_t));
 }
 
 std::uint32_t fpr_float_argument_bits(
@@ -159,9 +183,9 @@ std::uint32_t calculate_tv_size(
 {
     constexpr const char* api_name = "GX2CalcTVSize";
     const TvDimensions dimensions = get_tv_dimensions(render_mode, api_name);
-    validate_tv_surface_format(surface_format, api_name);
+    validate_scan_surface_format(surface_format, api_name);
     const std::uint32_t buffer_count =
-        get_tv_buffer_count(buffering_mode, api_name);
+        get_scan_buffer_count(buffering_mode, api_name);
 
     constexpr std::uint64_t bytes_per_pixel = 4U;
     const std::uint64_t width = dimensions.width;
@@ -172,6 +196,39 @@ std::uint32_t calculate_tv_size(
     {
         throw HleExecutionError(
             "gx2::GX2CalcTVSize: calculated size overflows uint32_t");
+    }
+    return static_cast<std::uint32_t>(size);
+}
+
+std::uint32_t calculate_drc_size(
+    std::uint32_t render_mode,
+    std::uint32_t surface_format,
+    std::uint32_t buffering_mode)
+{
+    constexpr const char* api_name = "GX2CalcDRCSize";
+    if (render_mode != gx2_drc_render_mode_single &&
+        render_mode != gx2_drc_render_mode_double)
+    {
+        throw HleExecutionError(
+            std::string("gx2::") + api_name +
+            ": unsupported DRC render mode " + std::to_string(render_mode));
+    }
+
+    validate_scan_surface_format(surface_format, api_name);
+    const std::uint32_t buffer_count =
+        get_scan_buffer_count(buffering_mode, api_name);
+
+    // The logical DRC image is 854x480, but scan-buffer storage uses an
+    // 864-pixel row pitch. Size the allocation from that padded pitch.
+    constexpr std::uint64_t scan_pitch = 864U;
+    constexpr std::uint64_t height = 480U;
+    constexpr std::uint64_t bytes_per_pixel = 4U;
+    const std::uint64_t size =
+        scan_pitch * height * bytes_per_pixel * buffer_count;
+    if (size > std::numeric_limits<std::uint32_t>::max())
+    {
+        throw HleExecutionError(
+            "gx2::GX2CalcDRCSize: calculated size overflows uint32_t");
     }
     return static_cast<std::uint32_t>(size);
 }
@@ -874,29 +931,34 @@ void register_gx2_hle(HleDispatcher& dispatcher)
             const std::uint32_t size = calculate_tv_size(
                 render_mode, surface_format, buffering_mode);
 
-            const auto validate_output = [&](std::uint32_t address,
-                                             const char* name) {
-                if (address == 0U)
-                {
-                    throw HleExecutionError(
-                        std::string("gx2::GX2CalcTVSize: ") + name +
-                        " pointer is null");
-                }
-                if (static_cast<std::uint64_t>(address) +
-                        sizeof(std::uint32_t) >
-                    guest_address_space_end)
-                {
-                    throw HleExecutionError(
-                        std::string("gx2::GX2CalcTVSize: ") + name +
-                        " pointer range wraps the guest address space");
-                }
-                core.memory.validate_write_range(address, sizeof(std::uint32_t));
-            };
-
             // Preflight both outputs before either is written. If pointers
             // alias, the following writes intentionally retain API order.
-            validate_output(out_size, "size output");
-            validate_output(out_unk, "unkOut output");
+            validate_gx2_u32_output(
+                core, out_size, "GX2CalcTVSize", "size output");
+            validate_gx2_u32_output(
+                core, out_unk, "GX2CalcTVSize", "unkOut output");
+            core.memory.write32_be(out_size, size);
+            core.memory.write32_be(out_unk, 0U);
+        });
+
+    dispatcher.register_function(
+        "gx2",
+        "GX2CalcDRCSize",
+        [](EspressoCore& core) {
+            const std::uint32_t render_mode = core.state.gpr[3];
+            const std::uint32_t surface_format = core.state.gpr[4];
+            const std::uint32_t buffering_mode = core.state.gpr[5];
+            const std::uint32_t out_size = core.state.gpr[6];
+            const std::uint32_t out_unk = core.state.gpr[7];
+            const std::uint32_t size = calculate_drc_size(
+                render_mode, surface_format, buffering_mode);
+
+            // Validate both destinations before writing either one, matching
+            // GX2CalcTVSize's transactional output behavior.
+            validate_gx2_u32_output(
+                core, out_size, "GX2CalcDRCSize", "size output");
+            validate_gx2_u32_output(
+                core, out_unk, "GX2CalcDRCSize", "unkOut output");
             core.memory.write32_be(out_size, size);
             core.memory.write32_be(out_unk, 0U);
         });
@@ -914,8 +976,8 @@ void register_gx2_hle(HleDispatcher& dispatcher)
             constexpr const char* api_name = "GX2SetTVBuffer";
             const TvDimensions dimensions =
                 get_tv_dimensions(render_mode, api_name);
-            validate_tv_surface_format(surface_format, api_name);
-            (void)get_tv_buffer_count(buffering_mode, api_name);
+            validate_scan_surface_format(surface_format, api_name);
+            (void)get_scan_buffer_count(buffering_mode, api_name);
 
             // This API only records display metadata. The guest owns the buffer;
             // no memory access, allocation, cache action, or PM4 emission occurs.
