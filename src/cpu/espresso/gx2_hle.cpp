@@ -1051,6 +1051,20 @@ void register_gx2_hle(HleDispatcher& dispatcher)
             core.gx2.drc_scan_height = geometry.height;
             core.gx2.drc_scan_pitch = geometry.pitch;
         });
+
+    dispatcher.register_function(
+        "gx2",
+        "GX2SetDRCScale",
+        [](EspressoCore& core) {
+            const std::uint32_t width = core.state.gpr[3];
+            const std::uint32_t height = core.state.gpr[4];
+
+            // Retain requested DRC output dimensions independently from scan
+            // geometry and its padded pitch. AVM/renderer effects are deferred.
+            core.gx2.drc_scale_configured = true;
+            core.gx2.drc_scale_width = width;
+            core.gx2.drc_scale_height = height;
+        });
 }
 
 } // namespace affogato::cpu::espresso

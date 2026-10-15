@@ -63,6 +63,9 @@ struct Gx2RuntimeState
     std::uint32_t drc_scan_width{};
     std::uint32_t drc_scan_height{};
     std::uint32_t drc_scan_pitch{};
+    bool drc_scale_configured{};
+    std::uint32_t drc_scale_width{};
+    std::uint32_t drc_scale_height{};
     bool db_depth_control_valid{};
     std::uint32_t db_depth_control{};
     bool db_stencilrefmask_valid{};
