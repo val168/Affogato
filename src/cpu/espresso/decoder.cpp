@@ -495,7 +495,14 @@ DecodedInstruction decode(std::uint32_t raw) noexcept
             instruction.base = static_cast<std::uint8_t>(field(raw, 16, 0x1FU));
             instruction.record = (raw & 1U) != 0U;
         }
-        else if (extended_opcode == 104) // neg; OE=1 remains unsupported
+        else if (extended_opcode == 616U && field(raw, 11, 0x1FU) == 0U) // nego; OE=1
+        {
+            instruction.opcode = Opcode::negate_overflow;
+            instruction.destination = static_cast<std::uint8_t>(field(raw, 21, 0x1FU));
+            instruction.source = static_cast<std::uint8_t>(field(raw, 16, 0x1FU));
+            instruction.record = (raw & 1U) != 0U;
+        }
+        else if (extended_opcode == 104U && field(raw, 11, 0x1FU) == 0U) // neg
         {
             instruction.opcode = Opcode::negate;
             instruction.destination = static_cast<std::uint8_t>(field(raw, 21, 0x1FU));

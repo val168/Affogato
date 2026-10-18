@@ -552,6 +552,7 @@ void set_xer_carry(CpuState& state, bool carry) noexcept
     case Opcode::subtract_from_zero_extended: return "subfze";
     case Opcode::subtract_from_minus_one_extended: return "subfme";
     case Opcode::negate: return "neg";
+    case Opcode::negate_overflow: return "nego";
     case Opcode::extend_sign_byte: return "extsb";
     case Opcode::extend_sign_halfword: return "extsh";
     case Opcode::ori: return "ori";
@@ -748,7 +749,8 @@ void add_history_source(
          instruction.opcode == Opcode::subtract_from_carrying_overflow ||
          instruction.opcode == Opcode::subtract_from_extended_overflow ||
          instruction.opcode == Opcode::add_carrying_overflow ||
-         instruction.opcode == Opcode::add_extended_overflow) && instruction.record)
+         instruction.opcode == Opcode::add_extended_overflow ||
+         instruction.opcode == Opcode::negate_overflow) && instruction.record)
     {
         entry.opcode_name += '.';
     }
@@ -1149,6 +1151,7 @@ void add_history_source(
         add_history_source(entry, state, instruction.base);
         break;
     case Opcode::negate:
+    case Opcode::negate_overflow:
     case Opcode::extend_sign_byte:
     case Opcode::extend_sign_halfword:
         add_history_source(entry, state, instruction.source);
@@ -1244,6 +1247,7 @@ void add_history_source(
     case Opcode::divide_word_unsigned:
     case Opcode::divide_word_signed:
     case Opcode::negate:
+    case Opcode::negate_overflow:
     case Opcode::extend_sign_byte:
     case Opcode::extend_sign_halfword:
     case Opcode::ori:
@@ -1787,7 +1791,8 @@ StepResult EspressoCore::step()
         instruction.opcode == Opcode::add_carrying_overflow ||
         instruction.opcode == Opcode::add_extended_overflow ||
         instruction.opcode == Opcode::subtract_from_carrying_overflow ||
-        instruction.opcode == Opcode::subtract_from_extended_overflow)
+        instruction.opcode == Opcode::subtract_from_extended_overflow ||
+        instruction.opcode == Opcode::negate_overflow)
     {
         pending_history_entry_.has_overflow_result = true;
     }
@@ -1930,6 +1935,27 @@ StepResult EspressoCore::step()
         const std::uint32_t source = state.gpr[instruction.source];
         const std::uint32_t result = 0U - source;
         state.gpr[instruction.destination] = result;
+        if (instruction.record)
+        {
+            set_record_result(state, result);
+        }
+        break;
+    }
+
+    case Opcode::negate_overflow:
+    {
+        const std::uint32_t source = state.gpr[instruction.source];
+        const std::uint32_t result = 0U - source;
+        const bool overflow = source == 0x80000000U;
+        state.gpr[instruction.destination] = result;
+        if (overflow)
+        {
+            state.xer |= xer_overflow_mask | xer_summary_overflow_mask;
+        }
+        else
+        {
+            state.xer &= ~xer_overflow_mask;
+        }
         if (instruction.record)
         {
             set_record_result(state, result);

@@ -399,7 +399,7 @@ void decoder_tests()
     assert(neg.destination == 11);
     assert(neg.source == 10);
     assert(!neg.record);
-    assert(decode(0x7D6A04D0U).opcode == Opcode::unsupported); // nego remains unsupported
+    assert(decode(0x7D6A04D0U).opcode == Opcode::negate_overflow);
 
     const DecodedInstruction ori = decode(0x60631234U); // ori r3, r3, 0x1234
     assert(ori.opcode == Opcode::ori);
@@ -7380,6 +7380,92 @@ void subtract_from_carrying_overflow_tests()
     assert(format_instruction_history(record).find("CA=1 OV=1 SO=1") !=
            std::string::npos);
     (void)execute(6U, 4U, 5U, 2U, 1U, xer_so, true); // retains sticky SO
+}
+
+void negate_overflow_tests()
+{
+    constexpr std::uint32_t xer_so = 0x80000000U;
+    constexpr std::uint32_t xer_ov = 0x40000000U;
+    constexpr std::uint32_t xer_ca = 0x20000000U;
+    const std::uint32_t encoding = (31U << 26U) | (3U << 21U) | (4U << 16U) |
+                                   (616U << 1U);
+    const DecodedInstruction decoded = decode(encoding);
+    assert(decoded.opcode == Opcode::negate_overflow);
+    assert(decoded.destination == 3U && decoded.source == 4U && !decoded.record);
+    assert(decode(encoding | 1U).opcode == Opcode::negate_overflow);
+    assert(decode(encoding | 1U).record);
+    assert(decode((encoding & ~(616U << 1U)) | (104U << 1U)).opcode == Opcode::negate);
+    assert(decode(encoding | (1U << 11U)).opcode == Opcode::unsupported);
+
+    const auto execute = [&](std::uint8_t destination, std::uint8_t source_reg,
+                             std::uint32_t source, std::uint32_t initial_xer,
+                             bool record = false) {
+        EspressoCore core(8U);
+        core.state.gpr.fill(0xA5A5A5A5U);
+        core.state.gpr[source_reg] = source;
+        core.state.cr = 0x12345678U;
+        core.state.xer = initial_xer;
+        core.state.lr = 0x11223344U;
+        core.state.ctr = 0x55667788U;
+        core.state.fpscr = 0xCAFEBABEU;
+        core.state.fpr.fill(0x0123456789ABCDEFULL);
+        core.state.fpr_ps1.fill(0xFEDCBA9876543210ULL);
+        const std::uint32_t word = (31U << 26U) |
+            (static_cast<std::uint32_t>(destination) << 21U) |
+            (static_cast<std::uint32_t>(source_reg) << 16U) | (616U << 1U) |
+            static_cast<std::uint32_t>(record);
+        core.memory.write32_be(0U, word);
+        const auto gprs_before = core.state.gpr;
+        const auto fprs_before = core.state.fpr;
+        const auto ps1_before = core.state.fpr_ps1;
+        const std::uint32_t result = 0U - source;
+        const bool overflow = source == 0x80000000U;
+        std::uint32_t expected_xer = initial_xer & ~xer_ov;
+        if (overflow)
+        {
+            expected_xer |= xer_ov | xer_so;
+        }
+
+        const RunResult run = core.run(1U);
+        assert(run.reason == StopReason::instruction_limit && run.steps == 1U);
+        assert(core.state.cia == 4U && core.state.gpr[destination] == result);
+        for (std::uint32_t reg = 0; reg < 32U; ++reg)
+        {
+            if (reg != destination)
+            {
+                assert(core.state.gpr[reg] == gprs_before[reg]);
+            }
+        }
+        assert(core.state.xer == expected_xer); // CA and unrelated bits preserved
+        assert(core.state.lr == 0x11223344U && core.state.ctr == 0x55667788U);
+        assert(core.state.fpscr == 0xCAFEBABEU);
+        assert(core.state.fpr == fprs_before && core.state.fpr_ps1 == ps1_before);
+        if (!record)
+        {
+            assert(core.state.cr == 0x12345678U);
+        }
+        else
+        {
+            const std::uint32_t cr0 = (result & 0x80000000U) != 0U ? 0x8U
+                : result == 0U ? 0x2U : 0x4U;
+            assert(((core.state.cr >> 28U) & 0xFU) ==
+                   (cr0 | ((expected_xer & xer_so) != 0U ? 1U : 0U)));
+            assert((core.state.cr & 0x0FFFFFFFU) == 0x02345678U);
+        }
+        const InstructionHistoryEntry& history = run.instruction_history.front();
+        assert(history.opcode_name == (record ? "nego." : "nego"));
+        assert(history.has_overflow_result && history.overflow_result == overflow);
+        assert(history.summary_overflow_result == ((expected_xer & xer_so) != 0U));
+        return run;
+    };
+
+    (void)execute(3U, 4U, 0U, xer_ca | xer_ov);
+    (void)execute(3U, 4U, 1U, xer_ca);
+    (void)execute(3U, 4U, 0x80000000U, xer_ca);
+    (void)execute(3U, 4U, 1U, xer_so | xer_ov | xer_ca); // clears OV but preserves SO/CA
+    (void)execute(4U, 4U, 0x80000000U, 0U); // destination aliases source
+    const RunResult record = execute(6U, 4U, 0x80000000U, 0U, true);
+    assert(format_instruction_history(record).find("OV=1 SO=1") != std::string::npos);
 }
 
 void add_to_zero_extended_tests()
@@ -22225,6 +22311,7 @@ int main(int argc, char* argv[])
     add_overflow_tests();
     subtract_from_overflow_tests();
     subtract_from_carrying_overflow_tests();
+    negate_overflow_tests();
     add_to_zero_extended_tests();
     subtract_from_zero_extended_tests();
     subtract_from_extended_tests();
