@@ -7665,7 +7665,7 @@ void add_to_zero_extended_tests()
     assert(decode(encode_addze(3U, 3U, true)).record);
     assert(decode(encode_addze(3U, 3U, false, 1U)).opcode == Opcode::unsupported);
     assert(decode(encode_addze(3U, 3U, false, 0U, 714U)).opcode ==
-           Opcode::unsupported);
+           Opcode::add_to_zero_extended_overflow);
 
     const auto execute = [&](std::uint8_t destination, std::uint8_t ra,
                              std::uint32_t a, bool old_ca,
@@ -7778,6 +7778,93 @@ void add_to_zero_extended_tests()
            std::string::npos);
     assert(chain_trace.find("addze r3=0x00000005 CAin=1 -> r3=0x00000006 CA=0") !=
            std::string::npos);
+}
+
+void add_to_zero_extended_overflow_tests()
+{
+    constexpr std::uint32_t xer_so = 0x80000000U;
+    constexpr std::uint32_t xer_ov = 0x40000000U;
+    constexpr std::uint32_t xer_ca = 0x20000000U;
+    const auto encode_addzeo = [](std::uint8_t destination, std::uint8_t ra,
+                                  bool record = false, std::uint8_t reserved_rb = 0U) {
+        return (31U << 26U) |
+            (static_cast<std::uint32_t>(destination) << 21U) |
+            (static_cast<std::uint32_t>(ra) << 16U) |
+            (static_cast<std::uint32_t>(reserved_rb) << 11U) |
+            (714U << 1U) | static_cast<std::uint32_t>(record);
+    };
+
+    const std::uint32_t word = encode_addzeo(3U, 4U);
+    const DecodedInstruction decoded = decode(word);
+    assert(decoded.opcode == Opcode::add_to_zero_extended_overflow);
+    assert(decoded.destination == 3U && decoded.base == 4U && !decoded.record);
+    assert(((word >> 1U) & 0x3FFU) == 714U);
+    assert(decode(encode_addzeo(3U, 4U, true)).record);
+    assert(decode(encode_addzeo(3U, 4U, false, 1U)).opcode == Opcode::unsupported);
+
+    const auto execute = [&](std::uint8_t destination, std::uint8_t ra,
+                             std::uint32_t a, bool carry_in,
+                             bool record = false, bool so_in = false) {
+        EspressoCore core(8U);
+        core.state.gpr.fill(0xA5A5A5A5U);
+        core.state.gpr[ra] = a;
+        const std::uint32_t initial_xer = 0x400000A5U |
+            (so_in ? xer_so : 0U) | (carry_in ? xer_ca : 0U);
+        constexpr std::uint32_t initial_cr = 0x12345678U;
+        core.state.xer = initial_xer;
+        core.state.cr = initial_cr;
+        const auto original_gprs = core.state.gpr;
+        const std::uint32_t instruction = encode_addzeo(destination, ra, record);
+        core.memory.write32_be(0U, instruction);
+        const std::uint64_t sum = static_cast<std::uint64_t>(a) +
+                                  static_cast<std::uint32_t>(carry_in);
+        const std::uint32_t result = static_cast<std::uint32_t>(sum);
+        const std::int64_t exact_signed =
+            static_cast<std::int64_t>(std::bit_cast<std::int32_t>(a)) +
+            static_cast<std::int64_t>(carry_in);
+        const bool overflow = exact_signed > std::numeric_limits<std::int32_t>::max();
+        const bool carry_out = (sum >> 32U) != 0U;
+        const std::uint32_t expected_xer = (initial_xer & ~xer_ov & ~xer_ca) |
+            (carry_out ? xer_ca : 0U) | (overflow ? xer_ov | xer_so : 0U);
+
+        const RunResult run = core.run(1U);
+        assert(run.steps == 1U && run.reason == StopReason::instruction_limit);
+        assert(core.state.gpr[destination] == result);
+        for (std::uint32_t reg = 0; reg < 32U; ++reg)
+        {
+            if (reg != destination)
+            {
+                assert(core.state.gpr[reg] == original_gprs[reg]);
+            }
+        }
+        assert(core.state.xer == expected_xer);
+        if (record)
+        {
+            const std::uint32_t classification = (result & 0x80000000U) != 0U ? 0x8U
+                : result == 0U ? 0x2U : 0x4U;
+            assert(((core.state.cr >> 28U) & 0xFU) ==
+                   (classification | static_cast<std::uint32_t>((expected_xer & xer_so) != 0U)));
+            assert((core.state.cr & 0x0FFFFFFFU) == (initial_cr & 0x0FFFFFFFU));
+            assert(run.instruction_history.front().opcode_name == "addzeo.");
+        }
+        else
+        {
+            assert(core.state.cr == initial_cr);
+        }
+        const InstructionHistoryEntry& history = run.instruction_history.front();
+        assert(history.has_carry_input && history.carry_input == carry_in);
+        assert(history.has_carry_result && history.carry_result == carry_out);
+        assert(history.has_overflow_result && history.overflow_result == overflow);
+        return std::pair{result, run};
+    };
+
+    assert(execute(3U, 4U, 0U, false).first == 0U);
+    assert(execute(3U, 4U, 0x7FFFFFFFU, true).first == 0x80000000U);
+    assert(execute(3U, 4U, 0xFFFFFFFFU, true).first == 0U); // carry, no signed overflow
+    assert(execute(3U, 4U, 0xFFFFFFFFU, false).first == 0xFFFFFFFFU);
+    assert(execute(4U, 4U, 0x7FFFFFFFU, true).first == 0x80000000U); // rD==rA
+    (void)execute(3U, 4U, 0x7FFFFFFFU, true, true); // LT, OV and SO
+    (void)execute(3U, 4U, 0xFFFFFFFFU, true, true, true); // EQ with sticky SO, no OV
 }
 
 void subtract_from_extended_overflow_tests()
@@ -22575,6 +22662,7 @@ int main(int argc, char* argv[])
     subtract_from_carrying_overflow_tests();
     negate_overflow_tests();
     add_to_zero_extended_tests();
+    add_to_zero_extended_overflow_tests();
     subtract_from_zero_extended_tests();
     subtract_from_extended_tests();
     subtract_from_extended_overflow_tests();
