@@ -7616,6 +7616,8 @@ void guest_mutex_tests()
     constexpr std::uint32_t direct_mutex = 0x900U;
     const std::uint32_t os_init = core.hle.bind_import("coreinit", "OSInitMutex");
     const std::uint32_t os_lock = core.hle.bind_import("coreinit", "OSLockMutex");
+    const std::uint32_t os_try_lock =
+        core.hle.bind_import("coreinit", "OSTryLockMutex");
     const std::uint32_t os_unlock = core.hle.bind_import("coreinit", "OSUnlockMutex");
     core.state.cia = os_init;
     core.state.lr = return_address;
@@ -7629,9 +7631,32 @@ void guest_mutex_tests()
     invoke(os_unlock, direct_mutex);
     assert(core.memory.read32_be(direct_mutex + 0x1CU) == 0);
 
+    const auto try_lock = [&](std::uint32_t address, std::uint32_t lr) {
+        core.state.cia = os_try_lock;
+        core.state.lr = lr;
+        core.state.gpr[3] = address;
+        const RunResult result = core.run(1U);
+        assert(result.reason == StopReason::instruction_limit);
+        assert(result.steps == 1U);
+        assert(core.state.cia == lr);
+        return core.state.gpr[3];
+    };
+    assert(try_lock(direct_mutex, return_address + 4U) == 1U);
+    assert(core.memory.read32_be(direct_mutex + 0x1CU) == thread);
+    assert(core.memory.read32_be(direct_mutex + 0x20U) == 1U);
+    assert(try_lock(direct_mutex, return_address + 8U) == 1U);
+    assert(core.memory.read32_be(direct_mutex + 0x20U) == 2U);
+    invoke(os_unlock, direct_mutex);
+    invoke(os_unlock, direct_mutex);
+    assert(core.memory.read32_be(direct_mutex + 0x1CU) == 0U);
+    assert(core.memory.read32_be(direct_mutex + 0x20U) == 0U);
+
     // A foreign owner cannot be treated as acquired without a scheduler.
     core.memory.write32_be(mutex + 0x1CU, 0xDEADBEEFU);
     core.memory.write32_be(mutex + 0x20U, 1U);
+    assert(try_lock(mutex, return_address + 12U) == 0U);
+    assert(core.memory.read32_be(mutex + 0x1CU) == 0xDEADBEEFU);
+    assert(core.memory.read32_be(mutex + 0x20U) == 1U);
     core.state.cia = lock;
     core.state.lr = return_address;
     core.state.gpr[3] = wrapper;

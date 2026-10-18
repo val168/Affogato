@@ -1763,6 +1763,13 @@ void register_coreinit_hle(HleDispatcher& dispatcher)
         });
     dispatcher.register_function(
         "coreinit",
+        "OSTryLockMutex",
+        [](EspressoCore& core) {
+            core.state.gpr[3] =
+                lock_guest_os_mutex(core, core.state.gpr[3]) ? 1U : 0U;
+        });
+    dispatcher.register_function(
+        "coreinit",
         "OSUnlockMutex",
         [](EspressoCore& core) {
             unlock_guest_os_mutex(core, core.state.gpr[3]);
