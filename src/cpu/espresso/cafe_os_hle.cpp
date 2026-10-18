@@ -994,6 +994,33 @@ void register_coreinit_hle(HleDispatcher& dispatcher)
 
     dispatcher.register_function(
         "coreinit",
+        "OSResumeThread",
+        [](EspressoCore& core) {
+            const std::uint32_t thread = core.state.gpr[3];
+            const std::uint64_t count_address =
+                static_cast<std::uint64_t>(thread) + os_thread_suspend_count_offset;
+            if (count_address + sizeof(std::uint32_t) >
+                (std::uint64_t{1} << 32U))
+            {
+                throw GuestMemoryFault(thread, os_thread_size, GuestMemoryAccess::read);
+            }
+
+            const std::uint32_t previous_count = core.memory.read32_be(
+                static_cast<std::uint32_t>(count_address));
+            // Cafe returns the old suspend count. Reaching zero makes the
+            // thread eligible for a run queue; Affogato currently has no
+            // guest-thread scheduler, so it records the counter transition
+            // without switching the active Espresso architectural state.
+            if (previous_count != 0U)
+            {
+                core.memory.write32_be(
+                    static_cast<std::uint32_t>(count_address), previous_count - 1U);
+            }
+            core.state.gpr[3] = previous_count;
+        });
+
+    dispatcher.register_function(
+        "coreinit",
         "OSGetSystemInfo",
         [](EspressoCore& core) {
             const auto address = core.hle.bind_data_import(

@@ -8620,6 +8620,64 @@ void os_set_thread_affinity_hle_tests()
     assert(core.memory.read32_be(thread + context_affinity_offset) == 0U);
 }
 
+void os_resume_thread_hle_tests()
+{
+    constexpr std::uint32_t thread = 0x1000U;
+    constexpr std::uint32_t suspend_count_offset = 0x328U;
+    constexpr std::uint32_t state_offset = 0x324U;
+    constexpr std::uint32_t return_address = 0x02761428U;
+
+    EspressoCore core(0x3000U);
+    register_coreinit_hle(core.hle);
+    const std::uint32_t resume =
+        core.hle.bind_import("coreinit", "OSResumeThread");
+    core.memory.fill_bytes(thread, 0x6A0U, 0xA5U);
+    core.memory.write8(thread + state_offset, 1U); // READY
+    core.memory.write32_be(thread + suspend_count_offset, 1U);
+    for (std::uint32_t reg = 0U; reg < core.state.gpr.size(); ++reg)
+    {
+        core.state.gpr[reg] = 0xB3000000U + reg * 0x101U;
+    }
+    core.state.gpr[3] = thread;
+    core.state.lr = return_address;
+    const auto gprs_before = core.state.gpr;
+    std::vector<std::uint8_t> memory_before(core.memory.size());
+    core.memory.read_bytes(0U, memory_before);
+
+    core.state.cia = resume;
+    const RunResult first = core.run(1U);
+    assert(first.reason == StopReason::instruction_limit);
+    assert(first.steps == 1U);
+    assert(core.state.cia == return_address);
+    assert(core.state.gpr[3] == 1U); // old suspend count
+    for (std::size_t reg = 4U; reg < core.state.gpr.size(); ++reg)
+    {
+        assert(core.state.gpr[reg] == gprs_before[reg]);
+    }
+    assert(core.memory.read32_be(thread + suspend_count_offset) == 0U);
+    assert(core.memory.read8(thread + state_offset) == 1U); // remains READY
+    std::vector<std::uint8_t> memory_after(core.memory.size());
+    core.memory.read_bytes(0U, memory_after);
+    for (std::size_t address = 0U; address < memory_after.size(); ++address)
+    {
+        const bool count_byte = address >= thread + suspend_count_offset &&
+                                address < thread + suspend_count_offset + 4U;
+        if (!count_byte)
+        {
+            assert(memory_after[address] == memory_before[address]);
+        }
+    }
+
+    // A non-suspended thread is not decremented below zero and returns zero.
+    core.state.gpr[3] = thread;
+    core.state.lr = return_address + 4U;
+    core.state.cia = resume;
+    assert(core.run(1U).reason == StopReason::instruction_limit);
+    assert(core.state.cia == return_address + 4U);
+    assert(core.state.gpr[3] == 0U);
+    assert(core.memory.read32_be(thread + suspend_count_offset) == 0U);
+}
+
 void nn_save_init_hle_tests()
 {
     constexpr std::uint32_t return_address = 0x0274226CU;
@@ -18658,6 +18716,7 @@ int main(int argc, char* argv[])
     os_create_thread_hle_tests();
     os_set_thread_name_hle_tests();
     os_set_thread_affinity_hle_tests();
+    os_resume_thread_hle_tests();
     guest_mutex_tests();
     memset_hle_tests();
     memcpy_hle_tests();
