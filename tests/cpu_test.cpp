@@ -553,6 +553,12 @@ void decoder_tests()
     assert(decode(0x4C880001U).opcode == Opcode::unsupported); // reserved bit 0
     assert(decode(0x4CA80000U).opcode == Opcode::unsupported); // reserved field
 
+    const DecodedInstruction mfcr = decode(0x7C600026U); // mfcr r3
+    assert(mfcr.opcode == Opcode::move_from_condition_register);
+    assert(mfcr.destination == 3U);
+    assert(decode(0x7C600027U).opcode == Opcode::unsupported); // reserved bit 0
+    assert(decode(0x7C601026U).opcode == Opcode::unsupported); // reserved field
+
     const DecodedInstruction cmpwi = decode(0x2E830007U); // cmpwi cr5, r3, 7
     assert(cmpwi.opcode == Opcode::compare_signed_immediate);
     assert(cmpwi.cr_field == 5);
@@ -1605,6 +1611,39 @@ void move_condition_register_field_tests()
             assert(trace.find("cr" + std::to_string(source) + "=0x") != std::string::npos);
         }
     }
+}
+
+void move_from_condition_register_tests()
+{
+    constexpr std::uint32_t instruction = 0x7C600026U;
+    EspressoCore core(0x100U);
+    core.state.cr = 0xA5C39E71U;
+    core.state.gpr[3] = 0xDEADBEEFU;
+    core.state.gpr[4] = 0x44444444U;
+    core.state.xer = 0xA00000A5U;
+    core.state.lr = 0x10203040U;
+    core.state.ctr = 0x50607080U;
+    core.state.fpscr = 0x12345678U;
+    core.memory.write32_be(0U, instruction);
+    const auto gpr_before = core.state.gpr;
+    const auto fpr_before = core.state.fpr;
+    const auto fpr_ps1_before = core.state.fpr_ps1;
+    const std::uint32_t cr_before = core.state.cr;
+    const std::uint32_t xer_before = core.state.xer;
+    const std::uint32_t lr_before = core.state.lr;
+    const std::uint32_t ctr_before = core.state.ctr;
+    const std::uint32_t fpscr_before = core.state.fpscr;
+    const auto result = core.run(1U);
+    assert(result.steps == 1U && core.state.cia == 4U);
+    assert(core.state.gpr[3] == cr_before);
+    assert(core.state.gpr[4] == gpr_before[4]);
+    assert(core.state.cr == cr_before);
+    assert(core.state.xer == xer_before);
+    assert(core.state.lr == lr_before && core.state.ctr == ctr_before);
+    assert(core.state.fpscr == fpscr_before);
+    assert(core.state.fpr == fpr_before);
+    assert(core.state.fpr_ps1 == fpr_ps1_before);
+    assert(result.instruction_history.front().opcode_name == "mfcr");
 }
 
 void floating_compare_unordered_tests()
@@ -18175,6 +18214,7 @@ int main(int argc, char* argv[])
     condition_bit_nand_tests();
     condition_bit_equivalence_tests();
     move_condition_register_field_tests();
+    move_from_condition_register_tests();
     integer_alu_tests();
     and_immediate_shifted_record_tests();
     rotate_left_word_and_mask_register_tests();

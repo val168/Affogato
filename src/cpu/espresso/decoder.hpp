@@ -123,6 +123,7 @@ enum class Opcode
     condition_bit_nand,
     condition_bit_equivalence,
     move_condition_register_field,
+    move_from_condition_register,
 };
 
 struct DecodedInstruction

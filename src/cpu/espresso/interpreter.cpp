@@ -606,6 +606,7 @@ void set_xer_carry(CpuState& state, bool carry) noexcept
     case Opcode::condition_bit_nand: return "crnand";
     case Opcode::condition_bit_equivalence: return "creqv";
     case Opcode::move_condition_register_field: return "mcrf";
+    case Opcode::move_from_condition_register: return "mfcr";
     }
     return "unknown";
 }
@@ -3605,6 +3606,10 @@ StepResult EspressoCore::step()
         pending_history_entry_.cr_field_value = static_cast<std::uint8_t>(value);
         break;
     }
+
+    case Opcode::move_from_condition_register:
+        state.gpr[instruction.destination] = state.cr;
+        break;
 
     case Opcode::store_halfword:
         memory.write16_be(
