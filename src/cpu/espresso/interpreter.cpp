@@ -580,6 +580,7 @@ void set_xer_carry(CpuState& state, bool carry) noexcept
     case Opcode::floating_move_register: return "fmr";
     case Opcode::floating_negate: return "fneg";
     case Opcode::floating_absolute_value: return "fabs";
+    case Opcode::floating_negative_absolute_value: return "fnabs";
     case Opcode::floating_convert_to_integer_word_zero: return "fctiwz";
     case Opcode::floating_subtract_double: return "fsub";
     case Opcode::floating_round_to_single: return "frsp";
@@ -790,7 +791,8 @@ void add_history_source(
         return entry;
     }
     if (opcode == Opcode::floating_move_register || opcode == Opcode::floating_negate ||
-        opcode == Opcode::floating_absolute_value)
+        opcode == Opcode::floating_absolute_value ||
+        opcode == Opcode::floating_negative_absolute_value)
     {
         entry.has_fp_move = true;
         entry.fp_move_destination = instruction.fp_register;
@@ -2829,6 +2831,21 @@ StepResult EspressoCore::step()
     {
         const std::uint64_t source = state.fpr[instruction.fp_source_b];
         const std::uint64_t result = source & ~binary64_sign_mask;
+        state.fpr[instruction.fp_register] = result;
+        pending_history_entry_.has_fp_move = true;
+        pending_history_entry_.fp_move_destination = instruction.fp_register;
+        pending_history_entry_.fp_move_source = instruction.fp_source_b;
+        pending_history_entry_.fp_move_source_value = source;
+        pending_history_entry_.fp_move_destination_value = result;
+        pending_history_entry_.fp_move_destination_ps1 =
+            state.fpr_ps1[instruction.fp_register];
+        break;
+    }
+
+    case Opcode::floating_negative_absolute_value:
+    {
+        const std::uint64_t source = state.fpr[instruction.fp_source_b];
+        const std::uint64_t result = source | binary64_sign_mask;
         state.fpr[instruction.fp_register] = result;
         pending_history_entry_.has_fp_move = true;
         pending_history_entry_.fp_move_destination = instruction.fp_register;

@@ -3308,6 +3308,59 @@ void floating_absolute_value_tests()
     assert(trace.find("ps1 unchanged=0x3FF6666660000000") != std::string::npos);
 }
 
+void floating_negative_absolute_value_tests()
+{
+    constexpr std::uint32_t instruction = 0xFC200910U; // fnabs f1,f1
+    const DecodedInstruction decoded = decode(instruction);
+    assert(decoded.opcode == Opcode::floating_negative_absolute_value);
+    assert(decoded.fp_register == 1U && decoded.fp_source_b == 1U);
+    assert(((instruction >> 1U) & 0x3FFU) == 136U);
+    assert(((instruction >> 16U) & 0x1FU) == 0U);
+    assert(decode(instruction | 0x00010000U).opcode == Opcode::unsupported);
+    assert(decode(instruction | 1U).opcode == Opcode::unsupported);
+
+    constexpr std::array<std::pair<std::uint64_t, std::uint64_t>, 8> cases{{
+        {0x0000000000000000ULL, 0x8000000000000000ULL}, // +0 -> -0
+        {0x8000000000000000ULL, 0x8000000000000000ULL}, // -0 remains -0
+        {0x3FF0000000000000ULL, 0xBFF0000000000000ULL}, // +1 -> -1
+        {0xBFF8000000000000ULL, 0xBFF8000000000000ULL}, // -1.5 unchanged
+        {0x7FF0000000000000ULL, 0xFFF0000000000000ULL}, // +inf -> -inf
+        {0xFFF0000000000000ULL, 0xFFF0000000000000ULL}, // -inf unchanged
+        {0x7FF8123456789ABCULL, 0xFFF8123456789ABCULL}, // qNaN payload preserved
+        {0x7FF0123456789ABCULL, 0xFFF0123456789ABCULL}, // sNaN remains signaling
+    }};
+    for (const auto& [source_raw, expected_raw] : cases)
+    {
+        EspressoCore core(16U);
+        core.state.fpr[1] = source_raw;
+        core.state.fpr_ps1[1] = 0xDEADBEEF01234567ULL;
+        core.state.fpscr = 0xD4C3BEEFU;
+        core.state.cr = 0xA5C36E91U;
+        core.state.gpr[4] = 0x12345678U;
+        core.memory.write32_be(0U, instruction);
+        const RunResult result = core.run(1U);
+        assert(result.reason == StopReason::instruction_limit);
+        assert(core.state.fpr[1] == expected_raw);
+        assert(core.state.fpr_ps1[1] == 0xDEADBEEF01234567ULL);
+        assert(core.state.fpscr == 0xD4C3BEEFU);
+        assert(core.state.cr == 0xA5C36E91U);
+        assert(core.state.gpr[4] == 0x12345678U);
+        const std::string trace = format_instruction_history(result);
+        assert(trace.find("fnabs f1.ps0=") != std::string::npos);
+        assert(trace.find("ps1 unchanged=0xDEADBEEF01234567") != std::string::npos);
+    }
+
+    EspressoCore distinct(16U);
+    distinct.state.fpr[4] = 0xBFF8000000000000ULL;
+    distinct.state.fpr[3] = 0x0123456789ABCDEFULL;
+    distinct.state.fpr_ps1[3] = 0xFEDCBA9876543210ULL;
+    distinct.memory.write32_be(0U, 0xFC602110U); // fnabs f3,f4
+    assert(distinct.step() == StepResult::executed);
+    assert(distinct.state.fpr[3] == 0xBFF8000000000000ULL);
+    assert(distinct.state.fpr[4] == 0xBFF8000000000000ULL);
+    assert(distinct.state.fpr_ps1[3] == 0xFEDCBA9876543210ULL);
+}
+
 void floating_subtract_double_tests()
 {
     const auto encode_fsub = [](std::uint8_t destination, std::uint8_t source_a,
@@ -20359,6 +20412,7 @@ int main(int argc, char* argv[])
     floating_move_register_tests();
     floating_negate_tests();
     floating_absolute_value_tests();
+    floating_negative_absolute_value_tests();
     floating_subtract_double_tests();
     floating_add_double_tests();
     floating_multiply_double_tests();
