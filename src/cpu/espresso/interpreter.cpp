@@ -451,6 +451,7 @@ void set_xer_carry(CpuState& state, bool carry) noexcept
             instruction.opcode == Opcode::store_halfword_indexed ||
             instruction.opcode == Opcode::store_halfword_byte_reverse_indexed ||
             instruction.opcode == Opcode::store_single_indexed ||
+            instruction.opcode == Opcode::store_single_indexed_update ||
             instruction.opcode == Opcode::store_double_indexed ||
             instruction.opcode == Opcode::store_floating_as_integer_word_indexed;
         const bool memory_instruction = indexed ||
@@ -481,6 +482,7 @@ void set_xer_carry(CpuState& state, bool carry) noexcept
             instruction.opcode == Opcode::store_single ||
             instruction.opcode == Opcode::store_single_update ||
             instruction.opcode == Opcode::store_single_indexed ||
+            instruction.opcode == Opcode::store_single_indexed_update ||
             instruction.opcode == Opcode::store_double_indexed ||
             instruction.opcode == Opcode::store_double ||
             instruction.opcode == Opcode::store_double_update ||
@@ -620,6 +622,7 @@ void set_xer_carry(CpuState& state, bool carry) noexcept
     case Opcode::store_single: return "stfs";
     case Opcode::store_single_update: return "stfsu";
     case Opcode::store_single_indexed: return "stfsx";
+    case Opcode::store_single_indexed_update: return "stfsux";
     case Opcode::store_double: return "stfd";
     case Opcode::store_double_indexed: return "stfdx";
     case Opcode::store_double_update: return "stfdu";
@@ -901,6 +904,7 @@ void add_history_source(
         opcode == Opcode::store_byte_indexed || opcode == Opcode::store_halfword_indexed ||
         opcode == Opcode::store_halfword_byte_reverse_indexed ||
         opcode == Opcode::store_single_indexed ||
+        opcode == Opcode::store_single_indexed_update ||
         opcode == Opcode::store_double_indexed ||
         opcode == Opcode::store_floating_as_integer_word_indexed)
     {
@@ -934,6 +938,7 @@ void add_history_source(
     }
     else if (opcode == Opcode::store_single || opcode == Opcode::store_single_update ||
              opcode == Opcode::store_single_indexed || opcode == Opcode::store_double ||
+             opcode == Opcode::store_single_indexed_update ||
              opcode == Opcode::store_double_indexed ||
              opcode == Opcode::store_double_update ||
              opcode == Opcode::store_floating_as_integer_word_indexed)
@@ -1048,6 +1053,7 @@ void add_history_source(
     case Opcode::store_halfword_indexed:
     case Opcode::store_halfword_byte_reverse_indexed:
     case Opcode::store_single_indexed:
+    case Opcode::store_single_indexed_update:
     case Opcode::store_double_indexed:
     case Opcode::store_floating_as_integer_word_indexed:
         if (instruction.base != 0)
@@ -1153,6 +1159,7 @@ void add_history_source(
     case Opcode::store_single:
         break;
     case Opcode::store_single_update:
+    case Opcode::store_single_indexed_update:
         entry.has_destination = true;
         entry.destination_register = instruction.base;
         break;
@@ -3701,8 +3708,11 @@ StepResult EspressoCore::step()
     case Opcode::store_single:
     case Opcode::store_single_update:
     case Opcode::store_single_indexed:
+    case Opcode::store_single_indexed_update:
     {
-        const std::uint32_t address = instruction.opcode == Opcode::store_single_indexed
+        const bool indexed = instruction.opcode == Opcode::store_single_indexed ||
+            instruction.opcode == Opcode::store_single_indexed_update;
+        const std::uint32_t address = indexed
             ? (instruction.base == 0U ? 0U : state.gpr[instruction.base]) +
                 state.gpr[instruction.source]
             : effective_address(state, instruction.base, instruction.immediate);
@@ -3712,7 +3722,8 @@ StepResult EspressoCore::step()
         memory.write32_be(address, single_bits);
         pending_history_entry_.has_stored_single_value = true;
         pending_history_entry_.stored_single_value = single_bits;
-        if (instruction.opcode == Opcode::store_single_update)
+        if (instruction.opcode == Opcode::store_single_update ||
+            instruction.opcode == Opcode::store_single_indexed_update)
         {
             state.gpr[instruction.base] = address;
         }

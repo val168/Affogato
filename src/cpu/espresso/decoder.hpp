@@ -121,6 +121,7 @@ enum class Opcode
     store_single,
     store_single_update,
     store_single_indexed,
+    store_single_indexed_update,
     store_double,
     store_double_indexed,
     store_double_update,
