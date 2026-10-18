@@ -466,7 +466,8 @@ void set_xer_carry(CpuState& state, bool carry) noexcept
             instruction.opcode == Opcode::store_double_indexed ||
             instruction.opcode == Opcode::store_double_indexed_update ||
             instruction.opcode == Opcode::store_floating_as_integer_word_indexed ||
-            instruction.opcode == Opcode::data_cache_block_zero;
+            instruction.opcode == Opcode::data_cache_block_zero ||
+            instruction.opcode == Opcode::data_cache_block_store;
         const bool memory_instruction = indexed ||
             instruction.opcode == Opcode::load_word_zero ||
             instruction.opcode == Opcode::load_word_update ||
@@ -503,7 +504,8 @@ void set_xer_carry(CpuState& state, bool carry) noexcept
             instruction.opcode == Opcode::store_double_update ||
             instruction.opcode == Opcode::load_double ||
             instruction.opcode == Opcode::load_double_update ||
-            instruction.opcode == Opcode::data_cache_block_zero;
+            instruction.opcode == Opcode::data_cache_block_zero ||
+            instruction.opcode == Opcode::data_cache_block_store;
         if (memory_instruction)
         {
             detail << "; rA=" << std::dec << static_cast<unsigned>(instruction.base)
@@ -590,6 +592,7 @@ void set_xer_carry(CpuState& state, bool carry) noexcept
     case Opcode::enforce_in_order_io: return "eieio";
     case Opcode::instruction_cache_block_invalidate: return "icbi";
     case Opcode::data_cache_block_touch: return "dcbt";
+    case Opcode::data_cache_block_store: return "dcbst";
     case Opcode::data_cache_block_zero: return "dcbz";
     case Opcode::floating_compare_unordered: return "fcmpu";
     case Opcode::floating_compare_ordered: return "fcmpo";
@@ -1084,6 +1087,7 @@ void add_history_source(
         opcode == Opcode::store_floating_as_integer_word_indexed ||
         opcode == Opcode::instruction_cache_block_invalidate ||
         opcode == Opcode::data_cache_block_touch ||
+        opcode == Opcode::data_cache_block_store ||
         opcode == Opcode::data_cache_block_zero)
     {
         const std::uint32_t base = instruction.base == 0U
@@ -1270,6 +1274,7 @@ void add_history_source(
         break;
     case Opcode::data_cache_block_zero:
     case Opcode::data_cache_block_touch:
+    case Opcode::data_cache_block_store:
     case Opcode::instruction_cache_block_invalidate:
         if (instruction.base != 0U)
         {
@@ -5260,6 +5265,18 @@ StepResult EspressoCore::step()
         // dcbt is a non-faulting prefetch hint. Affogato has no modeled D-cache
         // or cacheability attributes, so the hint has no observable effect.
         break;
+
+    case Opcode::data_cache_block_store:
+    {
+        const std::uint32_t base = instruction.base == 0U
+            ? 0U : state.gpr[instruction.base];
+        const std::uint32_t address = base + state.gpr[instruction.source];
+        // dcbst is treated as a load for address translation/protection. Reads
+        // are already immediately coherent in GuestMemory, so there is no
+        // cache state to write back; validate the addressed byte nonetheless.
+        static_cast<void>(memory.read8(address));
+        break;
+    }
 
     case Opcode::instruction_cache_block_invalidate:
         // Instructions are fetched from GuestMemory on every step; there is no
