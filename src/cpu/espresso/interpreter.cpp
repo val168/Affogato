@@ -544,6 +544,7 @@ void set_xer_carry(CpuState& state, bool carry) noexcept
     case Opcode::subtract_from: return "subf";
     case Opcode::subtract_from_overflow: return "subfo";
     case Opcode::subtract_from_carrying: return "subfc";
+    case Opcode::subtract_from_carrying_overflow: return "subfco";
     case Opcode::subtract_from_extended: return "subfe";
     case Opcode::subtract_from_zero_extended: return "subfze";
     case Opcode::subtract_from_minus_one_extended: return "subfme";
@@ -740,7 +741,8 @@ void add_history_source(
         entry.opcode_name += '.';
     }
     if ((instruction.opcode == Opcode::add_overflow ||
-         instruction.opcode == Opcode::subtract_from_overflow) && instruction.record)
+         instruction.opcode == Opcode::subtract_from_overflow ||
+         instruction.opcode == Opcode::subtract_from_carrying_overflow) && instruction.record)
     {
         entry.opcode_name += '.';
     }
@@ -1107,6 +1109,7 @@ void add_history_source(
     case Opcode::add_extended:
     case Opcode::subtract_from:
     case Opcode::subtract_from_overflow:
+    case Opcode::subtract_from_carrying_overflow:
     case Opcode::subtract_from_carrying:
     case Opcode::subtract_from_extended:
     case Opcode::multiply_low_word:
@@ -1213,6 +1216,7 @@ void add_history_source(
     case Opcode::add:
     case Opcode::add_overflow:
     case Opcode::subtract_from_overflow:
+    case Opcode::subtract_from_carrying_overflow:
     case Opcode::add_carrying:
     case Opcode::add_extended:
     case Opcode::add_to_zero_extended:
@@ -1767,11 +1771,13 @@ StepResult EspressoCore::step()
     const DecodedInstruction instruction = decode(instruction_word);
     pending_history_entry_ = make_history_entry(state, cia, instruction_word, instruction);
     if (instruction.opcode == Opcode::add_overflow ||
-        instruction.opcode == Opcode::subtract_from_overflow)
+        instruction.opcode == Opcode::subtract_from_overflow ||
+        instruction.opcode == Opcode::subtract_from_carrying_overflow)
     {
         pending_history_entry_.has_overflow_result = true;
     }
     if (instruction.opcode == Opcode::subtract_from_carrying ||
+        instruction.opcode == Opcode::subtract_from_carrying_overflow ||
         instruction.opcode == Opcode::subtract_from_extended ||
         instruction.opcode == Opcode::add_carrying ||
         instruction.opcode == Opcode::add_to_zero_extended ||
@@ -2156,6 +2162,31 @@ StepResult EspressoCore::step()
         else
         {
             state.xer &= ~xer_carry_mask;
+        }
+        if (instruction.record)
+        {
+            set_record_result(state, result);
+        }
+        break;
+    }
+
+    case Opcode::subtract_from_carrying_overflow:
+    {
+        const std::uint32_t minuend = state.gpr[instruction.source];
+        const std::uint32_t subtrahend = state.gpr[instruction.base];
+        const std::uint32_t result = minuend - subtrahend;
+        const bool carry_out = minuend >= subtrahend;
+        const bool overflow = (((minuend ^ subtrahend) &
+                                (minuend ^ result)) & 0x80000000U) != 0U;
+        state.gpr[instruction.destination] = result;
+        set_xer_carry(state, carry_out);
+        if (overflow)
+        {
+            state.xer |= xer_overflow_mask | xer_summary_overflow_mask;
+        }
+        else
+        {
+            state.xer &= ~xer_overflow_mask;
         }
         if (instruction.record)
         {
