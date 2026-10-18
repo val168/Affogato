@@ -152,6 +152,11 @@ struct InstructionHistoryEntry
     std::uint8_t fpscr_bit_number{};
     std::uint32_t fpscr_before_bit_operation{};
     std::uint32_t fpscr_after_bit_operation{};
+    bool has_fpscr_field_write{};
+    std::uint8_t fpscr_field_number{};
+    std::uint8_t fpscr_field_immediate{};
+    std::uint32_t fpscr_before_field_write{};
+    std::uint32_t fpscr_after_field_write{};
     bool has_fp_select{};
     std::uint8_t fp_select_destination{};
     std::uint8_t fp_select_a{};

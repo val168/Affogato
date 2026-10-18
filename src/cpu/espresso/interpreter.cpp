@@ -627,6 +627,7 @@ void set_xer_carry(CpuState& state, bool carry) noexcept
     case Opcode::floating_move_from_fpscr: return "mffs";
     case Opcode::floating_move_to_fpscr_bit_zero: return "mtfsb0";
     case Opcode::floating_move_to_fpscr_bit_one: return "mtfsb1";
+    case Opcode::floating_move_to_fpscr_field_immediate: return "mtfsfi";
     case Opcode::floating_convert_to_integer_word: return "fctiw";
     case Opcode::floating_convert_to_integer_word_zero: return "fctiwz";
     case Opcode::floating_subtract_double: return "fsub";
@@ -933,6 +934,14 @@ void add_history_source(
         entry.fpscr_bit_set = opcode == Opcode::floating_move_to_fpscr_bit_one;
         entry.fpscr_bit_number = instruction.fpscr_bit;
         entry.fpscr_before_bit_operation = state.fpscr;
+        return entry;
+    }
+    if (opcode == Opcode::floating_move_to_fpscr_field_immediate)
+    {
+        entry.has_fpscr_field_write = true;
+        entry.fpscr_field_number = instruction.fpscr_field;
+        entry.fpscr_field_immediate = instruction.fpscr_immediate;
+        entry.fpscr_before_field_write = state.fpscr;
         return entry;
     }
     if (opcode == Opcode::floating_select)
@@ -1749,6 +1758,19 @@ std::string format_instruction_history(const RunResult& result)
             {
                 text << " -> 0x" << std::hex << std::setw(8)
                      << entry.fpscr_after_bit_operation;
+            }
+        }
+        if (entry.has_fpscr_field_write)
+        {
+            text << " BF=" << std::dec
+                 << static_cast<unsigned>(entry.fpscr_field_number)
+                 << " U=" << static_cast<unsigned>(entry.fpscr_field_immediate)
+                 << " FPSCR=0x" << std::hex << std::setw(8)
+                 << entry.fpscr_before_field_write;
+            if (entry.completed)
+            {
+                text << " -> 0x" << std::hex << std::setw(8)
+                     << entry.fpscr_after_field_write;
             }
         }
         if (entry.has_immediate)
@@ -3905,6 +3927,25 @@ StepResult EspressoCore::step()
             update_fpscr_summaries(state);
         }
         pending_history_entry_.fpscr_after_bit_operation = state.fpscr;
+        break;
+    }
+
+    case Opcode::floating_move_to_fpscr_field_immediate:
+    {
+        const std::uint32_t shift = 28U -
+            (static_cast<std::uint32_t>(instruction.fpscr_field) * 4U);
+        const std::uint32_t field_mask = 0xFU << shift;
+        std::uint32_t writable_mask = field_mask;
+        if (instruction.fpscr_field == 0U)
+        {
+            // FEX and VX are summary bits; writes to those positions are ignored.
+            writable_mask &= ~(fpscr::fex_mask | fpscr::vx_mask);
+        }
+        const std::uint32_t value =
+            static_cast<std::uint32_t>(instruction.fpscr_immediate) << shift;
+        state.fpscr = (state.fpscr & ~writable_mask) | (value & writable_mask);
+        update_fpscr_summaries(state);
+        pending_history_entry_.fpscr_after_field_write = state.fpscr;
         break;
     }
 

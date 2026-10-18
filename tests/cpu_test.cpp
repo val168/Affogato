@@ -4101,6 +4101,65 @@ void floating_move_to_fpscr_bit_one_tests()
     }
 }
 
+void floating_move_to_fpscr_field_immediate_tests()
+{
+    const auto encode_mtfsfi = [](std::uint8_t field, std::uint8_t value,
+                                  bool record = false,
+                                  std::uint32_t reserved = 0U) {
+        return (63U << 26U) |
+            (static_cast<std::uint32_t>(field) << 23U) |
+            (static_cast<std::uint32_t>(value) << 12U) |
+            reserved | (134U << 1U) | static_cast<std::uint32_t>(record);
+    };
+
+    constexpr std::uint32_t exact_encoding = 0xFF00410CU; // mtfsfi 6,4
+    const DecodedInstruction decoded = decode(exact_encoding);
+    assert(decoded.opcode == Opcode::floating_move_to_fpscr_field_immediate);
+    assert(decoded.fpscr_field == 6U && decoded.fpscr_immediate == 4U);
+    assert(((exact_encoding >> 1U) & 0x3FFU) == 134U);
+    assert(decode(encode_mtfsfi(6U, 4U, true)).opcode == Opcode::unsupported);
+    assert(decode(encode_mtfsfi(6U, 4U, false, 1U << 21U)).opcode ==
+           Opcode::unsupported);
+    assert(decode(encode_mtfsfi(6U, 4U, false, 1U << 16U)).opcode ==
+           Opcode::unsupported);
+    assert(decode(encode_mtfsfi(6U, 4U, false, 1U << 11U)).opcode ==
+           Opcode::unsupported);
+
+    EspressoCore ordinary(0x100U);
+    ordinary.state.fpscr = fpscr::rn_mask | fpscr::ve_mask | 0x00006000U;
+    ordinary.memory.write32_be(0U, exact_encoding);
+    const std::uint32_t before = ordinary.state.fpscr;
+    const RunResult ordinary_result = ordinary.run(1U);
+    const std::uint32_t expected =
+        (before & ~0x000000F0U) | 0x00000040U;
+    assert(ordinary_result.reason == StopReason::instruction_limit);
+    assert(ordinary.state.fpscr == expected);
+    const InstructionHistoryEntry& ordinary_history =
+        ordinary_result.instruction_history.front();
+    assert(ordinary_history.opcode_name == "mtfsfi");
+    assert(ordinary_history.has_fpscr_field_write);
+    assert(ordinary_history.fpscr_field_number == 6U);
+    assert(ordinary_history.fpscr_field_immediate == 4U);
+    assert(ordinary_history.fpscr_before_field_write == before);
+    assert(ordinary_history.fpscr_after_field_write == expected);
+
+    EspressoCore exception(0x100U);
+    exception.state.fpscr = fpscr::ze_mask;
+    exception.memory.write32_be(0U, encode_mtfsfi(1U, 4U)); // set ZX
+    const RunResult exception_result = exception.run(1U);
+    assert(exception_result.reason == StopReason::instruction_limit);
+    assert((exception.state.fpscr &
+            (fpscr::zx_mask | fpscr::ze_mask | fpscr::fex_mask)) ==
+           (fpscr::zx_mask | fpscr::ze_mask | fpscr::fex_mask));
+
+    EspressoCore summaries(0x100U);
+    summaries.memory.write32_be(0U, encode_mtfsfi(0U, 0xFU));
+    const RunResult summaries_result = summaries.run(1U);
+    assert(summaries_result.reason == StopReason::instruction_limit);
+    // FX and OX are writable in field 0; FEX/VX are recomputed summary bits.
+    assert(summaries.state.fpscr == (fpscr::fx_mask | fpscr::ox_mask));
+}
+
 void floating_negate_tests()
 {
     constexpr std::uint32_t wind_waker_word = 0xFD805050U;
@@ -24010,6 +24069,7 @@ int main(int argc, char* argv[])
     floating_move_from_fpscr_tests();
     floating_move_to_fpscr_bit_zero_tests();
     floating_move_to_fpscr_bit_one_tests();
+    floating_move_to_fpscr_field_immediate_tests();
     floating_negate_tests();
     floating_absolute_value_tests();
     floating_negative_absolute_value_tests();
