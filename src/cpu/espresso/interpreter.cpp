@@ -3,6 +3,7 @@
 #include "cpu/espresso/decoder.hpp"
 
 #include <bit>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <exception>
@@ -18,6 +19,7 @@ namespace
 
 constexpr std::uint32_t xer_summary_overflow_mask = 0x80000000U;
 constexpr std::uint32_t xer_carry_mask = 0x20000000U;
+constexpr std::uint32_t espresso_data_cache_block_size = 32U;
 constexpr std::uint8_t cr_less_than = 0x8U;
 constexpr std::uint8_t cr_greater_than = 0x4U;
 constexpr std::uint8_t cr_equal = 0x2U;
@@ -462,7 +464,8 @@ void set_xer_carry(CpuState& state, bool carry) noexcept
             instruction.opcode == Opcode::store_single_indexed_update ||
             instruction.opcode == Opcode::store_double_indexed ||
             instruction.opcode == Opcode::store_double_indexed_update ||
-            instruction.opcode == Opcode::store_floating_as_integer_word_indexed;
+            instruction.opcode == Opcode::store_floating_as_integer_word_indexed ||
+            instruction.opcode == Opcode::data_cache_block_zero;
         const bool memory_instruction = indexed ||
             instruction.opcode == Opcode::load_word_zero ||
             instruction.opcode == Opcode::load_word_update ||
@@ -497,7 +500,8 @@ void set_xer_carry(CpuState& state, bool carry) noexcept
             instruction.opcode == Opcode::store_double_indexed_update ||
             instruction.opcode == Opcode::store_double ||
             instruction.opcode == Opcode::store_double_update ||
-            instruction.opcode == Opcode::load_double;
+            instruction.opcode == Opcode::load_double ||
+            instruction.opcode == Opcode::data_cache_block_zero;
         if (memory_instruction)
         {
             detail << "; rA=" << std::dec << static_cast<unsigned>(instruction.base)
@@ -567,6 +571,7 @@ void set_xer_carry(CpuState& state, bool carry) noexcept
     case Opcode::shift_right_word: return "srw";
     case Opcode::branch: return "b";
     case Opcode::instruction_sync: return "isync";
+    case Opcode::data_cache_block_zero: return "dcbz";
     case Opcode::floating_compare_unordered: return "fcmpu";
     case Opcode::floating_compare_ordered: return "fcmpo";
     case Opcode::floating_divide_single: return "fdivs";
@@ -992,12 +997,17 @@ void add_history_source(
         opcode == Opcode::store_single_indexed_update ||
         opcode == Opcode::store_double_indexed ||
         opcode == Opcode::store_double_indexed_update ||
-        opcode == Opcode::store_floating_as_integer_word_indexed)
+        opcode == Opcode::store_floating_as_integer_word_indexed ||
+        opcode == Opcode::data_cache_block_zero)
     {
         const std::uint32_t base = instruction.base == 0U
             ? 0U : state.gpr[instruction.base];
         entry.has_effective_address = true;
         entry.effective_address = base + state.gpr[instruction.source];
+        if (opcode == Opcode::data_cache_block_zero)
+        {
+            entry.effective_address &= ~(espresso_data_cache_block_size - 1U);
+        }
     }
 
     if (opcode == Opcode::load_single || opcode == Opcode::load_single_update ||
@@ -1152,6 +1162,13 @@ void add_history_source(
     case Opcode::store_double_indexed_update:
     case Opcode::store_floating_as_integer_word_indexed:
         if (instruction.base != 0)
+        {
+            add_history_source(entry, state, instruction.base);
+        }
+        add_history_source(entry, state, instruction.source);
+        break;
+    case Opcode::data_cache_block_zero:
+        if (instruction.base != 0U)
         {
             add_history_source(entry, state, instruction.base);
         }
@@ -4304,6 +4321,22 @@ StepResult EspressoCore::step()
         memory.write16_be(address, value);
         pending_history_entry_.has_stored_halfword_value = true;
         pending_history_entry_.stored_halfword_value = value;
+        break;
+    }
+
+    case Opcode::data_cache_block_zero:
+    {
+        const std::uint32_t base = instruction.base == 0U
+            ? 0U : state.gpr[instruction.base];
+        const std::uint32_t effective = base + state.gpr[instruction.source];
+        const std::uint32_t block_address =
+            effective & ~(espresso_data_cache_block_size - 1U);
+        const std::array<std::uint8_t, espresso_data_cache_block_size> zero_block{};
+
+        // With no separately modeled Espresso D-cache, make the coherent guest
+        // memory effect visible directly. write_bytes validates all 32 bytes
+        // before changing any backing region.
+        memory.write_bytes(block_address, zero_block);
         break;
     }
 

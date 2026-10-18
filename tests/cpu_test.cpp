@@ -1747,6 +1747,104 @@ void move_condition_register_from_xer_tests()
     }
 }
 
+void data_cache_block_zero_tests()
+{
+    const auto encode_dcbz = [](std::uint8_t base, std::uint8_t index,
+                                bool reserved = false) {
+        return (31U << 26U) |
+            (static_cast<std::uint32_t>(base) << 16U) |
+            (static_cast<std::uint32_t>(index) << 11U) |
+            (1014U << 1U) | static_cast<std::uint32_t>(reserved);
+    };
+    constexpr std::uint32_t exact = 0x7C0007ECU;
+    assert(decode(exact).opcode == Opcode::data_cache_block_zero);
+    assert(decode(exact).base == 0U);
+    assert(decode(exact).source == 0U);
+    assert(decode(encode_dcbz(3U, 4U, true)).opcode == Opcode::unsupported);
+
+    EspressoCore core(0x100U);
+    core.state.gpr[0] = 0xDEADBEEFU;
+    core.state.gpr[5] = 0x4FU;
+    core.state.cr = 0xA5C36E91U;
+    core.state.xer = 0x800000A5U;
+    core.state.lr = 0x12345678U;
+    core.state.ctr = 0x87654321U;
+    core.state.fpscr = 0xD4C3BEEFU;
+    core.memory.write32_be(0U, encode_dcbz(0U, 5U));
+    for (std::uint32_t address = 0x30U; address < 0x70U; ++address)
+    {
+        core.memory.write8(address, static_cast<std::uint8_t>(address ^ 0xA5U));
+    }
+    const auto gprs_before = core.state.gpr;
+    const auto fprs_before = core.state.fpr;
+    const auto ps1_before = core.state.fpr_ps1;
+    const auto cr_before = core.state.cr;
+    const auto xer_before = core.state.xer;
+    const auto fpscr_before = core.state.fpscr;
+    const auto lr_before = core.state.lr;
+    const auto ctr_before = core.state.ctr;
+    const auto neighbor_before = core.memory.read8(0x3FU);
+    const auto after_block_before = core.memory.read8(0x60U);
+
+    const RunResult result = core.run(1U);
+    assert(result.steps == 1U);
+    assert(result.reason == StopReason::instruction_limit);
+    assert(core.state.cia == 4U);
+    assert(core.state.gpr == gprs_before);
+    assert(core.state.fpr == fprs_before);
+    assert(core.state.fpr_ps1 == ps1_before);
+    assert(core.state.cr == cr_before);
+    assert(core.state.xer == xer_before);
+    assert(core.state.fpscr == fpscr_before);
+    assert(core.state.lr == lr_before);
+    assert(core.state.ctr == ctr_before);
+    assert(core.memory.read8(0x3FU) == neighbor_before);
+    assert(core.memory.read8(0x60U) == after_block_before);
+    for (std::uint32_t address = 0x40U; address < 0x60U; ++address)
+    {
+        assert(core.memory.read8(address) == 0U);
+    }
+    assert(format_instruction_history(result).find("dcbz") != std::string::npos);
+    assert(format_instruction_history(result).find("[0x00000040]") != std::string::npos);
+
+    EspressoCore indexed(0x100U);
+    indexed.state.gpr[6] = 0x80U;
+    indexed.state.gpr[7] = 0x3FU;
+    indexed.memory.write32_be(0U, encode_dcbz(6U, 7U));
+    for (std::uint32_t address = 0xA0U; address < 0xC0U; ++address)
+    {
+        indexed.memory.write8(address, 0xCCU);
+    }
+    assert(indexed.step() == StepResult::executed);
+    for (std::uint32_t address = 0xA0U; address < 0xC0U; ++address)
+    {
+        assert(indexed.memory.read8(address) == 0U);
+    }
+    assert(indexed.state.gpr[6] == 0x80U);
+    assert(indexed.state.gpr[7] == 0x3FU);
+
+    // A block crossing an unmapped boundary faults before any mapped byte is
+    // cleared; the history still reports the aligned block address.
+    EspressoCore fault(0x90U);
+    fault.state.gpr[5] = 0x80U;
+    fault.memory.write32_be(0U, encode_dcbz(0U, 5U));
+    for (std::uint32_t address = 0x80U; address < 0x90U; ++address)
+    {
+        fault.memory.write8(address, 0x5AU);
+    }
+    const RunResult fault_result = fault.run(1U);
+    assert(fault_result.reason == StopReason::memory_fault);
+    assert(fault_result.detail.find("write 32 byte(s)") != std::string::npos);
+    assert(fault_result.detail.find("rA=0") != std::string::npos);
+    assert(fault_result.detail.find("rB=5") != std::string::npos);
+    assert(!fault_result.instruction_history.empty());
+    assert(!fault_result.instruction_history.back().completed);
+    for (std::uint32_t address = 0x80U; address < 0x90U; ++address)
+    {
+        assert(fault.memory.read8(address) == 0x5AU);
+    }
+}
+
 void floating_compare_unordered_tests()
 {
     const auto encode_fcmpu = [](std::uint8_t cr_field, std::uint8_t fr_a,
@@ -21363,6 +21461,7 @@ int main(int argc, char* argv[])
     mem_get_allocatable_size_for_exp_heap_ex_hle_tests();
     compare_and_conditional_branch_tests();
     instruction_sync_tests();
+    data_cache_block_zero_tests();
     floating_compare_unordered_tests();
     floating_compare_ordered_tests();
     floating_divide_single_tests();
