@@ -109,6 +109,7 @@ enum class Opcode
     conditional_branch_to_count_register,
     load_single,
     load_single_update,
+    load_single_indexed,
     load_double,
     store_single,
     store_single_update,
