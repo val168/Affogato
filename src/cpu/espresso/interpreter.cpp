@@ -2347,6 +2347,11 @@ StepResult EspressoCore::step()
         if (is_binary64_signaling_nan(a_raw) || is_binary64_signaling_nan(b_raw))
         {
             raise_fpscr_exception(state, fpscr::vxsnan_mask);
+            if (instruction.opcode == Opcode::floating_compare_ordered &&
+                (state.fpscr & fpscr::ve_mask) == 0U)
+            {
+                raise_fpscr_exception(state, fpscr::vxvc_mask);
+            }
         }
         else if (instruction.opcode == Opcode::floating_compare_ordered &&
                  (a_nan || b_nan))

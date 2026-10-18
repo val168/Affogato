@@ -1911,7 +1911,8 @@ void floating_compare_ordered_tests()
         {0x4000000000000000ULL, 0x3FF0000000000000ULL, 0x4U, 0U}, // GT
         {0x3FF0000000000000ULL, 0x3FF0000000000000ULL, 0x2U, 0U}, // EQ
         {0x7FF8000000000001ULL, 0x3FF0000000000000ULL, 0x1U, fpscr::vxvc_mask},
-        {0x7FF0000000000001ULL, 0x3FF0000000000000ULL, 0x1U, fpscr::vxsnan_mask},
+        {0x7FF0000000000001ULL, 0x3FF0000000000000ULL, 0x1U,
+         fpscr::vxsnan_mask | fpscr::vxvc_mask},
     }};
     for (const TestCase& test : cases)
     {
@@ -1955,6 +1956,15 @@ void floating_compare_ordered_tests()
     assert((enabled.state.fpscr & (fpscr::vxvc_mask | fpscr::vx_mask |
                                    fpscr::fx_mask | fpscr::fex_mask)) ==
            (fpscr::vxvc_mask | fpscr::vx_mask | fpscr::fx_mask | fpscr::fex_mask));
+
+    EspressoCore enabled_signaling(8U);
+    enabled_signaling.state.fpr[1] = 0x7FF0000000000001ULL;
+    enabled_signaling.state.fpr[31] = 0x3FF0000000000000ULL;
+    enabled_signaling.state.fpscr = fpscr::ve_mask;
+    enabled_signaling.memory.write32_be(0U, encode_fcmpo(0U, 1U, 31U));
+    assert(enabled_signaling.step() == StepResult::executed);
+    assert((enabled_signaling.state.fpscr & fpscr::vxsnan_mask) != 0U);
+    assert((enabled_signaling.state.fpscr & fpscr::vxvc_mask) == 0U);
 }
 
 void floating_divide_single_tests()
