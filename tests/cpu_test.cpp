@@ -1790,6 +1790,60 @@ void move_condition_register_from_fpscr_tests()
            (fpscr::vxisi_mask | fpscr::vx_mask));
 }
 
+void memory_synchronize_tests()
+{
+    constexpr std::uint32_t sync_instruction = 0x7C0004ACU;
+    const DecodedInstruction decoded = decode(sync_instruction);
+    assert(decoded.opcode == Opcode::memory_synchronize);
+    assert(((sync_instruction >> 1U) & 0x3FFU) == 598U);
+    assert(decode(sync_instruction | 1U).opcode == Opcode::unsupported);
+    assert(decode(sync_instruction | (1U << 21U)).opcode == Opcode::unsupported);
+    assert(decode(sync_instruction | (1U << 22U)).opcode == Opcode::unsupported);
+    assert(decode(sync_instruction | (1U << 11U)).opcode == Opcode::unsupported);
+
+    EspressoCore core(0x100U);
+    core.state.gpr[3] = 0x12345678U;
+    core.state.cr = 0xA5C39E71U;
+    core.state.xer = 0x800000A5U;
+    core.state.fpscr = 0xFEDCBA98U;
+    core.state.fpr[7] = 0x0123456789ABCDEFULL;
+    core.state.fpr_ps1[7] = 0xFEDCBA9876543210ULL;
+    core.state.lr = 0x10203040U;
+    core.state.ctr = 0x50607080U;
+    core.memory.write32_be(0U, sync_instruction);
+    const auto gpr_before = core.state.gpr;
+    const auto fpr_before = core.state.fpr;
+    const auto fpr_ps1_before = core.state.fpr_ps1;
+    const std::uint32_t cr_before = core.state.cr;
+    const std::uint32_t xer_before = core.state.xer;
+    const std::uint32_t fpscr_before = core.state.fpscr;
+    const std::uint32_t lr_before = core.state.lr;
+    const std::uint32_t ctr_before = core.state.ctr;
+    const RunResult result = core.run(1U);
+    assert(result.steps == 1U && core.state.cia == 4U);
+    assert(core.state.gpr == gpr_before);
+    assert(core.state.fpr == fpr_before);
+    assert(core.state.fpr_ps1 == fpr_ps1_before);
+    assert(core.state.cr == cr_before && core.state.xer == xer_before);
+    assert(core.state.fpscr == fpscr_before);
+    assert(core.state.lr == lr_before && core.state.ctr == ctr_before);
+    assert(result.instruction_history.front().opcode_name == "sync");
+
+    // GuestMemory is immediately coherent and the interpreter retires stores
+    // in order, so a following load observes the preceding store across sync.
+    EspressoCore ordered(0x100U);
+    const std::uint32_t stw_r4_0 = 0x90830000U; // stw r4,0(r3)
+    const std::uint32_t lwz_r5_0 = 0x80A30000U; // lwz r5,0(r3)
+    ordered.state.gpr[3] = 0x40U;
+    ordered.state.gpr[4] = 0xCAFEBABEU;
+    ordered.memory.write32_be(0U, stw_r4_0);
+    ordered.memory.write32_be(4U, sync_instruction);
+    ordered.memory.write32_be(8U, lwz_r5_0);
+    const RunResult ordered_result = ordered.run(3U);
+    assert(ordered_result.steps == 3U && ordered.state.gpr[5] == 0xCAFEBABEU);
+    assert(ordered.memory.read32_be(0x40U) == 0xCAFEBABEU);
+}
+
 void move_from_condition_register_tests()
 {
     constexpr std::uint32_t instruction = 0x7C600026U;
@@ -24129,6 +24183,7 @@ int main(int argc, char* argv[])
     condition_bit_equivalence_tests();
     move_condition_register_field_tests();
     move_condition_register_from_fpscr_tests();
+    memory_synchronize_tests();
     move_from_condition_register_tests();
     move_from_xer_tests();
     move_to_xer_tests();

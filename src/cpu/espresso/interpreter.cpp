@@ -4,6 +4,7 @@
 
 #include <bit>
 #include <array>
+#include <atomic>
 #include <cmath>
 #include <cstdint>
 #include <exception>
@@ -719,6 +720,7 @@ void set_xer_carry(CpuState& state, bool carry) noexcept
     case Opcode::move_from_condition_register: return "mfcr";
     case Opcode::move_to_condition_register_fields: return "mtcrf";
     case Opcode::move_condition_register_from_xer: return "mcrxr";
+    case Opcode::memory_synchronize: return "sync";
     }
     return "unknown";
 }
@@ -5433,6 +5435,14 @@ StepResult EspressoCore::step()
     case Opcode::instruction_sync:
         // Instructions are fetched directly from guest memory. There is no
         // pipeline, I-cache, MMU synchronization state, or JIT cache to sync yet.
+        break;
+
+    case Opcode::memory_synchronize:
+        // Guest memory operations complete synchronously on the interpreter
+        // lane. Keep the architectural ordering point visible to the host
+        // memory model as well, in case guest memory is shared with a host-side
+        // observer in the future.
+        std::atomic_thread_fence(std::memory_order_seq_cst);
         break;
 
     case Opcode::enforce_in_order_io:

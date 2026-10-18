@@ -193,6 +193,7 @@ enum class Opcode
     move_from_condition_register,
     move_to_condition_register_fields,
     move_condition_register_from_xer,
+    memory_synchronize,
 };
 
 struct DecodedInstruction

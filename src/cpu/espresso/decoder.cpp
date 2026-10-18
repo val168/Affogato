@@ -324,7 +324,14 @@ DecodedInstruction decode(std::uint32_t raw) noexcept
     case 31: // X-form arithmetic, logical, and compare instructions
     {
         const std::uint32_t extended_opcode = field(raw, 1, 0x3FFU);
-        if (extended_opcode == 19U && field(raw, 11U, 0x3FFU) == 0U &&
+        if (extended_opcode == 598U &&
+            field(raw, 22U, 0xFU) == 0U && // reserved bits 6-9
+            field(raw, 21U, 0x1U) == 0U && // L=0 heavyweight sync form
+            field(raw, 11U, 0x3FFU) == 0U && (raw & 1U) == 0U)
+        {
+            instruction.opcode = Opcode::memory_synchronize;
+        }
+        else if (extended_opcode == 19U && field(raw, 11U, 0x3FFU) == 0U &&
             (raw & 1U) == 0U)
         {
             instruction.opcode = Opcode::move_from_condition_register;
