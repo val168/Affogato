@@ -7,6 +7,7 @@
 
 #include <cstddef>
 #include <array>
+#include <chrono>
 #include <string>
 #include <vector>
 
@@ -233,6 +234,7 @@ public:
     void reset() noexcept
     {
         state.reset();
+        timebase_origin_ = std::chrono::steady_clock::now();
         current_thread_address = 0;
         os_sleep_ticks_offset = 0;
         fs_initialized = false;
@@ -317,6 +319,9 @@ public:
     std::uint32_t mem2_heap_region_end{};
 
 private:
+    // Scoped approximation until Espresso instruction-cycle accounting exists.
+    std::chrono::steady_clock::time_point timebase_origin_{
+        std::chrono::steady_clock::now()};
     std::uint32_t current_instruction_word_{};
     bool current_instruction_word_fetched_{};
     std::array<InstructionHistoryEntry, instruction_history_capacity> instruction_history_{};

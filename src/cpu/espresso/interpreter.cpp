@@ -22,6 +22,7 @@ constexpr std::uint32_t xer_summary_overflow_mask = 0x80000000U;
 constexpr std::uint32_t xer_overflow_mask = 0x40000000U;
 constexpr std::uint32_t xer_carry_mask = 0x20000000U;
 constexpr std::uint32_t espresso_data_cache_block_size = 32U;
+constexpr std::uint64_t espresso_time_base_frequency = 62156250ULL;
 constexpr std::uint8_t cr_less_than = 0x8U;
 constexpr std::uint8_t cr_greater_than = 0x4U;
 constexpr std::uint8_t cr_equal = 0x2U;
@@ -29,6 +30,27 @@ constexpr std::uint8_t fp_unordered = 0x1U;
 constexpr std::uint64_t binary64_exponent_mask = 0x7FF0000000000000ULL;
 constexpr std::uint64_t binary64_fraction_mask = 0x000FFFFFFFFFFFFFULL;
 constexpr std::uint64_t binary64_quiet_nan_bit = 0x0008000000000000ULL;
+
+[[nodiscard]] std::uint64_t elapsed_time_base_ticks(
+    std::chrono::steady_clock::time_point origin) noexcept
+{
+    const auto elapsed = std::chrono::steady_clock::now() - origin;
+    if (elapsed <= std::chrono::steady_clock::duration::zero())
+    {
+        return 0U;
+    }
+
+    const auto whole_seconds = std::chrono::duration_cast<std::chrono::seconds>(elapsed);
+    const auto fractional_nanoseconds = std::chrono::duration_cast<std::chrono::nanoseconds>(
+        elapsed - whole_seconds).count();
+    const auto whole_second_ticks =
+        static_cast<std::uint64_t>(whole_seconds.count()) * espresso_time_base_frequency;
+    const auto fractional_ticks =
+        static_cast<std::uint64_t>(fractional_nanoseconds) *
+        espresso_time_base_frequency / 1000000000ULL;
+    // Unsigned addition naturally models the architectural 64-bit TB wrap.
+    return whole_second_ticks + fractional_ticks;
+}
 
 [[nodiscard]] bool is_binary64_nan(std::uint64_t raw) noexcept
 {
@@ -681,6 +703,8 @@ void set_xer_carry(CpuState& state, bool carry) noexcept
     case Opcode::move_to_count_register: return "mtctr";
     case Opcode::move_from_xer: return "mfxer";
     case Opcode::move_to_xer: return "mtxer";
+    case Opcode::move_from_time_base_lower: return "mftb";
+    case Opcode::move_from_time_base_upper: return "mftbu";
     case Opcode::conditional_branch_to_count_register: return "bcctr";
     case Opcode::load_single: return "lfs";
     case Opcode::load_single_update: return "lfsu";
@@ -1436,6 +1460,8 @@ void add_history_source(
     case Opcode::move_from_link_register:
     case Opcode::move_from_count_register:
     case Opcode::move_from_xer:
+    case Opcode::move_from_time_base_lower:
+    case Opcode::move_from_time_base_upper:
         entry.has_destination = true;
         entry.destination_register = instruction.destination;
         break;
@@ -4839,6 +4865,17 @@ StepResult EspressoCore::step()
     case Opcode::move_from_xer:
         state.gpr[instruction.destination] = state.xer;
         break;
+
+    case Opcode::move_from_time_base_lower:
+    case Opcode::move_from_time_base_upper:
+    {
+        const std::uint64_t time_base = elapsed_time_base_ticks(timebase_origin_);
+        state.gpr[instruction.destination] =
+            instruction.opcode == Opcode::move_from_time_base_lower
+                ? static_cast<std::uint32_t>(time_base)
+                : static_cast<std::uint32_t>(time_base >> 32U);
+        break;
+    }
 
     case Opcode::move_to_count_register:
         state.ctr = state.gpr[instruction.destination];

@@ -154,6 +154,8 @@ enum class Opcode
     move_to_count_register,
     move_from_xer,
     move_to_xer,
+    move_from_time_base_lower,
+    move_from_time_base_upper,
     conditional_branch_to_count_register,
     load_single,
     load_single_update,

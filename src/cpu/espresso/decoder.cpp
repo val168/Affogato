@@ -389,6 +389,21 @@ DecodedInstruction decode(std::uint32_t raw) noexcept
             instruction.destination = static_cast<std::uint8_t>(field(raw, 16, 0x1FU));
             instruction.record = (raw & 1U) != 0;
         }
+        else if (extended_opcode == 371U)
+        {
+            // TBR is split across the encoded rA/rB fields in reversed order,
+            // just like SPR in mfspr.
+            const std::uint32_t tbr =
+                (field(raw, 11U, 0x1FU) << 5U) | field(raw, 16U, 0x1FU);
+            if ((raw & 1U) == 0U && (tbr == 268U || tbr == 269U))
+            {
+                instruction.opcode = tbr == 268U
+                    ? Opcode::move_from_time_base_lower
+                    : Opcode::move_from_time_base_upper;
+                instruction.destination =
+                    static_cast<std::uint8_t>(field(raw, 21U, 0x1FU));
+            }
+        }
         else if (extended_opcode == 339 || extended_opcode == 467)
         {
             // The SPR number is split into two five-bit fields in reverse

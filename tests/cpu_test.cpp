@@ -1920,6 +1920,60 @@ void move_from_xer_tests()
     assert(format_instruction_history(result).find("mfxer") != std::string::npos);
 }
 
+void move_from_time_base_tests()
+{
+    constexpr std::uint32_t mftb_r3 = 0x7C6C42E6U;
+    constexpr std::uint32_t mftbu_r4 = 0x7C8D42E6U;
+    constexpr std::uint32_t unsupported_tbr = 0x7C6E42E6U;
+    const DecodedInstruction lower = decode(mftb_r3);
+    const DecodedInstruction upper = decode(mftbu_r4);
+    assert(lower.opcode == Opcode::move_from_time_base_lower);
+    assert(lower.destination == 3U);
+    assert(upper.opcode == Opcode::move_from_time_base_upper);
+    assert(upper.destination == 4U);
+    assert(decode(mftb_r3 | 1U).opcode == Opcode::unsupported);
+    assert(decode(unsupported_tbr).opcode == Opcode::unsupported);
+
+    EspressoCore core(0x100U);
+    core.state.gpr.fill(0xA5A5A5A5U);
+    core.state.gpr[3] = 0xDEADBEEFU;
+    core.state.gpr[4] = 0xCAFEBABEU;
+    core.state.gpr[5] = 0x13579BDFU;
+    core.state.cr = 0x12345678U;
+    core.state.xer = 0xE00000A5U;
+    core.state.lr = 0x10203040U;
+    core.state.ctr = 0x50607080U;
+    core.state.fpscr = 0xCAFEBABEU;
+    core.memory.write32_be(0U, mftb_r3);
+    core.memory.write32_be(4U, mftbu_r4);
+    core.memory.write32_be(8U, mftb_r3 | (2U << 21U)); // mftb r5
+    const auto gprs_before = core.state.gpr;
+    const std::uint32_t cr_before = core.state.cr;
+    const std::uint32_t xer_before = core.state.xer;
+    const std::uint32_t lr_before = core.state.lr;
+    const std::uint32_t ctr_before = core.state.ctr;
+    const std::uint32_t fpscr_before = core.state.fpscr;
+
+    const RunResult result = core.run(3U);
+    assert(result.steps == 3U && core.state.cia == 12U);
+    assert(core.state.gpr[3] != 0xDEADBEEFU);
+    assert(core.state.gpr[4] == 0U);
+    assert(core.state.gpr[5] >= core.state.gpr[3]);
+    for (std::size_t reg = 0U; reg < core.state.gpr.size(); ++reg)
+    {
+        if (reg != 3U && reg != 4U && reg != 5U)
+        {
+            assert(core.state.gpr[reg] == gprs_before[reg]);
+        }
+    }
+    assert(core.state.cr == cr_before && core.state.xer == xer_before);
+    assert(core.state.lr == lr_before && core.state.ctr == ctr_before);
+    assert(core.state.fpscr == fpscr_before);
+    assert(result.instruction_history[0].opcode_name == "mftb");
+    assert(result.instruction_history[1].opcode_name == "mftbu");
+    assert(result.instruction_history[2].opcode_name == "mftb");
+}
+
 void move_to_xer_tests()
 {
     constexpr std::uint32_t instruction = 0x7CA103A6U; // mtxer r5
@@ -24191,6 +24245,7 @@ int main(int argc, char* argv[])
     memory_synchronize_tests();
     move_from_condition_register_tests();
     move_from_xer_tests();
+    move_from_time_base_tests();
     move_to_xer_tests();
     move_to_condition_register_fields_tests();
     move_condition_register_from_xer_tests();
