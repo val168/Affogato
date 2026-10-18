@@ -326,10 +326,11 @@ DecodedInstruction decode(std::uint32_t raw) noexcept
         const std::uint32_t extended_opcode = field(raw, 1, 0x3FFU);
         if (extended_opcode == 598U &&
             field(raw, 22U, 0xFU) == 0U && // reserved bits 6-9
-            field(raw, 21U, 0x1U) == 0U && // L=0 heavyweight sync form
             field(raw, 11U, 0x3FFU) == 0U && (raw & 1U) == 0U)
         {
-            instruction.opcode = Opcode::memory_synchronize;
+            instruction.opcode = field(raw, 21U, 0x1U) == 0U
+                ? Opcode::memory_synchronize
+                : Opcode::memory_synchronize_lightweight;
         }
         else if (extended_opcode == 19U && field(raw, 11U, 0x3FFU) == 0U &&
             (raw & 1U) == 0U)

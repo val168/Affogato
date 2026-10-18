@@ -1797,9 +1797,14 @@ void memory_synchronize_tests()
     assert(decoded.opcode == Opcode::memory_synchronize);
     assert(((sync_instruction >> 1U) & 0x3FFU) == 598U);
     assert(decode(sync_instruction | 1U).opcode == Opcode::unsupported);
-    assert(decode(sync_instruction | (1U << 21U)).opcode == Opcode::unsupported);
     assert(decode(sync_instruction | (1U << 22U)).opcode == Opcode::unsupported);
     assert(decode(sync_instruction | (1U << 11U)).opcode == Opcode::unsupported);
+
+    constexpr std::uint32_t lwsync_instruction = 0x7C2004ACU;
+    assert(decode(lwsync_instruction).opcode == Opcode::memory_synchronize_lightweight);
+    assert(decode(lwsync_instruction | 1U).opcode == Opcode::unsupported);
+    assert(decode(lwsync_instruction | (1U << 22U)).opcode == Opcode::unsupported);
+    assert(decode(lwsync_instruction | (1U << 11U)).opcode == Opcode::unsupported);
 
     EspressoCore core(0x100U);
     core.state.gpr[3] = 0x12345678U;
@@ -1837,7 +1842,7 @@ void memory_synchronize_tests()
     ordered.state.gpr[3] = 0x40U;
     ordered.state.gpr[4] = 0xCAFEBABEU;
     ordered.memory.write32_be(0U, stw_r4_0);
-    ordered.memory.write32_be(4U, sync_instruction);
+    ordered.memory.write32_be(4U, lwsync_instruction);
     ordered.memory.write32_be(8U, lwz_r5_0);
     const RunResult ordered_result = ordered.run(3U);
     assert(ordered_result.steps == 3U && ordered.state.gpr[5] == 0xCAFEBABEU);

@@ -721,6 +721,7 @@ void set_xer_carry(CpuState& state, bool carry) noexcept
     case Opcode::move_to_condition_register_fields: return "mtcrf";
     case Opcode::move_condition_register_from_xer: return "mcrxr";
     case Opcode::memory_synchronize: return "sync";
+    case Opcode::memory_synchronize_lightweight: return "lwsync";
     }
     return "unknown";
 }
@@ -5438,10 +5439,11 @@ StepResult EspressoCore::step()
         break;
 
     case Opcode::memory_synchronize:
+    case Opcode::memory_synchronize_lightweight:
         // Guest memory operations complete synchronously on the interpreter
         // lane. Keep the architectural ordering point visible to the host
-        // memory model as well, in case guest memory is shared with a host-side
-        // observer in the future.
+        // memory model as well. A sequentially-consistent fence is stronger
+        // than the lightweight lwsync ordering, but valid for both forms.
         std::atomic_thread_fence(std::memory_order_seq_cst);
         break;
 
