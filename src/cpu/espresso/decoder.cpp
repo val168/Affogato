@@ -531,6 +531,14 @@ DecodedInstruction decode(std::uint32_t raw) noexcept
             instruction.base = static_cast<std::uint8_t>(field(raw, 16, 0x1FU));
             instruction.source = static_cast<std::uint8_t>(field(raw, 11, 0x1FU));
         }
+        else if (extended_opcode == 631U && (raw & 1U) == 0U &&
+                 field(raw, 16, 0x1FU) != 0U) // lfdux; rA=0 is invalid
+        {
+            instruction.opcode = Opcode::load_double_indexed_update;
+            instruction.fp_register = static_cast<std::uint8_t>(field(raw, 21, 0x1FU));
+            instruction.base = static_cast<std::uint8_t>(field(raw, 16, 0x1FU));
+            instruction.source = static_cast<std::uint8_t>(field(raw, 11, 0x1FU));
+        }
         else if (extended_opcode == 663U && (raw & 1U) == 0U) // stfsx
         {
             instruction.opcode = Opcode::store_single_indexed;

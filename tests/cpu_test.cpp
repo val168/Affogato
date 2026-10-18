@@ -18011,6 +18011,67 @@ void store_single_indexed_tests()
     assert(!fault_result.instruction_history.front().has_stored_single_value);
 }
 
+void load_double_indexed_update_tests()
+{
+    const auto encode_lfdux = [](std::uint8_t destination, std::uint8_t base,
+                                 std::uint8_t index, bool reserved_bit = false) {
+        return (31U << 26U) |
+            (static_cast<std::uint32_t>(destination) << 21U) |
+            (static_cast<std::uint32_t>(base) << 16U) |
+            (static_cast<std::uint32_t>(index) << 11U) | (631U << 1U) |
+            static_cast<std::uint32_t>(reserved_bit);
+    };
+
+    constexpr std::uint32_t exact_encoding = 0x7C0104EEU;
+    const DecodedInstruction decoded = decode(exact_encoding);
+    assert(decoded.opcode == Opcode::load_double_indexed_update);
+    assert(decoded.fp_register == 0U && decoded.base == 1U && decoded.source == 0U);
+    assert(((exact_encoding >> 1U) & 0x3FFU) == 631U);
+    assert(decode(encode_lfdux(3U, 0U, 5U)).opcode == Opcode::unsupported);
+    assert(decode(encode_lfdux(3U, 4U, 5U, true)).opcode == Opcode::unsupported);
+
+    EspressoCore core(0x100U);
+    core.state.gpr.fill(0xA5A5A5A5U);
+    core.state.gpr[4] = 0x40U;
+    core.state.gpr[5] = 8U;
+    core.state.fpr.fill(0x0123456789ABCDEFULL);
+    core.state.fpr_ps1.fill(0xFEDCBA9876543210ULL);
+    core.state.fpr_ps1[7] = 0xDEADBEEF01234567ULL;
+    core.memory.write32_be(0U, encode_lfdux(7U, 4U, 5U));
+    core.memory.write64_be(0x48U, 0xFFF0123456789ABCULL);
+    const RunResult result = core.run(1U);
+    assert(result.reason == StopReason::instruction_limit);
+    assert(core.state.fpr[7] == 0xFFF0123456789ABCULL);
+    assert(core.state.fpr_ps1[7] == 0xDEADBEEF01234567ULL);
+    assert(core.state.gpr[4] == 0x48U);
+    assert(core.state.gpr[5] == 8U);
+    const InstructionHistoryEntry& history = result.instruction_history.front();
+    assert(history.opcode_name == "lfdux");
+    assert(history.has_effective_address && history.effective_address == 0x48U);
+    assert(history.has_fp_destination && history.fp_destination_register == 7U);
+    assert(history.fp_destination_value == 0xFFF0123456789ABCULL);
+    assert(history.has_destination && history.destination_register == 4U);
+    assert(history.destination_value == 0x48U);
+
+    EspressoCore fault(0x100U);
+    fault.memory.map_region(0x2000U, 4U);
+    fault.state.gpr[4] = 0x2000U;
+    fault.state.gpr[5] = 0U;
+    fault.state.fpr[6] = 0x1122334455667788ULL;
+    fault.state.fpr_ps1[6] = 0x8877665544332211ULL;
+    fault.memory.write32_be(0U, encode_lfdux(6U, 4U, 5U));
+    const RunResult fault_result = fault.run(1U);
+    assert(fault_result.reason == StopReason::memory_fault);
+    assert(fault_result.detail.find("read 8 byte(s)") != std::string::npos);
+    assert(fault_result.instruction_history.front().opcode_name == "lfdux");
+    assert(fault_result.instruction_history.front().has_effective_address);
+    assert(fault_result.instruction_history.front().effective_address == 0x2000U);
+    assert(!fault_result.instruction_history.front().completed);
+    assert(fault.state.gpr[4] == 0x2000U);
+    assert(fault.state.fpr[6] == 0x1122334455667788ULL);
+    assert(fault.state.fpr_ps1[6] == 0x8877665544332211ULL);
+}
+
 void store_double_indexed_tests()
 {
     const auto encode_stfdx = [](std::uint8_t source, std::uint8_t base,
@@ -19776,6 +19837,7 @@ int main(int argc, char* argv[])
     load_single_indexed_update_tests();
     load_double_indexed_tests();
     store_single_indexed_tests();
+    load_double_indexed_update_tests();
     store_double_indexed_tests();
     load_halfword_algebraic_tests();
     multiple_word_load_store_tests();

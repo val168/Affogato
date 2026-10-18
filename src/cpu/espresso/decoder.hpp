@@ -117,6 +117,7 @@ enum class Opcode
     load_single_indexed_update,
     load_double,
     load_double_indexed,
+    load_double_indexed_update,
     store_single,
     store_single_update,
     store_single_indexed,

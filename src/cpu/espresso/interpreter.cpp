@@ -440,6 +440,7 @@ void set_xer_carry(CpuState& state, bool carry) noexcept
             instruction.opcode == Opcode::load_single_indexed ||
             instruction.opcode == Opcode::load_single_indexed_update ||
             instruction.opcode == Opcode::load_double_indexed ||
+            instruction.opcode == Opcode::load_double_indexed_update ||
             instruction.opcode == Opcode::load_byte_zero_indexed ||
             instruction.opcode == Opcode::load_halfword_zero_indexed ||
             instruction.opcode == Opcode::load_halfword_byte_reverse_indexed ||
@@ -476,6 +477,7 @@ void set_xer_carry(CpuState& state, bool carry) noexcept
             instruction.opcode == Opcode::load_single_indexed ||
             instruction.opcode == Opcode::load_single_indexed_update ||
             instruction.opcode == Opcode::load_double_indexed ||
+            instruction.opcode == Opcode::load_double_indexed_update ||
             instruction.opcode == Opcode::store_single ||
             instruction.opcode == Opcode::store_single_update ||
             instruction.opcode == Opcode::store_single_indexed ||
@@ -614,6 +616,7 @@ void set_xer_carry(CpuState& state, bool carry) noexcept
     case Opcode::load_single_indexed_update: return "lfsux";
     case Opcode::load_double: return "lfd";
     case Opcode::load_double_indexed: return "lfdx";
+    case Opcode::load_double_indexed_update: return "lfdux";
     case Opcode::store_single: return "stfs";
     case Opcode::store_single_update: return "stfsu";
     case Opcode::store_single_indexed: return "stfsx";
@@ -888,6 +891,7 @@ void add_history_source(
         opcode == Opcode::load_single_indexed ||
         opcode == Opcode::load_single_indexed_update ||
         opcode == Opcode::load_double_indexed ||
+        opcode == Opcode::load_double_indexed_update ||
         opcode == Opcode::load_byte_zero_indexed ||
         opcode == Opcode::load_halfword_zero_indexed ||
         opcode == Opcode::load_halfword_byte_reverse_indexed ||
@@ -922,7 +926,8 @@ void add_history_source(
     }
     if (opcode == Opcode::load_single || opcode == Opcode::load_single_update ||
         opcode == Opcode::load_single_indexed || opcode == Opcode::load_single_indexed_update ||
-        opcode == Opcode::load_double || opcode == Opcode::load_double_indexed)
+        opcode == Opcode::load_double || opcode == Opcode::load_double_indexed ||
+        opcode == Opcode::load_double_indexed_update)
     {
         entry.has_fp_destination = true;
         entry.fp_destination_register = instruction.fp_register;
@@ -1032,6 +1037,7 @@ void add_history_source(
     case Opcode::load_single_indexed:
     case Opcode::load_single_indexed_update:
     case Opcode::load_double_indexed:
+    case Opcode::load_double_indexed_update:
     case Opcode::load_byte_zero_indexed:
     case Opcode::load_halfword_zero_indexed:
     case Opcode::load_halfword_byte_reverse_indexed:
@@ -1137,6 +1143,10 @@ void add_history_source(
         entry.destination_register = instruction.base;
         break;
     case Opcode::load_double_indexed:
+        break;
+    case Opcode::load_double_indexed_update:
+        entry.has_destination = true;
+        entry.destination_register = instruction.base;
         break;
     case Opcode::load_double:
         break;
@@ -3667,6 +3677,16 @@ StepResult EspressoCore::step()
             ? 0U : state.gpr[instruction.base];
         const std::uint32_t address = base + state.gpr[instruction.source];
         state.fpr[instruction.fp_register] = memory.read64_be(address);
+        break;
+    }
+
+    case Opcode::load_double_indexed_update:
+    {
+        const std::uint32_t base = state.gpr[instruction.base];
+        const std::uint32_t address = base + state.gpr[instruction.source];
+        const std::uint64_t value = memory.read64_be(address);
+        state.fpr[instruction.fp_register] = value;
+        state.gpr[instruction.base] = address;
         break;
     }
 
