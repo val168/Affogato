@@ -17652,6 +17652,69 @@ void store_word_byte_reverse_indexed_tests()
     assert(!fault_result.instruction_history.front().completed);
 }
 
+void store_byte_indexed_update_tests()
+{
+    const auto encode_stbux = [](std::uint8_t source, std::uint8_t base,
+                                 std::uint8_t index, bool reserved_bit = false) {
+        return (31U << 26U) |
+            (static_cast<std::uint32_t>(source) << 21U) |
+            (static_cast<std::uint32_t>(base) << 16U) |
+            (static_cast<std::uint32_t>(index) << 11U) | (247U << 1U) |
+            static_cast<std::uint32_t>(reserved_bit);
+    };
+
+    constexpr std::uint32_t exact_encoding = 0x7C0001EEU;
+    assert(decode(exact_encoding).opcode == Opcode::unsupported); // rA=0 is illegal.
+    assert(decode(encode_stbux(3U, 0U, 5U)).opcode == Opcode::unsupported);
+    assert(decode(encode_stbux(3U, 4U, 5U, true)).opcode == Opcode::unsupported);
+    const DecodedInstruction decoded = decode(encode_stbux(6U, 4U, 5U));
+    assert(decoded.opcode == Opcode::store_byte_indexed_update);
+    assert(decoded.destination == 6U && decoded.base == 4U && decoded.source == 5U);
+    assert(((encode_stbux(6U, 4U, 5U) >> 1U) & 0x3FFU) == 247U);
+
+    EspressoCore core(0x100U);
+    core.state.gpr[4] = 0x40U;
+    core.state.gpr[5] = 8U;
+    core.state.gpr[6] = 0x123456ABU;
+    core.memory.write32_be(0U, encode_stbux(6U, 4U, 5U));
+    const RunResult result = core.run(1U);
+    assert(result.reason == StopReason::instruction_limit);
+    assert(core.memory.read8(0x48U) == 0xABU);
+    assert(core.state.gpr[4] == 0x48U);
+    const InstructionHistoryEntry& history = result.instruction_history.front();
+    assert(history.opcode_name == "stbux");
+    assert(history.has_effective_address && history.effective_address == 0x48U);
+    assert(history.has_destination && history.destination_register == 4U);
+    assert(history.destination_value == 0x48U);
+    assert(history.source_count == 3U);
+    assert(history.source_registers[0] == 4U && history.source_values[0] == 0x40U);
+    assert(history.source_registers[1] == 5U && history.source_values[1] == 8U);
+    assert(history.source_registers[2] == 6U && history.source_values[2] == 0x123456ABU);
+
+    // Source/base aliasing stores the old base value before updating the base.
+    EspressoCore alias(0x100U);
+    alias.state.gpr[4] = 0x40U;
+    alias.state.gpr[5] = 8U;
+    alias.memory.write32_be(0U, encode_stbux(4U, 4U, 5U));
+    assert(alias.step() == StepResult::executed);
+    assert(alias.memory.read8(0x48U) == 0x40U);
+    assert(alias.state.gpr[4] == 0x48U);
+
+    EspressoCore fault(0x100U);
+    fault.state.gpr[4] = 0x2000U;
+    fault.state.gpr[5] = 0U;
+    fault.state.gpr[6] = 0x12345678U;
+    fault.memory.write32_be(0U, encode_stbux(6U, 4U, 5U));
+    const RunResult fault_result = fault.run(1U);
+    assert(fault_result.reason == StopReason::memory_fault);
+    assert(fault_result.detail.find("write 1 byte(s)") != std::string::npos);
+    assert(fault_result.instruction_history.front().opcode_name == "stbux");
+    assert(fault_result.instruction_history.front().has_effective_address);
+    assert(fault_result.instruction_history.front().effective_address == 0x2000U);
+    assert(!fault_result.instruction_history.front().completed);
+    assert(fault.state.gpr[4] == 0x2000U);
+}
+
 void store_halfword_byte_reverse_indexed_tests()
 {
     const auto encode_sthbrx = [](std::uint8_t source, std::uint8_t base,
@@ -20245,6 +20308,7 @@ int main(int argc, char* argv[])
     load_word_indexed_update_tests();
     load_byte_zero_indexed_tests();
     store_word_indexed_update_tests();
+    store_byte_indexed_update_tests();
     store_word_byte_reverse_indexed_tests();
     store_halfword_byte_reverse_indexed_tests();
     load_halfword_byte_reverse_indexed_tests();
