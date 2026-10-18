@@ -6558,7 +6558,11 @@ void divide_word_signed_tests()
     assert(decoded.opcode == Opcode::divide_word_signed);
     assert(decoded.destination == 3U && decoded.base == 4U && decoded.source == 5U);
     assert(decode(encode_xo(3U, 4U, 5U, 491U, true)).record);
-    assert(decode(encode_xo(3U, 4U, 5U, 1003U)).opcode == Opcode::unsupported);
+    const auto overflow_decoded = decode(encode_xo(3U, 4U, 5U, 1003U));
+    assert(overflow_decoded.opcode == Opcode::divide_word_signed_overflow);
+    assert(overflow_decoded.destination == 3U && overflow_decoded.base == 4U &&
+           overflow_decoded.source == 5U && !overflow_decoded.record);
+    assert(decode(encode_xo(3U, 4U, 5U, 1003U, true)).record);
 
     const std::array<std::array<std::uint32_t, 3>, 8> cases{{
         {10U, 3U, 3U}, {0xFFFFFFF6U, 3U, 0xFFFFFFFDU},
@@ -6594,6 +6598,86 @@ void divide_word_signed_tests()
     divisor_alias.state.gpr[3] = 3U;
     divisor_alias.memory.write32_be(0U, encode_xo(3U, 4U, 3U, 491U));
     assert(divisor_alias.step() == StepResult::executed && divisor_alias.state.gpr[3] == 3U);
+}
+
+void divide_word_signed_overflow_tests()
+{
+    constexpr std::uint32_t xer_so = 0x80000000U;
+    constexpr std::uint32_t xer_ov = 0x40000000U;
+    constexpr std::uint32_t xer_ca = 0x20000000U;
+    const auto encode_divwo = [](std::uint8_t destination, std::uint8_t ra,
+                                 std::uint8_t rb, bool record = false) {
+        return (31U << 26U) |
+            (static_cast<std::uint32_t>(destination) << 21U) |
+            (static_cast<std::uint32_t>(ra) << 16U) |
+            (static_cast<std::uint32_t>(rb) << 11U) |
+            (1003U << 1U) | static_cast<std::uint32_t>(record);
+    };
+
+    constexpr std::uint32_t initial_xer = 0xE00000A5U;
+    const auto execute = [&](std::uint8_t destination, std::uint8_t ra,
+                             std::uint8_t rb, std::uint32_t dividend_bits,
+                             std::uint32_t divisor_bits, bool record = false) {
+        EspressoCore core(8U);
+        core.state.gpr.fill(0xA5A5A5A5U);
+        core.state.gpr[ra] = dividend_bits;
+        core.state.gpr[rb] = divisor_bits;
+        core.state.xer = initial_xer;
+        core.state.cr = 0x12345678U;
+        const auto original_gprs = core.state.gpr;
+        const std::uint32_t instruction = encode_divwo(destination, ra, rb, record);
+        core.memory.write32_be(0U, instruction);
+        const std::int32_t dividend = std::bit_cast<std::int32_t>(dividend_bits);
+        const std::int32_t divisor = std::bit_cast<std::int32_t>(divisor_bits);
+        const bool overflow = divisor == 0 ||
+            (dividend == std::numeric_limits<std::int32_t>::min() && divisor == -1);
+        const std::uint32_t expected = divisor == 0
+            ? (dividend < 0 ? 0xFFFFFFFFU : 0U)
+            : (dividend == std::numeric_limits<std::int32_t>::min() && divisor == -1)
+                ? 0xFFFFFFFFU
+                : static_cast<std::uint32_t>(dividend / divisor);
+
+        const RunResult run = core.run(1U);
+        assert(run.steps == 1U && run.reason == StopReason::instruction_limit);
+        assert(core.state.gpr[destination] == expected);
+        for (std::uint32_t reg = 0; reg < 32U; ++reg)
+        {
+            if (reg != destination)
+            {
+                assert(core.state.gpr[reg] == original_gprs[reg]);
+            }
+        }
+        assert(((core.state.xer & xer_ov) != 0U) == overflow);
+        assert((core.state.xer & xer_so) != 0U); // sticky SO
+        assert((core.state.xer & xer_ca) == (initial_xer & xer_ca));
+        assert((core.state.xer & ~(xer_ov | xer_so)) == (initial_xer & ~(xer_ov | xer_so)));
+        if (record)
+        {
+            const std::uint32_t nibble = (expected & 0x80000000U) != 0U ? 0x9U
+                : expected == 0U ? 0x3U : 0x5U;
+            assert((core.state.cr >> 28U) == nibble);
+            assert((core.state.cr & 0x0FFFFFFFU) == 0x02345678U);
+            assert(run.instruction_history.front().opcode_name == "divwo.");
+        }
+        else
+        {
+            assert(core.state.cr == 0x12345678U);
+        }
+        return std::pair{expected, run};
+    };
+
+    assert(execute(3U, 4U, 5U, 10U, 3U).first == 3U);
+    assert(execute(3U, 4U, 5U, 0xFFFFFFF6U, 3U).first == 0xFFFFFFFDU);
+    assert(execute(3U, 4U, 5U, 10U, 0U).first == 0U);
+    assert(execute(3U, 4U, 5U, 0xFFFFFFF6U, 0U).first == 0xFFFFFFFFU);
+    assert(execute(3U, 4U, 5U, 0x80000000U, 0xFFFFFFFFU).first == 0xFFFFFFFFU);
+    assert(execute(4U, 4U, 5U, 0xFFFFFFF6U, 3U).first == 0xFFFFFFFDU);
+    assert(execute(5U, 4U, 5U, 10U, 3U).first == 3U);
+    (void)execute(6U, 4U, 5U, 0xFFFFFFF6U, 0U, true);
+
+    const auto overflow = execute(3U, 4U, 5U, 0x80000000U, 0xFFFFFFFFU);
+    assert(format_instruction_history(overflow.second).find("divwo") != std::string::npos);
+    assert(overflow.second.instruction_history.front().has_overflow_result);
 }
 
 void bitwise_nand_nor_or_complement_tests()
@@ -22480,6 +22564,7 @@ int main(int argc, char* argv[])
     multiply_high_word_signed_tests();
     multiply_low_word_overflow_tests();
     divide_word_signed_tests();
+    divide_word_signed_overflow_tests();
     bitwise_nand_nor_or_complement_tests();
     arithmetic_shift_right_word_tests();
     add_carrying_tests();

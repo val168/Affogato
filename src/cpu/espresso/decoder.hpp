@@ -16,6 +16,7 @@ enum class Opcode
     divide_word_unsigned,
     divide_word_unsigned_overflow,
     divide_word_signed,
+    divide_word_signed_overflow,
     xor_immediate,
     xor_immediate_shifted,
     count_leading_zeros,

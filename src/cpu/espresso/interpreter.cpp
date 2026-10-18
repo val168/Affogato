@@ -532,6 +532,7 @@ void set_xer_carry(CpuState& state, bool carry) noexcept
     case Opcode::divide_word_unsigned: return "divwu";
     case Opcode::divide_word_unsigned_overflow: return "divwuo";
     case Opcode::divide_word_signed: return "divw";
+    case Opcode::divide_word_signed_overflow: return "divwo";
     case Opcode::unsupported: return "unsupported";
     case Opcode::addi: return "addi";
     case Opcode::addis: return "addis";
@@ -754,6 +755,7 @@ void add_history_source(
          instruction.opcode == Opcode::add_carrying_overflow ||
          instruction.opcode == Opcode::add_extended_overflow ||
          instruction.opcode == Opcode::negate_overflow ||
+         instruction.opcode == Opcode::divide_word_signed_overflow ||
          instruction.opcode == Opcode::divide_word_unsigned_overflow) && instruction.record)
     {
         entry.opcode_name += '.';
@@ -1134,6 +1136,7 @@ void add_history_source(
     case Opcode::divide_word_unsigned:
     case Opcode::divide_word_unsigned_overflow:
     case Opcode::divide_word_signed:
+    case Opcode::divide_word_signed_overflow:
     case Opcode::compare_signed_register:
     case Opcode::compare_unsigned_register:
         add_history_source(entry, state, instruction.base);
@@ -1254,6 +1257,7 @@ void add_history_source(
     case Opcode::divide_word_unsigned:
     case Opcode::divide_word_unsigned_overflow:
     case Opcode::divide_word_signed:
+    case Opcode::divide_word_signed_overflow:
     case Opcode::negate:
     case Opcode::negate_overflow:
     case Opcode::extend_sign_byte:
@@ -1802,6 +1806,7 @@ StepResult EspressoCore::step()
         instruction.opcode == Opcode::subtract_from_extended_overflow ||
         instruction.opcode == Opcode::negate_overflow ||
         instruction.opcode == Opcode::multiply_low_word_overflow ||
+        instruction.opcode == Opcode::divide_word_signed_overflow ||
         instruction.opcode == Opcode::divide_word_unsigned_overflow)
     {
         pending_history_entry_.has_overflow_result = true;
@@ -1981,6 +1986,45 @@ StepResult EspressoCore::step()
             result = static_cast<std::uint32_t>(dividend / divisor);
         }
         state.gpr[instruction.destination] = result;
+        if (instruction.record)
+        {
+            set_record_result(state, result);
+        }
+        break;
+    }
+
+    case Opcode::divide_word_signed_overflow:
+    {
+        const std::int32_t dividend =
+            std::bit_cast<std::int32_t>(state.gpr[instruction.base]);
+        const std::int32_t divisor =
+            std::bit_cast<std::int32_t>(state.gpr[instruction.source]);
+        const bool overflow = divisor == 0 ||
+            (dividend == std::numeric_limits<std::int32_t>::min() && divisor == -1);
+        std::uint32_t result = 0U;
+        if (divisor == 0)
+        {
+            // The quotient is architecturally undefined for divide-by-zero;
+            // retain Cemu's deterministic result convention.
+            result = dividend < 0 ? 0xFFFFFFFFU : 0U;
+        }
+        else if (dividend == std::numeric_limits<std::int32_t>::min() && divisor == -1)
+        {
+            result = 0xFFFFFFFFU;
+        }
+        else
+        {
+            result = static_cast<std::uint32_t>(dividend / divisor);
+        }
+        state.gpr[instruction.destination] = result;
+        if (overflow)
+        {
+            state.xer |= xer_overflow_mask | xer_summary_overflow_mask;
+        }
+        else
+        {
+            state.xer &= ~xer_overflow_mask;
+        }
         if (instruction.record)
         {
             set_record_result(state, result);
