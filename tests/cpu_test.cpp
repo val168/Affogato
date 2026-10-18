@@ -4268,11 +4268,10 @@ void floating_multiply_add_double_tests()
            Opcode::unsupported);
     assert(decode(encode_fmadd(13U, 0U, 13U, 12U, false, 30U)).opcode ==
            Opcode::floating_negative_multiply_subtract_double);
-    for (const std::uint32_t sibling_xo : {28U, 31U})
-    {
-        assert(decode(encode_fmadd(13U, 0U, 13U, 12U, false, sibling_xo)).opcode ==
-               Opcode::unsupported);
-    }
+    assert(decode(encode_fmadd(13U, 0U, 13U, 12U, false, 28U)).opcode ==
+           Opcode::floating_multiply_subtract_double);
+    assert(decode(encode_fmadd(13U, 0U, 13U, 12U, false, 31U)).opcode ==
+           Opcode::unsupported);
 
     struct Execution
     {
@@ -4453,6 +4452,100 @@ void floating_multiply_add_double_tests()
     assert(trace.find("single=") == std::string::npos);
 }
 
+void floating_multiply_subtract_double_tests()
+{
+    const auto encode_fmsub = [](std::uint8_t destination, std::uint8_t source_a,
+                                 std::uint8_t source_b, std::uint8_t source_c,
+                                 bool record = false) {
+        return 0xFC000000U |
+            (static_cast<std::uint32_t>(destination) << 21U) |
+            (static_cast<std::uint32_t>(source_a) << 16U) |
+            (static_cast<std::uint32_t>(source_b) << 11U) |
+            (static_cast<std::uint32_t>(source_c) << 6U) | (28U << 1U) |
+            static_cast<std::uint32_t>(record);
+    };
+    constexpr std::uint32_t instruction = 0xFC000038U;
+    const DecodedInstruction decoded = decode(instruction);
+    assert(decoded.opcode == Opcode::floating_multiply_subtract_double);
+    assert(decoded.fp_register == 0U);
+    assert(decoded.fp_source_a == 0U);
+    assert(decoded.fp_source_b == 0U);
+    assert(decoded.fp_source_c == 0U);
+    assert(((instruction >> 1U) & 0x1FU) == 28U);
+    assert(decode(encode_fmsub(1U, 2U, 3U, 4U, true)).opcode == Opcode::unsupported);
+    assert(decode(encode_fmsub(1U, 2U, 3U, 4U) + (1U << 1U)).opcode ==
+           Opcode::floating_multiply_add_double); // XO29 remains fmadd.
+
+    const auto run = [&](std::uint8_t destination, std::uint8_t source_a,
+                         std::uint8_t source_b, std::uint8_t source_c,
+                         std::uint64_t a, std::uint64_t b, std::uint64_t c,
+                         std::uint32_t fpscr = 0U) {
+        EspressoCore core(16U);
+        for (std::size_t index = 0; index < core.state.fpr.size(); ++index)
+        {
+            core.state.fpr[index] = 0x1111000000000000ULL + index;
+            core.state.fpr_ps1[index] = 0x2222000000000000ULL + index;
+        }
+        core.state.fpr[source_a] = a;
+        core.state.fpr[source_b] = b;
+        core.state.fpr[source_c] = c;
+        core.state.fpr_ps1[destination] = 0xDEADBEEF01234567ULL;
+        core.state.fpscr = fpscr;
+        core.state.cr = 0xA5C36E91U;
+        core.state.xer = 0x800000A5U;
+        core.state.gpr[7] = 0x76543210U;
+        core.state.lr = 0x12345678U;
+        core.state.ctr = 0x87654321U;
+        core.memory.write32_be(0U, encode_fmsub(destination, source_a, source_b, source_c));
+        const RunResult result = core.run(1U);
+        assert(result.reason == StopReason::instruction_limit);
+        assert(core.state.cia == 4U);
+        assert(core.state.fpr_ps1[destination] == 0xDEADBEEF01234567ULL);
+        assert(core.state.cr == 0xA5C36E91U);
+        assert(core.state.xer == 0x800000A5U);
+        assert(core.state.gpr[7] == 0x76543210U);
+        assert(core.state.lr == 0x12345678U);
+        assert(core.state.ctr == 0x87654321U);
+        return std::pair{core.state, result};
+    };
+
+    const auto fused = run(4U, 1U, 4U, 2U,
+        0x3FF0000002000000ULL, // 1 + 2^-27
+        0x3FF0000000000000ULL, // addend 1
+        0x3FEFFFFFFC000000ULL); // 1 - 2^-27
+    assert(fused.first.fpr[4] == 0xBC90000000000000ULL); // -2^-54
+    assert(format_instruction_history(fused.second).find("fmsub") != std::string::npos);
+
+    const auto simple = run(4U, 1U, 2U, 3U,
+        0x4000000000000000ULL, // 2
+        0x4014000000000000ULL, // 5
+        0x4008000000000000ULL); // 3
+    assert(simple.first.fpr[4] == 0x3FF0000000000000ULL); // 2*3 - 5 = 1
+
+    const auto qnan = run(4U, 1U, 2U, 3U,
+        0x7FF8123456789ABCULL, 0x3FF0000000000000ULL,
+        0x4000000000000000ULL);
+    assert(qnan.first.fpr[4] == 0x7FF8123456789ABCULL);
+    const auto snan = run(4U, 1U, 2U, 3U,
+        0x7FF0123456789ABCULL, 0x3FF0000000000000ULL,
+        0x4000000000000000ULL);
+    assert((snan.first.fpscr & fpscr::vxsnan_mask) != 0U);
+    assert(snan.first.fpr[4] == 0x7FF8123456789ABCULL);
+
+    const auto infinity_invalid = run(4U, 1U, 2U, 3U,
+        0x7FF0000000000000ULL, 0x7FF0000000000000ULL,
+        0x3FF0000000000000ULL);
+    assert((infinity_invalid.first.fpscr & fpscr::vxisi_mask) != 0U);
+    assert(infinity_invalid.first.fpr[4] == 0x7FF8000000000000ULL);
+
+    const auto suppressed = run(4U, 1U, 2U, 3U,
+        0x7FF0000000000000ULL, 0x7FF0000000000000ULL,
+        0x3FF0000000000000ULL, fpscr::ve_mask);
+    assert((suppressed.first.fpscr & fpscr::vxisi_mask) != 0U);
+    assert(suppressed.first.fpr[4] == 0x1111000000000004ULL);
+    assert(suppressed.first.fpr_ps1[4] == 0xDEADBEEF01234567ULL);
+}
+
 void floating_negative_multiply_subtract_double_tests()
 {
     const auto encode_fnmsub = [](std::uint8_t destination, std::uint8_t source_a,
@@ -4479,12 +4572,12 @@ void floating_negative_multiply_subtract_double_tests()
     const std::uint32_t fmadd_encoding =
         (wind_waker_word & ~(0x1FU << 1U)) | (29U << 1U);
     assert(decode(fmadd_encoding).opcode == Opcode::floating_multiply_add_double);
-    for (const std::uint32_t sibling_xo : {28U, 31U})
-    {
-        const std::uint32_t sibling_encoding =
-            (wind_waker_word & ~(0x1FU << 1U)) | (sibling_xo << 1U);
-        assert(decode(sibling_encoding).opcode == Opcode::unsupported);
-    }
+    const std::uint32_t fmsub_encoding =
+        (wind_waker_word & ~(0x1FU << 1U)) | (28U << 1U);
+    assert(decode(fmsub_encoding).opcode == Opcode::floating_multiply_subtract_double);
+    const std::uint32_t fnmadd_encoding =
+        (wind_waker_word & ~(0x1FU << 1U)) | (31U << 1U);
+    assert(decode(fnmadd_encoding).opcode == Opcode::unsupported);
 
     struct Execution
     {
@@ -21106,6 +21199,7 @@ int main(int argc, char* argv[])
     floating_add_double_tests();
     floating_multiply_double_tests();
     floating_multiply_add_double_tests();
+    floating_multiply_subtract_double_tests();
     floating_negative_multiply_subtract_double_tests();
     floating_round_to_single_tests();
     floating_convert_to_integer_word_tests();
