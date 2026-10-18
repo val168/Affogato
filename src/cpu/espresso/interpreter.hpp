@@ -133,6 +133,13 @@ struct InstructionHistoryEntry
     std::uint64_t fp_integer_conversion_encoded_raw{};
     bool fp_integer_conversion_invalid{};
     bool fp_integer_conversion_write_suppressed{};
+    bool has_cr_bit_operation{};
+    std::uint8_t cr_bit_destination{};
+    std::uint8_t cr_bit_source_a{};
+    std::uint8_t cr_bit_source_b{};
+    bool cr_bit_source_a_value{};
+    bool cr_bit_source_b_value{};
+    bool cr_bit_result{};
     bool completed{};
 };
 

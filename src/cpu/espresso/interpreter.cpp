@@ -597,6 +597,7 @@ void set_xer_carry(CpuState& state, bool carry) noexcept
     case Opcode::store_double: return "stfd";
     case Opcode::store_double_update: return "stfdu";
     case Opcode::paired_single_merge10: return "ps_merge10";
+    case Opcode::condition_bit_and: return "crand";
     }
     return "unknown";
 }
@@ -702,6 +703,16 @@ void add_history_source(
         entry.paired_fp_source_a_ps1 = state.fpr_ps1[instruction.fp_source_a];
         entry.paired_fp_source_b_ps0 = state.fpr[instruction.fp_source_b];
         entry.paired_fp_source_b_ps1 = state.fpr_ps1[instruction.fp_source_b];
+        return entry;
+    }
+    if (opcode == Opcode::condition_bit_and)
+    {
+        entry.has_cr_bit_operation = true;
+        entry.cr_bit_destination = instruction.cr_destination_bit;
+        entry.cr_bit_source_a = instruction.cr_source_a_bit;
+        entry.cr_bit_source_b = instruction.cr_source_b_bit;
+        entry.cr_bit_source_a_value = read_cr_bit(state, instruction.cr_source_a_bit);
+        entry.cr_bit_source_b_value = read_cr_bit(state, instruction.cr_source_b_bit);
         return entry;
     }
     if (opcode == Opcode::floating_move_register || opcode == Opcode::floating_negate ||
@@ -1108,6 +1119,19 @@ std::string format_instruction_history(const RunResult& result)
             text << "0x" << std::setw(8) << entry.instruction_word << ' ';
         }
         text << entry.opcode_name;
+        if (entry.has_cr_bit_operation)
+        {
+            text << " cr" << std::dec
+                 << static_cast<unsigned>(entry.cr_bit_source_a) << '='
+                 << (entry.cr_bit_source_a_value ? '1' : '0')
+                 << " cr" << static_cast<unsigned>(entry.cr_bit_source_b) << '='
+                 << (entry.cr_bit_source_b_value ? '1' : '0');
+            if (entry.completed)
+            {
+                text << " -> cr" << static_cast<unsigned>(entry.cr_bit_destination)
+                     << '=' << (entry.cr_bit_result ? '1' : '0');
+            }
+        }
         if (entry.has_register_range)
         {
             text << " r" << std::dec << static_cast<unsigned>(entry.range_first_register)
@@ -3490,6 +3514,25 @@ StepResult EspressoCore::step()
         // Instructions are fetched directly from guest memory. There is no
         // pipeline, I-cache, MMU synchronization state, or JIT cache to sync yet.
         break;
+
+    case Opcode::condition_bit_and:
+    {
+        const bool source_a = read_cr_bit(state, instruction.cr_source_a_bit);
+        const bool source_b = read_cr_bit(state, instruction.cr_source_b_bit);
+        const bool result = source_a && source_b;
+        const std::uint32_t destination_mask =
+            1U << (31U - instruction.cr_destination_bit);
+        if (result)
+        {
+            state.cr |= destination_mask;
+        }
+        else
+        {
+            state.cr &= ~destination_mask;
+        }
+        pending_history_entry_.cr_bit_result = result;
+        break;
+    }
 
     case Opcode::store_halfword:
         memory.write16_be(

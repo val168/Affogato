@@ -490,6 +490,13 @@ void decoder_tests()
     assert(decode(0x4C00092CU).opcode == Opcode::unsupported);
     assert(decode(0x4C00012DU).opcode == Opcode::unsupported);
 
+    const DecodedInstruction crand = decode(0x4C8D3202U); // crand 4, 13, 6
+    assert(crand.opcode == Opcode::condition_bit_and);
+    assert(crand.cr_destination_bit == 4U);
+    assert(crand.cr_source_a_bit == 13U);
+    assert(crand.cr_source_b_bit == 6U);
+    assert(decode(0x4C8D3203U).opcode == Opcode::unsupported); // reserved bit 0
+
     const DecodedInstruction cmpwi = decode(0x2E830007U); // cmpwi cr5, r3, 7
     assert(cmpwi.opcode == Opcode::compare_signed_immediate);
     assert(cmpwi.cr_field == 5);
@@ -989,6 +996,126 @@ void instruction_sync_tests()
     assert(result.instruction_history.front().opcode_name == "isync");
     assert(format_instruction_history(result).find("isync") !=
            std::string::npos);
+}
+
+void condition_bit_and_tests()
+{
+    constexpr std::uint8_t destination_bit = 7U;
+    constexpr std::uint8_t source_a_bit = 5U;
+    constexpr std::uint8_t source_b_bit = 6U;
+    const auto encode_crand = [](std::uint8_t destination,
+                                 std::uint8_t source_a,
+                                 std::uint8_t source_b) {
+        return 0x4C000000U |
+            (static_cast<std::uint32_t>(destination) << 21U) |
+            (static_cast<std::uint32_t>(source_a) << 16U) |
+            (static_cast<std::uint32_t>(source_b) << 11U) |
+            (257U << 1U);
+    };
+    const auto cr_mask = [](std::uint8_t bit) {
+        return 1U << (31U - bit);
+    };
+    const auto set_cr_bit = [&](std::uint32_t value, std::uint8_t bit, bool set) {
+        return set ? value | cr_mask(bit) : value & ~cr_mask(bit);
+    };
+
+    const std::uint32_t instruction =
+        encode_crand(destination_bit, source_a_bit, source_b_bit);
+    assert(instruction == 0x4CE53202U);
+
+    for (bool a : {false, true})
+    {
+        for (bool b : {false, true})
+        {
+            EspressoCore core(0x100U);
+            for (std::size_t index = 0; index < core.state.gpr.size(); ++index)
+            {
+                core.state.gpr[index] = 0x10203040U +
+                    static_cast<std::uint32_t>(index);
+                core.state.fpr[index] = 0x1111000000000000ULL + index;
+                core.state.fpr_ps1[index] = 0x2222000000000000ULL + index;
+            }
+            core.state.cr = 0xA5A55A5AU;
+            core.state.cr = set_cr_bit(core.state.cr, source_a_bit, a);
+            core.state.cr = set_cr_bit(core.state.cr, source_b_bit, b);
+            core.state.cr = set_cr_bit(core.state.cr, destination_bit, true);
+            core.state.xer = 0xA00000A5U;
+            core.state.lr = 0x10203040U;
+            core.state.ctr = 0x50607080U;
+            core.state.fpscr = 0x12345678U;
+            core.memory.write32_be(0U, instruction);
+
+            const auto gpr_before = core.state.gpr;
+            const auto fpr_before = core.state.fpr;
+            const auto fpr_ps1_before = core.state.fpr_ps1;
+            const std::uint32_t cr_before = core.state.cr;
+            const std::uint32_t xer_before = core.state.xer;
+            const std::uint32_t lr_before = core.state.lr;
+            const std::uint32_t ctr_before = core.state.ctr;
+            const std::uint32_t fpscr_before = core.state.fpscr;
+            std::array<std::uint8_t, 0x100U> memory_before{};
+            core.memory.read_bytes(0U, memory_before);
+
+            const RunResult result = core.run(1U);
+            assert(result.reason == StopReason::instruction_limit);
+            assert(result.steps == 1U);
+            assert(core.state.cia == 4U);
+            const std::uint32_t expected_cr = set_cr_bit(
+                cr_before, destination_bit, a && b);
+            assert(core.state.cr == expected_cr);
+            assert(core.state.gpr == gpr_before);
+            assert(core.state.xer == xer_before);
+            assert(core.state.lr == lr_before);
+            assert(core.state.ctr == ctr_before);
+            assert(core.state.fpscr == fpscr_before);
+            assert(core.state.fpr == fpr_before);
+            assert(core.state.fpr_ps1 == fpr_ps1_before);
+            std::array<std::uint8_t, 0x100U> memory_after{};
+            core.memory.read_bytes(0U, memory_after);
+            assert(memory_after == memory_before);
+
+            assert(result.instruction_history.size() == 1U);
+            const auto& history = result.instruction_history.front();
+            assert(history.opcode_name == "crand");
+            assert(history.has_cr_bit_operation);
+            assert(history.cr_bit_source_a_value == a);
+            assert(history.cr_bit_source_b_value == b);
+            assert(history.cr_bit_result == (a && b));
+            assert(history.completed);
+            const std::string trace = format_instruction_history(result);
+            assert(trace.find("crand cr5=") != std::string::npos);
+            assert(trace.find("cr6=") != std::string::npos);
+            assert(trace.find("-> cr7=") != std::string::npos);
+        }
+    }
+
+    struct AliasingCase
+    {
+        std::uint8_t destination;
+        std::uint8_t source_a;
+        std::uint8_t source_b;
+        bool a;
+        bool b;
+    };
+    constexpr std::array aliasing_cases{
+        AliasingCase{5U, 5U, 6U, true, true},
+        AliasingCase{6U, 5U, 6U, true, false},
+        AliasingCase{9U, 9U, 9U, true, true},
+        AliasingCase{9U, 9U, 9U, false, false},
+    };
+    for (const AliasingCase& test : aliasing_cases)
+    {
+        EspressoCore core(0x100U);
+        core.state.cr = 0x5A5AA5A5U;
+        core.state.cr = set_cr_bit(core.state.cr, test.source_a, test.a);
+        core.state.cr = set_cr_bit(core.state.cr, test.source_b, test.b);
+        const std::uint32_t cr_before = core.state.cr;
+        core.memory.write32_be(0U, encode_crand(
+            test.destination, test.source_a, test.source_b));
+        assert(core.step() == StepResult::executed);
+        assert(core.state.cr == set_cr_bit(
+            cr_before, test.destination, test.a && test.b));
+    }
 }
 
 void floating_compare_unordered_tests()
@@ -17550,6 +17677,7 @@ int main(int argc, char* argv[])
     decoder_tests();
     guest_memory_tests();
     interpreter_tests();
+    condition_bit_and_tests();
     integer_alu_tests();
     and_immediate_shifted_record_tests();
     rotate_left_word_and_mask_register_tests();

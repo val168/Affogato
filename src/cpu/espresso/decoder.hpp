@@ -114,6 +114,7 @@ enum class Opcode
     store_double,
     store_double_update,
     paired_single_merge10,
+    condition_bit_and,
 };
 
 struct DecodedInstruction
@@ -129,6 +130,9 @@ struct DecodedInstruction
     std::uint8_t fp_source_b{};
     std::uint8_t base{};
     std::uint8_t cr_field{};
+    std::uint8_t cr_destination_bit{};
+    std::uint8_t cr_source_a_bit{};
+    std::uint8_t cr_source_b_bit{};
     std::uint8_t fp_compare_a{};
     std::uint8_t fp_compare_b{};
     std::uint8_t fp_source_c{};
