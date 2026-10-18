@@ -22905,6 +22905,62 @@ void paired_single_merge00_tests()
     assert(alias.state.fpr_ps1[5] == 0x5000000000000000ULL);
 }
 
+void paired_single_select_tests()
+{
+    const auto encode_ps_sel = [](std::uint8_t destination, std::uint8_t source_a,
+                                  std::uint8_t source_c, std::uint8_t source_b,
+                                  bool record = false) {
+        return 0x10000000U |
+            (static_cast<std::uint32_t>(destination) << 21U) |
+            (static_cast<std::uint32_t>(source_a) << 16U) |
+            (static_cast<std::uint32_t>(source_b) << 11U) |
+            (static_cast<std::uint32_t>(source_c) << 6U) |
+            (23U << 1U) | static_cast<std::uint32_t>(record);
+    };
+
+    constexpr std::uint32_t exact_encoding = 0x102220EEU;
+    const DecodedInstruction decoded = decode(exact_encoding);
+    assert(decoded.opcode == Opcode::paired_single_select);
+    assert(decoded.fp_register == 1U && decoded.fp_source_a == 2U &&
+           decoded.fp_source_b == 4U && decoded.fp_source_c == 3U);
+    assert(((exact_encoding >> 1U) & 0x1FU) == 23U);
+    assert(encode_ps_sel(1U, 2U, 3U, 4U) == exact_encoding);
+    assert(decode(encode_ps_sel(1U, 2U, 3U, 4U, true)).opcode == Opcode::unsupported);
+
+    EspressoCore core(4U);
+    core.state.fpr[2] = 0x3FF0000000000000ULL; // positive: choose C for PS0
+    core.state.fpr_ps1[2] = 0xBFF0000000000000ULL; // negative: choose B for PS1
+    core.state.fpr[4] = 0x4008000000000000ULL;
+    core.state.fpr_ps1[4] = 0x4010000000000000ULL;
+    core.state.fpr[3] = 0x4022000000000000ULL;
+    core.state.fpr_ps1[3] = 0x4024000000000000ULL;
+    core.state.fpscr = 0xDEADBEEFU;
+    core.memory.write32_be(0U, exact_encoding);
+    const RunResult result = core.run(1U);
+    assert(result.reason == StopReason::instruction_limit);
+    assert(core.state.fpr[1] == 0x4022000000000000ULL);
+    assert(core.state.fpr_ps1[1] == 0x4010000000000000ULL);
+    assert(core.state.fpscr == 0xDEADBEEFU);
+    const InstructionHistoryEntry& history = result.instruction_history.front();
+    assert(history.opcode_name == "ps_sel" && history.has_paired_fp_select);
+    assert(history.paired_fp_select_a_ps0 == 0x3FF0000000000000ULL);
+    assert(history.paired_fp_select_b_ps1 == 0x4010000000000000ULL);
+    assert(history.paired_fp_select_c_ps0 == 0x4022000000000000ULL);
+    assert(history.paired_fp_select_result_ps0 == 0x4022000000000000ULL);
+    assert(history.paired_fp_select_result_ps1 == 0x4010000000000000ULL);
+
+    // A NaN comparison is false, and all inputs are snapshotted under aliasing.
+    EspressoCore alias(4U);
+    alias.state.fpr[5] = 0x7FF8000000001234ULL;
+    alias.state.fpr_ps1[5] = 0x8000000000000000ULL;
+    alias.state.fpr[6] = 0x1111111111111111ULL;
+    alias.state.fpr_ps1[6] = 0x2222222222222222ULL;
+    alias.memory.write32_be(0U, encode_ps_sel(6U, 5U, 6U, 6U));
+    assert(alias.step() == StepResult::executed);
+    assert(alias.state.fpr[6] == 0x1111111111111111ULL); // NaN selects B
+    assert(alias.state.fpr_ps1[6] == 0x2222222222222222ULL); // -0 selects C
+}
+
 void paired_single_move_register_tests()
 {
     const auto encode_ps_mr = [](std::uint8_t destination, std::uint8_t source,
@@ -23578,6 +23634,7 @@ int main(int argc, char* argv[])
     floating_point_double_store_tests();
     floating_point_double_update_store_tests();
     paired_single_merge00_tests();
+    paired_single_select_tests();
     paired_single_move_register_tests();
     paired_single_negate_tests();
     paired_single_absolute_value_tests();

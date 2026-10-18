@@ -690,6 +690,7 @@ void set_xer_carry(CpuState& state, bool carry) noexcept
     case Opcode::paired_single_negate: return "ps_neg";
     case Opcode::paired_single_absolute_value: return "ps_abs";
     case Opcode::paired_single_negative_absolute_value: return "ps_nabs";
+    case Opcode::paired_single_select: return "ps_sel";
     case Opcode::condition_bit_and: return "crand";
     case Opcode::condition_bit_and_complement: return "crandc";
     case Opcode::condition_bit_or: return "cror";
@@ -837,6 +838,21 @@ void add_history_source(
         entry.paired_fp_source_a_ps1 = state.fpr_ps1[entry.paired_fp_source_a_register];
         entry.paired_fp_source_b_ps0 = state.fpr[instruction.fp_source_b];
         entry.paired_fp_source_b_ps1 = state.fpr_ps1[instruction.fp_source_b];
+        return entry;
+    }
+    if (opcode == Opcode::paired_single_select)
+    {
+        entry.has_paired_fp_select = true;
+        entry.paired_fp_select_destination = instruction.fp_register;
+        entry.paired_fp_select_a = instruction.fp_source_a;
+        entry.paired_fp_select_b = instruction.fp_source_b;
+        entry.paired_fp_select_c = instruction.fp_source_c;
+        entry.paired_fp_select_a_ps0 = state.fpr[instruction.fp_source_a];
+        entry.paired_fp_select_a_ps1 = state.fpr_ps1[instruction.fp_source_a];
+        entry.paired_fp_select_b_ps0 = state.fpr[instruction.fp_source_b];
+        entry.paired_fp_select_b_ps1 = state.fpr_ps1[instruction.fp_source_b];
+        entry.paired_fp_select_c_ps0 = state.fpr[instruction.fp_source_c];
+        entry.paired_fp_select_c_ps1 = state.fpr_ps1[instruction.fp_source_c];
         return entry;
     }
     if (opcode == Opcode::condition_bit_and ||
@@ -1761,6 +1777,36 @@ std::string format_instruction_history(const RunResult& result)
                 text << "{ps0=0x" << std::hex << std::setw(16)
                      << entry.paired_fp_destination_ps0 << ",ps1=0x"
                      << std::setw(16) << entry.paired_fp_destination_ps1 << '}';
+            }
+            else
+            {
+                text << " (not written)";
+            }
+        }
+        if (entry.has_paired_fp_select)
+        {
+            const auto print_select_source = [&](char operand, std::uint8_t reg,
+                                                  std::uint64_t ps0, std::uint64_t ps1) {
+                text << " f" << operand << "=f" << std::dec
+                     << static_cast<unsigned>(reg) << "{ps0=0x" << std::hex
+                     << std::setw(16) << ps0 << ",ps1=0x" << std::setw(16) << ps1 << '}';
+            };
+            print_select_source('A', entry.paired_fp_select_a,
+                                entry.paired_fp_select_a_ps0,
+                                entry.paired_fp_select_a_ps1);
+            print_select_source('B', entry.paired_fp_select_b,
+                                entry.paired_fp_select_b_ps0,
+                                entry.paired_fp_select_b_ps1);
+            print_select_source('C', entry.paired_fp_select_c,
+                                entry.paired_fp_select_c_ps0,
+                                entry.paired_fp_select_c_ps1);
+            text << " -> f" << std::dec
+                 << static_cast<unsigned>(entry.paired_fp_select_destination);
+            if (entry.completed)
+            {
+                text << "{ps0=0x" << std::hex << std::setw(16)
+                     << entry.paired_fp_select_result_ps0 << ",ps1=0x"
+                     << std::setw(16) << entry.paired_fp_select_result_ps1 << '}';
             }
             else
             {
@@ -5148,6 +5194,27 @@ StepResult EspressoCore::step()
         break;
     }
 
+    case Opcode::paired_single_select:
+    {
+        const std::uint64_t a_ps0 = state.fpr[instruction.fp_source_a];
+        const std::uint64_t a_ps1 = state.fpr_ps1[instruction.fp_source_a];
+        const std::uint64_t b_ps0 = state.fpr[instruction.fp_source_b];
+        const std::uint64_t b_ps1 = state.fpr_ps1[instruction.fp_source_b];
+        const std::uint64_t c_ps0 = state.fpr[instruction.fp_source_c];
+        const std::uint64_t c_ps1 = state.fpr_ps1[instruction.fp_source_c];
+        const double a0 = std::bit_cast<double>(a_ps0);
+        const double a1 = std::bit_cast<double>(a_ps1);
+        const std::uint64_t result_ps0 =
+            !is_binary64_nan(a_ps0) && a0 >= 0.0 ? c_ps0 : b_ps0;
+        const std::uint64_t result_ps1 =
+            !is_binary64_nan(a_ps1) && a1 >= 0.0 ? c_ps1 : b_ps1;
+        state.fpr[instruction.fp_register] = result_ps0;
+        state.fpr_ps1[instruction.fp_register] = result_ps1;
+        pending_history_entry_.paired_fp_select_result_ps0 = result_ps0;
+        pending_history_entry_.paired_fp_select_result_ps1 = result_ps1;
+        break;
+    }
+
     case Opcode::paired_single_negate:
     {
         constexpr std::uint64_t sign_mask = 0x8000000000000000ULL;
@@ -5346,6 +5413,13 @@ StepResult EspressoCore::step()
             state.fpr[pending_history_entry_.paired_fp_destination_register];
         pending_history_entry_.paired_fp_destination_ps1 =
             state.fpr_ps1[pending_history_entry_.paired_fp_destination_register];
+    }
+    if (pending_history_entry_.has_paired_fp_select)
+    {
+        pending_history_entry_.paired_fp_select_result_ps0 =
+            state.fpr[pending_history_entry_.paired_fp_select_destination];
+        pending_history_entry_.paired_fp_select_result_ps1 =
+            state.fpr_ps1[pending_history_entry_.paired_fp_select_destination];
     }
     append_instruction_history(std::move(pending_history_entry_));
     has_pending_history_entry_ = false;

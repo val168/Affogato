@@ -172,6 +172,7 @@ enum class Opcode
     paired_single_negate,
     paired_single_absolute_value,
     paired_single_negative_absolute_value,
+    paired_single_select,
     condition_bit_and,
     condition_bit_and_complement,
     condition_bit_or,
