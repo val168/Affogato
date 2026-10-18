@@ -23032,6 +23032,52 @@ void paired_single_merge10_tests()
     assert(record_form.state.fpr_ps1[31] == 0x2222222222222222ULL);
 }
 
+void paired_single_merge11_tests()
+{
+    const auto encode_ps_merge11 = [](std::uint8_t destination, std::uint8_t source_a,
+                                      std::uint8_t source_b, bool record = false) {
+        return 0x10000000U |
+            (static_cast<std::uint32_t>(destination) << 21U) |
+            (static_cast<std::uint32_t>(source_a) << 16U) |
+            (static_cast<std::uint32_t>(source_b) << 11U) |
+            (624U << 1U) | static_cast<std::uint32_t>(record);
+    };
+
+    constexpr std::uint32_t exact_encoding = 0x106324E0U;
+    const DecodedInstruction decoded = decode(exact_encoding);
+    assert(decoded.opcode == Opcode::paired_single_merge11);
+    assert(decoded.fp_register == 3U && decoded.fp_source_a == 3U &&
+           decoded.fp_source_b == 4U);
+    assert(((exact_encoding >> 1U) & 0x3FFU) == 624U);
+    assert(encode_ps_merge11(3U, 3U, 4U) == exact_encoding);
+    assert(decode(encode_ps_merge11(3U, 3U, 4U, true)).opcode == Opcode::unsupported);
+
+    EspressoCore core(4U);
+    core.state.fpr[5] = 0x5000000000000000ULL;
+    core.state.fpr_ps1[5] = 0x5100000000000000ULL;
+    core.state.fpr[9] = 0x9000000000000000ULL;
+    core.state.fpr_ps1[9] = 0x9100000000000000ULL;
+    core.memory.write32_be(0U, encode_ps_merge11(3U, 5U, 9U));
+    const RunResult result = core.run(1U);
+    assert(result.reason == StopReason::instruction_limit);
+    assert(core.state.fpr[3] == 0x5100000000000000ULL);
+    assert(core.state.fpr_ps1[3] == 0x9100000000000000ULL);
+    const InstructionHistoryEntry& history = result.instruction_history.front();
+    assert(history.opcode_name == "ps_merge11");
+    assert(history.has_paired_fp_state);
+    assert(history.paired_fp_destination_ps0 == 0x5100000000000000ULL);
+    assert(history.paired_fp_destination_ps1 == 0x9100000000000000ULL);
+
+    // Both selected PS1 values are snapshotted before an aliased destination write.
+    EspressoCore alias(4U);
+    alias.state.fpr[5] = 0x5000000000000000ULL;
+    alias.state.fpr_ps1[5] = 0x5100000000000000ULL;
+    alias.memory.write32_be(0U, encode_ps_merge11(5U, 5U, 5U));
+    assert(alias.step() == StepResult::executed);
+    assert(alias.state.fpr[5] == 0x5100000000000000ULL);
+    assert(alias.state.fpr_ps1[5] == 0x5100000000000000ULL);
+}
+
 void function_call_and_stack_tests()
 {
     EspressoCore link_branch_core(0x20);
@@ -23311,6 +23357,7 @@ int main(int argc, char* argv[])
     paired_single_merge00_tests();
     paired_single_merge01_tests();
     paired_single_merge10_tests();
+    paired_single_merge11_tests();
     elf_loader_tests();
     rpx_loader_tests();
     hle_dispatch_tests();

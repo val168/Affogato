@@ -684,6 +684,7 @@ void set_xer_carry(CpuState& state, bool carry) noexcept
     case Opcode::paired_single_merge00: return "ps_merge00";
     case Opcode::paired_single_merge01: return "ps_merge01";
     case Opcode::paired_single_merge10: return "ps_merge10";
+    case Opcode::paired_single_merge11: return "ps_merge11";
     case Opcode::condition_bit_and: return "crand";
     case Opcode::condition_bit_and_complement: return "crandc";
     case Opcode::condition_bit_or: return "cror";
@@ -810,7 +811,8 @@ void add_history_source(
     const Opcode opcode = instruction.opcode;
     if (opcode == Opcode::paired_single_merge00 ||
         opcode == Opcode::paired_single_merge01 ||
-        opcode == Opcode::paired_single_merge10)
+        opcode == Opcode::paired_single_merge10 ||
+        opcode == Opcode::paired_single_merge11)
     {
         entry.has_paired_fp_state = true;
         entry.paired_fp_destination_register = instruction.fp_register;
@@ -5080,6 +5082,7 @@ StepResult EspressoCore::step()
     case Opcode::paired_single_merge00:
     case Opcode::paired_single_merge01:
     case Opcode::paired_single_merge10:
+    case Opcode::paired_single_merge11:
     {
         // Snapshot both source lanes first: any of the three FPR operands may
         // alias, including the all-equal form used by Wind Waker.
@@ -5095,11 +5098,13 @@ StepResult EspressoCore::step()
             state.fpr[instruction.fp_source_b],
             state.fpr_ps1[instruction.fp_source_b]};
         state.fpr[instruction.fp_register] =
-            instruction.opcode == Opcode::paired_single_merge10
+            (instruction.opcode == Opcode::paired_single_merge10 ||
+             instruction.opcode == Opcode::paired_single_merge11)
                 ? source_a.ps1
                 : source_a.ps0;
         state.fpr_ps1[instruction.fp_register] =
-            instruction.opcode == Opcode::paired_single_merge01
+            (instruction.opcode == Opcode::paired_single_merge01 ||
+             instruction.opcode == Opcode::paired_single_merge11)
                 ? source_b.ps1
                 : source_b.ps0;
         break;

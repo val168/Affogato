@@ -36,13 +36,15 @@ DecodedInstruction decode(std::uint32_t raw) noexcept
     case 4: // Paired-single X-form instructions
         if ((field(raw, 1, 0x3FFU) == 528U ||
              field(raw, 1, 0x3FFU) == 560U ||
-             field(raw, 1, 0x3FFU) == 592U) && (raw & 1U) == 0U)
+             field(raw, 1, 0x3FFU) == 592U ||
+             field(raw, 1, 0x3FFU) == 624U) && (raw & 1U) == 0U)
         {
             const std::uint32_t extended_opcode = field(raw, 1, 0x3FFU);
             instruction.opcode = extended_opcode == 528U
                 ? Opcode::paired_single_merge00
                 : extended_opcode == 560U ? Opcode::paired_single_merge01
-                                           : Opcode::paired_single_merge10;
+                : extended_opcode == 592U ? Opcode::paired_single_merge10
+                                           : Opcode::paired_single_merge11;
             instruction.fp_register = static_cast<std::uint8_t>(field(raw, 21, 0x1FU));
             instruction.fp_source_a = static_cast<std::uint8_t>(field(raw, 16, 0x1FU));
             instruction.fp_source_b = static_cast<std::uint8_t>(field(raw, 11, 0x1FU));
