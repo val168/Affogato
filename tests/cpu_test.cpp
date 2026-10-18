@@ -1756,6 +1756,43 @@ void move_from_xer_tests()
     assert(format_instruction_history(result).find("mfxer") != std::string::npos);
 }
 
+void move_to_xer_tests()
+{
+    constexpr std::uint32_t instruction = 0x7CA103A6U; // mtxer r5
+    const DecodedInstruction decoded = decode(instruction);
+    assert(decoded.opcode == Opcode::move_to_xer);
+    assert(decoded.destination == 5U);
+    assert(((instruction >> 1U) & 0x3FFU) == 467U);
+
+    EspressoCore core(0x100U);
+    core.state.gpr.fill(0xA5A5A5A5U);
+    core.state.gpr[5] = 0xE1234567U;
+    core.state.xer = 0x01234567U;
+    core.state.cr = 0x89ABCDEFU;
+    core.state.lr = 0x10203040U;
+    core.state.ctr = 0x50607080U;
+    core.state.fpscr = 0xCAFEBABEU;
+    core.memory.write32_be(0U, instruction);
+    const auto gprs_before = core.state.gpr;
+    const auto fprs_before = core.state.fpr;
+    const auto ps1_before = core.state.fpr_ps1;
+    const RunResult result = core.run(1U);
+    assert(result.steps == 1U && core.state.cia == 4U);
+    assert(core.state.xer == 0xE1234567U);
+    assert(core.state.gpr == gprs_before);
+    assert(core.state.cr == 0x89ABCDEFU);
+    assert(core.state.lr == 0x10203040U && core.state.ctr == 0x50607080U);
+    assert(core.state.fpscr == 0xCAFEBABEU);
+    assert(core.state.fpr == fprs_before && core.state.fpr_ps1 == ps1_before);
+    const InstructionHistoryEntry& history = result.instruction_history.front();
+    assert(history.opcode_name == "mtxer");
+    assert(history.source_count == 1U && history.source_registers[0] == 5U);
+    assert(history.source_values[0] == 0xE1234567U);
+    assert(format_instruction_history(result).find("mtxer") != std::string::npos);
+
+    assert(decode(instruction | 1U).opcode == Opcode::unsupported);
+}
+
 void move_to_condition_register_fields_tests()
 {
     const auto encode_mtcrf = [](std::uint8_t source, std::uint8_t field_mask) {
@@ -23495,6 +23532,7 @@ int main(int argc, char* argv[])
     move_condition_register_field_tests();
     move_from_condition_register_tests();
     move_from_xer_tests();
+    move_to_xer_tests();
     move_to_condition_register_fields_tests();
     move_condition_register_from_xer_tests();
     integer_alu_tests();
