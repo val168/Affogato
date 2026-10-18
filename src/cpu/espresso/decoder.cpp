@@ -196,6 +196,16 @@ DecodedInstruction decode(std::uint32_t raw) noexcept
             instruction.cr_source_b_bit =
                 static_cast<std::uint8_t>(field(raw, 11, 0x1FU));
         }
+        else if (extended_opcode == 193U && (raw & 1U) == 0U) // crxor
+        {
+            instruction.opcode = Opcode::condition_bit_xor;
+            instruction.cr_destination_bit =
+                static_cast<std::uint8_t>(field(raw, 21, 0x1FU));
+            instruction.cr_source_a_bit =
+                static_cast<std::uint8_t>(field(raw, 16, 0x1FU));
+            instruction.cr_source_b_bit =
+                static_cast<std::uint8_t>(field(raw, 11, 0x1FU));
+        }
         else if (extended_opcode == 16 || extended_opcode == 528)
         {
             instruction.opcode = extended_opcode == 16

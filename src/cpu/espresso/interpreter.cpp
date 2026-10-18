@@ -602,6 +602,7 @@ void set_xer_carry(CpuState& state, bool carry) noexcept
     case Opcode::condition_bit_or: return "cror";
     case Opcode::condition_bit_or_complement: return "crorc";
     case Opcode::condition_bit_nor: return "crnor";
+    case Opcode::condition_bit_xor: return "crxor";
     }
     return "unknown";
 }
@@ -713,7 +714,8 @@ void add_history_source(
         opcode == Opcode::condition_bit_and_complement ||
         opcode == Opcode::condition_bit_or ||
         opcode == Opcode::condition_bit_or_complement ||
-        opcode == Opcode::condition_bit_nor)
+        opcode == Opcode::condition_bit_nor ||
+        opcode == Opcode::condition_bit_xor)
     {
         entry.has_cr_bit_operation = true;
         entry.cr_bit_destination = instruction.cr_destination_bit;
@@ -3528,6 +3530,7 @@ StepResult EspressoCore::step()
     case Opcode::condition_bit_or:
     case Opcode::condition_bit_or_complement:
     case Opcode::condition_bit_nor:
+    case Opcode::condition_bit_xor:
     {
         const bool source_a = read_cr_bit(state, instruction.cr_source_a_bit);
         const bool source_b = read_cr_bit(state, instruction.cr_source_b_bit);
@@ -3539,7 +3542,9 @@ StepResult EspressoCore::step()
                     ? source_a || source_b
                     : instruction.opcode == Opcode::condition_bit_or_complement
                         ? source_a || !source_b
-                        : !(source_a || source_b);
+                        : instruction.opcode == Opcode::condition_bit_nor
+                            ? !(source_a || source_b)
+                            : source_a != source_b;
         const std::uint32_t destination_mask =
             1U << (31U - instruction.cr_destination_bit);
         if (result)
