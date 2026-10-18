@@ -113,6 +113,7 @@ enum class Opcode
     load_double,
     store_single,
     store_single_update,
+    store_single_indexed,
     store_double,
     store_double_update,
     paired_single_merge10,

@@ -443,6 +443,7 @@ void set_xer_carry(CpuState& state, bool carry) noexcept
             instruction.opcode == Opcode::store_word_indexed ||
             instruction.opcode == Opcode::store_byte_indexed ||
             instruction.opcode == Opcode::store_halfword_indexed ||
+            instruction.opcode == Opcode::store_single_indexed ||
             instruction.opcode == Opcode::store_floating_as_integer_word_indexed;
         const bool memory_instruction = indexed ||
             instruction.opcode == Opcode::load_word_zero ||
@@ -468,6 +469,7 @@ void set_xer_carry(CpuState& state, bool carry) noexcept
             instruction.opcode == Opcode::load_single_indexed ||
             instruction.opcode == Opcode::store_single ||
             instruction.opcode == Opcode::store_single_update ||
+            instruction.opcode == Opcode::store_single_indexed ||
             instruction.opcode == Opcode::store_double ||
             instruction.opcode == Opcode::store_double_update ||
             instruction.opcode == Opcode::load_double;
@@ -598,6 +600,7 @@ void set_xer_carry(CpuState& state, bool carry) noexcept
     case Opcode::load_double: return "lfd";
     case Opcode::store_single: return "stfs";
     case Opcode::store_single_update: return "stfsu";
+    case Opcode::store_single_indexed: return "stfsx";
     case Opcode::store_double: return "stfd";
     case Opcode::store_double_update: return "stfdu";
     case Opcode::paired_single_merge10: return "ps_merge10";
@@ -867,6 +870,7 @@ void add_history_source(
         opcode == Opcode::load_halfword_algebraic_indexed ||
         opcode == Opcode::store_word_indexed ||
         opcode == Opcode::store_byte_indexed || opcode == Opcode::store_halfword_indexed ||
+        opcode == Opcode::store_single_indexed ||
         opcode == Opcode::store_floating_as_integer_word_indexed)
     {
         const std::uint32_t base = instruction.base == 0U
@@ -897,7 +901,8 @@ void add_history_source(
         entry.fp_destination_register = instruction.fp_register;
     }
     else if (opcode == Opcode::store_single || opcode == Opcode::store_single_update ||
-             opcode == Opcode::store_double || opcode == Opcode::store_double_update ||
+             opcode == Opcode::store_single_indexed || opcode == Opcode::store_double ||
+             opcode == Opcode::store_double_update ||
              opcode == Opcode::store_floating_as_integer_word_indexed)
     {
         entry.has_fp_source = true;
@@ -1002,6 +1007,7 @@ void add_history_source(
     case Opcode::store_word_indexed:
     case Opcode::store_byte_indexed:
     case Opcode::store_halfword_indexed:
+    case Opcode::store_single_indexed:
     case Opcode::store_floating_as_integer_word_indexed:
         if (instruction.base != 0)
         {
@@ -1099,6 +1105,8 @@ void add_history_source(
     case Opcode::store_single_update:
         entry.has_destination = true;
         entry.destination_register = instruction.base;
+        break;
+    case Opcode::store_single_indexed:
         break;
     case Opcode::store_word_update:
     case Opcode::store_byte_update:
@@ -3577,9 +3585,12 @@ StepResult EspressoCore::step()
 
     case Opcode::store_single:
     case Opcode::store_single_update:
+    case Opcode::store_single_indexed:
     {
-        const std::uint32_t address =
-            effective_address(state, instruction.base, instruction.immediate);
+        const std::uint32_t address = instruction.opcode == Opcode::store_single_indexed
+            ? (instruction.base == 0U ? 0U : state.gpr[instruction.base]) +
+                state.gpr[instruction.source]
+            : effective_address(state, instruction.base, instruction.immediate);
         const double double_value = std::bit_cast<double>(state.fpr[instruction.fp_register]);
         const float single_value = static_cast<float>(double_value);
         const std::uint32_t single_bits = std::bit_cast<std::uint32_t>(single_value);

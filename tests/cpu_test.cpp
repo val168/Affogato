@@ -17420,6 +17420,110 @@ void load_single_indexed_tests()
     assert(fault.state.fpr_ps1[6] == 0x8877665544332211ULL);
 }
 
+void store_single_indexed_tests()
+{
+    const auto encode_stfsx = [](std::uint8_t source, std::uint8_t base,
+                                 std::uint8_t index, bool reserved_bit = false) {
+        return (31U << 26U) |
+            (static_cast<std::uint32_t>(source) << 21U) |
+            (static_cast<std::uint32_t>(base) << 16U) |
+            (static_cast<std::uint32_t>(index) << 11U) | (663U << 1U) |
+            static_cast<std::uint32_t>(reserved_bit);
+    };
+
+    constexpr std::uint32_t exact_encoding = 0x7C00052EU;
+    const DecodedInstruction decoded = decode(exact_encoding);
+    assert(decoded.opcode == Opcode::store_single_indexed);
+    assert(decoded.fp_register == 0U);
+    assert(decoded.base == 0U);
+    assert(decoded.source == 0U);
+    assert(((exact_encoding >> 1U) & 0x3FFU) == 663U);
+    assert(encode_stfsx(0U, 0U, 0U) == exact_encoding);
+    assert(decode(encode_stfsx(3U, 4U, 5U, true)).opcode == Opcode::unsupported);
+
+    EspressoCore core(0x100U);
+    core.state.gpr.fill(0xA5A5A5A5U);
+    core.state.gpr[4] = 0x40U;
+    core.state.gpr[5] = 8U;
+    core.state.fpr[7] = 0x3FF8000000000000ULL; // 1.5
+    core.state.fpr_ps1[7] = 0xDEADBEEF01234567ULL;
+    core.state.cr = 0x12345678U;
+    core.state.xer = 0xA00000A5U;
+    core.state.lr = 0x11223344U;
+    core.state.ctr = 0x55667788U;
+    core.state.fpscr = 0xCAFEBABEU;
+    core.memory.write32_be(0U, encode_stfsx(7U, 4U, 5U));
+    core.memory.write32_be(0x48U, 0xAABBCCDDU);
+    const auto original_gprs = core.state.gpr;
+    const RunResult result = core.run(1U);
+    assert(result.reason == StopReason::instruction_limit);
+    assert(core.state.cia == 4U);
+    assert(core.memory.read32_be(0x48U) == 0x3FC00000U);
+    assert(core.state.gpr == original_gprs);
+    assert(core.state.fpr[7] == 0x3FF8000000000000ULL);
+    assert(core.state.fpr_ps1[7] == 0xDEADBEEF01234567ULL);
+    assert(core.state.cr == 0x12345678U);
+    assert(core.state.xer == 0xA00000A5U);
+    assert(core.state.lr == 0x11223344U);
+    assert(core.state.ctr == 0x55667788U);
+    assert(core.state.fpscr == 0xCAFEBABEU);
+    const InstructionHistoryEntry& history = result.instruction_history.front();
+    assert(history.opcode_name == "stfsx");
+    assert(history.has_effective_address && history.effective_address == 0x48U);
+    assert(history.has_fp_source && history.fp_source_register == 7U);
+    assert(history.fp_source_value == 0x3FF8000000000000ULL);
+    assert(history.has_stored_single_value && history.stored_single_value == 0x3FC00000U);
+    assert(history.source_count == 2U);
+    assert(history.source_registers[0] == 4U && history.source_values[0] == 0x40U);
+    assert(history.source_registers[1] == 5U && history.source_values[1] == 8U);
+
+    // rA=0 is zero, but rB=0 remains a normal GPR operand.
+    EspressoCore zero_base(0x100U);
+    zero_base.state.gpr[0] = 0x40U;
+    zero_base.state.fpr[3] = 0xBFF0000000000000ULL;
+    zero_base.memory.write32_be(0x40U, 0U);
+    zero_base.memory.write32_be(0U, encode_stfsx(3U, 0U, 0U));
+    const RunResult zero_base_result = zero_base.run(1U);
+    assert(zero_base.memory.read32_be(0x40U) == 0xBF800000U);
+    assert(zero_base_result.instruction_history.front().effective_address == 0x40U);
+    assert(zero_base_result.instruction_history.front().source_count == 1U);
+    assert(zero_base_result.instruction_history.front().source_registers[0] == 0U);
+
+    // The four-byte store supports a backing-region boundary.
+    EspressoCore cross_region(0x100U);
+    cross_region.memory.map_region(0x1000U, 2U);
+    cross_region.memory.map_region(0x1002U, 2U);
+    cross_region.state.gpr[4] = 0x1000U;
+    cross_region.state.fpr[6] = 0x3FF0000000000000ULL;
+    cross_region.memory.write32_be(0U, encode_stfsx(6U, 4U, 0U));
+    assert(cross_region.step() == StepResult::executed);
+    assert(cross_region.memory.read8(0x1000U) == 0x3FU);
+    assert(cross_region.memory.read8(0x1001U) == 0x80U);
+    assert(cross_region.memory.read8(0x1002U) == 0x00U);
+    assert(cross_region.memory.read8(0x1003U) == 0x00U);
+
+    // A partial destination faults before writing any byte or publishing a store result.
+    EspressoCore fault(0x100U);
+    fault.memory.map_region(0x2000U, 2U);
+    fault.memory.write8(0x2000U, 0xAAU);
+    fault.memory.write8(0x2001U, 0xBBU);
+    fault.state.gpr[4] = 0x2000U;
+    fault.state.fpr[6] = 0x3FF0000000000000ULL;
+    fault.memory.write32_be(0U, encode_stfsx(6U, 4U, 0U));
+    const RunResult fault_result = fault.run(1U);
+    assert(fault_result.reason == StopReason::memory_fault);
+    assert(fault_result.detail.find("write 4 byte(s)") != std::string::npos);
+    assert(fault_result.detail.find("rA=4 (0x00002000), rB=0 (0x00000000)") !=
+           std::string::npos);
+    assert(fault.memory.read8(0x2000U) == 0xAAU);
+    assert(fault.memory.read8(0x2001U) == 0xBBU);
+    assert(fault.state.fpr[6] == 0x3FF0000000000000ULL);
+    assert(fault_result.instruction_history.size() == 1U);
+    assert(fault_result.instruction_history.front().opcode_name == "stfsx");
+    assert(!fault_result.instruction_history.front().completed);
+    assert(!fault_result.instruction_history.front().has_stored_single_value);
+}
+
 void load_halfword_algebraic_tests()
 {
     const auto run_lha = [](std::uint8_t destination, std::uint8_t base,
@@ -19079,6 +19183,7 @@ int main(int argc, char* argv[])
     load_halfword_zero_indexed_tests();
     load_byte_zero_indexed_tests();
     load_single_indexed_tests();
+    store_single_indexed_tests();
     load_halfword_algebraic_tests();
     multiple_word_load_store_tests();
     load_string_word_immediate_tests();
