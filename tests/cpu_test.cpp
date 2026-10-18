@@ -1090,6 +1090,48 @@ void instruction_sync_tests()
            std::string::npos);
 }
 
+void enforce_in_order_io_tests()
+{
+    constexpr std::uint32_t eieio = 0x7C0006ACU;
+    assert(decode(eieio).opcode == Opcode::enforce_in_order_io);
+    assert(decode(eieio | 1U).opcode == Opcode::unsupported);
+    assert(decode(eieio | (1U << 11U)).opcode == Opcode::unsupported);
+
+    EspressoCore core(0x100U);
+    for (std::size_t index = 0U; index < core.state.gpr.size(); ++index)
+    {
+        core.state.gpr[index] = 0x10203040U + static_cast<std::uint32_t>(index);
+        core.state.fpr[index] = 0x1111000000000000ULL + index;
+        core.state.fpr_ps1[index] = 0x2222000000000000ULL + index;
+    }
+    core.state.cr = 0x12345678U;
+    core.state.xer = 0xA00000A5U;
+    core.state.lr = 0x10203040U;
+    core.state.ctr = 0x50607080U;
+    core.state.fpscr = 0xCAFEBABEU;
+    core.memory.write32_be(0U, eieio);
+    const auto gpr_before = core.state.gpr;
+    const auto fpr_before = core.state.fpr;
+    const auto ps1_before = core.state.fpr_ps1;
+    std::array<std::uint8_t, 0x100U> memory_before{};
+    core.memory.read_bytes(0U, memory_before);
+
+    const RunResult result = core.run(1U);
+    assert(result.steps == 1U && core.state.cia == 4U);
+    assert(core.state.gpr == gpr_before);
+    assert(core.state.fpr == fpr_before && core.state.fpr_ps1 == ps1_before);
+    assert(core.state.cr == 0x12345678U);
+    assert(core.state.xer == 0xA00000A5U);
+    assert(core.state.lr == 0x10203040U);
+    assert(core.state.ctr == 0x50607080U);
+    assert(core.state.fpscr == 0xCAFEBABEU);
+    std::array<std::uint8_t, 0x100U> memory_after{};
+    core.memory.read_bytes(0U, memory_after);
+    assert(memory_after == memory_before);
+    assert(result.instruction_history.front().opcode_name == "eieio");
+    assert(format_instruction_history(result).find("eieio") != std::string::npos);
+}
+
 void condition_bit_and_tests()
 {
     constexpr std::uint8_t destination_bit = 7U;
@@ -23150,6 +23192,7 @@ int main(int argc, char* argv[])
     mem_get_allocatable_size_for_exp_heap_ex_hle_tests();
     compare_and_conditional_branch_tests();
     instruction_sync_tests();
+    enforce_in_order_io_tests();
     data_cache_block_zero_tests();
     data_cache_block_touch_tests();
     instruction_cache_block_invalidate_tests();

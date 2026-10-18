@@ -69,6 +69,7 @@ enum class Opcode
     shift_right_word,
     branch,
     instruction_sync,
+    enforce_in_order_io,
     instruction_cache_block_invalidate,
     data_cache_block_touch,
     data_cache_block_zero,

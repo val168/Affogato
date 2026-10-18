@@ -794,6 +794,11 @@ DecodedInstruction decode(std::uint32_t raw) noexcept
             instruction.base = static_cast<std::uint8_t>(field(raw, 16, 0x1FU));
             instruction.source = static_cast<std::uint8_t>(field(raw, 11, 0x1FU));
         }
+        else if (extended_opcode == 854U && (raw & 1U) == 0U &&
+                 field(raw, 11, 0x7FFFU) == 0U) // eieio
+        {
+            instruction.opcode = Opcode::enforce_in_order_io;
+        }
         else if (extended_opcode == 1014U && (raw & 1U) == 0U) // dcbz
         {
             instruction.opcode = Opcode::data_cache_block_zero;

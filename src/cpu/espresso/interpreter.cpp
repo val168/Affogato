@@ -587,6 +587,7 @@ void set_xer_carry(CpuState& state, bool carry) noexcept
     case Opcode::shift_right_word: return "srw";
     case Opcode::branch: return "b";
     case Opcode::instruction_sync: return "isync";
+    case Opcode::enforce_in_order_io: return "eieio";
     case Opcode::instruction_cache_block_invalidate: return "icbi";
     case Opcode::data_cache_block_touch: return "dcbt";
     case Opcode::data_cache_block_zero: return "dcbz";
@@ -5064,6 +5065,12 @@ StepResult EspressoCore::step()
     case Opcode::instruction_sync:
         // Instructions are fetched directly from guest memory. There is no
         // pipeline, I-cache, MMU synchronization state, or JIT cache to sync yet.
+        break;
+
+    case Opcode::enforce_in_order_io:
+        // Guest memory accesses execute synchronously and in program order on
+        // Affogato's single interpreter lane; there is no cache-inhibited I/O
+        // mapping or asynchronous memory queue to order separately.
         break;
 
     case Opcode::data_cache_block_touch:
