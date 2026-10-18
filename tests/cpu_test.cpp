@@ -559,6 +559,14 @@ void decoder_tests()
     assert(decode(0x7C600027U).opcode == Opcode::unsupported); // reserved bit 0
     assert(decode(0x7C601026U).opcode == Opcode::unsupported); // reserved field
 
+    constexpr std::uint32_t mtcrf = 0x7CA80120U; // mtcrf 0x80,r5
+    const DecodedInstruction mtcrf_decoded = decode(mtcrf);
+    assert(mtcrf_decoded.opcode == Opcode::move_to_condition_register_fields);
+    assert(mtcrf_decoded.destination == 5U && mtcrf_decoded.cr_field_mask == 0x80U);
+    assert(decode(mtcrf | 1U).opcode == Opcode::unsupported);
+    assert(decode(mtcrf | (1U << 11U)).opcode == Opcode::unsupported);
+    assert(decode(mtcrf | (1U << 20U)).opcode == Opcode::unsupported);
+
     const DecodedInstruction cmpwi = decode(0x2E830007U); // cmpwi cr5, r3, 7
     assert(cmpwi.opcode == Opcode::compare_signed_immediate);
     assert(cmpwi.cr_field == 5);
@@ -1644,6 +1652,49 @@ void move_from_condition_register_tests()
     assert(core.state.fpr == fpr_before);
     assert(core.state.fpr_ps1 == fpr_ps1_before);
     assert(result.instruction_history.front().opcode_name == "mfcr");
+}
+
+void move_to_condition_register_fields_tests()
+{
+    const auto encode_mtcrf = [](std::uint8_t source, std::uint8_t field_mask) {
+        return (31U << 26U) |
+            (static_cast<std::uint32_t>(source) << 21U) |
+            (static_cast<std::uint32_t>(field_mask) << 12U) | (144U << 1U);
+    };
+
+    EspressoCore core(0x100U);
+    core.state.gpr[5] = 0xA1B2C3D4U;
+    core.state.cr = 0x01234567U;
+    core.state.xer = 0x89ABCDEFU;
+    core.state.lr = 0x10203040U;
+    core.state.ctr = 0x50607080U;
+    core.state.fpscr = 0xDEADBEEFU;
+    core.memory.write32_be(0U, encode_mtcrf(5U, 0xA0U)); // update CR0 and CR2
+    const auto gprs_before = core.state.gpr;
+    const auto fprs_before = core.state.fpr;
+    const auto ps1_before = core.state.fpr_ps1;
+    const std::uint32_t old_cr = core.state.cr;
+    const auto result = core.run(1U);
+    assert(result.steps == 1U && core.state.cia == 4U);
+    const std::uint32_t expected_cr =
+        (old_cr & ~0xF0F00000U) | (0xA1B2C3D4U & 0xF0F00000U);
+    assert(core.state.cr == expected_cr);
+    assert(core.state.gpr == gprs_before);
+    assert(core.state.xer == 0x89ABCDEFU);
+    assert(core.state.lr == 0x10203040U && core.state.ctr == 0x50607080U);
+    assert(core.state.fpscr == 0xDEADBEEFU);
+    assert(core.state.fpr == fprs_before && core.state.fpr_ps1 == ps1_before);
+    const InstructionHistoryEntry& history = result.instruction_history.front();
+    assert(history.opcode_name == "mtcrf");
+    assert(history.source_count == 1U && history.source_registers[0] == 5U);
+
+    // A zero field mask leaves CR untouched while the instruction still retires.
+    EspressoCore zero_mask(0x100U);
+    zero_mask.state.gpr[7] = 0xFFFFFFFFU;
+    zero_mask.state.cr = 0xFEDCBA98U;
+    zero_mask.memory.write32_be(0U, encode_mtcrf(7U, 0U));
+    assert(zero_mask.step() == StepResult::executed);
+    assert(zero_mask.state.cr == 0xFEDCBA98U);
 }
 
 void floating_compare_unordered_tests()
@@ -20327,6 +20378,7 @@ int main(int argc, char* argv[])
     condition_bit_equivalence_tests();
     move_condition_register_field_tests();
     move_from_condition_register_tests();
+    move_to_condition_register_fields_tests();
     integer_alu_tests();
     and_immediate_shifted_record_tests();
     rotate_left_word_and_mask_register_tests();

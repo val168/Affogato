@@ -294,6 +294,13 @@ DecodedInstruction decode(std::uint32_t raw) noexcept
             instruction.destination =
                 static_cast<std::uint8_t>(field(raw, 21U, 0x1FU));
         }
+        else if (extended_opcode == 144U && field(raw, 11U, 1U) == 0U &&
+                 field(raw, 20U, 1U) == 0U && (raw & 1U) == 0U)
+        {
+            instruction.opcode = Opcode::move_to_condition_register_fields;
+            instruction.destination = static_cast<std::uint8_t>(field(raw, 21U, 0x1FU));
+            instruction.cr_field_mask = static_cast<std::uint8_t>(field(raw, 12U, 0xFFU));
+        }
         else if ((extended_opcode == 597U || extended_opcode == 725U) && (raw & 1U) == 0U)
         {
             instruction.opcode = extended_opcode == 597U

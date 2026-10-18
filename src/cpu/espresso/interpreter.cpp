@@ -656,6 +656,7 @@ void set_xer_carry(CpuState& state, bool carry) noexcept
     case Opcode::condition_bit_equivalence: return "creqv";
     case Opcode::move_condition_register_field: return "mcrf";
     case Opcode::move_from_condition_register: return "mfcr";
+    case Opcode::move_to_condition_register_fields: return "mtcrf";
     }
     return "unknown";
 }
@@ -788,6 +789,11 @@ void add_history_source(
         const std::uint32_t shift =
             28U - 4U * static_cast<std::uint32_t>(instruction.cr_field_source);
         entry.cr_field_value = static_cast<std::uint8_t>((state.cr >> shift) & 0xFU);
+        return entry;
+    }
+    if (opcode == Opcode::move_to_condition_register_fields)
+    {
+        add_history_source(entry, state, instruction.destination);
         return entry;
     }
     if (opcode == Opcode::floating_move_register || opcode == Opcode::floating_negate ||
@@ -3992,6 +3998,24 @@ StepResult EspressoCore::step()
     case Opcode::move_from_condition_register:
         state.gpr[instruction.destination] = state.cr;
         break;
+
+    case Opcode::move_to_condition_register_fields:
+    {
+        const std::uint32_t source = state.gpr[instruction.destination];
+        for (std::uint32_t field_index = 0U; field_index < 8U; ++field_index)
+        {
+            const std::uint32_t mask_bit = 1U << (7U - field_index);
+            if ((instruction.cr_field_mask & mask_bit) == 0U)
+            {
+                continue;
+            }
+
+            const std::uint32_t shift = 28U - 4U * field_index;
+            const std::uint32_t field_mask = 0xFU << shift;
+            state.cr = (state.cr & ~field_mask) | (source & field_mask);
+        }
+        break;
+    }
 
     case Opcode::store_halfword:
         memory.write16_be(
