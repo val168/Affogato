@@ -168,6 +168,7 @@ enum class Opcode
     paired_single_merge10,
     paired_single_merge11,
     paired_single_move_register,
+    paired_single_negate,
     condition_bit_and,
     condition_bit_and_complement,
     condition_bit_or,
