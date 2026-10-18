@@ -157,6 +157,12 @@ struct InstructionHistoryEntry
     std::uint8_t fpscr_field_immediate{};
     std::uint32_t fpscr_before_field_write{};
     std::uint32_t fpscr_after_field_write{};
+    bool has_fpscr_masked_write{};
+    std::uint8_t fpscr_masked_write_source{};
+    std::uint8_t fpscr_masked_write_mask{};
+    std::uint64_t fpscr_masked_write_source_raw{};
+    std::uint32_t fpscr_before_masked_write{};
+    std::uint32_t fpscr_after_masked_write{};
     bool has_fp_select{};
     std::uint8_t fp_select_destination{};
     std::uint8_t fp_select_a{};

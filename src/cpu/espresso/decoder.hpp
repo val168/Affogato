@@ -105,6 +105,7 @@ enum class Opcode
     floating_move_to_fpscr_bit_zero,
     floating_move_to_fpscr_bit_one,
     floating_move_to_fpscr_field_immediate,
+    floating_move_to_fpscr_fields,
     floating_convert_to_integer_word,
     floating_convert_to_integer_word_zero,
     floating_select,
@@ -217,6 +218,7 @@ struct DecodedInstruction
     std::uint8_t fpscr_bit{};
     std::uint8_t fpscr_field{};
     std::uint8_t fpscr_immediate{};
+    std::uint8_t fpscr_field_mask{};
     std::uint8_t branch_options{};
     std::uint8_t condition_bit{};
     std::uint8_t shift{};

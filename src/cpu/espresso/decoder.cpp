@@ -990,6 +990,14 @@ DecodedInstruction decode(std::uint32_t raw) noexcept
             instruction.fpscr_field = static_cast<std::uint8_t>(field(raw, 23, 0x7U));
             instruction.fpscr_immediate = static_cast<std::uint8_t>(field(raw, 12, 0xFU));
         }
+        else if (field(raw, 1, 0x3FFU) == 711U &&
+                 field(raw, 25, 0x1U) == 0U &&
+                 field(raw, 16, 0x1U) == 0U && (raw & 1U) == 0U)
+        {
+            instruction.opcode = Opcode::floating_move_to_fpscr_fields;
+            instruction.fp_source_b = static_cast<std::uint8_t>(field(raw, 11, 0x1FU));
+            instruction.fpscr_field_mask = static_cast<std::uint8_t>(field(raw, 17, 0xFFU));
+        }
         else if (field(raw, 1, 0x3FFU) == 15U &&
                  field(raw, 16, 0x1FU) == 0U && (raw & 1U) == 0U)
         {
