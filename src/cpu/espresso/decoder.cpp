@@ -502,6 +502,15 @@ DecodedInstruction decode(std::uint32_t raw) noexcept
             instruction.base = static_cast<std::uint8_t>(field(raw, 16, 0x1FU));
             instruction.source = static_cast<std::uint8_t>(field(raw, 11, 0x1FU));
         }
+        else if (extended_opcode == 55U && (raw & 1U) == 0U &&
+                 field(raw, 16, 0x1FU) != 0U &&
+                 field(raw, 21, 0x1FU) != field(raw, 16, 0x1FU)) // lwzux
+        {
+            instruction.opcode = Opcode::load_word_indexed_update;
+            instruction.destination = static_cast<std::uint8_t>(field(raw, 21, 0x1FU));
+            instruction.base = static_cast<std::uint8_t>(field(raw, 16, 0x1FU));
+            instruction.source = static_cast<std::uint8_t>(field(raw, 11, 0x1FU));
+        }
         else if (extended_opcode == 534U && (raw & 1U) == 0U) // lwbrx
         {
             instruction.opcode = Opcode::load_word_byte_reverse_indexed;

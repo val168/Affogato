@@ -436,6 +436,7 @@ void set_xer_carry(CpuState& state, bool carry) noexcept
         detail << "; instruction 0x" << std::setw(8) << instruction_word;
         const DecodedInstruction instruction = decode(instruction_word);
         const bool indexed = instruction.opcode == Opcode::load_word_indexed ||
+            instruction.opcode == Opcode::load_word_indexed_update ||
             instruction.opcode == Opcode::load_word_byte_reverse_indexed ||
             instruction.opcode == Opcode::load_single_indexed ||
             instruction.opcode == Opcode::load_single_indexed_update ||
@@ -461,6 +462,7 @@ void set_xer_carry(CpuState& state, bool carry) noexcept
         const bool memory_instruction = indexed ||
             instruction.opcode == Opcode::load_word_zero ||
             instruction.opcode == Opcode::load_word_update ||
+            instruction.opcode == Opcode::load_word_indexed_update ||
             instruction.opcode == Opcode::store_word ||
             instruction.opcode == Opcode::store_word_update ||
             instruction.opcode == Opcode::load_byte_zero ||
@@ -589,6 +591,7 @@ void set_xer_carry(CpuState& state, bool carry) noexcept
     case Opcode::store_string_word_immediate: return "stswi";
     case Opcode::load_word_update: return "lwzu";
     case Opcode::load_word_indexed: return "lwzx";
+    case Opcode::load_word_indexed_update: return "lwzux";
     case Opcode::load_word_byte_reverse_indexed: return "lwbrx";
     case Opcode::load_byte_zero_indexed: return "lbzx";
     case Opcode::load_byte_zero_indexed_update: return "lbzux";
@@ -899,6 +902,7 @@ void add_history_source(
         opcode == Opcode::store_halfword_byte_reverse_indexed;
 
     if (opcode == Opcode::load_word_indexed ||
+        opcode == Opcode::load_word_indexed_update ||
         opcode == Opcode::load_word_byte_reverse_indexed ||
         opcode == Opcode::load_single_indexed ||
         opcode == Opcode::load_single_indexed_update ||
@@ -1052,6 +1056,7 @@ void add_history_source(
         add_history_source(entry, state, instruction.base);
         break;
     case Opcode::load_word_indexed:
+    case Opcode::load_word_indexed_update:
     case Opcode::load_word_byte_reverse_indexed:
     case Opcode::load_single_indexed:
     case Opcode::load_single_indexed_update:
@@ -1143,6 +1148,7 @@ void add_history_source(
     case Opcode::load_word_zero:
     case Opcode::load_word_update:
     case Opcode::load_word_indexed:
+    case Opcode::load_word_indexed_update:
     case Opcode::load_word_byte_reverse_indexed:
     case Opcode::load_byte_zero_indexed:
     case Opcode::load_byte_zero_indexed_update:
@@ -3471,6 +3477,16 @@ StepResult EspressoCore::step()
         const std::uint32_t base = instruction.base == 0 ? 0U : state.gpr[instruction.base];
         const std::uint32_t address = base + state.gpr[instruction.source];
         state.gpr[instruction.destination] = memory.read32_be(address);
+        break;
+    }
+
+    case Opcode::load_word_indexed_update:
+    {
+        const std::uint32_t base = state.gpr[instruction.base];
+        const std::uint32_t address = base + state.gpr[instruction.source];
+        const std::uint32_t value = memory.read32_be(address);
+        state.gpr[instruction.destination] = value;
+        state.gpr[instruction.base] = address;
         break;
     }
 

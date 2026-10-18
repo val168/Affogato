@@ -17302,6 +17302,60 @@ void load_byte_zero_indexed_update_tests()
     assert(fault.state.gpr[6] == 0xDEADBEEFU);
 }
 
+void load_word_indexed_update_tests()
+{
+    const auto encode_lwzux = [](std::uint8_t destination, std::uint8_t base,
+                                 std::uint8_t index, bool reserved_bit = false) {
+        return (31U << 26U) |
+            (static_cast<std::uint32_t>(destination) << 21U) |
+            (static_cast<std::uint32_t>(base) << 16U) |
+            (static_cast<std::uint32_t>(index) << 11U) | (55U << 1U) |
+            static_cast<std::uint32_t>(reserved_bit);
+    };
+
+    constexpr std::uint32_t exact_encoding = 0x7C01006EU;
+    const DecodedInstruction decoded = decode(exact_encoding);
+    assert(decoded.opcode == Opcode::load_word_indexed_update);
+    assert(decoded.destination == 0U && decoded.base == 1U && decoded.source == 0U);
+    assert(((exact_encoding >> 1U) & 0x3FFU) == 55U);
+    assert(decode(encode_lwzux(3U, 0U, 5U)).opcode == Opcode::unsupported);
+    assert(decode(encode_lwzux(4U, 4U, 5U)).opcode == Opcode::unsupported);
+    assert(decode(encode_lwzux(3U, 4U, 5U, true)).opcode == Opcode::unsupported);
+
+    EspressoCore core(0x100U);
+    core.state.gpr[4] = 0x40U;
+    core.state.gpr[5] = 8U;
+    core.memory.write32_be(0U, encode_lwzux(6U, 4U, 5U));
+    core.memory.write32_be(0x48U, 0x89ABCDEFU);
+    const RunResult result = core.run(1U);
+    assert(result.reason == StopReason::instruction_limit);
+    assert(core.state.gpr[6] == 0x89ABCDEFU);
+    assert(core.state.gpr[4] == 0x48U);
+    assert(core.state.gpr[5] == 8U);
+    const InstructionHistoryEntry& history = result.instruction_history.front();
+    assert(history.opcode_name == "lwzux");
+    assert(history.has_effective_address && history.effective_address == 0x48U);
+    assert(history.has_destination && history.destination_register == 6U);
+    assert(history.destination_value == 0x89ABCDEFU);
+
+    EspressoCore fault(0x100U);
+    fault.memory.map_region(0x2000U, 2U);
+    fault.memory.write16_be(0x2000U, 0x1234U);
+    fault.state.gpr[4] = 0x2000U;
+    fault.state.gpr[5] = 0U;
+    fault.state.gpr[6] = 0xDEADBEEFU;
+    fault.memory.write32_be(0U, encode_lwzux(6U, 4U, 5U));
+    const RunResult fault_result = fault.run(1U);
+    assert(fault_result.reason == StopReason::memory_fault);
+    assert(fault_result.detail.find("read 4 byte(s)") != std::string::npos);
+    assert(fault_result.instruction_history.front().opcode_name == "lwzux");
+    assert(fault_result.instruction_history.front().has_effective_address);
+    assert(fault_result.instruction_history.front().effective_address == 0x2000U);
+    assert(!fault_result.instruction_history.front().completed);
+    assert(fault.state.gpr[4] == 0x2000U);
+    assert(fault.state.gpr[6] == 0xDEADBEEFU);
+}
+
 void load_byte_zero_indexed_tests()
 {
     const auto encode_lbzx = [](std::uint8_t destination, std::uint8_t base,
@@ -20121,6 +20175,7 @@ int main(int argc, char* argv[])
     load_halfword_zero_indexed_update_tests();
     load_halfword_algebraic_indexed_update_tests();
     load_byte_zero_indexed_update_tests();
+    load_word_indexed_update_tests();
     load_byte_zero_indexed_tests();
     store_word_byte_reverse_indexed_tests();
     store_halfword_byte_reverse_indexed_tests();
