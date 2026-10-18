@@ -661,6 +661,7 @@ void set_xer_carry(CpuState& state, bool carry) noexcept
     case Opcode::conditional_branch_to_link_register: return "bclr";
     case Opcode::move_from_count_register: return "mfctr";
     case Opcode::move_to_count_register: return "mtctr";
+    case Opcode::move_from_xer: return "mfxer";
     case Opcode::conditional_branch_to_count_register: return "bcctr";
     case Opcode::load_single: return "lfs";
     case Opcode::load_single_update: return "lfsu";
@@ -1321,6 +1322,7 @@ void add_history_source(
     case Opcode::load_halfword_algebraic:
     case Opcode::move_from_link_register:
     case Opcode::move_from_count_register:
+    case Opcode::move_from_xer:
         entry.has_destination = true;
         entry.destination_register = instruction.destination;
         break;
@@ -4535,6 +4537,10 @@ StepResult EspressoCore::step()
 
     case Opcode::move_from_count_register:
         state.gpr[instruction.destination] = state.ctr;
+        break;
+
+    case Opcode::move_from_xer:
+        state.gpr[instruction.destination] = state.xer;
         break;
 
     case Opcode::move_to_count_register:

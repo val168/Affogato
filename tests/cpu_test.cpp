@@ -781,6 +781,11 @@ void decoder_tests()
     assert(mflr.opcode == Opcode::move_from_link_register);
     assert(mflr.destination == 0);
 
+    const DecodedInstruction mfxer = decode(0x7C6102A6U); // mfxer r3
+    assert(mfxer.opcode == Opcode::move_from_xer);
+    assert(mfxer.destination == 3U);
+    assert(decode(0x7C6102A7U).opcode == Opcode::unsupported);
+
     const DecodedInstruction mtlr = decode(0x7C0803A6U); // mtlr r0
     assert(mtlr.opcode == Opcode::move_to_link_register);
     assert(mtlr.destination == 0);
@@ -1669,6 +1674,44 @@ void move_from_condition_register_tests()
     assert(core.state.fpr == fpr_before);
     assert(core.state.fpr_ps1 == fpr_ps1_before);
     assert(result.instruction_history.front().opcode_name == "mfcr");
+}
+
+void move_from_xer_tests()
+{
+    constexpr std::uint32_t instruction = 0x7C6102A6U; // mfxer r3
+    EspressoCore core(0x100U);
+    core.state.gpr.fill(0xA5A5A5A5U);
+    core.state.gpr[3] = 0xDEADBEEFU;
+    core.state.xer = 0xE00000A5U;
+    core.state.cr = 0x12345678U;
+    core.state.lr = 0x10203040U;
+    core.state.ctr = 0x50607080U;
+    core.state.fpscr = 0xCAFEBABEU;
+    core.memory.write32_be(0U, instruction);
+    const auto gprs_before = core.state.gpr;
+    const auto fprs_before = core.state.fpr;
+    const auto ps1_before = core.state.fpr_ps1;
+    const auto result = core.run(1U);
+    assert(result.steps == 1U && core.state.cia == 4U);
+    assert(core.state.gpr[3] == 0xE00000A5U);
+    for (std::size_t reg = 0U; reg < core.state.gpr.size(); ++reg)
+    {
+        if (reg != 3U)
+        {
+            assert(core.state.gpr[reg] == gprs_before[reg]);
+        }
+    }
+    assert(core.state.xer == 0xE00000A5U);
+    assert(core.state.cr == 0x12345678U);
+    assert(core.state.lr == 0x10203040U);
+    assert(core.state.ctr == 0x50607080U);
+    assert(core.state.fpscr == 0xCAFEBABEU);
+    assert(core.state.fpr == fprs_before && core.state.fpr_ps1 == ps1_before);
+    const InstructionHistoryEntry& history = result.instruction_history.front();
+    assert(history.opcode_name == "mfxer");
+    assert(history.has_destination && history.destination_register == 3U);
+    assert(history.destination_value == 0xE00000A5U);
+    assert(format_instruction_history(result).find("mfxer") != std::string::npos);
 }
 
 void move_to_condition_register_fields_tests()
@@ -23012,6 +23055,7 @@ int main(int argc, char* argv[])
     condition_bit_equivalence_tests();
     move_condition_register_field_tests();
     move_from_condition_register_tests();
+    move_from_xer_tests();
     move_to_condition_register_fields_tests();
     move_condition_register_from_xer_tests();
     integer_alu_tests();

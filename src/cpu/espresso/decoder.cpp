@@ -350,7 +350,13 @@ DecodedInstruction decode(std::uint32_t raw) noexcept
             // order: the encoded rA field contains SPR[0:4].
             const std::uint32_t spr =
                 (field(raw, 11, 0x1FU) << 5U) | field(raw, 16, 0x1FU);
-            if (spr == 8 || spr == 9)
+            if (spr == 1 && (raw & 1U) == 0U)
+            {
+                instruction.opcode = Opcode::move_from_xer;
+                instruction.destination =
+                    static_cast<std::uint8_t>(field(raw, 21, 0x1FU));
+            }
+            else if ((spr == 8 || spr == 9) && (raw & 1U) == 0U)
             {
                 instruction.destination =
                     static_cast<std::uint8_t>(field(raw, 21, 0x1FU));

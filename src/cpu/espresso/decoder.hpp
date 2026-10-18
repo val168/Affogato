@@ -143,6 +143,7 @@ enum class Opcode
     conditional_branch_to_link_register,
     move_from_count_register,
     move_to_count_register,
+    move_from_xer,
     conditional_branch_to_count_register,
     load_single,
     load_single_update,
