@@ -116,6 +116,7 @@ enum class Opcode
     paired_single_merge10,
     condition_bit_and,
     condition_bit_and_complement,
+    condition_bit_or,
 };
 
 struct DecodedInstruction

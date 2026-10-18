@@ -599,6 +599,7 @@ void set_xer_carry(CpuState& state, bool carry) noexcept
     case Opcode::paired_single_merge10: return "ps_merge10";
     case Opcode::condition_bit_and: return "crand";
     case Opcode::condition_bit_and_complement: return "crandc";
+    case Opcode::condition_bit_or: return "cror";
     }
     return "unknown";
 }
@@ -707,7 +708,8 @@ void add_history_source(
         return entry;
     }
     if (opcode == Opcode::condition_bit_and ||
-        opcode == Opcode::condition_bit_and_complement)
+        opcode == Opcode::condition_bit_and_complement ||
+        opcode == Opcode::condition_bit_or)
     {
         entry.has_cr_bit_operation = true;
         entry.cr_bit_destination = instruction.cr_destination_bit;
@@ -3519,12 +3521,15 @@ StepResult EspressoCore::step()
 
     case Opcode::condition_bit_and:
     case Opcode::condition_bit_and_complement:
+    case Opcode::condition_bit_or:
     {
         const bool source_a = read_cr_bit(state, instruction.cr_source_a_bit);
         const bool source_b = read_cr_bit(state, instruction.cr_source_b_bit);
         const bool result = instruction.opcode == Opcode::condition_bit_and
             ? source_a && source_b
-            : source_a && !source_b;
+            : instruction.opcode == Opcode::condition_bit_and_complement
+                ? source_a && !source_b
+                : source_a || source_b;
         const std::uint32_t destination_mask =
             1U << (31U - instruction.cr_destination_bit);
         if (result)
