@@ -73,6 +73,7 @@ enum class Opcode
     instruction_cache_block_invalidate,
     data_cache_block_touch,
     data_cache_block_store,
+    data_cache_block_flush,
     data_cache_block_zero,
     compare_signed_immediate,
     compare_signed_register,

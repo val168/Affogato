@@ -2104,6 +2104,63 @@ void data_cache_block_store_tests()
     assert(fault_result.detail.find("read 1 byte(s)") != std::string::npos);
 }
 
+void data_cache_block_flush_tests()
+{
+    const auto encode_dcbf = [](std::uint8_t base, std::uint8_t index,
+                                std::uint8_t reserved = 0U, bool rc = false) {
+        return (31U << 26U) |
+            (static_cast<std::uint32_t>(reserved) << 21U) |
+            (static_cast<std::uint32_t>(base) << 16U) |
+            (static_cast<std::uint32_t>(index) << 11U) |
+            (86U << 1U) | static_cast<std::uint32_t>(rc);
+    };
+
+    constexpr std::uint32_t exact_encoding = 0x7C0028ACU; // dcbf r0,r5
+    const DecodedInstruction decoded = decode(exact_encoding);
+    assert(decoded.opcode == Opcode::data_cache_block_flush);
+    assert(decoded.base == 0U && decoded.source == 5U);
+    assert(((exact_encoding >> 1U) & 0x3FFU) == 86U);
+    assert(decode(encode_dcbf(3U, 4U, 1U)).opcode == Opcode::unsupported);
+    assert(decode(encode_dcbf(3U, 4U, 0U, true)).opcode == Opcode::unsupported);
+
+    EspressoCore core(0x100U);
+    core.state.gpr.fill(0xA5A5A5A5U);
+    core.state.gpr[0] = 0xDEADBEEFU;
+    core.state.gpr[5] = 0x40U;
+    core.state.cr = 0x12345678U;
+    core.state.xer = 0xA00000A5U;
+    core.state.lr = 0x10203040U;
+    core.state.ctr = 0x50607080U;
+    core.state.fpscr = 0xCAFEBABEU;
+    core.memory.write8(0x40U, 0x5AU);
+    core.memory.write32_be(0U, exact_encoding);
+    const auto gprs_before = core.state.gpr;
+    const auto fprs_before = core.state.fpr;
+    const auto ps1_before = core.state.fpr_ps1;
+    const std::uint32_t cr_before = core.state.cr;
+    const std::uint32_t xer_before = core.state.xer;
+    const std::uint32_t fpscr_before = core.state.fpscr;
+    const RunResult result = core.run(1U);
+    assert(result.reason == StopReason::instruction_limit);
+    assert(core.state.gpr == gprs_before);
+    assert(core.state.fpr == fprs_before && core.state.fpr_ps1 == ps1_before);
+    assert(core.state.cr == cr_before && core.state.xer == xer_before);
+    assert(core.state.lr == 0x10203040U && core.state.ctr == 0x50607080U);
+    assert(core.state.fpscr == fpscr_before);
+    assert(core.memory.read8(0x40U) == 0x5AU);
+    const InstructionHistoryEntry& history = result.instruction_history.front();
+    assert(history.opcode_name == "dcbf");
+    assert(history.has_effective_address && history.effective_address == 0x40U);
+    assert(history.source_count == 1U && history.source_registers[0] == 5U);
+
+    EspressoCore fault(4U);
+    fault.state.gpr[5] = 0x40U;
+    fault.memory.write32_be(0U, exact_encoding);
+    const RunResult fault_result = fault.run(1U);
+    assert(fault_result.reason == StopReason::memory_fault);
+    assert(fault_result.detail.find("read 1 byte(s)") != std::string::npos);
+}
+
 void instruction_cache_block_invalidate_tests()
 {
     const auto encode_icbi = [](std::uint8_t base, std::uint8_t index,
@@ -23752,6 +23809,7 @@ int main(int argc, char* argv[])
     data_cache_block_zero_tests();
     data_cache_block_touch_tests();
     data_cache_block_store_tests();
+    data_cache_block_flush_tests();
     instruction_cache_block_invalidate_tests();
     floating_compare_unordered_tests();
     floating_compare_ordered_tests();
