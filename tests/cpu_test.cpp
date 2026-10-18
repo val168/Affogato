@@ -22805,6 +22805,69 @@ void floating_point_double_update_store_tests()
     assert(failed.has_destination && failed.destination_register == 6U);
 }
 
+void paired_single_merge00_tests()
+{
+    const auto encode_ps_merge00 = [](std::uint8_t destination, std::uint8_t source_a,
+                                      std::uint8_t source_b, bool record = false) {
+        return 0x10000000U |
+            (static_cast<std::uint32_t>(destination) << 21U) |
+            (static_cast<std::uint32_t>(source_a) << 16U) |
+            (static_cast<std::uint32_t>(source_b) << 11U) |
+            (528U << 1U) | static_cast<std::uint32_t>(record);
+    };
+
+    constexpr std::uint32_t exact_encoding = 0x10632420U;
+    const DecodedInstruction decoded = decode(exact_encoding);
+    assert(decoded.opcode == Opcode::paired_single_merge00);
+    assert(decoded.fp_register == 3U);
+    assert(decoded.fp_source_a == 3U);
+    assert(decoded.fp_source_b == 4U);
+    assert(((exact_encoding >> 1U) & 0x3FFU) == 528U);
+    assert(encode_ps_merge00(3U, 3U, 4U) == exact_encoding);
+    assert(decode(encode_ps_merge00(3U, 3U, 4U, true)).opcode == Opcode::unsupported);
+
+    EspressoCore core(4U);
+    core.state.fpr[5] = 0x5000000000000000ULL;
+    core.state.fpr_ps1[5] = 0x5100000000000000ULL;
+    core.state.fpr[9] = 0x9000000000000000ULL;
+    core.state.fpr_ps1[9] = 0x9100000000000000ULL;
+    core.state.fpr[3] = 0x3000000000000000ULL;
+    core.state.fpr_ps1[3] = 0x3100000000000000ULL;
+    core.state.gpr.fill(0xA5A5A5A5U);
+    core.state.cr = 0x12345678U;
+    core.state.xer = 0xA00000A5U;
+    core.memory.write32_be(0U, encode_ps_merge00(3U, 5U, 9U));
+    const auto gprs_before = core.state.gpr;
+    const auto gpr = core.run(1U);
+    assert(gpr.reason == StopReason::instruction_limit);
+    assert(core.state.fpr[3] == 0x5000000000000000ULL);
+    assert(core.state.fpr_ps1[3] == 0x9000000000000000ULL);
+    assert(core.state.fpr[5] == 0x5000000000000000ULL);
+    assert(core.state.fpr_ps1[5] == 0x5100000000000000ULL);
+    assert(core.state.fpr[9] == 0x9000000000000000ULL);
+    assert(core.state.fpr_ps1[9] == 0x9100000000000000ULL);
+    assert(core.state.gpr == gprs_before);
+    assert(core.state.cr == 0x12345678U);
+    assert(core.state.xer == 0xA00000A5U);
+    const InstructionHistoryEntry& history = gpr.instruction_history.front();
+    assert(history.opcode_name == "ps_merge00");
+    assert(history.has_paired_fp_state);
+    assert(history.paired_fp_source_a_ps0 == 0x5000000000000000ULL);
+    assert(history.paired_fp_source_b_ps0 == 0x9000000000000000ULL);
+    assert(history.paired_fp_destination_ps0 == 0x5000000000000000ULL);
+    assert(history.paired_fp_destination_ps1 == 0x9000000000000000ULL);
+    assert(format_instruction_history(gpr).find("ps_merge00") != std::string::npos);
+
+    // Destination/source aliasing uses both original source PS0 values.
+    EspressoCore alias(4U);
+    alias.state.fpr[5] = 0x5000000000000000ULL;
+    alias.state.fpr_ps1[5] = 0x5100000000000000ULL;
+    alias.memory.write32_be(0U, encode_ps_merge00(5U, 5U, 5U));
+    assert(alias.step() == StepResult::executed);
+    assert(alias.state.fpr[5] == 0x5000000000000000ULL);
+    assert(alias.state.fpr_ps1[5] == 0x5000000000000000ULL);
+}
+
 void paired_single_merge10_tests()
 {
     const auto encode_ps_merge10 = [](std::uint8_t destination, std::uint8_t source_a,
@@ -23197,6 +23260,7 @@ int main(int argc, char* argv[])
     floating_point_store_tests();
     floating_point_double_store_tests();
     floating_point_double_update_store_tests();
+    paired_single_merge00_tests();
     paired_single_merge10_tests();
     elf_loader_tests();
     rpx_loader_tests();
