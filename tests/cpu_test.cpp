@@ -10581,6 +10581,201 @@ void os_init_message_queue_hle_tests()
     }
 }
 
+void os_send_message_hle_tests()
+{
+    constexpr std::uint32_t queue = 0x1000U;
+    constexpr std::uint32_t messages = 0x2000U;
+    constexpr std::uint32_t message_a = 0x3000U;
+    constexpr std::uint32_t message_b = 0x3100U;
+    constexpr std::uint32_t message_c = 0x3200U;
+    constexpr std::uint32_t return_address = 0x02760C1CU;
+    constexpr std::uint32_t queue_size = 0x3CU;
+    constexpr std::uint32_t message_size = 0x10U;
+
+    EspressoCore core(0x10000U);
+    register_coreinit_hle(core.hle);
+    const std::uint32_t initialize =
+        core.hle.bind_import("coreinit", "OSInitMessageQueue");
+    const std::uint32_t send =
+        core.hle.bind_import("coreinit", "OSSendMessage");
+    core.state.cia = initialize;
+    core.state.lr = return_address;
+    core.state.gpr[3] = queue;
+    core.state.gpr[4] = messages;
+    core.state.gpr[5] = 3U;
+    assert(core.step() == StepResult::executed);
+
+    const auto write_message = [&](std::uint32_t address, std::uint32_t seed) {
+        for (std::uint32_t offset = 0U; offset < message_size; offset += 4U)
+        {
+            core.memory.write32_be(address + offset, seed + offset);
+        }
+    };
+    const auto expect_message = [&](std::uint32_t address, std::uint32_t seed) {
+        for (std::uint32_t offset = 0U; offset < message_size; offset += 4U)
+        {
+            assert(core.memory.read32_be(address + offset) == seed + offset);
+        }
+    };
+    write_message(message_a, 0xA0000000U);
+    write_message(message_b, 0xB0000000U);
+    write_message(message_c, 0xC0000000U);
+
+    for (std::uint32_t reg = 0U; reg < core.state.gpr.size(); ++reg)
+    {
+        core.state.gpr[reg] = 0x51000000U + reg * 0x101U;
+    }
+    for (std::uint32_t reg = 0U; reg < core.state.fpr.size(); ++reg)
+    {
+        core.state.fpr[reg] = 0x1122000000000000ULL + reg;
+        core.state.fpr_ps1[reg] = 0x3344000000000000ULL + reg;
+    }
+    core.state.cr = 0x12345678U;
+    core.state.xer = 0xA00000A5U;
+    core.state.ctr = 0xCAFEBABEU;
+    core.state.fpscr = 0x5A5AA55AU;
+    core.state.lr = return_address;
+
+    const auto invoke_send = [&](std::uint32_t source, std::uint32_t flags) {
+        core.state.cia = send;
+        core.state.gpr[3] = queue;
+        core.state.gpr[4] = source;
+        core.state.gpr[5] = flags;
+        return core.run(1U);
+    };
+
+    // Ordinary send appends a byte-exact OSMessage and changes only the queue
+    // ring and BOOL return register (apart from the normal HLE CIA return).
+    const auto fprs_before = core.state.fpr;
+    const auto ps1_before = core.state.fpr_ps1;
+    const std::uint32_t cr_before = core.state.cr;
+    const std::uint32_t xer_before = core.state.xer;
+    const std::uint32_t ctr_before = core.state.ctr;
+    const std::uint32_t fpscr_before = core.state.fpscr;
+    const std::uint32_t lr_before = core.state.lr;
+    const auto gprs_before = core.state.gpr;
+    const RunResult sent_a = invoke_send(message_a, 0U);
+    assert(sent_a.reason == StopReason::instruction_limit && sent_a.steps == 1U);
+    assert(core.state.cia == return_address);
+    assert(core.state.gpr[3] == 1U);
+    assert(core.state.gpr[4] == message_a);
+    assert(core.state.gpr[5] == 0U);
+    for (std::uint32_t reg = 0U; reg < 3U; ++reg)
+    {
+        assert(core.state.gpr[reg] == gprs_before[reg]);
+    }
+    for (std::uint32_t reg = 6U; reg < core.state.gpr.size(); ++reg)
+    {
+        assert(core.state.gpr[reg] == gprs_before[reg]);
+    }
+    assert(core.state.fpr == fprs_before);
+    assert(core.state.fpr_ps1 == ps1_before);
+    assert(core.state.cr == cr_before);
+    assert(core.state.xer == xer_before);
+    assert(core.state.ctr == ctr_before);
+    assert(core.state.fpscr == fpscr_before);
+    assert(core.state.lr == lr_before);
+    assert(core.memory.read32_be(queue + 0x34U) == 0U);
+    assert(core.memory.read32_be(queue + 0x38U) == 1U);
+    expect_message(messages, 0xA0000000U);
+
+    // High-priority send inserts before existing entries, then normal sends
+    // continue at the ring tail even after the first index wraps.
+    const RunResult sent_b = invoke_send(message_b, 2U);
+    assert(sent_b.reason == StopReason::instruction_limit);
+    assert(core.state.gpr[3] == 1U);
+    assert(core.memory.read32_be(queue + 0x34U) == 2U);
+    assert(core.memory.read32_be(queue + 0x38U) == 2U);
+    expect_message(messages + 2U * message_size, 0xB0000000U);
+    const RunResult sent_c = invoke_send(message_c, 0U);
+    assert(sent_c.reason == StopReason::instruction_limit);
+    assert(core.memory.read32_be(queue + 0x34U) == 2U);
+    assert(core.memory.read32_be(queue + 0x38U) == 3U);
+    expect_message(messages + message_size, 0xC0000000U);
+    expect_message(messages + 2U * message_size, 0xB0000000U);
+
+    // A nonblocking send to a full queue fails without changing ring contents
+    // or metadata; a blocking send cannot be emulated without a scheduler.
+    std::vector<std::uint8_t> queue_before(queue_size);
+    core.memory.read_bytes(queue, queue_before);
+    std::vector<std::uint8_t> ring_before(3U * message_size);
+    core.memory.read_bytes(messages, ring_before);
+    const RunResult full_nonblocking = invoke_send(message_a, 0U);
+    assert(full_nonblocking.reason == StopReason::instruction_limit);
+    assert(core.state.gpr[3] == 0U);
+    std::vector<std::uint8_t> queue_after(queue_size);
+    core.memory.read_bytes(queue, queue_after);
+    assert(queue_after == queue_before);
+    std::vector<std::uint8_t> ring_after(3U * message_size);
+    core.memory.read_bytes(messages, ring_after);
+    assert(ring_after == ring_before);
+    core.state.cia = send;
+    core.state.lr = return_address;
+    core.state.gpr[3] = queue;
+    core.state.gpr[4] = message_a;
+    core.state.gpr[5] = 1U;
+    const RunResult full_blocking = core.run(1U);
+    assert(full_blocking.reason == StopReason::hle_error);
+    assert(full_blocking.steps == 0U);
+    assert(full_blocking.detail.find("scheduling is unavailable") != std::string::npos);
+    core.memory.read_bytes(queue, queue_after);
+    assert(queue_after == queue_before);
+
+    // A zero-capacity queue is full for nonblocking purposes and does not
+    // dereference the otherwise-invalid message pointer.
+    core.state.cia = initialize;
+    core.state.lr = return_address;
+    core.state.gpr[3] = queue;
+    core.state.gpr[4] = messages;
+    core.state.gpr[5] = 0U;
+    assert(core.step() == StepResult::executed);
+    const RunResult zero_capacity = invoke_send(0xDEADBEEFU, 0U);
+    assert(zero_capacity.reason == StopReason::instruction_limit);
+    assert(core.state.gpr[3] == 0U);
+    assert(core.memory.read32_be(queue + 0x38U) == 0U);
+
+    // A bad destination slot is diagnosed before queue metadata or the ring is
+    // mutated.
+    core.memory.write32_be(queue + 0x2CU, 0x20000U);
+    core.memory.write32_be(queue + 0x30U, 1U);
+    core.memory.write32_be(queue + 0x34U, 0U);
+    core.memory.write32_be(queue + 0x38U, 0U);
+    core.state.cia = send;
+    core.state.lr = return_address;
+    core.state.gpr[3] = queue;
+    core.state.gpr[4] = message_a;
+    core.state.gpr[5] = 0U;
+    const RunResult invalid_slot = core.run(1U);
+    assert(invalid_slot.reason == StopReason::hle_error);
+    assert(invalid_slot.steps == 0U);
+    assert(invalid_slot.detail.find("outside mapped guest memory") != std::string::npos);
+    assert(core.memory.read32_be(queue + 0x34U) == 0U);
+    assert(core.memory.read32_be(queue + 0x38U) == 0U);
+
+    // An invalid source fails before modifying the queue or its backing ring.
+    core.memory.write32_be(queue + 0x2CU, messages);
+    core.memory.write32_be(queue + 0x30U, 1U);
+    std::vector<std::uint8_t> empty_queue_before(queue_size);
+    core.memory.read_bytes(queue, empty_queue_before);
+    std::vector<std::uint8_t> empty_ring_before(message_size);
+    core.memory.read_bytes(messages, empty_ring_before);
+    core.state.cia = send;
+    core.state.lr = return_address;
+    core.state.gpr[3] = queue;
+    core.state.gpr[4] = 0x20000U;
+    core.state.gpr[5] = 0U;
+    const RunResult invalid_source = core.run(1U);
+    assert(invalid_source.reason == StopReason::hle_error);
+    assert(invalid_source.steps == 0U);
+    assert(invalid_source.detail.find("outside mapped guest memory") != std::string::npos);
+    core.memory.read_bytes(queue, queue_after);
+    assert(queue_after == empty_queue_before);
+    std::vector<std::uint8_t> one_slot_after(message_size);
+    core.memory.read_bytes(messages, one_slot_after);
+    assert(one_slot_after == empty_ring_before);
+
+}
+
 void mem_get_base_heap_handle_hle_tests()
 {
     constexpr std::uint32_t heap_tag = 0x45585048U; // EXPH
@@ -20558,6 +20753,7 @@ int main(int argc, char* argv[])
     os_set_exception_callback_hle_tests();
     os_get_thread_priority_hle_tests();
     os_init_message_queue_hle_tests();
+    os_send_message_hle_tests();
     mem_get_base_heap_handle_hle_tests();
     mem_get_allocatable_size_for_frm_heap_ex_hle_tests();
     mem_alloc_from_frm_heap_ex_hle_tests();

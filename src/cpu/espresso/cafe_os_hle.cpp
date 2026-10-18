@@ -69,6 +69,9 @@ constexpr std::uint32_t os_message_queue_messages_offset = 0x2CU;
 constexpr std::uint32_t os_message_queue_capacity_offset = 0x30U;
 constexpr std::uint32_t os_message_queue_first_offset = 0x34U;
 constexpr std::uint32_t os_message_queue_used_offset = 0x38U;
+constexpr std::uint32_t os_message_size = 0x10U;
+constexpr std::uint32_t os_message_flag_blocking = 1U << 0U;
+constexpr std::uint32_t os_message_flag_high_priority = 1U << 1U;
 constexpr std::uint32_t os_thread_queue_head_offset = 0x00U;
 constexpr std::uint32_t os_thread_queue_tail_offset = 0x04U;
 constexpr std::uint32_t os_thread_queue_parent_offset = 0x08U;
@@ -176,6 +179,96 @@ void initialize_guest_message_queue(
     memory.write32_be(queue + os_message_queue_capacity_offset, size);
     memory.write32_be(queue + os_message_queue_first_offset, 0U);
     memory.write32_be(queue + os_message_queue_used_offset, 0U);
+}
+
+[[nodiscard]] bool send_guest_message(
+    EspressoCore& core,
+    std::uint32_t queue,
+    std::uint32_t message,
+    std::uint32_t flags)
+{
+    constexpr std::uint64_t guest_address_space_end = std::uint64_t{1} << 32U;
+    if (queue == 0U)
+    {
+        throw HleExecutionError("OSSendMessage received null OSMessageQueue pointer");
+    }
+    if (static_cast<std::uint64_t>(queue) + os_message_queue_size >
+        guest_address_space_end)
+    {
+        throw HleExecutionError("OSSendMessage OSMessageQueue address wraps guest address space");
+    }
+    try
+    {
+        core.memory.validate_write_range(queue, os_message_queue_size);
+    }
+    catch (const GuestMemoryFault&)
+    {
+        throw HleExecutionError("OSSendMessage OSMessageQueue is outside mapped guest memory");
+    }
+
+    const std::uint32_t messages =
+        core.memory.read32_be(queue + os_message_queue_messages_offset);
+    const std::uint32_t capacity =
+        core.memory.read32_be(queue + os_message_queue_capacity_offset);
+    const std::uint32_t first =
+        core.memory.read32_be(queue + os_message_queue_first_offset);
+    const std::uint32_t used =
+        core.memory.read32_be(queue + os_message_queue_used_offset);
+
+    if (capacity != 0U && first >= capacity)
+    {
+        throw HleExecutionError("OSSendMessage encountered an invalid message-queue first index");
+    }
+    if (used >= capacity)
+    {
+        if ((flags & os_message_flag_blocking) != 0U)
+        {
+            // Correct blocking requires waking/scheduling guest threads, which
+            // Affogato's current single-lane runtime does not yet implement.
+            throw HleExecutionError(
+                "OSSendMessage would block on a full queue, but guest thread scheduling is unavailable");
+        }
+        return false;
+    }
+
+    if (message == 0U)
+    {
+        throw HleExecutionError("OSSendMessage received null OSMessage pointer");
+    }
+
+    const std::uint64_t slot_index = (flags & os_message_flag_high_priority) != 0U
+        ? (static_cast<std::uint64_t>(first) + capacity - 1U) % capacity
+        : (static_cast<std::uint64_t>(first) + used) % capacity;
+    const std::uint64_t slot_address =
+        static_cast<std::uint64_t>(messages) + slot_index * os_message_size;
+    if (slot_address + os_message_size > guest_address_space_end)
+    {
+        throw HleExecutionError("OSSendMessage message slot wraps guest address space");
+    }
+
+    std::array<std::uint8_t, os_message_size> message_bytes{};
+    try
+    {
+        core.memory.read_bytes(message, message_bytes);
+        core.memory.validate_write_range(
+            static_cast<std::uint32_t>(slot_address), os_message_size);
+    }
+    catch (const GuestMemoryFault&)
+    {
+        throw HleExecutionError("OSSendMessage message source or queue slot is outside mapped guest memory");
+    }
+
+    // Both ranges are validated before any guest memory is changed. Snapshot
+    // also makes overlapping source/destination buffers safe.
+    core.memory.write_bytes(
+        static_cast<std::uint32_t>(slot_address), message_bytes);
+    if ((flags & os_message_flag_high_priority) != 0U)
+    {
+        core.memory.write32_be(queue + os_message_queue_first_offset,
+                               static_cast<std::uint32_t>(slot_index));
+    }
+    core.memory.write32_be(queue + os_message_queue_used_offset, used + 1U);
+    return true;
 }
 
 void initialize_guest_fast_mutex(
@@ -1749,6 +1842,17 @@ void register_coreinit_hle(HleDispatcher& dispatcher)
             }
 
             initialize_guest_message_queue(core.memory, queue, messages, size);
+        });
+    dispatcher.register_function(
+        "coreinit",
+        "OSSendMessage",
+        [](EspressoCore& core) {
+            const bool sent = send_guest_message(
+                core,
+                core.state.gpr[3],
+                core.state.gpr[4],
+                core.state.gpr[5]);
+            core.state.gpr[3] = sent ? 1U : 0U;
         });
     dispatcher.register_function(
         "coreinit",
