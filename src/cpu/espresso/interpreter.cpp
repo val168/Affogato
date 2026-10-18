@@ -438,6 +438,7 @@ void set_xer_carry(CpuState& state, bool carry) noexcept
         const bool indexed = instruction.opcode == Opcode::load_word_indexed ||
             instruction.opcode == Opcode::load_word_byte_reverse_indexed ||
             instruction.opcode == Opcode::load_single_indexed ||
+            instruction.opcode == Opcode::load_single_indexed_update ||
             instruction.opcode == Opcode::load_double_indexed ||
             instruction.opcode == Opcode::load_byte_zero_indexed ||
             instruction.opcode == Opcode::load_halfword_zero_indexed ||
@@ -473,6 +474,7 @@ void set_xer_carry(CpuState& state, bool carry) noexcept
             instruction.opcode == Opcode::load_single ||
             instruction.opcode == Opcode::load_single_update ||
             instruction.opcode == Opcode::load_single_indexed ||
+            instruction.opcode == Opcode::load_single_indexed_update ||
             instruction.opcode == Opcode::load_double_indexed ||
             instruction.opcode == Opcode::store_single ||
             instruction.opcode == Opcode::store_single_update ||
@@ -609,6 +611,7 @@ void set_xer_carry(CpuState& state, bool carry) noexcept
     case Opcode::load_single: return "lfs";
     case Opcode::load_single_update: return "lfsu";
     case Opcode::load_single_indexed: return "lfsx";
+    case Opcode::load_single_indexed_update: return "lfsux";
     case Opcode::load_double: return "lfd";
     case Opcode::load_double_indexed: return "lfdx";
     case Opcode::store_single: return "stfs";
@@ -883,6 +886,7 @@ void add_history_source(
     if (opcode == Opcode::load_word_indexed ||
         opcode == Opcode::load_word_byte_reverse_indexed ||
         opcode == Opcode::load_single_indexed ||
+        opcode == Opcode::load_single_indexed_update ||
         opcode == Opcode::load_double_indexed ||
         opcode == Opcode::load_byte_zero_indexed ||
         opcode == Opcode::load_halfword_zero_indexed ||
@@ -917,7 +921,7 @@ void add_history_source(
         entry.effective_address = effective_address(state, instruction.base, instruction.immediate);
     }
     if (opcode == Opcode::load_single || opcode == Opcode::load_single_update ||
-        opcode == Opcode::load_single_indexed ||
+        opcode == Opcode::load_single_indexed || opcode == Opcode::load_single_indexed_update ||
         opcode == Opcode::load_double || opcode == Opcode::load_double_indexed)
     {
         entry.has_fp_destination = true;
@@ -1026,6 +1030,7 @@ void add_history_source(
     case Opcode::load_word_indexed:
     case Opcode::load_word_byte_reverse_indexed:
     case Opcode::load_single_indexed:
+    case Opcode::load_single_indexed_update:
     case Opcode::load_double_indexed:
     case Opcode::load_byte_zero_indexed:
     case Opcode::load_halfword_zero_indexed:
@@ -1127,6 +1132,7 @@ void add_history_source(
     case Opcode::load_single_indexed:
         break;
     case Opcode::load_single_update:
+    case Opcode::load_single_indexed_update:
         entry.has_destination = true;
         entry.destination_register = instruction.base;
         break;
@@ -3633,8 +3639,11 @@ StepResult EspressoCore::step()
     case Opcode::load_single:
     case Opcode::load_single_update:
     case Opcode::load_single_indexed:
+    case Opcode::load_single_indexed_update:
     {
-        const std::uint32_t address = instruction.opcode == Opcode::load_single_indexed
+        const bool indexed = instruction.opcode == Opcode::load_single_indexed ||
+            instruction.opcode == Opcode::load_single_indexed_update;
+        const std::uint32_t address = indexed
             ? (instruction.base == 0U ? 0U : state.gpr[instruction.base]) +
                 state.gpr[instruction.source]
             : effective_address(state, instruction.base, instruction.immediate);
@@ -3644,7 +3653,8 @@ StepResult EspressoCore::step()
         const std::uint64_t double_bits = std::bit_cast<std::uint64_t>(double_value);
         state.fpr[instruction.fp_register] = double_bits;
         state.fpr_ps1[instruction.fp_register] = double_bits;
-        if (instruction.opcode == Opcode::load_single_update)
+        if (instruction.opcode == Opcode::load_single_update ||
+            instruction.opcode == Opcode::load_single_indexed_update)
         {
             state.gpr[instruction.base] = address;
         }
