@@ -43,6 +43,7 @@ enum class Opcode
     subtract_from_zero_extended,
     subtract_from_zero_extended_overflow,
     subtract_from_minus_one_extended,
+    subtract_from_minus_one_extended_overflow,
     negate,
     negate_overflow,
     extend_sign_byte,
