@@ -40,6 +40,7 @@ enum class Opcode
     subtract_from_extended,
     subtract_from_extended_overflow,
     subtract_from_zero_extended,
+    subtract_from_zero_extended_overflow,
     subtract_from_minus_one_extended,
     negate,
     negate_overflow,
