@@ -31,11 +31,31 @@ constexpr std::uint32_t os_system_info_cpu_ratio = 5U;
 constexpr std::int64_t os_system_info_unix_epoch_offset = 946684800;
 constexpr std::uint32_t current_core_index = 1U;
 constexpr std::uint32_t os_thread_size = 0x6A0U;
+constexpr std::uint64_t os_context_tag = 0x4F53436F6E747874ULL;
 constexpr std::uint32_t os_thread_tag_offset = 0x320U;
+constexpr std::uint32_t os_thread_state_offset = 0x324U;
+constexpr std::uint32_t os_thread_attributes_offset = 0x325U;
+constexpr std::uint32_t os_thread_id_offset = 0x326U;
+constexpr std::uint32_t os_thread_suspend_count_offset = 0x328U;
 constexpr std::uint32_t os_thread_priority_offset = 0x32CU;
 constexpr std::uint32_t os_thread_base_priority_offset = 0x330U;
+constexpr std::uint32_t os_thread_exit_value_offset = 0x334U;
+constexpr std::uint32_t os_thread_stack_start_offset = 0x394U;
+constexpr std::uint32_t os_thread_stack_end_offset = 0x398U;
+constexpr std::uint32_t os_thread_entry_point_offset = 0x39CU;
+constexpr std::uint32_t os_thread_specific_offset = 0x578U;
 constexpr std::uint32_t os_thread_type_offset = 0x5BCU;
 constexpr std::uint32_t os_thread_tag = 0x74487244U; // tHrD
+constexpr std::uint32_t os_thread_ready = 1U;
+constexpr std::uint32_t os_thread_type_application = 2U;
+constexpr std::uint32_t os_thread_id_unassigned = 0x8000U;
+constexpr std::uint32_t os_context_gpr_offset = 0x08U;
+constexpr std::uint32_t os_context_lr_offset = 0x8CU;
+constexpr std::uint32_t os_context_srr0_offset = 0x98U;
+constexpr std::uint32_t os_context_srr1_offset = 0x9CU;
+constexpr std::uint32_t os_context_fpscr_offset = 0xB4U;
+constexpr std::uint32_t os_context_gqr_offset = 0x1BCU;
+constexpr std::uint32_t os_context_upir_offset = 0x1DCU;
 constexpr std::int32_t os_thread_default_app_priority = 16;
 constexpr std::int32_t os_thread_app_priority_base = 64;
 constexpr std::int32_t os_thread_default_internal_priority =
@@ -783,6 +803,144 @@ void register_coreinit_hle(HleDispatcher& dispatcher)
             core.proc_ui_in_shutdown = false;
             core.proc_ui_status = 0U;
             core.proc_ui_draw_done_release = false;
+        });
+
+    dispatcher.register_function(
+        "coreinit",
+        "OSCreateThread",
+        [](EspressoCore& core) {
+            const std::uint32_t thread = core.state.gpr[3];
+            const std::uint32_t entry = core.state.gpr[4];
+            const std::uint32_t argument = core.state.gpr[5];
+            const std::uint32_t argument_pointer = core.state.gpr[6];
+            const std::uint32_t stack_top = core.state.gpr[7];
+            const std::uint32_t stack_size = core.state.gpr[8];
+            const std::int32_t priority =
+                static_cast<std::int32_t>(core.state.gpr[9]);
+            const std::uint32_t attributes = core.state.gpr[10];
+
+            if (thread == 0U || stack_top == 0U || stack_size == 0U ||
+                priority < 0 || priority >= 32 || attributes >= 0x20U ||
+                stack_top < stack_size)
+            {
+                core.state.gpr[3] = 0U;
+                return;
+            }
+
+            constexpr std::uint32_t thread_extent = os_thread_size;
+            const std::uint64_t thread_end =
+                static_cast<std::uint64_t>(thread) + thread_extent;
+            const std::uint32_t stack_bottom = stack_top - stack_size;
+            const std::uint32_t aligned_stack_top = stack_top & ~7U;
+            const std::uint32_t effective_attributes =
+                (attributes & 7U) == 0U
+                    ? attributes | (1U << current_core_index)
+                    : attributes;
+            if (thread_end > (std::uint64_t{1} << 32U) ||
+                static_cast<std::uint64_t>(aligned_stack_top) <
+                    static_cast<std::uint64_t>(stack_bottom) + 12U)
+            {
+                core.state.gpr[3] = 0U;
+                return;
+            }
+
+            // Validate every range that will be written before initializing
+            // either object, so an unmapped stack cannot leave a half-built
+            // OSThread behind.
+            core.memory.validate_write_range(thread, os_thread_size);
+            core.memory.validate_write_range(stack_bottom, stack_size);
+            constexpr std::array<std::uint32_t, 5> callback_offsets{
+                0x630U, 0x63CU, 0x648U, 0x654U, 0x680U};
+            std::array<std::uint32_t, 15> inherited_callbacks{};
+            if (core.current_thread_address != 0U &&
+                core.current_thread_address != thread)
+            {
+                std::size_t callback_index = 0U;
+                for (const std::uint32_t callback_offset : callback_offsets)
+                {
+                    for (std::uint32_t core_index = 0U; core_index < 3U; ++core_index)
+                    {
+                        const std::uint32_t offset =
+                            callback_offset + core_index * sizeof(std::uint32_t);
+                        inherited_callbacks[callback_index++] = core.memory.read32_be(
+                            core.current_thread_address + offset);
+                    }
+                }
+            }
+            const std::uint32_t context_return =
+                core.hle.bind_import("coreinit", "OSExitThread");
+
+            // Cafe initializes newly-created threads suspended. Their context
+            // is guest-visible now, but Affogato does not schedule it until a
+            // real resume/scheduler implementation exists.
+            core.memory.zero_fill(thread, os_thread_size);
+            core.memory.write64_be(thread, os_context_tag);
+            core.memory.write32_be(thread + os_context_gpr_offset + 1U * 4U,
+                                   aligned_stack_top - 8U);
+            core.memory.write32_be(thread + os_context_gpr_offset + 3U * 4U,
+                                   argument);
+            core.memory.write32_be(thread + os_context_gpr_offset + 4U * 4U,
+                                   argument_pointer);
+            core.memory.write32_be(thread + os_context_lr_offset, context_return);
+            core.memory.write32_be(thread + os_context_srr0_offset, entry);
+            core.memory.write32_be(thread + os_context_srr1_offset, 0x9032U);
+            core.memory.write32_be(thread + os_context_fpscr_offset, 4U);
+            core.memory.write32_be(thread + os_context_gqr_offset + 2U * 4U,
+                                   0x00040004U);
+            core.memory.write32_be(thread + os_context_gqr_offset + 3U * 4U,
+                                   0x00050005U);
+            core.memory.write32_be(thread + os_context_gqr_offset + 4U * 4U,
+                                   0x00060006U);
+            core.memory.write32_be(thread + os_context_gqr_offset + 5U * 4U,
+                                   0x00070007U);
+            core.memory.write32_be(thread + os_context_upir_offset, current_core_index);
+            core.memory.write32_be(thread + os_thread_tag_offset, os_thread_tag);
+            core.memory.write8(thread + os_thread_state_offset,
+                               entry != 0U ? os_thread_ready : 0U);
+            core.memory.write8(thread + os_thread_attributes_offset,
+                               static_cast<std::uint8_t>(effective_attributes));
+            core.memory.write16_be(thread + os_thread_id_offset,
+                                    static_cast<std::uint16_t>(os_thread_id_unassigned));
+            core.memory.write32_be(thread + os_thread_suspend_count_offset,
+                                   entry != 0U ? 1U : 0U);
+            const std::uint32_t effective_priority =
+                static_cast<std::uint32_t>(priority) + os_thread_app_priority_base;
+            core.memory.write32_be(thread + os_thread_priority_offset,
+                                   effective_priority);
+            core.memory.write32_be(thread + os_thread_base_priority_offset,
+                                   effective_priority);
+            core.memory.write32_be(thread + os_thread_exit_value_offset, 0xFFFFFFFFU);
+            core.memory.write32_be(thread + os_thread_stack_start_offset, stack_top);
+            core.memory.write32_be(thread + os_thread_stack_end_offset, stack_bottom);
+            core.memory.write32_be(thread + os_thread_entry_point_offset, entry);
+            core.memory.write32_be(thread + os_thread_type_offset,
+                                   os_thread_type_application);
+            core.memory.write32_be(aligned_stack_top - 4U, 0U);
+            core.memory.write32_be(aligned_stack_top - 8U, 0U);
+            core.memory.write32_be(stack_bottom, 0xDEADBABEU);
+
+            // Copy the installed exception handlers from the current thread,
+            // matching OSCreateThread's guest-visible inheritance semantics.
+            if (core.current_thread_address != 0U &&
+                core.current_thread_address != thread)
+            {
+                std::size_t callback_index = 0U;
+                for (const std::uint32_t callback_offset : callback_offsets)
+                {
+                    for (std::uint32_t core_index = 0U; core_index < 3U; ++core_index)
+                    {
+                        const std::uint32_t offset =
+                            callback_offset + core_index * sizeof(std::uint32_t);
+                        core.memory.write32_be(thread + offset,
+                                               inherited_callbacks[callback_index++]);
+                    }
+                }
+            }
+
+            // Specific values are the final thread-specific array in the
+            // public OSThread layout and are already zero from the full clear.
+            static_assert(os_thread_specific_offset + 0x40U <= os_thread_size);
+            core.state.gpr[3] = 1U;
         });
 
     dispatcher.register_function(

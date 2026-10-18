@@ -8306,6 +8306,157 @@ void proc_ui_init_hle_tests()
     assert(other.proc_ui_in_foreground);
 }
 
+void os_create_thread_hle_tests()
+{
+    constexpr std::uint32_t thread = 0x1000U;
+    constexpr std::uint32_t parent_thread = 0x2000U;
+    constexpr std::uint32_t stack_bottom = 0x4000U;
+    constexpr std::uint32_t stack_top = 0x5000U;
+    constexpr std::uint32_t stack_size = stack_top - stack_bottom;
+    constexpr std::uint32_t entry = 0x0276138CU;
+    constexpr std::uint32_t argc = 0x11U;
+    constexpr std::uint32_t argv = 0x06E2E208U;
+    constexpr std::uint32_t return_address = 0x02761428U;
+    constexpr std::uint32_t thread_tag = 0x74487244U;
+    constexpr std::uint64_t context_tag = 0x4F53436F6E747874ULL;
+
+    EspressoCore core(0x8000U);
+    register_coreinit_hle(core.hle);
+    const std::uint32_t create = core.hle.bind_import("coreinit", "OSCreateThread");
+    const std::uint32_t exit_thread = core.hle.bind_import("coreinit", "OSExitThread");
+    core.current_thread_address = parent_thread;
+    core.memory.fill_bytes(thread, 0x6A0U, 0xA5U);
+    core.memory.fill_bytes(parent_thread, 0x6A0U, 0x5AU);
+    core.memory.fill_bytes(stack_bottom, stack_size, 0xCCU);
+
+    constexpr std::array<std::uint32_t, 5> callback_offsets{
+        0x630U, 0x63CU, 0x648U, 0x654U, 0x680U};
+    std::uint32_t expected_callback = 0x02001000U;
+    for (const std::uint32_t callback_offset : callback_offsets)
+    {
+        for (std::uint32_t core_index = 0U; core_index < 3U; ++core_index)
+        {
+            core.memory.write32_be(
+                parent_thread + callback_offset + core_index * 4U,
+                expected_callback++);
+        }
+    }
+
+    for (std::uint32_t reg = 0U; reg < core.state.gpr.size(); ++reg)
+    {
+        core.state.gpr[reg] = 0xA1000000U + reg * 0x101U;
+    }
+    for (std::uint32_t reg = 0U; reg < core.state.fpr.size(); ++reg)
+    {
+        core.state.fpr[reg] = 0x1111000000000000ULL + reg;
+        core.state.fpr_ps1[reg] = 0x2222000000000000ULL + reg;
+    }
+    core.state.cr = 0x12345678U;
+    core.state.xer = 0xA00000A5U;
+    core.state.ctr = 0xCAFEBABEU;
+    core.state.fpscr = 0x5A5AA55AU;
+    core.state.lr = return_address;
+    core.state.gpr[3] = thread;
+    core.state.gpr[4] = entry;
+    core.state.gpr[5] = argc;
+    core.state.gpr[6] = argv;
+    core.state.gpr[7] = stack_top;
+    core.state.gpr[8] = stack_size;
+    core.state.gpr[9] = 17U;
+    core.state.gpr[10] = 0U;
+    const auto gprs_before = core.state.gpr;
+    const auto fprs_before = core.state.fpr;
+    const auto ps1_before = core.state.fpr_ps1;
+    const std::uint32_t cr_before = core.state.cr;
+    const std::uint32_t xer_before = core.state.xer;
+    const std::uint32_t ctr_before = core.state.ctr;
+    const std::uint32_t fpscr_before = core.state.fpscr;
+
+    core.state.cia = create;
+    const RunResult result = core.run(1U);
+    assert(result.reason == StopReason::instruction_limit);
+    assert(result.steps == 1U);
+    assert(core.state.cia == return_address);
+    assert(core.state.gpr[3] == 1U);
+    for (std::size_t reg = 4U; reg < core.state.gpr.size(); ++reg)
+    {
+        assert(core.state.gpr[reg] == gprs_before[reg]);
+    }
+    assert(core.state.fpr == fprs_before);
+    assert(core.state.fpr_ps1 == ps1_before);
+    assert(core.state.cr == cr_before);
+    assert(core.state.xer == xer_before);
+    assert(core.state.ctr == ctr_before);
+    assert(core.state.fpscr == fpscr_before);
+
+    assert(core.memory.read64_be(thread) == context_tag);
+    assert(core.memory.read32_be(thread + 0x98U) == entry); // initial SRR0
+    assert(core.memory.read32_be(thread + 0x9CU) == 0x9032U);
+    assert(core.memory.read32_be(thread + 0x8CU) == exit_thread);
+    assert(core.memory.read32_be(thread + 0x0CU) == ((stack_top & ~7U) - 8U));
+    assert(core.memory.read32_be(thread + 0x14U) == argc);
+    assert(core.memory.read32_be(thread + 0x18U) == argv);
+    assert(core.memory.read32_be(thread + 0xB4U) == 4U);
+    assert(core.memory.read32_be(thread + 0x1BCU + 2U * 4U) == 0x00040004U);
+    assert(core.memory.read32_be(thread + 0x1BCU + 5U * 4U) == 0x00070007U);
+    assert(core.memory.read32_be(thread + 0x1DCU) == 1U);
+    assert(core.memory.read32_be(thread + 0x320U) == thread_tag);
+    assert(core.memory.read8(thread + 0x324U) == 1U); // READY, not RUNNING
+    assert(core.memory.read8(thread + 0x325U) == 2U); // default affinity: core 1
+    assert(core.memory.read16_be(thread + 0x326U) == 0x8000U);
+    assert(core.memory.read32_be(thread + 0x328U) == 1U); // initially suspended
+    assert(core.memory.read32_be(thread + 0x32CU) == 81U);
+    assert(core.memory.read32_be(thread + 0x330U) == 81U);
+    assert(core.memory.read32_be(thread + 0x334U) == 0xFFFFFFFFU);
+    assert(core.memory.read32_be(thread + 0x394U) == stack_top);
+    assert(core.memory.read32_be(thread + 0x398U) == stack_bottom);
+    assert(core.memory.read32_be(thread + 0x39CU) == entry);
+    assert(core.memory.read32_be(thread + 0x5BCU) == 2U);
+    assert(core.memory.read32_be(stack_top - 4U) == 0U);
+    assert(core.memory.read32_be(stack_top - 8U) == 0U);
+    assert(core.memory.read32_be(stack_bottom) == 0xDEADBABEU);
+
+    expected_callback = 0x02001000U;
+    for (const std::uint32_t callback_offset : callback_offsets)
+    {
+        for (std::uint32_t core_index = 0U; core_index < 3U; ++core_index)
+        {
+            assert(core.memory.read32_be(
+                       thread + callback_offset + core_index * 4U) ==
+                   expected_callback++);
+        }
+    }
+
+    // Invalid priority is reported as BOOL false and leaves both guest memory
+    // objects unchanged rather than manufacturing a runnable thread.
+    const auto thread_before_invalid = [&]() {
+        std::vector<std::uint8_t> bytes(0x6A0U);
+        core.memory.read_bytes(thread, bytes);
+        return bytes;
+    }();
+    std::vector<std::uint8_t> stack_before_invalid(stack_size);
+    core.memory.read_bytes(stack_bottom, stack_before_invalid);
+    core.state.gpr[3] = thread;
+    core.state.gpr[4] = entry;
+    core.state.gpr[5] = argc;
+    core.state.gpr[6] = argv;
+    core.state.gpr[7] = stack_top;
+    core.state.gpr[8] = stack_size;
+    core.state.gpr[9] = 32U;
+    core.state.gpr[10] = 0U;
+    core.state.cia = create;
+    core.state.lr = return_address + 4U;
+    const RunResult invalid = core.run(1U);
+    assert(invalid.reason == StopReason::instruction_limit);
+    assert(core.state.gpr[3] == 0U);
+    std::vector<std::uint8_t> thread_after_invalid(0x6A0U);
+    core.memory.read_bytes(thread, thread_after_invalid);
+    assert(thread_after_invalid == thread_before_invalid);
+    std::vector<std::uint8_t> stack_after_invalid(stack_size);
+    core.memory.read_bytes(stack_bottom, stack_after_invalid);
+    assert(stack_after_invalid == stack_before_invalid);
+}
+
 void nn_save_init_hle_tests()
 {
     constexpr std::uint32_t return_address = 0x0274226CU;
@@ -18341,6 +18492,7 @@ int main(int argc, char* argv[])
     hle_dispatch_tests();
     nn_olv_hle_tests();
     proc_ui_init_hle_tests();
+    os_create_thread_hle_tests();
     guest_mutex_tests();
     memset_hle_tests();
     memcpy_hle_tests();
