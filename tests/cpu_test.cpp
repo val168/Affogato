@@ -17301,6 +17301,83 @@ void load_byte_zero_indexed_tests()
     assert(fault.state.gpr == before_fault_gprs);
 }
 
+void store_halfword_byte_reverse_indexed_tests()
+{
+    const auto encode_sthbrx = [](std::uint8_t source, std::uint8_t base,
+                                  std::uint8_t index, bool reserved_bit = false) {
+        return (31U << 26U) |
+            (static_cast<std::uint32_t>(source) << 21U) |
+            (static_cast<std::uint32_t>(base) << 16U) |
+            (static_cast<std::uint32_t>(index) << 11U) | (918U << 1U) |
+            static_cast<std::uint32_t>(reserved_bit);
+    };
+
+    constexpr std::uint32_t exact_encoding = 0x7C00072CU;
+    const DecodedInstruction decoded = decode(exact_encoding);
+    assert(decoded.opcode == Opcode::store_halfword_byte_reverse_indexed);
+    assert(decoded.destination == 0U && decoded.base == 0U && decoded.source == 0U);
+    assert(((exact_encoding >> 1U) & 0x3FFU) == 918U);
+    assert(encode_sthbrx(0U, 0U, 0U) == exact_encoding);
+    assert(decode(encode_sthbrx(3U, 4U, 5U, true)).opcode == Opcode::unsupported);
+
+    EspressoCore core(0x100U);
+    core.state.gpr.fill(0xA5A5A5A5U);
+    core.state.gpr[4] = 0x40U;
+    core.state.gpr[5] = 8U;
+    core.state.gpr[7] = 0x12343456U;
+    core.state.cr = 0x12345678U;
+    core.state.xer = 0xA00000A5U;
+    core.state.lr = 0x11223344U;
+    core.state.ctr = 0x55667788U;
+    core.state.fpscr = 0xCAFEBABEU;
+    core.memory.write32_be(0U, encode_sthbrx(7U, 4U, 5U));
+    core.memory.write16_be(0x48U, 0xAABBU);
+    const auto original_gprs = core.state.gpr;
+    const RunResult result = core.run(1U);
+    assert(result.reason == StopReason::instruction_limit);
+    assert(core.memory.read16_be(0x48U) == 0x5634U);
+    assert(core.state.gpr == original_gprs);
+    assert(core.state.cr == 0x12345678U);
+    assert(core.state.xer == 0xA00000A5U);
+    assert(core.state.lr == 0x11223344U);
+    assert(core.state.ctr == 0x55667788U);
+    assert(core.state.fpscr == 0xCAFEBABEU);
+    const InstructionHistoryEntry& history = result.instruction_history.front();
+    assert(history.opcode_name == "sthbrx");
+    assert(history.has_effective_address && history.effective_address == 0x48U);
+    assert(history.has_stored_halfword_value && history.stored_halfword_value == 0x5634U);
+    assert(history.source_count == 3U);
+    assert(history.source_registers[0] == 4U);
+    assert(history.source_registers[1] == 5U);
+    assert(history.source_registers[2] == 7U);
+
+    // rA=0 contributes literal zero; rB=0 is still a real GPR index.
+    EspressoCore zero_base(0x100U);
+    zero_base.state.gpr[0] = 0x40U;
+    zero_base.state.gpr[3] = 0xABCDU;
+    zero_base.memory.write32_be(0U, encode_sthbrx(3U, 0U, 0U));
+    assert(zero_base.step() == StepResult::executed);
+    assert(zero_base.memory.read16_be(0x40U) == 0xCDABU);
+
+    // A fault spanning a mapped prefix leaves that prefix unchanged.
+    EspressoCore fault(0x100U);
+    fault.memory.map_region(0x2000U, 1U);
+    fault.memory.write8(0x2000U, 0xA5U);
+    fault.state.gpr[4] = 0x2000U;
+    fault.state.gpr[5] = 0U;
+    fault.state.gpr[6] = 0x12345678U;
+    fault.memory.write32_be(0U, encode_sthbrx(6U, 4U, 5U));
+    const RunResult fault_result = fault.run(1U);
+    assert(fault_result.reason == StopReason::memory_fault);
+    assert(fault_result.detail.find("write 2 byte(s)") != std::string::npos);
+    assert(fault_result.detail.find("rA=4 (0x00002000), rB=5 (0x00000000)") !=
+           std::string::npos);
+    assert(fault.memory.read8(0x2000U) == 0xA5U);
+    assert(fault_result.instruction_history.front().opcode_name == "sthbrx");
+    assert(!fault_result.instruction_history.front().completed);
+    assert(!fault_result.instruction_history.front().has_stored_halfword_value);
+}
+
 void load_halfword_byte_reverse_indexed_tests()
 {
     const auto encode_lhbrx = [](std::uint8_t destination, std::uint8_t base,
@@ -19338,6 +19415,7 @@ int main(int argc, char* argv[])
     store_floating_as_integer_word_indexed_tests();
     load_halfword_zero_indexed_tests();
     load_byte_zero_indexed_tests();
+    store_halfword_byte_reverse_indexed_tests();
     load_halfword_byte_reverse_indexed_tests();
     load_word_byte_reverse_indexed_tests();
     load_single_indexed_tests();
