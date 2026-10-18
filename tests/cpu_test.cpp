@@ -2727,6 +2727,66 @@ void floating_subtract_single_tests()
            std::string::npos);
 }
 
+void floating_multiply_subtract_single_tests()
+{
+    const auto encode_fmsubs = [](std::uint8_t destination, std::uint8_t source_a,
+                                  std::uint8_t source_b, std::uint8_t source_c,
+                                  bool record = false) {
+        return (59U << 26U) |
+            (static_cast<std::uint32_t>(destination) << 21U) |
+            (static_cast<std::uint32_t>(source_a) << 16U) |
+            (static_cast<std::uint32_t>(source_b) << 11U) |
+            (static_cast<std::uint32_t>(source_c) << 6U) | (28U << 1U) |
+            static_cast<std::uint32_t>(record);
+    };
+    const std::uint32_t instruction = encode_fmsubs(1U, 2U, 3U, 4U);
+    const DecodedInstruction decoded = decode(instruction);
+    assert(decoded.opcode == Opcode::floating_multiply_subtract_single);
+    assert(decoded.fp_register == 1U);
+    assert(decoded.fp_source_a == 2U);
+    assert(decoded.fp_source_b == 3U);
+    assert(decoded.fp_source_c == 4U);
+    assert(((instruction >> 1U) & 0x1FU) == 28U);
+    assert(decode(encode_fmsubs(1U, 2U, 3U, 4U, true)).opcode == Opcode::unsupported);
+
+    const auto execute = [&](std::uint64_t a, std::uint64_t b, std::uint64_t c,
+                             std::uint32_t fpscr = 0U) {
+        EspressoCore core(16U);
+        core.state.fpr[1] = 0x1111000000000001ULL;
+        core.state.fpr_ps1[1] = 0xDEADBEEF01234567ULL;
+        core.state.fpr[2] = a;
+        core.state.fpr[3] = b;
+        core.state.fpr[4] = c;
+        core.state.fpscr = fpscr;
+        core.memory.write32_be(0U, instruction);
+        const RunResult result = core.run(1U);
+        assert(result.steps == 1U);
+        return std::pair{core.state, result};
+    };
+
+    const auto basic = execute(0x4000000000000000ULL,
+                               0x4014000000000000ULL,
+                               0x4008000000000000ULL);
+    assert(basic.first.fpr[1] == 0x3FF0000000000000ULL);
+    assert(basic.first.fpr_ps1[1] == 0x3FF0000000000000ULL);
+    assert(format_instruction_history(basic.second).find("fmsubs") != std::string::npos);
+
+    const auto invalid = execute(0x7FF0000000000000ULL,
+                                 0x3FF0000000000000ULL,
+                                 0x0000000000000000ULL);
+    assert((invalid.first.fpscr & fpscr::vximz_mask) != 0U);
+    assert(invalid.first.fpr[1] == 0x7FF8000000000000ULL);
+    assert(invalid.first.fpr_ps1[1] == 0x7FF8000000000000ULL);
+
+    const auto suppressed = execute(0x7FF0000000000000ULL,
+                                    0x3FF0000000000000ULL,
+                                    0x0000000000000000ULL,
+                                    fpscr::ve_mask);
+    assert((suppressed.first.fpscr & fpscr::vximz_mask) != 0U);
+    assert(suppressed.first.fpr[1] == 0x1111000000000001ULL);
+    assert(suppressed.first.fpr_ps1[1] == 0xDEADBEEF01234567ULL);
+}
+
 void floating_multiply_add_single_tests()
 {
     const auto encode_fmadds = [](std::uint8_t destination, std::uint8_t source_a,
@@ -21257,6 +21317,7 @@ int main(int argc, char* argv[])
     floating_divide_double_tests();
     floating_add_single_tests();
     floating_subtract_single_tests();
+    floating_multiply_subtract_single_tests();
     floating_multiply_add_single_tests();
     floating_multiply_single_tests();
     floating_move_register_tests();

@@ -578,6 +578,7 @@ void set_xer_carry(CpuState& state, bool carry) noexcept
     case Opcode::floating_multiply_double: return "fmul";
     case Opcode::floating_select: return "fsel";
     case Opcode::floating_multiply_add_single: return "fmadds";
+    case Opcode::floating_multiply_subtract_single: return "fmsubs";
     case Opcode::floating_multiply_add_double: return "fmadd";
     case Opcode::floating_multiply_subtract_double: return "fmsub";
     case Opcode::floating_negative_multiply_add_double: return "fnmadd";
@@ -860,6 +861,7 @@ void add_history_source(
         opcode == Opcode::floating_multiply_single ||
         opcode == Opcode::floating_multiply_double ||
         opcode == Opcode::floating_multiply_add_single ||
+        opcode == Opcode::floating_multiply_subtract_single ||
         opcode == Opcode::floating_multiply_add_double ||
         opcode == Opcode::floating_multiply_subtract_double ||
         opcode == Opcode::floating_negative_multiply_add_double ||
@@ -885,6 +887,7 @@ void add_history_source(
         entry.fp_arithmetic_source_count = opcode == Opcode::floating_round_to_single
             ? 1U
             : (opcode == Opcode::floating_multiply_add_single ||
+               opcode == Opcode::floating_multiply_subtract_single ||
                opcode == Opcode::floating_multiply_add_double ||
                opcode == Opcode::floating_multiply_subtract_double ||
                opcode == Opcode::floating_negative_multiply_add_double ||
@@ -892,6 +895,7 @@ void add_history_source(
         if (opcode == Opcode::floating_multiply_single ||
             opcode == Opcode::floating_multiply_double ||
             opcode == Opcode::floating_multiply_add_single ||
+            opcode == Opcode::floating_multiply_subtract_single ||
             opcode == Opcode::floating_multiply_add_double ||
             opcode == Opcode::floating_multiply_subtract_double ||
             opcode == Opcode::floating_negative_multiply_add_double ||
@@ -2797,6 +2801,89 @@ StepResult EspressoCore::step()
         const bool rounded_up = inexact &&
             std::fabs(extended_result) > std::fabs(exact_result);
 
+        // TODO: add exact FPSCR OX/UX behavior when broader FP exceptions are modeled.
+        commit_result(single_bits, inexact, rounded_up);
+        break;
+    }
+
+    case Opcode::floating_multiply_subtract_single:
+    {
+        const std::uint64_t a_raw = state.fpr[instruction.fp_source_a];
+        const std::uint64_t b_raw = state.fpr[instruction.fp_source_b];
+        const std::uint64_t c_raw = state.fpr[instruction.fp_source_c];
+        const auto commit_result = [&](std::uint32_t single_bits,
+                                       bool inexact,
+                                       bool rounded_up) {
+            const float single_result = std::bit_cast<float>(single_bits);
+            const double extended_result = static_cast<double>(single_result);
+            const std::uint64_t raw_result = std::bit_cast<std::uint64_t>(extended_result);
+            state.fpr[instruction.fp_register] = raw_result;
+            state.fpr_ps1[instruction.fp_register] = raw_result;
+            set_single_arithmetic_result_status(state, single_bits, inexact, rounded_up);
+            pending_history_entry_.has_fp_arithmetic_result = true;
+            pending_history_entry_.fp_arithmetic_result_raw = raw_result;
+            pending_history_entry_.fp_arithmetic_single_bits = single_bits;
+        };
+        const auto commit_quiet_nan = [&](std::uint64_t nan_source) {
+            commit_result(quiet_nan_single_bits(nan_source), false, false);
+        };
+        const auto signal_invalid = [&](std::uint32_t subexception,
+                                        std::uint64_t nan_source) {
+            raise_fpscr_exception(state, subexception);
+            if ((state.fpscr & fpscr::ve_mask) == 0U)
+            {
+                commit_quiet_nan(nan_source);
+            }
+        };
+
+        if (is_binary64_signaling_nan(a_raw) || is_binary64_signaling_nan(b_raw) ||
+            is_binary64_signaling_nan(c_raw))
+        {
+            const std::uint64_t signaling_source = is_binary64_signaling_nan(a_raw)
+                ? a_raw
+                : is_binary64_signaling_nan(c_raw) ? c_raw : b_raw;
+            signal_invalid(fpscr::vxsnan_mask, signaling_source);
+            break;
+        }
+        if (is_binary64_nan(a_raw) || is_binary64_nan(c_raw) || is_binary64_nan(b_raw))
+        {
+            const std::uint64_t nan_source = is_binary64_nan(a_raw) ? a_raw
+                : is_binary64_nan(c_raw) ? c_raw : b_raw;
+            commit_quiet_nan(nan_source);
+            break;
+        }
+
+        const bool a_zero = is_binary64_zero(a_raw);
+        const bool c_zero = is_binary64_zero(c_raw);
+        const bool a_infinity = is_binary64_infinity(a_raw);
+        const bool c_infinity = is_binary64_infinity(c_raw);
+        if ((a_infinity && c_zero) || (a_zero && c_infinity))
+        {
+            signal_invalid(fpscr::vximz_mask, 0U);
+            break;
+        }
+
+        const bool product_is_infinite = a_infinity || c_infinity;
+        const bool b_infinity = is_binary64_infinity(b_raw);
+        const bool product_is_negative =
+            ((a_raw ^ c_raw) & binary64_sign_mask) != 0U;
+        const bool b_is_negative = (b_raw & binary64_sign_mask) != 0U;
+        if (product_is_infinite && b_infinity && product_is_negative == b_is_negative)
+        {
+            signal_invalid(fpscr::vxisi_mask, 0U);
+            break;
+        }
+
+        const double a = std::bit_cast<double>(a_raw);
+        const double c = std::bit_cast<double>(round_multiply_operand_25bit(c_raw));
+        const double b = std::bit_cast<double>(b_raw);
+        const double exact_result = std::fma(a, c, -b);
+        const float single_result = static_cast<float>(exact_result);
+        const double extended_result = static_cast<double>(single_result);
+        const std::uint32_t single_bits = std::bit_cast<std::uint32_t>(single_result);
+        const bool inexact = extended_result != exact_result;
+        const bool rounded_up = inexact &&
+            std::fabs(extended_result) > std::fabs(exact_result);
         // TODO: add exact FPSCR OX/UX behavior when broader FP exceptions are modeled.
         commit_result(single_bits, inexact, rounded_up);
         break;
