@@ -24207,7 +24207,7 @@ int main(int argc, char* argv[])
 
         try
         {
-            constexpr std::size_t rpx_instruction_limit = 250'000'000U;
+            constexpr std::size_t rpx_instruction_limit = 500'000'000U;
             affogato::Emulator emulator;
             const auto image = emulator.load_rpx(file);
             std::cout << "Loaded RPX entry point 0x" << std::hex << image.entry_point
