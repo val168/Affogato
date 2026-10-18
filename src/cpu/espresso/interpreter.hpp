@@ -193,6 +193,7 @@ public:
     {
         state.reset();
         current_thread_address = 0;
+        os_sleep_ticks_offset = 0;
         fs_initialized = false;
         nn_save_initialized = false;
         proc_ui_initialized = false;
@@ -254,6 +255,7 @@ public:
     GuestMemory memory;
     HleDispatcher hle;
     std::uint32_t current_thread_address{};
+    std::uint64_t os_sleep_ticks_offset{};
     bool fs_initialized{};
     bool nn_save_initialized{};
     bool proc_ui_initialized{};

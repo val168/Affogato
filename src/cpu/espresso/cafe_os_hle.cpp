@@ -1152,10 +1152,40 @@ void register_coreinit_hle(HleDispatcher& dispatcher)
             // cycle accounting exists, derive elapsed timer ticks from the
             // same host-clock epoch used for the persistent Cafe baseTime.
             const std::uint64_t current_epoch_ticks = current_os_epoch_ticks();
-            const std::uint64_t system_time = current_epoch_ticks >= base_time
+            const std::uint64_t elapsed_ticks = current_epoch_ticks >= base_time
                 ? current_epoch_ticks - base_time
                 : 0U;
+            const std::uint64_t system_time =
+                core.os_sleep_ticks_offset >
+                    std::numeric_limits<std::uint64_t>::max() - elapsed_ticks
+                    ? std::numeric_limits<std::uint64_t>::max()
+                    : elapsed_ticks + core.os_sleep_ticks_offset;
             set_u64_return(core.state, system_time);
+        });
+    dispatcher.register_function(
+        "coreinit",
+        "OSSleepTicks",
+        [](EspressoCore& core) {
+            // OSTime is a signed 64-bit PPC ABI argument in r3:r4. A deadline
+            // at or before the current time is already expired. Affogato has
+            // one synchronously executing guest thread and no scheduler yet;
+            // advance the emulated time exposed by OSGetSystemTime instead of
+            // blocking the host or pretending to switch guest threads.
+            const std::uint64_t raw_ticks =
+                (static_cast<std::uint64_t>(core.state.gpr[3]) << 32U) |
+                core.state.gpr[4];
+            const std::int64_t ticks = std::bit_cast<std::int64_t>(raw_ticks);
+            if (ticks > 0)
+            {
+                const std::uint64_t positive_ticks =
+                    static_cast<std::uint64_t>(ticks);
+                core.os_sleep_ticks_offset =
+                    positive_ticks >
+                            std::numeric_limits<std::uint64_t>::max() -
+                                core.os_sleep_ticks_offset
+                        ? std::numeric_limits<std::uint64_t>::max()
+                        : core.os_sleep_ticks_offset + positive_ticks;
+            }
         });
     dispatcher.register_function(
         "coreinit",

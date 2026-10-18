@@ -10995,6 +10995,92 @@ void os_get_system_time_hle_tests()
     assert(core.memory.read64_be(*system_info_address + 0x08U) == 0U);
 }
 
+void os_sleep_ticks_hle_tests()
+{
+    constexpr std::uint32_t return_address = 0x180U;
+    constexpr std::uint32_t ticks_per_second = 62156250U;
+
+    EspressoCore core(0x400U);
+    register_coreinit_hle(core.hle);
+    const std::uint32_t import = core.hle.bind_import(
+        "coreinit", "OSSleepTicks");
+    const std::uint32_t get_time_import = core.hle.bind_import(
+        "coreinit", "OSGetSystemTime");
+    core.current_thread_address = 0x100U;
+    for (std::uint32_t reg = 0; reg < core.state.gpr.size(); ++reg)
+    {
+        core.state.gpr[reg] = 0xA5000000U + reg * 0x101U;
+    }
+    for (std::uint32_t reg = 0; reg < core.state.fpr.size(); ++reg)
+    {
+        core.state.fpr[reg] = 0x1111000000000000ULL + reg;
+        core.state.fpr_ps1[reg] = 0x2222000000000000ULL + reg;
+    }
+    core.state.cr = 0x12345678U;
+    core.state.xer = 0xA00000A5U;
+    core.state.ctr = 0xCAFEBABEU;
+    core.state.fpscr = 0x5A5AA55AU;
+    core.memory.fill_bytes(0x200U, 0x80U, 0xC7U);
+    std::array<std::uint8_t, 0x80U> memory_before{};
+    core.memory.read_bytes(0x200U, memory_before);
+
+    const auto invoke = [&](std::int64_t ticks) {
+        core.state.cia = import;
+        core.state.lr = return_address;
+        core.state.gpr[3] = static_cast<std::uint32_t>(
+            static_cast<std::uint64_t>(ticks) >> 32U);
+        core.state.gpr[4] = static_cast<std::uint32_t>(ticks);
+        const auto gpr_before = core.state.gpr;
+        const auto fpr_before = core.state.fpr;
+        const auto ps1_before = core.state.fpr_ps1;
+        const std::uint32_t cr_before = core.state.cr;
+        const std::uint32_t xer_before = core.state.xer;
+        const std::uint32_t ctr_before = core.state.ctr;
+        const std::uint32_t fpscr_before = core.state.fpscr;
+
+        const RunResult result = core.run(1U);
+        assert(result.reason == StopReason::instruction_limit);
+        assert(result.steps == 1U);
+        assert(core.state.cia == return_address);
+        assert(core.state.lr == return_address);
+        assert(core.state.gpr == gpr_before); // void HLE preserves r3:r4 too
+        assert(core.state.fpr == fpr_before);
+        assert(core.state.fpr_ps1 == ps1_before);
+        assert(core.state.cr == cr_before);
+        assert(core.state.xer == xer_before);
+        assert(core.state.ctr == ctr_before);
+        assert(core.state.fpscr == fpscr_before);
+        std::array<std::uint8_t, 0x80U> memory_after{};
+        core.memory.read_bytes(0x200U, memory_after);
+        assert(memory_after == memory_before);
+    };
+
+    invoke(0);
+    invoke(-1);
+    core.state.cia = get_time_import;
+    core.state.lr = return_address;
+    assert(core.run(1U).reason == StopReason::instruction_limit);
+    const std::uint64_t time_before_sleep =
+        (static_cast<std::uint64_t>(core.state.gpr[3]) << 32U) |
+        core.state.gpr[4];
+
+    // A 100ms positive sleep advances the guest timer by the requested amount
+    // without blocking the host in Affogato's scheduler-free execution model.
+    constexpr std::int64_t positive_ticks = ticks_per_second / 10;
+    invoke(positive_ticks);
+    core.state.cia = get_time_import;
+    core.state.lr = return_address;
+    assert(core.run(1U).reason == StopReason::instruction_limit);
+    const std::uint64_t time_after_sleep =
+        (static_cast<std::uint64_t>(core.state.gpr[3]) << 32U) |
+        core.state.gpr[4];
+    assert(time_after_sleep >=
+           time_before_sleep + static_cast<std::uint64_t>(positive_ticks));
+
+    core.reset();
+    assert(core.os_sleep_ticks_offset == 0U);
+}
+
 void os_set_exception_callback_hle_tests()
 {
     struct CallbackType
@@ -21685,6 +21771,7 @@ int main(int argc, char* argv[])
     fs_add_client_hle_tests();
     fs_set_state_change_notification_hle_tests();
     os_get_system_time_hle_tests();
+    os_sleep_ticks_hle_tests();
     os_set_exception_callback_hle_tests();
     os_get_thread_priority_hle_tests();
     os_init_message_queue_hle_tests();
