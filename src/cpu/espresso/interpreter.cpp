@@ -526,6 +526,7 @@ void set_xer_carry(CpuState& state, bool carry) noexcept
     case Opcode::multiply_low_immediate:
         return "mulli";
     case Opcode::multiply_low_word: return "mullw";
+    case Opcode::multiply_low_word_overflow: return "mullwo";
     case Opcode::multiply_high_word_unsigned: return "mulhwu";
     case Opcode::multiply_high_word_signed: return "mulhw";
     case Opcode::divide_word_unsigned: return "divwu";
@@ -718,6 +719,7 @@ void add_history_source(
     entry.has_instruction_word = true;
     entry.opcode_name = opcode_name(instruction.opcode);
     if ((instruction.opcode == Opcode::multiply_low_word ||
+         instruction.opcode == Opcode::multiply_low_word_overflow ||
          instruction.opcode == Opcode::multiply_high_word_unsigned ||
          instruction.opcode == Opcode::multiply_high_word_signed ||
          instruction.opcode == Opcode::divide_word_unsigned ||
@@ -1124,6 +1126,7 @@ void add_history_source(
     case Opcode::subtract_from_extended:
     case Opcode::subtract_from_extended_overflow:
     case Opcode::multiply_low_word:
+    case Opcode::multiply_low_word_overflow:
     case Opcode::multiply_high_word_unsigned:
     case Opcode::multiply_high_word_signed:
     case Opcode::divide_word_unsigned:
@@ -1242,6 +1245,7 @@ void add_history_source(
     case Opcode::subtract_from_minus_one_extended:
     case Opcode::subtract_from_zero_extended:
     case Opcode::multiply_low_word:
+    case Opcode::multiply_low_word_overflow:
     case Opcode::multiply_high_word_unsigned:
     case Opcode::multiply_high_word_signed:
     case Opcode::divide_word_unsigned:
@@ -1792,7 +1796,8 @@ StepResult EspressoCore::step()
         instruction.opcode == Opcode::add_extended_overflow ||
         instruction.opcode == Opcode::subtract_from_carrying_overflow ||
         instruction.opcode == Opcode::subtract_from_extended_overflow ||
-        instruction.opcode == Opcode::negate_overflow)
+        instruction.opcode == Opcode::negate_overflow ||
+        instruction.opcode == Opcode::multiply_low_word_overflow)
     {
         pending_history_entry_.has_overflow_result = true;
     }
@@ -1854,6 +1859,30 @@ StepResult EspressoCore::step()
         const std::int64_t product = lhs * rhs;
         const std::uint32_t result = static_cast<std::uint32_t>(product);
         state.gpr[instruction.destination] = result;
+        if (instruction.record)
+        {
+            set_record_result(state, result);
+        }
+        break;
+    }
+
+    case Opcode::multiply_low_word_overflow:
+    {
+        const std::int64_t a = std::bit_cast<std::int32_t>(state.gpr[instruction.base]);
+        const std::int64_t b = std::bit_cast<std::int32_t>(state.gpr[instruction.source]);
+        const std::int64_t product = a * b;
+        const std::uint32_t result = static_cast<std::uint32_t>(product);
+        const bool overflow = product < std::numeric_limits<std::int32_t>::min() ||
+                              product > std::numeric_limits<std::int32_t>::max();
+        state.gpr[instruction.destination] = result;
+        if (overflow)
+        {
+            state.xer |= xer_overflow_mask | xer_summary_overflow_mask;
+        }
+        else
+        {
+            state.xer &= ~xer_overflow_mask;
+        }
         if (instruction.record)
         {
             set_record_result(state, result);

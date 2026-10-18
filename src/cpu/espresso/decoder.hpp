@@ -10,6 +10,7 @@ enum class Opcode
     unsupported,
     multiply_low_immediate,
     multiply_low_word,
+    multiply_low_word_overflow,
     multiply_high_word_unsigned,
     multiply_high_word_signed,
     divide_word_unsigned,
