@@ -945,6 +945,16 @@ void register_coreinit_hle(HleDispatcher& dispatcher)
 
     dispatcher.register_function(
         "coreinit",
+        "OSSetThreadName",
+        [](EspressoCore& core) {
+            constexpr std::uint32_t thread_name_offset = 0x5C0U;
+            const std::uint32_t thread = core.state.gpr[3];
+            const std::uint32_t name = core.state.gpr[4];
+            core.memory.write32_be(thread + thread_name_offset, name);
+        });
+
+    dispatcher.register_function(
+        "coreinit",
         "OSGetSystemInfo",
         [](EspressoCore& core) {
             const auto address = core.hle.bind_data_import(

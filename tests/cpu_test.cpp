@@ -8457,6 +8457,83 @@ void os_create_thread_hle_tests()
     assert(stack_after_invalid == stack_before_invalid);
 }
 
+void os_set_thread_name_hle_tests()
+{
+    constexpr std::uint32_t thread = 0x1000U;
+    constexpr std::uint32_t thread_size = 0x6A0U;
+    constexpr std::uint32_t name_offset = 0x5C0U;
+    constexpr std::uint32_t guest_name = 0x10144D94U;
+    constexpr std::uint32_t return_address = 0x02761428U;
+
+    EspressoCore core(0x4000U);
+    register_coreinit_hle(core.hle);
+    const std::uint32_t set_name =
+        core.hle.bind_import("coreinit", "OSSetThreadName");
+    core.memory.fill_bytes(thread, thread_size, 0xA5U);
+    for (std::uint32_t reg = 0U; reg < core.state.gpr.size(); ++reg)
+    {
+        core.state.gpr[reg] = 0xB1000000U + reg * 0x101U;
+    }
+    for (std::uint32_t reg = 0U; reg < core.state.fpr.size(); ++reg)
+    {
+        core.state.fpr[reg] = 0x1111000000000000ULL + reg;
+        core.state.fpr_ps1[reg] = 0x2222000000000000ULL + reg;
+    }
+    core.state.cr = 0x12345678U;
+    core.state.xer = 0xA00000A5U;
+    core.state.ctr = 0xCAFEBABEU;
+    core.state.fpscr = 0x5A5AA55AU;
+    core.state.gpr[3] = thread;
+    core.state.gpr[4] = guest_name;
+    core.state.lr = return_address;
+    const auto gprs_before = core.state.gpr;
+    const auto fprs_before = core.state.fpr;
+    const auto ps1_before = core.state.fpr_ps1;
+    const std::uint32_t cr_before = core.state.cr;
+    const std::uint32_t xer_before = core.state.xer;
+    const std::uint32_t ctr_before = core.state.ctr;
+    const std::uint32_t fpscr_before = core.state.fpscr;
+    std::vector<std::uint8_t> memory_before(core.memory.size());
+    core.memory.read_bytes(0U, memory_before);
+
+    core.state.cia = set_name;
+    const RunResult result = core.run(1U);
+    assert(result.reason == StopReason::instruction_limit);
+    assert(result.steps == 1U);
+    assert(core.state.cia == return_address);
+    assert(core.state.gpr == gprs_before); // void ABI; both arguments preserved
+    assert(core.state.fpr == fprs_before);
+    assert(core.state.fpr_ps1 == ps1_before);
+    assert(core.state.cr == cr_before);
+    assert(core.state.xer == xer_before);
+    assert(core.state.ctr == ctr_before);
+    assert(core.state.fpscr == fpscr_before);
+    assert(core.memory.read32_be(thread + name_offset) == guest_name);
+    std::vector<std::uint8_t> memory_after(core.memory.size());
+    core.memory.read_bytes(0U, memory_after);
+    for (std::uint32_t address = 0U; address < memory_after.size(); ++address)
+    {
+        const bool name_field_byte = address >= thread + name_offset &&
+                                     address < thread + name_offset + 4U;
+        if (!name_field_byte)
+        {
+            assert(memory_after[address] == memory_before[address]);
+        }
+    }
+
+    // The name is an opaque guest pointer, so NULL and non-mapped addresses
+    // are stored verbatim without reading string data.
+    core.state.gpr[3] = thread;
+    core.state.gpr[4] = 0U;
+    core.state.lr = return_address + 4U;
+    core.state.cia = set_name;
+    assert(core.run(1U).reason == StopReason::instruction_limit);
+    assert(core.state.cia == return_address + 4U);
+    assert(core.state.gpr[3] == thread);
+    assert(core.state.gpr[4] == 0U);
+    assert(core.memory.read32_be(thread + name_offset) == 0U);
+}
+
 void nn_save_init_hle_tests()
 {
     constexpr std::uint32_t return_address = 0x0274226CU;
@@ -18493,6 +18570,7 @@ int main(int argc, char* argv[])
     nn_olv_hle_tests();
     proc_ui_init_hle_tests();
     os_create_thread_hle_tests();
+    os_set_thread_name_hle_tests();
     guest_mutex_tests();
     memset_hle_tests();
     memcpy_hle_tests();
