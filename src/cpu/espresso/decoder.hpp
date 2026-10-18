@@ -120,6 +120,7 @@ enum class Opcode
     store_single_update,
     store_single_indexed,
     store_double,
+    store_double_indexed,
     store_double_update,
     paired_single_merge10,
     condition_bit_and,
