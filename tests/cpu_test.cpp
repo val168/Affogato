@@ -4013,9 +4013,10 @@ void floating_move_to_fpscr_bit_zero_tests()
     assert(core.state.lr == 0x11223344U && core.state.ctr == 0x55667788U);
     const InstructionHistoryEntry& history = result.instruction_history.front();
     assert(history.opcode_name == "mtfsb0");
-    assert(history.has_fpscr_bit_clear && history.fpscr_bit_number == 7U);
-    assert(history.fpscr_before_bit_clear == fpscr_before);
-    assert(history.fpscr_after_bit_clear == expected_fpscr);
+    assert(history.has_fpscr_bit_operation && !history.fpscr_bit_set &&
+           history.fpscr_bit_number == 7U);
+    assert(history.fpscr_before_bit_operation == fpscr_before);
+    assert(history.fpscr_after_bit_operation == expected_fpscr);
     const std::string trace = format_instruction_history(result);
     assert(trace.find("mtfsb0 BT=7 FPSCR=") != std::string::npos);
     assert(trace.find("-> 0x") != std::string::npos);
@@ -4054,6 +4055,50 @@ void floating_move_to_fpscr_bit_zero_tests()
     const RunResult clear_fx_result = clear_fx.run(1U);
     assert(clear_fx_result.reason == StopReason::instruction_limit);
     assert(clear_fx.state.fpscr == fpscr::xx_mask);
+}
+
+void floating_move_to_fpscr_bit_one_tests()
+{
+    const auto encode_mtfsb1 = [](std::uint8_t bit, bool record = false,
+                                 std::uint32_t reserved = 0U) {
+        return (63U << 26U) |
+            (static_cast<std::uint32_t>(bit) << 21U) |
+            reserved | (38U << 1U) | static_cast<std::uint32_t>(record);
+    };
+
+    constexpr std::uint32_t set_vxsnan = 0xFCE0004CU; // mtfsb1 7
+    const DecodedInstruction decoded = decode(set_vxsnan);
+    assert(decoded.opcode == Opcode::floating_move_to_fpscr_bit_one);
+    assert(decoded.fpscr_bit == 7U);
+    assert(((set_vxsnan >> 1U) & 0x3FFU) == 38U);
+    assert(decode(encode_mtfsb1(7U, true)).opcode == Opcode::unsupported);
+    assert(decode(encode_mtfsb1(7U, false, 1U << 11U)).opcode ==
+           Opcode::unsupported);
+
+    EspressoCore core(0x100U);
+    core.state.fpscr = fpscr::ve_mask | 0x00006000U;
+    core.memory.write32_be(0U, set_vxsnan);
+    const RunResult result = core.run(1U);
+    const std::uint32_t expected = core.state.fpscr;
+    assert(result.reason == StopReason::instruction_limit && result.steps == 1U);
+    assert((expected & (fpscr::vxsnan_mask | fpscr::vx_mask | fpscr::fex_mask)) ==
+           (fpscr::vxsnan_mask | fpscr::vx_mask | fpscr::fex_mask));
+    assert((expected & (fpscr::fx_mask | 0x00006000U)) == 0x00006000U);
+    const InstructionHistoryEntry& history = result.instruction_history.front();
+    assert(history.opcode_name == "mtfsb1");
+    assert(history.has_fpscr_bit_operation && history.fpscr_bit_set);
+    assert(history.fpscr_bit_number == 7U);
+    assert(history.fpscr_after_bit_operation == expected);
+
+    for (const std::uint8_t summary_bit : {1U, 2U})
+    {
+        EspressoCore summary(0x100U);
+        summary.state.fpscr = fpscr::fx_mask;
+        summary.memory.write32_be(0U, encode_mtfsb1(summary_bit));
+        const RunResult summary_result = summary.run(1U);
+        assert(summary_result.reason == StopReason::instruction_limit);
+        assert(summary.state.fpscr == fpscr::fx_mask);
+    }
 }
 
 void floating_negate_tests()
@@ -23964,6 +24009,7 @@ int main(int argc, char* argv[])
     floating_move_register_tests();
     floating_move_from_fpscr_tests();
     floating_move_to_fpscr_bit_zero_tests();
+    floating_move_to_fpscr_bit_one_tests();
     floating_negate_tests();
     floating_absolute_value_tests();
     floating_negative_absolute_value_tests();

@@ -103,6 +103,7 @@ enum class Opcode
     floating_negative_absolute_value,
     floating_move_from_fpscr,
     floating_move_to_fpscr_bit_zero,
+    floating_move_to_fpscr_bit_one,
     floating_convert_to_integer_word,
     floating_convert_to_integer_word_zero,
     floating_select,
