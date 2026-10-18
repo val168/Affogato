@@ -121,6 +121,7 @@ enum class Opcode
     condition_bit_nor,
     condition_bit_xor,
     condition_bit_nand,
+    condition_bit_equivalence,
 };
 
 struct DecodedInstruction
