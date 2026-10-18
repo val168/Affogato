@@ -685,6 +685,7 @@ void set_xer_carry(CpuState& state, bool carry) noexcept
     case Opcode::paired_single_merge01: return "ps_merge01";
     case Opcode::paired_single_merge10: return "ps_merge10";
     case Opcode::paired_single_merge11: return "ps_merge11";
+    case Opcode::paired_single_move_register: return "ps_mr";
     case Opcode::condition_bit_and: return "crand";
     case Opcode::condition_bit_and_complement: return "crandc";
     case Opcode::condition_bit_or: return "cror";
@@ -812,14 +813,18 @@ void add_history_source(
     if (opcode == Opcode::paired_single_merge00 ||
         opcode == Opcode::paired_single_merge01 ||
         opcode == Opcode::paired_single_merge10 ||
-        opcode == Opcode::paired_single_merge11)
+        opcode == Opcode::paired_single_merge11 ||
+        opcode == Opcode::paired_single_move_register)
     {
         entry.has_paired_fp_state = true;
+        entry.paired_fp_unary = opcode == Opcode::paired_single_move_register;
         entry.paired_fp_destination_register = instruction.fp_register;
-        entry.paired_fp_source_a_register = instruction.fp_source_a;
+        entry.paired_fp_source_a_register = entry.paired_fp_unary
+            ? instruction.fp_source_b
+            : instruction.fp_source_a;
         entry.paired_fp_source_b_register = instruction.fp_source_b;
-        entry.paired_fp_source_a_ps0 = state.fpr[instruction.fp_source_a];
-        entry.paired_fp_source_a_ps1 = state.fpr_ps1[instruction.fp_source_a];
+        entry.paired_fp_source_a_ps0 = state.fpr[entry.paired_fp_source_a_register];
+        entry.paired_fp_source_a_ps1 = state.fpr_ps1[entry.paired_fp_source_a_register];
         entry.paired_fp_source_b_ps0 = state.fpr[instruction.fp_source_b];
         entry.paired_fp_source_b_ps1 = state.fpr_ps1[instruction.fp_source_b];
         return entry;
@@ -1723,12 +1728,21 @@ std::string format_instruction_history(const RunResult& result)
                      << static_cast<unsigned>(reg) << "{ps0=0x" << std::hex
                      << std::setw(16) << ps0 << ",ps1=0x" << std::setw(16) << ps1 << '}';
             };
-            print_paired_source('A', entry.paired_fp_source_a_register,
-                                entry.paired_fp_source_a_ps0,
-                                entry.paired_fp_source_a_ps1);
-            print_paired_source('B', entry.paired_fp_source_b_register,
-                                entry.paired_fp_source_b_ps0,
-                                entry.paired_fp_source_b_ps1);
+            if (entry.paired_fp_unary)
+            {
+                print_paired_source('B', entry.paired_fp_source_b_register,
+                                    entry.paired_fp_source_b_ps0,
+                                    entry.paired_fp_source_b_ps1);
+            }
+            else
+            {
+                print_paired_source('A', entry.paired_fp_source_a_register,
+                                    entry.paired_fp_source_a_ps0,
+                                    entry.paired_fp_source_a_ps1);
+                print_paired_source('B', entry.paired_fp_source_b_register,
+                                    entry.paired_fp_source_b_ps0,
+                                    entry.paired_fp_source_b_ps1);
+            }
             text << " -> f" << std::dec
                  << static_cast<unsigned>(entry.paired_fp_destination_register);
             if (entry.completed)
@@ -5107,6 +5121,15 @@ StepResult EspressoCore::step()
              instruction.opcode == Opcode::paired_single_merge11)
                 ? source_b.ps1
                 : source_b.ps0;
+        break;
+    }
+
+    case Opcode::paired_single_move_register:
+    {
+        const std::uint64_t source_ps0 = state.fpr[instruction.fp_source_b];
+        const std::uint64_t source_ps1 = state.fpr_ps1[instruction.fp_source_b];
+        state.fpr[instruction.fp_register] = source_ps0;
+        state.fpr_ps1[instruction.fp_register] = source_ps1;
         break;
     }
 
