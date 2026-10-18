@@ -55,6 +55,7 @@ enum class Opcode
     shift_right_word,
     branch,
     instruction_sync,
+    instruction_cache_block_invalidate,
     data_cache_block_touch,
     data_cache_block_zero,
     compare_signed_immediate,

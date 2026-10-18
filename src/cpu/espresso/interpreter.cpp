@@ -571,6 +571,7 @@ void set_xer_carry(CpuState& state, bool carry) noexcept
     case Opcode::shift_right_word: return "srw";
     case Opcode::branch: return "b";
     case Opcode::instruction_sync: return "isync";
+    case Opcode::instruction_cache_block_invalidate: return "icbi";
     case Opcode::data_cache_block_touch: return "dcbt";
     case Opcode::data_cache_block_zero: return "dcbz";
     case Opcode::floating_compare_unordered: return "fcmpu";
@@ -999,6 +1000,7 @@ void add_history_source(
         opcode == Opcode::store_double_indexed ||
         opcode == Opcode::store_double_indexed_update ||
         opcode == Opcode::store_floating_as_integer_word_indexed ||
+        opcode == Opcode::instruction_cache_block_invalidate ||
         opcode == Opcode::data_cache_block_touch ||
         opcode == Opcode::data_cache_block_zero)
     {
@@ -1171,6 +1173,7 @@ void add_history_source(
         break;
     case Opcode::data_cache_block_zero:
     case Opcode::data_cache_block_touch:
+    case Opcode::instruction_cache_block_invalidate:
         if (instruction.base != 0U)
         {
             add_history_source(entry, state, instruction.base);
@@ -4557,6 +4560,11 @@ StepResult EspressoCore::step()
     case Opcode::data_cache_block_touch:
         // dcbt is a non-faulting prefetch hint. Affogato has no modeled D-cache
         // or cacheability attributes, so the hint has no observable effect.
+        break;
+
+    case Opcode::instruction_cache_block_invalidate:
+        // Instructions are fetched from GuestMemory on every step; there is no
+        // separate I-cache or translated-code cache whose block can be stale.
         break;
 
     case Opcode::condition_bit_and:

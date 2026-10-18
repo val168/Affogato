@@ -1925,6 +1925,85 @@ void data_cache_block_touch_tests()
     assert(trace.find("[0x00000110]") != std::string::npos);
 }
 
+void instruction_cache_block_invalidate_tests()
+{
+    const auto encode_icbi = [](std::uint8_t base, std::uint8_t index,
+                                bool reserved = false) {
+        return (31U << 26U) |
+            (static_cast<std::uint32_t>(base) << 16U) |
+            (static_cast<std::uint32_t>(index) << 11U) |
+            (982U << 1U) | static_cast<std::uint32_t>(reserved);
+    };
+
+    constexpr std::uint32_t canonical = 0x7C0007ACU;
+    const DecodedInstruction decoded = decode(canonical);
+    assert(decoded.opcode == Opcode::instruction_cache_block_invalidate);
+    assert(decoded.base == 0U);
+    assert(decoded.source == 0U);
+    assert(decode(encode_icbi(3U, 4U, true)).opcode == Opcode::unsupported);
+
+    EspressoCore core(0x100U);
+    for (std::size_t index = 0; index < core.state.gpr.size(); ++index)
+    {
+        core.state.gpr[index] = static_cast<std::uint32_t>(0x10203040U + index);
+        core.state.fpr[index] = 0x1111000000000000ULL + index;
+        core.state.fpr_ps1[index] = 0x2222000000000000ULL + index;
+    }
+    // RA=0 uses the literal zero base; RB remains GPR5. Affogato's per-step
+    // fetch model needs no cache access even for an unmapped hint address.
+    core.state.gpr[0] = 0xDEADBEEFU;
+    core.state.gpr[5] = 0x110U;
+    core.state.cr = 0xA5C36E91U;
+    core.state.xer = 0x800000A5U;
+    core.state.lr = 0x12345678U;
+    core.state.ctr = 0x87654321U;
+    core.state.fpscr = 0xD4C3BEEFU;
+    core.memory.write32_be(0U, encode_icbi(0U, 5U));
+    for (std::uint32_t address = 0x20U; address < 0x80U; ++address)
+    {
+        core.memory.write8(address, static_cast<std::uint8_t>(address ^ 0xA5U));
+    }
+
+    const auto gprs_before = core.state.gpr;
+    const auto fprs_before = core.state.fpr;
+    const auto ps1_before = core.state.fpr_ps1;
+    const std::uint32_t cr_before = core.state.cr;
+    const std::uint32_t xer_before = core.state.xer;
+    const std::uint32_t fpscr_before = core.state.fpscr;
+    const std::uint32_t lr_before = core.state.lr;
+    const std::uint32_t ctr_before = core.state.ctr;
+    std::array<std::uint8_t, 0x100U> memory_before{};
+    core.memory.read_bytes(0U, memory_before);
+
+    const RunResult result = core.run(1U);
+    assert(result.reason == StopReason::instruction_limit);
+    assert(result.steps == 1U);
+    assert(core.state.cia == 4U);
+    assert(core.state.gpr == gprs_before);
+    assert(core.state.fpr == fprs_before);
+    assert(core.state.fpr_ps1 == ps1_before);
+    assert(core.state.cr == cr_before);
+    assert(core.state.xer == xer_before);
+    assert(core.state.fpscr == fpscr_before);
+    assert(core.state.lr == lr_before);
+    assert(core.state.ctr == ctr_before);
+    std::array<std::uint8_t, 0x100U> memory_after{};
+    core.memory.read_bytes(0U, memory_after);
+    assert(memory_after == memory_before);
+
+    assert(result.instruction_history.size() == 1U);
+    const InstructionHistoryEntry& history = result.instruction_history.front();
+    assert(history.completed);
+    assert(history.opcode_name == "icbi");
+    assert(history.has_effective_address && history.effective_address == 0x110U);
+    assert(history.source_count == 1U);
+    assert(history.source_registers[0] == 5U);
+    const std::string trace = format_instruction_history(result);
+    assert(trace.find("icbi") != std::string::npos);
+    assert(trace.find("r5=0x00000110") != std::string::npos);
+    assert(trace.find("[0x00000110]") != std::string::npos);
+}
+
 void floating_compare_unordered_tests()
 {
     const auto encode_fcmpu = [](std::uint8_t cr_field, std::uint8_t fr_a,
@@ -21543,6 +21622,7 @@ int main(int argc, char* argv[])
     instruction_sync_tests();
     data_cache_block_zero_tests();
     data_cache_block_touch_tests();
+    instruction_cache_block_invalidate_tests();
     floating_compare_unordered_tests();
     floating_compare_ordered_tests();
     floating_divide_single_tests();

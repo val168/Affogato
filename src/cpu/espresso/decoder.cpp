@@ -710,6 +710,12 @@ DecodedInstruction decode(std::uint32_t raw) noexcept
             instruction.base = static_cast<std::uint8_t>(field(raw, 16, 0x1FU));
             instruction.source = static_cast<std::uint8_t>(field(raw, 11, 0x1FU));
         }
+        else if (extended_opcode == 982U && (raw & 1U) == 0U) // icbi
+        {
+            instruction.opcode = Opcode::instruction_cache_block_invalidate;
+            instruction.base = static_cast<std::uint8_t>(field(raw, 16, 0x1FU));
+            instruction.source = static_cast<std::uint8_t>(field(raw, 11, 0x1FU));
+        }
         else if (extended_opcode == 824) // srawi
         {
             instruction.opcode = Opcode::arithmetic_shift_right_immediate;
