@@ -688,6 +688,7 @@ void set_xer_carry(CpuState& state, bool carry) noexcept
     case Opcode::paired_single_move_register: return "ps_mr";
     case Opcode::paired_single_negate: return "ps_neg";
     case Opcode::paired_single_absolute_value: return "ps_abs";
+    case Opcode::paired_single_negative_absolute_value: return "ps_nabs";
     case Opcode::condition_bit_and: return "crand";
     case Opcode::condition_bit_and_complement: return "crandc";
     case Opcode::condition_bit_or: return "cror";
@@ -818,12 +819,14 @@ void add_history_source(
         opcode == Opcode::paired_single_merge11 ||
         opcode == Opcode::paired_single_move_register ||
         opcode == Opcode::paired_single_negate ||
-        opcode == Opcode::paired_single_absolute_value)
+        opcode == Opcode::paired_single_absolute_value ||
+        opcode == Opcode::paired_single_negative_absolute_value)
     {
         entry.has_paired_fp_state = true;
         entry.paired_fp_unary = opcode == Opcode::paired_single_move_register ||
             opcode == Opcode::paired_single_negate ||
-            opcode == Opcode::paired_single_absolute_value;
+            opcode == Opcode::paired_single_absolute_value ||
+            opcode == Opcode::paired_single_negative_absolute_value;
         entry.paired_fp_destination_register = instruction.fp_register;
         entry.paired_fp_source_a_register = entry.paired_fp_unary
             ? instruction.fp_source_b
@@ -5156,6 +5159,16 @@ StepResult EspressoCore::step()
         const std::uint64_t source_ps1 = state.fpr_ps1[instruction.fp_source_b];
         state.fpr[instruction.fp_register] = source_ps0 & magnitude_mask;
         state.fpr_ps1[instruction.fp_register] = source_ps1 & magnitude_mask;
+        break;
+    }
+
+    case Opcode::paired_single_negative_absolute_value:
+    {
+        constexpr std::uint64_t sign_mask = 0x8000000000000000ULL;
+        const std::uint64_t source_ps0 = state.fpr[instruction.fp_source_b];
+        const std::uint64_t source_ps1 = state.fpr_ps1[instruction.fp_source_b];
+        state.fpr[instruction.fp_register] = source_ps0 | sign_mask;
+        state.fpr_ps1[instruction.fp_register] = source_ps1 | sign_mask;
         break;
     }
 
