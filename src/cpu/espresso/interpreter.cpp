@@ -682,6 +682,7 @@ void set_xer_carry(CpuState& state, bool carry) noexcept
     case Opcode::store_double_indexed_update: return "stfdux";
     case Opcode::store_double_update: return "stfdu";
     case Opcode::paired_single_merge00: return "ps_merge00";
+    case Opcode::paired_single_merge01: return "ps_merge01";
     case Opcode::paired_single_merge10: return "ps_merge10";
     case Opcode::condition_bit_and: return "crand";
     case Opcode::condition_bit_and_complement: return "crandc";
@@ -808,6 +809,7 @@ void add_history_source(
 
     const Opcode opcode = instruction.opcode;
     if (opcode == Opcode::paired_single_merge00 ||
+        opcode == Opcode::paired_single_merge01 ||
         opcode == Opcode::paired_single_merge10)
     {
         entry.has_paired_fp_state = true;
@@ -5076,6 +5078,7 @@ StepResult EspressoCore::step()
     }
 
     case Opcode::paired_single_merge00:
+    case Opcode::paired_single_merge01:
     case Opcode::paired_single_merge10:
     {
         // Snapshot both source lanes first: any of the three FPR operands may
@@ -5092,10 +5095,13 @@ StepResult EspressoCore::step()
             state.fpr[instruction.fp_source_b],
             state.fpr_ps1[instruction.fp_source_b]};
         state.fpr[instruction.fp_register] =
-            instruction.opcode == Opcode::paired_single_merge00
-                ? source_a.ps0
-                : source_a.ps1;
-        state.fpr_ps1[instruction.fp_register] = source_b.ps0;
+            instruction.opcode == Opcode::paired_single_merge10
+                ? source_a.ps1
+                : source_a.ps0;
+        state.fpr_ps1[instruction.fp_register] =
+            instruction.opcode == Opcode::paired_single_merge01
+                ? source_b.ps1
+                : source_b.ps0;
         break;
     }
 
