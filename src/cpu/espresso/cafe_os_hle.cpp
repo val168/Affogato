@@ -56,6 +56,7 @@ constexpr std::uint32_t os_context_srr1_offset = 0x9CU;
 constexpr std::uint32_t os_context_fpscr_offset = 0xB4U;
 constexpr std::uint32_t os_context_gqr_offset = 0x1BCU;
 constexpr std::uint32_t os_context_upir_offset = 0x1DCU;
+constexpr std::uint32_t os_context_affinity_offset = 0x304U;
 constexpr std::int32_t os_thread_default_app_priority = 16;
 constexpr std::int32_t os_thread_app_priority_base = 64;
 constexpr std::int32_t os_thread_default_internal_priority =
@@ -894,6 +895,8 @@ void register_coreinit_hle(HleDispatcher& dispatcher)
             core.memory.write32_be(thread + os_context_gqr_offset + 5U * 4U,
                                    0x00070007U);
             core.memory.write32_be(thread + os_context_upir_offset, current_core_index);
+            core.memory.write32_be(thread + os_context_affinity_offset,
+                                   effective_attributes & 7U);
             core.memory.write32_be(thread + os_thread_tag_offset, os_thread_tag);
             core.memory.write8(thread + os_thread_state_offset,
                                entry != 0U ? os_thread_ready : 0U);
@@ -951,6 +954,42 @@ void register_coreinit_hle(HleDispatcher& dispatcher)
             const std::uint32_t thread = core.state.gpr[3];
             const std::uint32_t name = core.state.gpr[4];
             core.memory.write32_be(thread + thread_name_offset, name);
+        });
+
+    dispatcher.register_function(
+        "coreinit",
+        "OSSetThreadAffinity",
+        [](EspressoCore& core) {
+            constexpr std::uint32_t attributes_offset = 0x325U;
+            const std::uint32_t thread = core.state.gpr[3];
+            const std::uint32_t affinity = core.state.gpr[4] & 7U;
+            const std::uint64_t attributes_address =
+                static_cast<std::uint64_t>(thread) + attributes_offset;
+            const std::uint64_t context_affinity_address =
+                static_cast<std::uint64_t>(thread) + os_context_affinity_offset;
+            if (attributes_address > 0xFFFFFFFFULL ||
+                context_affinity_address + sizeof(std::uint32_t) >
+                    (std::uint64_t{1} << 32U))
+            {
+                throw GuestMemoryFault(thread, os_thread_size, GuestMemoryAccess::write);
+            }
+
+            const auto attributes = core.memory.read8(
+                static_cast<std::uint32_t>(attributes_address));
+            core.memory.validate_write_range(
+                static_cast<std::uint32_t>(attributes_address), sizeof(std::uint8_t));
+            core.memory.validate_write_range(
+                static_cast<std::uint32_t>(context_affinity_address),
+                sizeof(std::uint32_t));
+
+            // This updates the guest-visible thread/context state. Affogato's
+            // current single-lane model has no per-core run queues to reschedule.
+            core.memory.write8(
+                static_cast<std::uint32_t>(attributes_address),
+                static_cast<std::uint8_t>((attributes & ~7U) | affinity));
+            core.memory.write32_be(
+                static_cast<std::uint32_t>(context_affinity_address), affinity);
+            core.state.gpr[3] = 1U;
         });
 
     dispatcher.register_function(
