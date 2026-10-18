@@ -8,6 +8,7 @@ namespace affogato::cpu::espresso
 
 namespace fpscr
 {
+inline constexpr std::uint32_t rn_mask = 0x00000003U;
 inline constexpr std::uint32_t fpcc_mask = 0x0000F000U;
 inline constexpr std::uint32_t fprf_mask = 0x0001F000U;
 inline constexpr std::uint32_t fi_mask = 0x00020000U;

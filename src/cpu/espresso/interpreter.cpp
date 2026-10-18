@@ -583,6 +583,7 @@ void set_xer_carry(CpuState& state, bool carry) noexcept
     case Opcode::floating_negate: return "fneg";
     case Opcode::floating_absolute_value: return "fabs";
     case Opcode::floating_negative_absolute_value: return "fnabs";
+    case Opcode::floating_convert_to_integer_word: return "fctiw";
     case Opcode::floating_convert_to_integer_word_zero: return "fctiwz";
     case Opcode::floating_subtract_double: return "fsub";
     case Opcode::floating_round_to_single: return "frsp";
@@ -817,7 +818,8 @@ void add_history_source(
         entry.fp_move_destination_ps1 = state.fpr_ps1[instruction.fp_register];
         return entry;
     }
-    if (opcode == Opcode::floating_convert_to_integer_word_zero)
+    if (opcode == Opcode::floating_convert_to_integer_word ||
+        opcode == Opcode::floating_convert_to_integer_word_zero)
     {
         entry.has_fp_integer_conversion = true;
         entry.fp_integer_conversion_source = instruction.fp_source_b;
@@ -3342,6 +3344,7 @@ StepResult EspressoCore::step()
         break;
     }
 
+    case Opcode::floating_convert_to_integer_word:
     case Opcode::floating_convert_to_integer_word_zero:
     {
         const std::uint64_t source_raw = state.fpr[instruction.fp_source_b];
@@ -3351,6 +3354,7 @@ StepResult EspressoCore::step()
         std::uint32_t integer_bits{};
         bool invalid = false;
         bool inexact = false;
+        bool rounded_up = false;
 
         if (is_binary64_nan(source_raw))
         {
@@ -3364,7 +3368,41 @@ StepResult EspressoCore::step()
         }
         else
         {
-            const double rounded = std::trunc(source);
+            const std::uint32_t rounding_mode =
+                instruction.opcode == Opcode::floating_convert_to_integer_word_zero
+                    ? 1U
+                    : state.fpscr & fpscr::rn_mask;
+            double rounded{};
+            switch (rounding_mode)
+            {
+            case 0U:
+            {
+                const double lower = std::floor(source);
+                const double fraction = source - lower;
+                if (fraction < 0.5)
+                {
+                    rounded = lower;
+                }
+                else if (fraction > 0.5)
+                {
+                    rounded = lower + 1.0;
+                }
+                else
+                {
+                    // Nearest with ties to even; beyond the exact-integer
+                    // range, representable doubles are already even integers.
+                    rounded = std::fmod(std::fabs(lower), 2.0) == 0.0
+                        ? lower
+                        : lower + 1.0;
+                }
+                break;
+            }
+            case 1U: rounded = std::trunc(source); break;
+            case 2U: rounded = std::ceil(source); break;
+            case 3U: rounded = std::floor(source); break;
+            default: break;
+            }
+
             if (rounded >= one_past_maximum_signed_word)
             {
                 invalid = true;
@@ -3380,6 +3418,8 @@ StepResult EspressoCore::step()
                 const std::int32_t integer = static_cast<std::int32_t>(rounded);
                 integer_bits = std::bit_cast<std::uint32_t>(integer);
                 inexact = rounded != source;
+                rounded_up = inexact &&
+                    std::fabs(rounded) > std::fabs(source);
             }
 
             if (invalid)
@@ -3392,6 +3432,10 @@ StepResult EspressoCore::step()
         if (!invalid && inexact)
         {
             state.fpscr |= fpscr::fi_mask | fpscr::xx_mask | fpscr::fx_mask;
+            if (rounded_up)
+            {
+                state.fpscr |= fpscr::fr_mask;
+            }
         }
         update_fpscr_summaries(state);
 

@@ -4735,7 +4735,7 @@ void floating_convert_to_integer_word_zero_tests()
     assert(decode(encode_fctiwz(0U, 1U, false, 1U)).opcode == Opcode::unsupported);
     assert(decode(encode_fctiwz(0U, 1U, true)).opcode == Opcode::unsupported);
     assert(decode(encode_fctiwz(0U, 1U, false, 0U, 14U)).opcode ==
-           Opcode::unsupported);
+           Opcode::floating_convert_to_integer_word);
 
     struct Execution
     {
@@ -4906,6 +4906,185 @@ void floating_convert_to_integer_word_zero_tests()
         0U, 1U, quiet_nan, enabled_fpscr);
     const std::string suppressed_history = format_instruction_history(suppressed_trace.result);
     assert(suppressed_history.find("f0 (write suppressed; int32(-2147483648) raw=0xFFF8000080000000 invalid)") !=
+           std::string::npos);
+}
+
+void floating_convert_to_integer_word_tests()
+{
+    const auto encode_fctiw = [](std::uint8_t destination, std::uint8_t source,
+                                 bool record = false, std::uint8_t reserved_a = 0U,
+                                 std::uint32_t xo = 14U) {
+        return 0xFC000000U |
+            (static_cast<std::uint32_t>(destination) << 21U) |
+            (static_cast<std::uint32_t>(reserved_a) << 16U) |
+            (static_cast<std::uint32_t>(source) << 11U) | (xo << 1U) |
+            static_cast<std::uint32_t>(record);
+    };
+    constexpr std::uint32_t wind_word = 0xFC00081CU;
+    const DecodedInstruction decoded = decode(wind_word);
+    assert(decoded.opcode == Opcode::floating_convert_to_integer_word);
+    assert(decoded.fp_register == 0U);
+    assert(decoded.fp_source_b == 1U);
+    assert(((wind_word >> 1U) & 0x3FFU) == 14U);
+    assert(((wind_word >> 16U) & 0x1FU) == 0U);
+    assert((wind_word & 1U) == 0U);
+    assert(encode_fctiw(0U, 1U) == wind_word);
+    assert(decode(encode_fctiw(0U, 1U, true)).opcode == Opcode::unsupported);
+    assert(decode(encode_fctiw(0U, 1U, false, 1U)).opcode == Opcode::unsupported);
+    assert(decode(encode_fctiw(0U, 1U, false, 0U, 15U)).opcode ==
+           Opcode::floating_convert_to_integer_word_zero);
+
+    constexpr std::uint64_t destination_ps1 = 0xDEADBEEF01234567ULL;
+    constexpr std::uint32_t fpscr_sentinel = 0x00015000U;
+    struct Execution
+    {
+        CpuState state;
+        RunResult result;
+    };
+    const auto execute = [&](double source, std::uint32_t rn,
+                             std::uint32_t additional_fpscr = 0U,
+                             std::uint8_t destination = 0U,
+                             std::uint8_t source_register = 1U) {
+        EspressoCore core(16U);
+        for (std::size_t index = 0U; index < core.state.gpr.size(); ++index)
+        {
+            core.state.gpr[index] = 0x900U + static_cast<std::uint32_t>(index);
+            core.state.fpr[index] = 0x1111000000000000ULL + index;
+            core.state.fpr_ps1[index] = 0x2222000000000000ULL + index;
+        }
+        core.state.fpr[source_register] = std::bit_cast<std::uint64_t>(source);
+        core.state.fpr_ps1[destination] = destination_ps1;
+        core.state.cr = 0xA5C36E91U;
+        core.state.xer = 0x800000A5U;
+        core.state.fpscr = fpscr_sentinel | rn | additional_fpscr;
+        core.state.lr = 0x12345678U;
+        core.state.ctr = 0x87654321U;
+        core.memory.write32_be(0U, encode_fctiw(destination, source_register));
+        core.memory.write32_be(8U, 0xDEADBEEFU);
+        const auto gprs_before = core.state.gpr;
+        const auto fprs_before = core.state.fpr;
+        const auto ps1_before = core.state.fpr_ps1;
+        const std::uint32_t fpscr_before = core.state.fpscr;
+        const auto memory_before = core.memory.read32_be(8U);
+
+        Execution execution{.state = {}, .result = core.run(1U)};
+        assert(execution.result.reason == StopReason::instruction_limit);
+        assert(execution.result.steps == 1U);
+        assert(core.state.cia == 4U);
+        assert(core.state.gpr == gprs_before);
+        assert(core.state.cr == 0xA5C36E91U);
+        assert(core.state.xer == 0x800000A5U);
+        assert(core.state.lr == 0x12345678U);
+        assert(core.state.ctr == 0x87654321U);
+        assert(core.memory.read32_be(8U) == memory_before);
+        assert(core.state.fpr_ps1 == ps1_before);
+        assert((core.state.fpscr & fpscr::fprf_mask) ==
+               (fpscr_before & fpscr::fprf_mask));
+        for (std::size_t index = 0U; index < core.state.fpr.size(); ++index)
+        {
+            if (index != destination)
+            {
+                assert(core.state.fpr[index] == fprs_before[index]);
+            }
+        }
+        if (source_register != destination)
+        {
+            assert(core.state.fpr[source_register] ==
+                   std::bit_cast<std::uint64_t>(source));
+        }
+        execution.state = core.state;
+        return execution;
+    };
+    const auto encoded = [](std::int32_t integer, std::uint64_t source_raw) {
+        std::uint64_t value = 0xFFF8000000000000ULL |
+            std::bit_cast<std::uint32_t>(integer);
+        if (integer == 0 && (source_raw & 0x8000000000000000ULL) != 0U)
+        {
+            value |= 0x0000000100000000ULL;
+        }
+        return value;
+    };
+    const auto raw = [](double value) { return std::bit_cast<std::uint64_t>(value); };
+
+    struct RoundingCase
+    {
+        double source;
+        std::uint32_t rn;
+        std::int32_t expected;
+    };
+    constexpr std::array<RoundingCase, 12> rounding_cases{{
+        {1.5, 0U, 2}, {1.5, 1U, 1}, {1.5, 2U, 2}, {1.5, 3U, 1},
+        {-1.5, 0U, -2}, {-1.5, 1U, -1}, {-1.5, 2U, -1}, {-1.5, 3U, -2},
+        {2.5, 0U, 2}, {3.5, 0U, 4}, {-2.5, 0U, -2}, {-3.5, 0U, -4},
+    }};
+    for (const RoundingCase& test : rounding_cases)
+    {
+        const Execution result = execute(test.source, test.rn);
+        assert(result.state.fpr[0] == encoded(test.expected, raw(test.source)));
+        assert((result.state.fpscr & fpscr::fi_mask) != 0U);
+        assert((result.state.fpscr & fpscr::xx_mask) != 0U);
+    }
+
+    const Execution magnitude_rounded_up = execute(1.75, 0U);
+    assert(magnitude_rounded_up.state.fpr[0] == encoded(2, raw(1.75)));
+    assert((magnitude_rounded_up.state.fpscr & fpscr::fr_mask) != 0U);
+    const Execution magnitude_rounded_down = execute(1.25, 0U);
+    assert(magnitude_rounded_down.state.fpr[0] == encoded(1, raw(1.25)));
+    assert((magnitude_rounded_down.state.fpscr & fpscr::fr_mask) == 0U);
+    const Execution negative_fraction_to_zero = execute(-0.5, 0U);
+    assert(negative_fraction_to_zero.state.fpr[0] == 0xFFF8000100000000ULL);
+    const Execution positive_exact = execute(3.0, 0U, fpscr::xx_mask |
+        fpscr::fi_mask | fpscr::fr_mask);
+    assert(positive_exact.state.fpr[0] == 0xFFF8000000000003ULL);
+    assert((positive_exact.state.fpscr & (fpscr::fi_mask | fpscr::fr_mask)) == 0U);
+    assert((positive_exact.state.fpscr & fpscr::xx_mask) != 0U);
+
+    // Rounding is applied before range checking: values just outside the
+    // integer interval can round back into range for nearest-even.
+    const Execution positive_edge = execute(2147483647.4, 0U);
+    assert(positive_edge.state.fpr[0] == 0xFFF800007FFFFFFFULL);
+    assert((positive_edge.state.fpscr & fpscr::vxcvi_mask) == 0U);
+    const Execution positive_edge_up = execute(2147483647.4, 2U);
+    assert(positive_edge_up.state.fpr[0] == 0xFFF800007FFFFFFFULL);
+    assert((positive_edge_up.state.fpscr & fpscr::vxcvi_mask) != 0U);
+    const Execution negative_edge = execute(-2147483648.4, 0U);
+    assert(negative_edge.state.fpr[0] == 0xFFF8000080000000ULL);
+    assert((negative_edge.state.fpscr & fpscr::vxcvi_mask) == 0U);
+    const Execution negative_edge_down = execute(-2147483648.4, 3U);
+    assert(negative_edge_down.state.fpr[0] == 0xFFF8000080000000ULL);
+    assert((negative_edge_down.state.fpscr & fpscr::vxcvi_mask) != 0U);
+
+    const Execution positive_infinity = execute(
+        std::numeric_limits<double>::infinity(), 0U);
+    assert(positive_infinity.state.fpr[0] == 0xFFF800007FFFFFFFULL);
+    const Execution negative_infinity = execute(
+        -std::numeric_limits<double>::infinity(), 0U);
+    assert(negative_infinity.state.fpr[0] == 0xFFF8000080000000ULL);
+    constexpr std::uint64_t qnan_raw = 0x7FF8123456789ABCULL;
+    constexpr std::uint64_t snan_raw = 0x7FF0000000004321ULL;
+    const Execution qnan = execute(std::bit_cast<double>(qnan_raw), 0U);
+    assert(qnan.state.fpr[0] == 0xFFF8000080000000ULL);
+    assert((qnan.state.fpscr & fpscr::vxcvi_mask) != 0U);
+    assert((qnan.state.fpscr & fpscr::vxsnan_mask) == 0U);
+    const Execution snan = execute(std::bit_cast<double>(snan_raw), 0U);
+    assert(snan.state.fpr[0] == 0xFFF8000080000000ULL);
+    assert((snan.state.fpscr & (fpscr::vxcvi_mask | fpscr::vxsnan_mask)) ==
+           (fpscr::vxcvi_mask | fpscr::vxsnan_mask));
+
+    const std::uint32_t enabled = fpscr::ve_mask;
+    const Execution suppressed = execute(
+        std::numeric_limits<double>::infinity(), 0U, enabled);
+    assert(suppressed.state.fpr[0] == 0x1111000000000000ULL);
+    assert((suppressed.state.fpscr & (fpscr::vxcvi_mask | fpscr::vx_mask |
+                                      fpscr::fx_mask | fpscr::fex_mask)) ==
+           (fpscr::vxcvi_mask | fpscr::vx_mask | fpscr::fx_mask | fpscr::fex_mask));
+    const Execution alias = execute(-1.5, 0U, 0U, 1U, 1U);
+    assert(alias.state.fpr[1] == 0xFFF80000FFFFFFFEULL);
+    assert(alias.state.fpr_ps1[1] == destination_ps1);
+
+    const Execution wind_waker = execute(0.0, 0U);
+    const std::string trace = format_instruction_history(wind_waker.result);
+    assert(trace.find("fctiw f1=0 [0x0000000000000000] -> f0=int32(0) raw=0xFFF8000000000000") !=
            std::string::npos);
 }
 
@@ -20797,6 +20976,7 @@ int main(int argc, char* argv[])
     floating_multiply_add_double_tests();
     floating_negative_multiply_subtract_double_tests();
     floating_round_to_single_tests();
+    floating_convert_to_integer_word_tests();
     floating_convert_to_integer_word_zero_tests();
     load_store_tests();
     store_halfword_update_tests();

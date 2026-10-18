@@ -75,6 +75,7 @@ enum class Opcode
     floating_negate,
     floating_absolute_value,
     floating_negative_absolute_value,
+    floating_convert_to_integer_word,
     floating_convert_to_integer_word_zero,
     floating_subtract_double,
     floating_round_to_single,
