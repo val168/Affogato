@@ -530,6 +530,13 @@ DecodedInstruction decode(std::uint32_t raw) noexcept
             instruction.base = static_cast<std::uint8_t>(field(raw, 16, 0x1FU));
             instruction.source = static_cast<std::uint8_t>(field(raw, 11, 0x1FU));
         }
+        else if (extended_opcode == 790U && (raw & 1U) == 0U) // lhbrx
+        {
+            instruction.opcode = Opcode::load_halfword_byte_reverse_indexed;
+            instruction.destination = static_cast<std::uint8_t>(field(raw, 21, 0x1FU));
+            instruction.base = static_cast<std::uint8_t>(field(raw, 16, 0x1FU));
+            instruction.source = static_cast<std::uint8_t>(field(raw, 11, 0x1FU));
+        }
         else if (extended_opcode == 343U && (raw & 1U) == 0U) // lhax
         {
             instruction.opcode = Opcode::load_halfword_algebraic_indexed;

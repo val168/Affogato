@@ -86,6 +86,7 @@ enum class Opcode
     load_word_byte_reverse_indexed,
     load_byte_zero_indexed,
     load_halfword_zero_indexed,
+    load_halfword_byte_reverse_indexed,
     load_halfword_algebraic_indexed,
     store_word,
     store_multiple_word,

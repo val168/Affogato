@@ -17301,6 +17301,65 @@ void load_byte_zero_indexed_tests()
     assert(fault.state.gpr == before_fault_gprs);
 }
 
+void load_halfword_byte_reverse_indexed_tests()
+{
+    const auto encode_lhbrx = [](std::uint8_t destination, std::uint8_t base,
+                                 std::uint8_t index, bool reserved_bit = false) {
+        return (31U << 26U) |
+            (static_cast<std::uint32_t>(destination) << 21U) |
+            (static_cast<std::uint32_t>(base) << 16U) |
+            (static_cast<std::uint32_t>(index) << 11U) | (790U << 1U) |
+            static_cast<std::uint32_t>(reserved_bit);
+    };
+
+    constexpr std::uint32_t exact_encoding = 0x7C00062CU;
+    const DecodedInstruction decoded = decode(exact_encoding);
+    assert(decoded.opcode == Opcode::load_halfword_byte_reverse_indexed);
+    assert(decoded.destination == 0U && decoded.base == 0U && decoded.source == 0U);
+    assert(((exact_encoding >> 1U) & 0x3FFU) == 790U);
+    assert(encode_lhbrx(0U, 0U, 0U) == exact_encoding);
+    assert(decode(encode_lhbrx(3U, 4U, 5U, true)).opcode == Opcode::unsupported);
+
+    EspressoCore core(0x100U);
+    core.state.gpr[4] = 0x40U;
+    core.state.gpr[5] = 8U;
+    core.state.gpr[7] = 0xDEADBEEFU;
+    core.memory.write32_be(0U, encode_lhbrx(7U, 4U, 5U));
+    core.memory.write16_be(0x48U, 0x1234U);
+    const RunResult result = core.run(1U);
+    assert(result.reason == StopReason::instruction_limit);
+    assert(core.state.gpr[7] == 0x00003412U);
+    const InstructionHistoryEntry& history = result.instruction_history.front();
+    assert(history.opcode_name == "lhbrx");
+    assert(history.has_effective_address && history.effective_address == 0x48U);
+    assert(history.has_destination && history.destination_register == 7U);
+    assert(history.destination_value == 0x00003412U);
+
+    // rA=0 uses zero, with rB=0 still supplying GPR0 as the index.
+    EspressoCore zero_base(0x100U);
+    zero_base.state.gpr[0] = 0x40U;
+    zero_base.memory.write16_be(0x40U, 0xABCDU);
+    zero_base.memory.write32_be(0U, encode_lhbrx(3U, 0U, 0U));
+    const RunResult zero_result = zero_base.run(1U);
+    assert(zero_base.state.gpr[3] == 0x0000CDABU);
+    assert(zero_result.instruction_history.front().effective_address == 0x40U);
+
+    EspressoCore fault(0x100U);
+    fault.memory.map_region(0x2000U, 1U);
+    fault.memory.write8(0x2000U, 0x12U);
+    fault.state.gpr[4] = 0x2000U;
+    fault.state.gpr[5] = 0U;
+    fault.state.gpr[6] = 0xDEADBEEFU;
+    fault.memory.write32_be(0U, encode_lhbrx(6U, 4U, 5U));
+    const RunResult fault_result = fault.run(1U);
+    assert(fault_result.reason == StopReason::memory_fault);
+    assert(fault_result.detail.find("read 2 byte(s)") != std::string::npos);
+    assert(fault_result.detail.find("rA=4 (0x00002000), rB=5 (0x00000000)") !=
+           std::string::npos);
+    assert(fault.state.gpr[6] == 0xDEADBEEFU);
+    assert(!fault_result.instruction_history.front().completed);
+}
+
 void load_word_byte_reverse_indexed_tests()
 {
     const auto encode_lwbrx = [](std::uint8_t destination, std::uint8_t base,
@@ -19279,6 +19338,7 @@ int main(int argc, char* argv[])
     store_floating_as_integer_word_indexed_tests();
     load_halfword_zero_indexed_tests();
     load_byte_zero_indexed_tests();
+    load_halfword_byte_reverse_indexed_tests();
     load_word_byte_reverse_indexed_tests();
     load_single_indexed_tests();
     store_single_indexed_tests();
