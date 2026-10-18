@@ -28,6 +28,7 @@ enum class Opcode
     add,
     add_overflow,
     subtract_from,
+    subtract_from_overflow,
     subtract_from_carrying,
     subtract_from_extended,
     subtract_from_zero_extended,

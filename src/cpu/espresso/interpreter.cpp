@@ -542,6 +542,7 @@ void set_xer_carry(CpuState& state, bool carry) noexcept
     case Opcode::add: return "add";
     case Opcode::add_overflow: return "addo";
     case Opcode::subtract_from: return "subf";
+    case Opcode::subtract_from_overflow: return "subfo";
     case Opcode::subtract_from_carrying: return "subfc";
     case Opcode::subtract_from_extended: return "subfe";
     case Opcode::subtract_from_zero_extended: return "subfze";
@@ -738,7 +739,8 @@ void add_history_source(
     {
         entry.opcode_name += '.';
     }
-    if (instruction.opcode == Opcode::add_overflow && instruction.record)
+    if ((instruction.opcode == Opcode::add_overflow ||
+         instruction.opcode == Opcode::subtract_from_overflow) && instruction.record)
     {
         entry.opcode_name += '.';
     }
@@ -1104,6 +1106,7 @@ void add_history_source(
     case Opcode::add_carrying:
     case Opcode::add_extended:
     case Opcode::subtract_from:
+    case Opcode::subtract_from_overflow:
     case Opcode::subtract_from_carrying:
     case Opcode::subtract_from_extended:
     case Opcode::multiply_low_word:
@@ -1209,6 +1212,7 @@ void add_history_source(
     case Opcode::subtract_from_immediate_carry:
     case Opcode::add:
     case Opcode::add_overflow:
+    case Opcode::subtract_from_overflow:
     case Opcode::add_carrying:
     case Opcode::add_extended:
     case Opcode::add_to_zero_extended:
@@ -1762,7 +1766,8 @@ StepResult EspressoCore::step()
     current_instruction_word_fetched_ = true;
     const DecodedInstruction instruction = decode(instruction_word);
     pending_history_entry_ = make_history_entry(state, cia, instruction_word, instruction);
-    if (instruction.opcode == Opcode::add_overflow)
+    if (instruction.opcode == Opcode::add_overflow ||
+        instruction.opcode == Opcode::subtract_from_overflow)
     {
         pending_history_entry_.has_overflow_result = true;
     }
@@ -2010,6 +2015,28 @@ StepResult EspressoCore::step()
         const std::uint32_t b = state.gpr[instruction.source];
         const std::uint32_t result = a + b;
         const bool overflow = ((~(a ^ b) & (a ^ result)) & 0x80000000U) != 0U;
+        state.gpr[instruction.destination] = result;
+        if (overflow)
+        {
+            state.xer |= xer_overflow_mask | xer_summary_overflow_mask;
+        }
+        else
+        {
+            state.xer &= ~xer_overflow_mask;
+        }
+        if (instruction.record)
+        {
+            set_record_result(state, result);
+        }
+        break;
+    }
+
+    case Opcode::subtract_from_overflow:
+    {
+        const std::uint32_t a = state.gpr[instruction.base];
+        const std::uint32_t b = state.gpr[instruction.source];
+        const std::uint32_t result = b - a;
+        const bool overflow = (((b ^ a) & (b ^ result)) & 0x80000000U) != 0U;
         state.gpr[instruction.destination] = result;
         if (overflow)
         {

@@ -6997,6 +6997,99 @@ void add_overflow_tests()
     (void)execute(6U, 4U, 5U, 1U, 2U, xer_so, true); // non-overflow preserves sticky SO
 }
 
+void subtract_from_overflow_tests()
+{
+    constexpr std::uint32_t xer_so = 0x80000000U;
+    constexpr std::uint32_t xer_ov = 0x40000000U;
+    constexpr std::uint32_t xer_ca = 0x20000000U;
+    const std::uint32_t encoding = encode_xo(3U, 4U, 5U, 552U);
+    const DecodedInstruction decoded = decode(encoding);
+    assert(decoded.opcode == Opcode::subtract_from_overflow);
+    assert(decoded.destination == 3U && decoded.base == 4U && decoded.source == 5U);
+    assert(!decoded.record);
+    const DecodedInstruction record_decoded = decode(encoding | 1U);
+    assert(record_decoded.opcode == Opcode::subtract_from_overflow && record_decoded.record);
+    assert(decode(encode_xo(3U, 4U, 5U, 40U)).opcode == Opcode::subtract_from);
+
+    const auto execute = [&](std::uint8_t destination, std::uint8_t ra,
+                             std::uint8_t rb, std::uint32_t a, std::uint32_t b,
+                             std::uint32_t initial_xer, bool record = false) {
+        EspressoCore core(8U);
+        core.state.gpr.fill(0xA5A5A5A5U);
+        core.state.gpr[ra] = a;
+        core.state.gpr[rb] = b;
+        core.state.cr = 0x12345678U;
+        core.state.xer = initial_xer;
+        core.state.lr = 0x11223344U;
+        core.state.ctr = 0x55667788U;
+        core.state.fpscr = 0xCAFEBABEU;
+        core.state.fpr.fill(0x0123456789ABCDEFULL);
+        core.state.fpr_ps1.fill(0xFEDCBA9876543210ULL);
+        core.memory.write32_be(0U, encode_xo(destination, ra, rb, 552U, record));
+        const auto gprs_before = core.state.gpr;
+        const auto fprs_before = core.state.fpr;
+        const auto ps1_before = core.state.fpr_ps1;
+        std::array<std::uint8_t, 8U> memory_before{};
+        core.memory.read_bytes(0U, memory_before);
+
+        const std::uint32_t result = b - a;
+        const bool overflow = (((b ^ a) & (b ^ result)) & 0x80000000U) != 0U;
+        std::uint32_t expected_xer = initial_xer & ~xer_ov;
+        if (overflow)
+        {
+            expected_xer |= xer_ov | xer_so;
+        }
+        const RunResult run = core.run(1U);
+        assert(run.reason == StopReason::instruction_limit && run.steps == 1U);
+        assert(core.state.cia == 4U);
+        assert(core.state.gpr[destination] == result);
+        for (std::uint32_t reg = 0; reg < 32U; ++reg)
+        {
+            if (reg != destination)
+            {
+                assert(core.state.gpr[reg] == gprs_before[reg]);
+            }
+        }
+        assert(core.state.xer == expected_xer); // CA and unrelated bits preserved
+        assert(core.state.lr == 0x11223344U && core.state.ctr == 0x55667788U);
+        assert(core.state.fpscr == 0xCAFEBABEU);
+        assert(core.state.fpr == fprs_before && core.state.fpr_ps1 == ps1_before);
+        std::array<std::uint8_t, 8U> memory_after{};
+        core.memory.read_bytes(0U, memory_after);
+        assert(memory_after == memory_before);
+        if (!record)
+        {
+            assert(core.state.cr == 0x12345678U);
+        }
+        else
+        {
+            const std::uint32_t cr0 = (result & 0x80000000U) != 0U ? 0x8U
+                : result == 0U ? 0x2U : 0x4U;
+            assert(((core.state.cr >> 28U) & 0xFU) ==
+                   (cr0 | ((expected_xer & xer_so) != 0U ? 1U : 0U)));
+            assert((core.state.cr & 0x0FFFFFFFU) == 0x02345678U);
+        }
+        const InstructionHistoryEntry& history = run.instruction_history.front();
+        assert(history.opcode_name == (record ? "subfo." : "subfo"));
+        assert(history.has_overflow_result && history.overflow_result == overflow);
+        assert(history.summary_overflow_result == ((expected_xer & xer_so) != 0U));
+        return run;
+    };
+
+    (void)execute(3U, 4U, 5U, 2U, 1U, xer_so | xer_ov | xer_ca);
+    (void)execute(3U, 4U, 5U, 1U, 0x80000000U, xer_ca); // negative overflow
+    (void)execute(3U, 4U, 5U, 0xFFFFFFFFU, 0x7FFFFFFFU, xer_ca); // positive overflow
+    (void)execute(4U, 4U, 5U, 1U, 0x80000000U, 0U); // rD == rA
+    (void)execute(5U, 4U, 5U, 0xFFFFFFFFU, 0x7FFFFFFFU, 0U); // rD == rB
+    (void)execute(5U, 5U, 5U, 0x12345678U, 0x12345678U, 0U); // all alias
+
+    const RunResult record =
+        execute(6U, 4U, 5U, 1U, 0x80000000U, 0U, true);
+    assert(record.instruction_history.front().opcode_name == "subfo.");
+    assert(format_instruction_history(record).find("OV=1 SO=1") != std::string::npos);
+    (void)execute(6U, 4U, 5U, 2U, 1U, xer_so, true); // retain sticky SO
+}
+
 void add_to_zero_extended_tests()
 {
     constexpr std::uint32_t xer_ca = 0x20000000U;
@@ -21735,6 +21828,7 @@ int main(int argc, char* argv[])
     arithmetic_shift_right_word_tests();
     add_carrying_tests();
     add_overflow_tests();
+    subtract_from_overflow_tests();
     add_to_zero_extended_tests();
     subtract_from_zero_extended_tests();
     subtract_from_extended_tests();
