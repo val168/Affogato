@@ -60,6 +60,7 @@ enum class Opcode
     compare_unsigned_immediate,
     compare_unsigned_register,
     floating_compare_unordered,
+    floating_compare_ordered,
     floating_divide_single,
     floating_divide_double,
     floating_add_single,

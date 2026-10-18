@@ -575,6 +575,15 @@ void decoder_tests()
     assert(decode(mcrxr | (1U << 11U)).opcode == Opcode::unsupported);
     assert(decode(mcrxr | (1U << 20U)).opcode == Opcode::unsupported);
 
+    constexpr std::uint32_t fcmpo = 0xFC01F840U; // fcmpo cr0,f1,f31
+    const DecodedInstruction fcmpo_decoded = decode(fcmpo);
+    assert(fcmpo_decoded.opcode == Opcode::floating_compare_ordered);
+    assert(fcmpo_decoded.cr_field == 0U);
+    assert(fcmpo_decoded.fp_compare_a == 1U && fcmpo_decoded.fp_compare_b == 31U);
+    assert(decode(fcmpo | 1U).opcode == Opcode::unsupported);
+    assert(decode(fcmpo | (1U << 21U)).opcode == Opcode::unsupported);
+    assert(decode(fcmpo | (1U << 22U)).opcode == Opcode::unsupported);
+
     const DecodedInstruction cmpwi = decode(0x2E830007U); // cmpwi cr5, r3, 7
     assert(cmpwi.opcode == Opcode::compare_signed_immediate);
     assert(cmpwi.cr_field == 5);
@@ -1878,6 +1887,74 @@ void floating_compare_unordered_tests()
     assert((signaling_enabled & fpscr::fx_mask) != 0U);
     assert((signaling_enabled & fpscr::fex_mask) != 0U);
     assert((signaling_enabled & fpscr::ve_mask) != 0U);
+}
+
+void floating_compare_ordered_tests()
+{
+    const auto encode_fcmpo = [](std::uint8_t cr_field, std::uint8_t fr_a,
+                                 std::uint8_t fr_b) {
+        return 0xFC000040U |
+            (static_cast<std::uint32_t>(cr_field) << 23U) |
+            (static_cast<std::uint32_t>(fr_a) << 16U) |
+            (static_cast<std::uint32_t>(fr_b) << 11U);
+    };
+
+    struct TestCase
+    {
+        std::uint64_t a;
+        std::uint64_t b;
+        std::uint8_t expected_cr;
+        std::uint32_t expected_invalid;
+    };
+    constexpr std::array<TestCase, 5> cases{{
+        {0x3FF0000000000000ULL, 0x4000000000000000ULL, 0x8U, 0U}, // LT
+        {0x4000000000000000ULL, 0x3FF0000000000000ULL, 0x4U, 0U}, // GT
+        {0x3FF0000000000000ULL, 0x3FF0000000000000ULL, 0x2U, 0U}, // EQ
+        {0x7FF8000000000001ULL, 0x3FF0000000000000ULL, 0x1U, fpscr::vxvc_mask},
+        {0x7FF0000000000001ULL, 0x3FF0000000000000ULL, 0x1U, fpscr::vxsnan_mask},
+    }};
+    for (const TestCase& test : cases)
+    {
+        EspressoCore core(16U);
+        core.state.fpr[1] = test.a;
+        core.state.fpr[31] = test.b;
+        core.state.fpr_ps1[1] = 0xDEADBEEF01234567ULL;
+        core.state.fpr_ps1[31] = 0x0123456789ABCDEFULL;
+        core.state.cr = 0xA5C36E91U;
+        core.state.fpscr = 0x00000025U;
+        const auto gprs_before = core.state.gpr;
+        const auto fprs_before = core.state.fpr;
+        const auto ps1_before = core.state.fpr_ps1;
+        const std::uint32_t cr_before = core.state.cr;
+        core.memory.write32_be(0U, encode_fcmpo(2U, 1U, 31U));
+        const RunResult result = core.run(1U);
+        assert(result.steps == 1U);
+        const std::uint32_t shift = 28U - 4U * 2U;
+        const std::uint32_t field_mask = 0xFU << shift;
+        assert(core.state.cr == ((cr_before & ~field_mask) |
+                                 (static_cast<std::uint32_t>(test.expected_cr) << shift)));
+        assert((core.state.fpscr & fpscr::fpcc_mask) ==
+               (static_cast<std::uint32_t>(test.expected_cr) << 12U));
+        assert((core.state.fpscr & (fpscr::vxvc_mask | fpscr::vxsnan_mask)) ==
+               test.expected_invalid);
+        assert(core.state.gpr == gprs_before);
+        assert(core.state.fpr == fprs_before);
+        assert(core.state.fpr_ps1 == ps1_before);
+        assert(result.instruction_history.front().opcode_name == "fcmpo");
+        assert(result.instruction_history.front().fp_compare_result == test.expected_cr);
+    }
+
+    // Ordered compare with an enabled quiet-NaN exception still records UN in CR.
+    EspressoCore enabled(8U);
+    enabled.state.fpr[1] = 0x7FF8000000000001ULL;
+    enabled.state.fpr[31] = 0x3FF0000000000000ULL;
+    enabled.state.fpscr = fpscr::ve_mask;
+    enabled.memory.write32_be(0U, encode_fcmpo(0U, 1U, 31U));
+    assert(enabled.step() == StepResult::executed);
+    assert((enabled.state.cr >> 28U) == 0x1U);
+    assert((enabled.state.fpscr & (fpscr::vxvc_mask | fpscr::vx_mask |
+                                   fpscr::fx_mask | fpscr::fex_mask)) ==
+           (fpscr::vxvc_mask | fpscr::vx_mask | fpscr::fx_mask | fpscr::fex_mask));
 }
 
 void floating_divide_single_tests()
@@ -20497,6 +20574,7 @@ int main(int argc, char* argv[])
     compare_and_conditional_branch_tests();
     instruction_sync_tests();
     floating_compare_unordered_tests();
+    floating_compare_ordered_tests();
     floating_divide_single_tests();
     floating_divide_double_tests();
     floating_add_single_tests();

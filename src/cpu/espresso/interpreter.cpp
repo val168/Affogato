@@ -84,7 +84,8 @@ constexpr std::uint64_t binary64_infinity_bits = 0x7FF0000000000000ULL;
 
 constexpr std::uint32_t implemented_invalid_masks =
     fpscr::vxsnan_mask | fpscr::vxzdz_mask | fpscr::vximz_mask |
-    fpscr::vxidi_mask | fpscr::vxisi_mask | fpscr::vxcvi_mask;
+    fpscr::vxidi_mask | fpscr::vxisi_mask | fpscr::vxcvi_mask |
+    fpscr::vxvc_mask;
 
 void update_fpscr_summaries(CpuState& state) noexcept
 {
@@ -567,6 +568,7 @@ void set_xer_carry(CpuState& state, bool carry) noexcept
     case Opcode::branch: return "b";
     case Opcode::instruction_sync: return "isync";
     case Opcode::floating_compare_unordered: return "fcmpu";
+    case Opcode::floating_compare_ordered: return "fcmpo";
     case Opcode::floating_divide_single: return "fdivs";
     case Opcode::floating_divide_double: return "fdiv";
     case Opcode::floating_add_single: return "fadds";
@@ -823,7 +825,8 @@ void add_history_source(
         entry.fp_integer_conversion_destination = instruction.fp_register;
         return entry;
     }
-    if (opcode == Opcode::floating_compare_unordered)
+    if (opcode == Opcode::floating_compare_unordered ||
+        opcode == Opcode::floating_compare_ordered)
     {
         entry.has_fp_compare = true;
         entry.fp_compare_cr_field = instruction.cr_field;
@@ -2324,6 +2327,7 @@ StepResult EspressoCore::step()
         break;
 
     case Opcode::floating_compare_unordered:
+    case Opcode::floating_compare_ordered:
     {
         const std::uint64_t a_raw = state.fpr[instruction.fp_compare_a];
         const std::uint64_t b_raw = state.fpr[instruction.fp_compare_b];
@@ -2343,6 +2347,11 @@ StepResult EspressoCore::step()
         if (is_binary64_signaling_nan(a_raw) || is_binary64_signaling_nan(b_raw))
         {
             raise_fpscr_exception(state, fpscr::vxsnan_mask);
+        }
+        else if (instruction.opcode == Opcode::floating_compare_ordered &&
+                 (a_nan || b_nan))
+        {
+            raise_fpscr_exception(state, fpscr::vxvc_mask);
         }
         pending_history_entry_.fp_compare_result = result;
         break;
