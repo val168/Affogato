@@ -85,6 +85,7 @@ enum class Opcode
     load_word_indexed,
     load_word_byte_reverse_indexed,
     load_byte_zero_indexed,
+    load_byte_zero_indexed_update,
     load_halfword_zero_indexed,
     load_halfword_zero_indexed_update,
     load_halfword_byte_reverse_indexed,
