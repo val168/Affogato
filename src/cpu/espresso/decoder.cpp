@@ -34,10 +34,13 @@ DecodedInstruction decode(std::uint32_t raw) noexcept
     switch (field(raw, 26, 0x3FU))
     {
     case 4: // Paired-single X-form instructions
-        if (field(raw, 1, 0x3FFU) == 40U &&
+        if ((field(raw, 1, 0x3FFU) == 40U ||
+             field(raw, 1, 0x3FFU) == 264U) &&
             field(raw, 16, 0x1FU) == 0U && (raw & 1U) == 0U)
         {
-            instruction.opcode = Opcode::paired_single_negate;
+            instruction.opcode = field(raw, 1, 0x3FFU) == 40U
+                ? Opcode::paired_single_negate
+                : Opcode::paired_single_absolute_value;
             instruction.fp_register = static_cast<std::uint8_t>(field(raw, 21, 0x1FU));
             instruction.fp_source_b = static_cast<std::uint8_t>(field(raw, 11, 0x1FU));
         }
