@@ -8130,7 +8130,7 @@ void divide_word_unsigned_tests()
     assert(record_form.opcode == Opcode::divide_word_unsigned);
     assert(record_form.record);
     assert(decode(encode_divwu(8U, 29U, 31U, false, true)).opcode ==
-           Opcode::unsupported);
+           Opcode::divide_word_unsigned_overflow);
 
     const auto execute = [&](std::uint8_t destination, std::uint8_t ra,
                              std::uint8_t rb, std::uint32_t dividend,
@@ -8216,6 +8216,94 @@ void divide_word_unsigned_tests()
     assert(wind_result.first == 0U);
     const std::string trace = format_instruction_history(wind_result.second);
     assert(trace.find("divwu r29=0x000041A7 r31=0x7FFFFFFF -> r8=0x00000000") !=
+           std::string::npos);
+}
+
+void divide_word_unsigned_overflow_tests()
+{
+    constexpr std::uint32_t xer_so = 0x80000000U;
+    constexpr std::uint32_t xer_ov = 0x40000000U;
+    constexpr std::uint32_t xer_ca = 0x20000000U;
+    const auto encode_divwuo = [](std::uint8_t destination, std::uint8_t ra,
+                                  std::uint8_t rb, bool record = false) {
+        return (31U << 26U) |
+            (static_cast<std::uint32_t>(destination) << 21U) |
+            (static_cast<std::uint32_t>(ra) << 16U) |
+            (static_cast<std::uint32_t>(rb) << 11U) |
+            (971U << 1U) | static_cast<std::uint32_t>(record);
+    };
+
+    const std::uint32_t word = encode_divwuo(8U, 29U, 31U);
+    const DecodedInstruction decoded = decode(word);
+    assert(decoded.opcode == Opcode::divide_word_unsigned_overflow);
+    assert(decoded.destination == 8U);
+    assert(decoded.base == 29U);
+    assert(decoded.source == 31U);
+    assert(!decoded.record);
+    assert(((word >> 1U) & 0x3FFU) == 971U);
+    assert(decode(encode_divwuo(8U, 29U, 31U, true)).record);
+
+    constexpr std::uint32_t xer_initial = 0xA00000A5U;
+    const auto execute = [&](std::uint8_t destination, std::uint8_t ra,
+                             std::uint8_t rb, std::uint32_t dividend,
+                             std::uint32_t divisor, bool record = false) {
+        EspressoCore core(8U);
+        core.state.gpr.fill(0xA5A5A5A5U);
+        core.state.gpr[ra] = dividend;
+        core.state.gpr[rb] = divisor;
+        core.state.xer = xer_initial;
+        core.state.cr = 0x12345678U;
+        const auto original_gprs = core.state.gpr;
+        const std::uint32_t instruction = encode_divwuo(destination, ra, rb, record);
+        core.memory.write32_be(0U, instruction);
+        const bool overflow = divisor == 0U;
+        const std::uint32_t result = overflow ? 0U : dividend / divisor;
+
+        const RunResult run = core.run(1U);
+        assert(run.steps == 1U);
+        assert(run.reason == StopReason::instruction_limit);
+        assert(core.state.gpr[destination] == result);
+        for (std::uint32_t reg = 0; reg < 32U; ++reg)
+        {
+            if (reg != destination)
+            {
+                assert(core.state.gpr[reg] == original_gprs[reg]);
+            }
+        }
+        assert(((core.state.xer & xer_ov) != 0U) == overflow);
+        assert((core.state.xer & xer_so) != 0U);
+        assert((core.state.xer & xer_ca) == (xer_initial & xer_ca));
+        assert((core.state.xer & ~(xer_ov | xer_so)) ==
+               (xer_initial & ~(xer_ov | xer_so)));
+        if (record)
+        {
+            const std::uint32_t expected_cr0 = (result & 0x80000000U) != 0U
+                ? 0x9U
+                : result == 0U ? 0x3U : 0x5U;
+            assert((core.state.cr >> 28U) == expected_cr0);
+            assert((core.state.cr & 0x0FFFFFFFU) == 0x02345678U);
+            assert(run.instruction_history.front().opcode_name == "divwuo.");
+        }
+        else
+        {
+            assert(core.state.cr == 0x12345678U);
+        }
+        return std::pair{result, run};
+    };
+
+    assert(execute(3U, 4U, 5U, 10U, 2U).first == 5U); // OV clears, SO sticks
+    assert(execute(3U, 4U, 5U, 0xFFFFFFFFU, 2U).first == 0x7FFFFFFFU);
+    assert(execute(3U, 4U, 5U, 123U, 0U).first == 0U); // undefined quotient convention
+    assert(execute(3U, 3U, 4U, 10U, 2U).first == 5U); // rD aliases dividend
+    assert(execute(4U, 3U, 4U, 10U, 2U).first == 5U); // rD aliases divisor
+    assert(execute(5U, 5U, 5U, 123U, 123U).first == 1U); // all registers alias
+    (void)execute(6U, 4U, 5U, 0xFFFFFFFFU, 1U, true); // dot form sees signed negative
+    (void)execute(6U, 4U, 5U, 123U, 0U, true); // dot form after zero divisor
+
+    const auto zero_division = execute(8U, 29U, 31U, 0x41A7U, 0U);
+    assert(zero_division.first == 0U);
+    assert(format_instruction_history(zero_division.second).find(
+               "divwuo r29=0x000041A7 r31=0x00000000 -> r8=0x00000000 OV=1 SO=1") !=
            std::string::npos);
 }
 
@@ -22407,6 +22495,7 @@ int main(int argc, char* argv[])
     subtract_from_extended_overflow_tests();
     multiply_high_word_unsigned_tests();
     divide_word_unsigned_tests();
+    divide_word_unsigned_overflow_tests();
     shift_right_word_tests();
     or_immediate_shifted_tests();
     extend_sign_byte_tests();

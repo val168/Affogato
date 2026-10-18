@@ -14,6 +14,7 @@ enum class Opcode
     multiply_high_word_unsigned,
     multiply_high_word_signed,
     divide_word_unsigned,
+    divide_word_unsigned_overflow,
     divide_word_signed,
     xor_immediate,
     xor_immediate_shifted,

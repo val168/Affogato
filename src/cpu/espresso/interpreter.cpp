@@ -530,6 +530,7 @@ void set_xer_carry(CpuState& state, bool carry) noexcept
     case Opcode::multiply_high_word_unsigned: return "mulhwu";
     case Opcode::multiply_high_word_signed: return "mulhw";
     case Opcode::divide_word_unsigned: return "divwu";
+    case Opcode::divide_word_unsigned_overflow: return "divwuo";
     case Opcode::divide_word_signed: return "divw";
     case Opcode::unsupported: return "unsupported";
     case Opcode::addi: return "addi";
@@ -752,7 +753,8 @@ void add_history_source(
          instruction.opcode == Opcode::subtract_from_extended_overflow ||
          instruction.opcode == Opcode::add_carrying_overflow ||
          instruction.opcode == Opcode::add_extended_overflow ||
-         instruction.opcode == Opcode::negate_overflow) && instruction.record)
+         instruction.opcode == Opcode::negate_overflow ||
+         instruction.opcode == Opcode::divide_word_unsigned_overflow) && instruction.record)
     {
         entry.opcode_name += '.';
     }
@@ -1130,6 +1132,7 @@ void add_history_source(
     case Opcode::multiply_high_word_unsigned:
     case Opcode::multiply_high_word_signed:
     case Opcode::divide_word_unsigned:
+    case Opcode::divide_word_unsigned_overflow:
     case Opcode::divide_word_signed:
     case Opcode::compare_signed_register:
     case Opcode::compare_unsigned_register:
@@ -1249,6 +1252,7 @@ void add_history_source(
     case Opcode::multiply_high_word_unsigned:
     case Opcode::multiply_high_word_signed:
     case Opcode::divide_word_unsigned:
+    case Opcode::divide_word_unsigned_overflow:
     case Opcode::divide_word_signed:
     case Opcode::negate:
     case Opcode::negate_overflow:
@@ -1797,7 +1801,8 @@ StepResult EspressoCore::step()
         instruction.opcode == Opcode::subtract_from_carrying_overflow ||
         instruction.opcode == Opcode::subtract_from_extended_overflow ||
         instruction.opcode == Opcode::negate_overflow ||
-        instruction.opcode == Opcode::multiply_low_word_overflow)
+        instruction.opcode == Opcode::multiply_low_word_overflow ||
+        instruction.opcode == Opcode::divide_word_unsigned_overflow)
     {
         pending_history_entry_.has_overflow_result = true;
     }
@@ -1910,6 +1915,30 @@ StepResult EspressoCore::step()
         const std::uint32_t divisor = state.gpr[instruction.source];
         const std::uint32_t result = divisor == 0U ? 0U : dividend / divisor;
         state.gpr[instruction.destination] = result;
+        if (instruction.record)
+        {
+            set_record_result(state, result);
+        }
+        break;
+    }
+
+    case Opcode::divide_word_unsigned_overflow:
+    {
+        const std::uint32_t dividend = state.gpr[instruction.base];
+        const std::uint32_t divisor = state.gpr[instruction.source];
+        // PowerPC leaves the quotient undefined for division by zero. Match
+        // Cemu's stable result while exposing the architecturally defined OV.
+        const bool overflow = divisor == 0U;
+        const std::uint32_t result = overflow ? 0U : dividend / divisor;
+        state.gpr[instruction.destination] = result;
+        if (overflow)
+        {
+            state.xer |= xer_overflow_mask | xer_summary_overflow_mask;
+        }
+        else
+        {
+            state.xer &= ~xer_overflow_mask;
+        }
         if (instruction.record)
         {
             set_record_result(state, result);
