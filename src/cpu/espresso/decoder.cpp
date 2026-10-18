@@ -481,12 +481,15 @@ DecodedInstruction decode(std::uint32_t raw) noexcept
             instruction.source = static_cast<std::uint8_t>(field(raw, 11, 0x1FU));
             instruction.record = (raw & 1U) != 0U;
         }
-        else if ((extended_opcode == 232U || extended_opcode == 234U) &&
+        else if ((extended_opcode == 232U || extended_opcode == 234U ||
+                  extended_opcode == 746U) &&
                  field(raw, 11, 0x1FU) == 0U)
         {
             instruction.opcode = extended_opcode == 232U
                 ? Opcode::subtract_from_minus_one_extended
-                : Opcode::add_to_minus_one_extended;
+                : extended_opcode == 746U
+                    ? Opcode::add_to_minus_one_extended_overflow
+                    : Opcode::add_to_minus_one_extended;
             instruction.destination = static_cast<std::uint8_t>(field(raw, 21, 0x1FU));
             instruction.base = static_cast<std::uint8_t>(field(raw, 16, 0x1FU));
             instruction.record = (raw & 1U) != 0U;

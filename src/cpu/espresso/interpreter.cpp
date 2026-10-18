@@ -544,6 +544,7 @@ void set_xer_carry(CpuState& state, bool carry) noexcept
     case Opcode::add_extended: return "adde";
     case Opcode::add_extended_overflow: return "addeo";
     case Opcode::add_to_minus_one_extended: return "addme";
+    case Opcode::add_to_minus_one_extended_overflow: return "addmeo";
     case Opcode::subtract_from_immediate_carry: return "subfic";
     case Opcode::add: return "add";
     case Opcode::add_overflow: return "addo";
@@ -757,6 +758,7 @@ void add_history_source(
          instruction.opcode == Opcode::add_carrying_overflow ||
          instruction.opcode == Opcode::add_extended_overflow ||
          instruction.opcode == Opcode::add_to_zero_extended_overflow ||
+         instruction.opcode == Opcode::add_to_minus_one_extended_overflow ||
          instruction.opcode == Opcode::subtract_from_zero_extended_overflow ||
          instruction.opcode == Opcode::negate_overflow ||
          instruction.opcode == Opcode::divide_word_signed_overflow ||
@@ -1160,6 +1162,7 @@ void add_history_source(
     case Opcode::add_to_zero_extended:
     case Opcode::add_to_zero_extended_overflow:
     case Opcode::add_to_minus_one_extended:
+    case Opcode::add_to_minus_one_extended_overflow:
     case Opcode::subtract_from_zero_extended:
     case Opcode::subtract_from_zero_extended_overflow:
     case Opcode::subtract_from_minus_one_extended:
@@ -1252,6 +1255,7 @@ void add_history_source(
     case Opcode::add_to_zero_extended:
     case Opcode::add_to_zero_extended_overflow:
     case Opcode::add_to_minus_one_extended:
+    case Opcode::add_to_minus_one_extended_overflow:
     case Opcode::subtract_from:
     case Opcode::subtract_from_carrying:
     case Opcode::subtract_from_extended:
@@ -1811,6 +1815,7 @@ StepResult EspressoCore::step()
         instruction.opcode == Opcode::add_carrying_overflow ||
         instruction.opcode == Opcode::add_extended_overflow ||
         instruction.opcode == Opcode::add_to_zero_extended_overflow ||
+        instruction.opcode == Opcode::add_to_minus_one_extended_overflow ||
         instruction.opcode == Opcode::subtract_from_zero_extended_overflow ||
         instruction.opcode == Opcode::subtract_from_carrying_overflow ||
         instruction.opcode == Opcode::subtract_from_extended_overflow ||
@@ -1834,6 +1839,7 @@ StepResult EspressoCore::step()
         instruction.opcode == Opcode::subtract_from_zero_extended_overflow ||
         instruction.opcode == Opcode::add_extended ||
         instruction.opcode == Opcode::add_to_minus_one_extended ||
+        instruction.opcode == Opcode::add_to_minus_one_extended_overflow ||
         instruction.opcode == Opcode::subtract_from_minus_one_extended ||
         instruction.opcode == Opcode::arithmetic_shift_right_word)
     {
@@ -1848,6 +1854,7 @@ StepResult EspressoCore::step()
         instruction.opcode == Opcode::add_extended ||
         instruction.opcode == Opcode::add_extended_overflow ||
         instruction.opcode == Opcode::add_to_minus_one_extended ||
+        instruction.opcode == Opcode::add_to_minus_one_extended_overflow ||
         instruction.opcode == Opcode::subtract_from_minus_one_extended)
     {
         pending_history_entry_.has_carry_input = true;
@@ -2378,6 +2385,37 @@ StepResult EspressoCore::step()
         const std::uint32_t result = static_cast<std::uint32_t>(sum);
         state.gpr[instruction.destination] = result;
         set_xer_carry(state, (sum >> 32U) != 0U);
+        if (instruction.record)
+        {
+            set_record_result(state, result);
+        }
+        break;
+    }
+
+    case Opcode::add_to_minus_one_extended_overflow:
+    {
+        const std::uint32_t a = state.gpr[instruction.base];
+        const bool carry_in = (state.xer & xer_carry_mask) != 0U;
+        const std::uint64_t sum = static_cast<std::uint64_t>(a) +
+                                  0xFFFFFFFFULL +
+                                  static_cast<std::uint32_t>(carry_in);
+        const std::uint32_t result = static_cast<std::uint32_t>(sum);
+        const std::int64_t exact_signed =
+            static_cast<std::int64_t>(std::bit_cast<std::int32_t>(a)) - 1 +
+            static_cast<std::int64_t>(carry_in);
+        const bool overflow = exact_signed < std::numeric_limits<std::int32_t>::min() ||
+                              exact_signed > std::numeric_limits<std::int32_t>::max();
+        const bool carry_out = (sum >> 32U) != 0U;
+        state.gpr[instruction.destination] = result;
+        set_xer_carry(state, carry_out);
+        if (overflow)
+        {
+            state.xer |= xer_overflow_mask | xer_summary_overflow_mask;
+        }
+        else
+        {
+            state.xer &= ~xer_overflow_mask;
+        }
         if (instruction.record)
         {
             set_record_result(state, result);

@@ -30,6 +30,7 @@ enum class Opcode
     add_extended,
     add_extended_overflow,
     add_to_minus_one_extended,
+    add_to_minus_one_extended_overflow,
     subtract_from_immediate_carry,
     add,
     add_overflow,
