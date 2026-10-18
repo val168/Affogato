@@ -100,6 +100,7 @@ enum class Opcode
     store_byte_indexed,
     store_byte_indexed_update,
     store_halfword_indexed,
+    store_halfword_indexed_update,
     store_halfword_byte_reverse_indexed,
     store_floating_as_integer_word_indexed,
     load_byte_zero,
