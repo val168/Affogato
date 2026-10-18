@@ -22134,6 +22134,107 @@ void floating_point_double_load_tests()
     assert(!fault.instruction_history.front().completed);
 }
 
+void floating_point_double_load_update_tests()
+{
+    const auto encode_lfdu = [](std::uint8_t destination, std::uint8_t base,
+                                std::int16_t displacement) {
+        return 0xCC000000U |
+            (static_cast<std::uint32_t>(destination) << 21U) |
+            (static_cast<std::uint32_t>(base) << 16U) |
+            static_cast<std::uint16_t>(displacement);
+    };
+
+    constexpr std::uint32_t exact_encoding = 0xCCE40008U;
+    const DecodedInstruction decoded = decode(exact_encoding);
+    assert(decoded.opcode == Opcode::load_double_update);
+    assert(decoded.fp_register == 7U);
+    assert(decoded.base == 4U);
+    assert(decoded.immediate == 8);
+    assert(encode_lfdu(7U, 4U, 8) == exact_encoding);
+    assert(decode(encode_lfdu(7U, 0U, 8)).opcode == Opcode::unsupported);
+
+    constexpr std::uint64_t loaded_bits = 0xFFF8123456789ABCULL;
+    EspressoCore core(0x200U);
+    core.state.gpr.fill(0xA5A5A5A5U);
+    core.state.gpr[4] = 0x40U;
+    core.state.fpr.fill(0x0123456789ABCDEFULL);
+    core.state.fpr_ps1.fill(0xFEDCBA9876543210ULL);
+    core.state.fpr_ps1[7] = 0xDEADBEEF01234567ULL;
+    core.state.cr = 0x12345678U;
+    core.state.xer = 0xA00000A5U;
+    core.state.lr = 0x11223344U;
+    core.state.ctr = 0x55667788U;
+    core.state.fpscr = 0xCAFEBABEU;
+    core.memory.write64_be(0x48U, loaded_bits);
+    core.memory.write32_be(0U, exact_encoding);
+    const auto original_gprs = core.state.gpr;
+    const auto original_fprs = core.state.fpr;
+    const auto original_ps1 = core.state.fpr_ps1;
+    const RunResult result = core.run(1U);
+    assert(result.reason == StopReason::instruction_limit);
+    assert(core.state.fpr[7] == loaded_bits);
+    assert(core.state.fpr_ps1 == original_ps1);
+    assert(core.state.gpr[4] == 0x48U);
+    for (std::size_t reg = 0U; reg < core.state.gpr.size(); ++reg)
+    {
+        if (reg != 4U)
+        {
+            assert(core.state.gpr[reg] == original_gprs[reg]);
+        }
+    }
+    for (std::size_t reg = 0U; reg < core.state.fpr.size(); ++reg)
+    {
+        if (reg != 7U)
+        {
+            assert(core.state.fpr[reg] == original_fprs[reg]);
+        }
+    }
+    assert(core.state.cr == 0x12345678U);
+    assert(core.state.xer == 0xA00000A5U);
+    assert(core.state.lr == 0x11223344U);
+    assert(core.state.ctr == 0x55667788U);
+    assert(core.state.fpscr == 0xCAFEBABEU);
+    const InstructionHistoryEntry& history = result.instruction_history.front();
+    assert(history.opcode_name == "lfdu");
+    assert(history.has_effective_address && history.effective_address == 0x48U);
+    assert(history.has_fp_destination && history.fp_destination_register == 7U);
+    assert(history.fp_destination_value == loaded_bits);
+    assert(history.has_destination && history.destination_register == 4U);
+    assert(history.destination_value == 0x48U);
+    assert(history.source_count == 1U);
+    assert(history.source_registers[0] == 4U && history.source_values[0] == 0x40U);
+    assert(format_instruction_history(result).find("lfdu") != std::string::npos);
+
+    EspressoCore negative_displacement(0x200U);
+    negative_displacement.state.gpr[3] = 0xA0U;
+    negative_displacement.memory.write64_be(0x90U, 0x0123456789ABCDEFULL);
+    negative_displacement.memory.write32_be(0U, encode_lfdu(5U, 3U, -16));
+    assert(negative_displacement.step() == StepResult::executed);
+    assert(negative_displacement.state.fpr[5] == 0x0123456789ABCDEFULL);
+    assert(negative_displacement.state.fpr_ps1[5] == 0U);
+    assert(negative_displacement.state.gpr[3] == 0x90U);
+
+    EspressoCore fault_core(0x100U);
+    fault_core.state.gpr[1] = 0xFCU;
+    fault_core.state.fpr[6] = 0x1122334455667788ULL;
+    fault_core.state.fpr_ps1[6] = 0x8877665544332211ULL;
+    fault_core.memory.write32_be(0U, encode_lfdu(6U, 1U, 0));
+    const RunResult fault = fault_core.run(1U);
+    assert(fault.reason == StopReason::memory_fault);
+    assert(fault.detail.find("read 8 byte(s)") != std::string::npos);
+    assert(fault.detail.find("rA=1 (0x000000FC)") != std::string::npos);
+    assert(fault_core.state.gpr[1] == 0xFCU);
+    assert(fault_core.state.fpr[6] == 0x1122334455667788ULL);
+    assert(fault_core.state.fpr_ps1[6] == 0x8877665544332211ULL);
+    assert(fault.instruction_history.size() == 1U);
+    assert(fault.instruction_history.front().opcode_name == "lfdu");
+    assert(fault.instruction_history.front().has_effective_address);
+    assert(fault.instruction_history.front().effective_address == 0xFCU);
+    assert(!fault.instruction_history.front().completed);
+    assert(fault.instruction_history.front().has_destination);
+    assert(fault.instruction_history.front().destination_register == 1U);
+}
+
 void floating_point_store_tests()
 {
     const auto encode_stfs = [](std::uint8_t source, std::uint8_t base,
@@ -22951,6 +23052,7 @@ int main(int argc, char* argv[])
     floating_point_load_tests();
     floating_point_single_update_tests();
     floating_point_double_load_tests();
+    floating_point_double_load_update_tests();
     floating_point_store_tests();
     floating_point_double_store_tests();
     floating_point_double_update_store_tests();

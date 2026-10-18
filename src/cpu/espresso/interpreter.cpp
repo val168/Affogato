@@ -502,6 +502,7 @@ void set_xer_carry(CpuState& state, bool carry) noexcept
             instruction.opcode == Opcode::store_double ||
             instruction.opcode == Opcode::store_double_update ||
             instruction.opcode == Opcode::load_double ||
+            instruction.opcode == Opcode::load_double_update ||
             instruction.opcode == Opcode::data_cache_block_zero;
         if (memory_instruction)
         {
@@ -666,6 +667,7 @@ void set_xer_carry(CpuState& state, bool carry) noexcept
     case Opcode::load_single_indexed: return "lfsx";
     case Opcode::load_single_indexed_update: return "lfsux";
     case Opcode::load_double: return "lfd";
+    case Opcode::load_double_update: return "lfdu";
     case Opcode::load_double_indexed: return "lfdx";
     case Opcode::load_double_indexed_update: return "lfdux";
     case Opcode::store_single: return "stfs";
@@ -1047,7 +1049,7 @@ void add_history_source(
     }
 
     if (opcode == Opcode::load_single || opcode == Opcode::load_single_update ||
-        opcode == Opcode::load_double ||
+        opcode == Opcode::load_double || opcode == Opcode::load_double_update ||
         opcode == Opcode::store_single ||
         opcode == Opcode::store_single_update || opcode == Opcode::store_double ||
         opcode == Opcode::store_double_update ||
@@ -1062,7 +1064,8 @@ void add_history_source(
     }
     if (opcode == Opcode::load_single || opcode == Opcode::load_single_update ||
         opcode == Opcode::load_single_indexed || opcode == Opcode::load_single_indexed_update ||
-        opcode == Opcode::load_double || opcode == Opcode::load_double_indexed ||
+        opcode == Opcode::load_double || opcode == Opcode::load_double_update ||
+        opcode == Opcode::load_double_indexed ||
         opcode == Opcode::load_double_indexed_update)
     {
         entry.has_fp_destination = true;
@@ -1333,6 +1336,10 @@ void add_history_source(
     case Opcode::load_double_indexed:
         break;
     case Opcode::load_double_indexed_update:
+        entry.has_destination = true;
+        entry.destination_register = instruction.base;
+        break;
+    case Opcode::load_double_update:
         entry.has_destination = true;
         entry.destination_register = instruction.base;
         break;
@@ -4949,6 +4956,17 @@ StepResult EspressoCore::step()
         const std::uint32_t address =
             effective_address(state, instruction.base, instruction.immediate);
         state.fpr[instruction.fp_register] = memory.read64_be(address);
+        break;
+    }
+
+    case Opcode::load_double_update:
+    {
+        const std::uint32_t old_base = state.gpr[instruction.base];
+        const std::uint32_t address =
+            old_base + static_cast<std::uint32_t>(instruction.immediate);
+        const std::uint64_t value = memory.read64_be(address);
+        state.fpr[instruction.fp_register] = value;
+        state.gpr[instruction.base] = address;
         break;
     }
 
