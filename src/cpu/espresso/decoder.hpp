@@ -21,6 +21,7 @@ enum class Opcode
     addis,
     add_immediate_carry,
     add_carrying,
+    add_carrying_overflow,
     add_to_zero_extended,
     add_extended,
     add_to_minus_one_extended,
