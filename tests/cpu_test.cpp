@@ -3540,6 +3540,137 @@ void floating_negative_absolute_value_tests()
     assert(distinct.state.fpr_ps1[3] == 0xFEDCBA9876543210ULL);
 }
 
+void floating_select_tests()
+{
+    const auto encode_fsel = [](std::uint8_t destination, std::uint8_t source_a,
+                                std::uint8_t source_b, std::uint8_t source_c,
+                                bool record = false) {
+        return 0xFC000000U |
+            (static_cast<std::uint32_t>(destination) << 21U) |
+            (static_cast<std::uint32_t>(source_a) << 16U) |
+            (static_cast<std::uint32_t>(source_b) << 11U) |
+            (static_cast<std::uint32_t>(source_c) << 6U) | (23U << 1U) |
+            static_cast<std::uint32_t>(record);
+    };
+
+    constexpr std::uint32_t wind_waker_word = 0xFC00002EU;
+    const DecodedInstruction decoded = decode(wind_waker_word);
+    assert(decoded.opcode == Opcode::floating_select);
+    assert(decoded.fp_register == 0U);
+    assert(decoded.fp_source_a == 0U);
+    assert(decoded.fp_source_b == 0U);
+    assert(decoded.fp_source_c == 0U);
+    assert(((wind_waker_word >> 1U) & 0x1FU) == 23U);
+    assert((wind_waker_word & 1U) == 0U);
+    assert(decode(encode_fsel(1U, 2U, 3U, 4U, true)).opcode == Opcode::unsupported);
+
+    struct SelectionCase
+    {
+        std::uint64_t a;
+        std::uint64_t b;
+        std::uint64_t c;
+        std::uint64_t expected;
+    };
+    constexpr std::array<SelectionCase, 8> cases{{
+        {0x0000000000000000ULL, 0x4008000000000000ULL,
+         0x4000000000000000ULL, 0x4000000000000000ULL}, // +0 selects C
+        {0x8000000000000000ULL, 0x4008000000000000ULL,
+         0x4000000000000000ULL, 0x4000000000000000ULL}, // -0 selects C
+        {0x3FF0000000000000ULL, 0x4008000000000000ULL,
+         0x4000000000000000ULL, 0x4000000000000000ULL}, // positive selects C
+        {0xBFF0000000000000ULL, 0x4008000000000000ULL,
+         0x4000000000000000ULL, 0x4008000000000000ULL}, // negative selects B
+        {0x7FF0000000000000ULL, 0x4008000000000000ULL,
+         0x4000000000000000ULL, 0x4000000000000000ULL}, // +inf selects C
+        {0xFFF0000000000000ULL, 0x4008000000000000ULL,
+         0x4000000000000000ULL, 0x4008000000000000ULL}, // -inf selects B
+        {0x7FF8123456789ABCULL, 0xFFF8123456789ABCULL,
+         0x4000000000000000ULL, 0xFFF8123456789ABCULL}, // qNaN selects B raw
+        {0x7FF0123456789ABCULL, 0xFFF0123456789ABCULL,
+         0x4000000000000000ULL, 0xFFF0123456789ABCULL}, // sNaN selects B raw
+    }};
+
+    for (const SelectionCase& test : cases)
+    {
+        EspressoCore core(16U);
+        for (std::size_t index = 0; index < core.state.gpr.size(); ++index)
+        {
+            core.state.gpr[index] = static_cast<std::uint32_t>(0x1000U + index);
+            core.state.fpr[index] = 0x1111000000000000ULL + index;
+            core.state.fpr_ps1[index] = 0x2222000000000000ULL + index;
+        }
+        core.state.fpr[1] = test.a;
+        core.state.fpr[2] = test.b;
+        core.state.fpr[3] = test.c;
+        core.state.fpr[4] = 0x3333444455556666ULL;
+        core.state.fpr_ps1[4] = 0xDEADBEEF01234567ULL;
+        core.state.fpscr = 0xD4C3BEEFU;
+        core.state.cr = 0xA5C36E91U;
+        core.state.xer = 0x800000A5U;
+        core.state.lr = 0x12345678U;
+        core.state.ctr = 0x87654321U;
+        core.memory.write32_be(0U, encode_fsel(4U, 1U, 2U, 3U));
+        core.memory.write32_be(8U, 0xDEADBEEFU);
+        const auto gpr_before = core.state.gpr;
+        const auto fpr_before = core.state.fpr;
+        const auto ps1_before = core.state.fpr_ps1;
+        const auto memory_before = core.memory.read32_be(8U);
+
+        const RunResult result = core.run(1U);
+        assert(result.reason == StopReason::instruction_limit);
+        assert(result.steps == 1U);
+        assert(core.state.cia == 4U);
+        assert(core.state.fpr[4] == test.expected);
+        assert(core.state.fpr_ps1 == ps1_before);
+        assert(core.state.gpr == gpr_before);
+        assert(core.state.cr == 0xA5C36E91U);
+        assert(core.state.xer == 0x800000A5U);
+        assert(core.state.fpscr == 0xD4C3BEEFU);
+        assert(core.state.lr == 0x12345678U);
+        assert(core.state.ctr == 0x87654321U);
+        assert(core.memory.read32_be(8U) == memory_before);
+        for (std::size_t index = 0; index < core.state.fpr.size(); ++index)
+        {
+            if (index != 4U)
+            {
+                assert(core.state.fpr[index] == fpr_before[index]);
+            }
+        }
+        const std::string trace = format_instruction_history(result);
+        assert(trace.find("fsel f1=") != std::string::npos);
+        assert(trace.find("f3=") != std::string::npos);
+        assert(trace.find("f2=") != std::string::npos);
+        assert(trace.find("-> f4=0x") != std::string::npos);
+    }
+
+    const auto execute_alias = [&](std::uint8_t destination, std::uint8_t a_reg,
+                                   std::uint8_t b_reg, std::uint8_t c_reg,
+                                   std::uint64_t a, std::uint64_t b,
+                                   std::uint64_t c, std::uint64_t expected) {
+        EspressoCore core(16U);
+        core.state.fpr[a_reg] = a;
+        core.state.fpr[b_reg] = b;
+        core.state.fpr[c_reg] = c;
+        core.state.fpr_ps1[destination] = 0xDEADBEEF01234567ULL;
+        core.memory.write32_be(0U, encode_fsel(destination, a_reg, b_reg, c_reg));
+        assert(core.step() == StepResult::executed);
+        assert(core.state.fpr[destination] == expected);
+        assert(core.state.fpr_ps1[destination] == 0xDEADBEEF01234567ULL);
+    };
+    execute_alias(5U, 5U, 6U, 7U, 0xBFF0000000000000ULL,
+                  0x4008000000000000ULL, 0x4000000000000000ULL,
+                  0x4008000000000000ULL); // destination == selector A
+    execute_alias(6U, 5U, 6U, 7U, 0x3FF0000000000000ULL,
+                  0x4008000000000000ULL, 0x4000000000000000ULL,
+                  0x4000000000000000ULL); // destination == false choice B
+    execute_alias(7U, 5U, 6U, 7U, 0x3FF0000000000000ULL,
+                  0x4008000000000000ULL, 0x4000000000000000ULL,
+                  0x4000000000000000ULL); // destination == true choice C
+    execute_alias(5U, 5U, 5U, 5U, 0xBFF0000000000000ULL,
+                  0xBFF0000000000000ULL, 0xBFF0000000000000ULL,
+                  0xBFF0000000000000ULL); // all registers alias
+}
+
 void floating_subtract_double_tests()
 {
     const auto encode_fsub = [](std::uint8_t destination, std::uint8_t source_a,
@@ -20970,6 +21101,7 @@ int main(int argc, char* argv[])
     floating_negate_tests();
     floating_absolute_value_tests();
     floating_negative_absolute_value_tests();
+    floating_select_tests();
     floating_subtract_double_tests();
     floating_add_double_tests();
     floating_multiply_double_tests();

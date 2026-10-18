@@ -576,6 +576,7 @@ void set_xer_carry(CpuState& state, bool carry) noexcept
     case Opcode::floating_add_double: return "fadd";
     case Opcode::floating_multiply_single: return "fmuls";
     case Opcode::floating_multiply_double: return "fmul";
+    case Opcode::floating_select: return "fsel";
     case Opcode::floating_multiply_add_single: return "fmadds";
     case Opcode::floating_multiply_add_double: return "fmadd";
     case Opcode::floating_negative_multiply_subtract_double: return "fnmsub";
@@ -816,6 +817,18 @@ void add_history_source(
         entry.fp_move_source = instruction.fp_source_b;
         entry.fp_move_source_value = state.fpr[instruction.fp_source_b];
         entry.fp_move_destination_ps1 = state.fpr_ps1[instruction.fp_register];
+        return entry;
+    }
+    if (opcode == Opcode::floating_select)
+    {
+        entry.has_fp_select = true;
+        entry.fp_select_destination = instruction.fp_register;
+        entry.fp_select_a = instruction.fp_source_a;
+        entry.fp_select_b = instruction.fp_source_b;
+        entry.fp_select_c = instruction.fp_source_c;
+        entry.fp_select_a_raw = state.fpr[instruction.fp_source_a];
+        entry.fp_select_b_raw = state.fpr[instruction.fp_source_b];
+        entry.fp_select_c_raw = state.fpr[instruction.fp_source_c];
         return entry;
     }
     if (opcode == Opcode::floating_convert_to_integer_word ||
@@ -1386,6 +1399,30 @@ std::string format_instruction_history(const RunResult& result)
                      << static_cast<unsigned>(entry.fp_compare_cr_field) << "=0x"
                      << std::hex << static_cast<unsigned>(entry.fp_compare_result)
                      << ", fpcc=0x" << static_cast<unsigned>(entry.fp_compare_result) << ')';
+            }
+        }
+        if (entry.has_fp_select)
+        {
+            const auto print_operand = [&](std::uint8_t reg, std::uint64_t raw) {
+                text << " f" << std::dec << static_cast<unsigned>(reg) << '=';
+                if (is_binary64_nan(raw))
+                {
+                    text << "NaN";
+                }
+                else
+                {
+                    text << std::setprecision(17) << std::bit_cast<double>(raw);
+                }
+                text << " [0x" << std::hex << std::setw(16) << raw << ']';
+            };
+            print_operand(entry.fp_select_a, entry.fp_select_a_raw);
+            print_operand(entry.fp_select_c, entry.fp_select_c_raw);
+            print_operand(entry.fp_select_b, entry.fp_select_b_raw);
+            if (entry.completed)
+            {
+                text << " -> f" << std::dec
+                     << static_cast<unsigned>(entry.fp_select_destination) << "=0x"
+                     << std::hex << std::setw(16) << entry.fp_select_result_raw;
             }
         }
         if (entry.has_fp_integer_conversion)
@@ -2896,6 +2933,20 @@ StepResult EspressoCore::step()
         pending_history_entry_.fp_move_destination_value = result;
         pending_history_entry_.fp_move_destination_ps1 =
             state.fpr_ps1[instruction.fp_register];
+        break;
+    }
+
+    case Opcode::floating_select:
+    {
+        const std::uint64_t a_raw = state.fpr[instruction.fp_source_a];
+        const std::uint64_t b_raw = state.fpr[instruction.fp_source_b];
+        const std::uint64_t c_raw = state.fpr[instruction.fp_source_c];
+        const double a = std::bit_cast<double>(a_raw);
+        const std::uint64_t result_raw =
+            !is_binary64_nan(a_raw) && a >= 0.0 ? c_raw : b_raw;
+
+        state.fpr[instruction.fp_register] = result_raw;
+        pending_history_entry_.fp_select_result_raw = result_raw;
         break;
     }
 
