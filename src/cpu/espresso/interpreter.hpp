@@ -144,6 +144,9 @@ struct InstructionHistoryEntry
     std::uint8_t cr_field_destination{};
     std::uint8_t cr_field_source{};
     std::uint8_t cr_field_value{};
+    bool has_xer_cr_move{};
+    std::uint8_t xer_cr_field{};
+    std::uint8_t xer_cr_value{};
     bool completed{};
 };
 

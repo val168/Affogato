@@ -567,6 +567,14 @@ void decoder_tests()
     assert(decode(mtcrf | (1U << 11U)).opcode == Opcode::unsupported);
     assert(decode(mtcrf | (1U << 20U)).opcode == Opcode::unsupported);
 
+    constexpr std::uint32_t mcrxr = 0x7D800400U; // mcrxr cr3
+    const DecodedInstruction mcrxr_decoded = decode(mcrxr);
+    assert(mcrxr_decoded.opcode == Opcode::move_condition_register_from_xer);
+    assert(mcrxr_decoded.cr_field == 3U);
+    assert(decode(mcrxr | 1U).opcode == Opcode::unsupported);
+    assert(decode(mcrxr | (1U << 11U)).opcode == Opcode::unsupported);
+    assert(decode(mcrxr | (1U << 20U)).opcode == Opcode::unsupported);
+
     const DecodedInstruction cmpwi = decode(0x2E830007U); // cmpwi cr5, r3, 7
     assert(cmpwi.opcode == Opcode::compare_signed_immediate);
     assert(cmpwi.cr_field == 5);
@@ -1695,6 +1703,39 @@ void move_to_condition_register_fields_tests()
     zero_mask.memory.write32_be(0U, encode_mtcrf(7U, 0U));
     assert(zero_mask.step() == StepResult::executed);
     assert(zero_mask.state.cr == 0xFEDCBA98U);
+}
+
+void move_condition_register_from_xer_tests()
+{
+    for (std::uint32_t field = 0U; field < 8U; ++field)
+    {
+        for (std::uint32_t xer_nibble = 0U; xer_nibble < 16U; ++xer_nibble)
+        {
+            EspressoCore core(0x100U);
+            core.state.xer = (xer_nibble << 28U) | 0x01234567U;
+            core.state.cr = 0x89ABCDEFU;
+            const std::uint32_t old_cr = core.state.cr;
+            const std::uint32_t old_xer = core.state.xer;
+            const std::uint32_t shift = 28U - 4U * field;
+            const std::uint32_t cr_mask = 0xFU << shift;
+            const std::uint32_t instruction =
+                0x7C000400U | (field << 23U);
+            core.memory.write32_be(0U, instruction);
+            const RunResult result = core.run(1U);
+            assert(result.steps == 1U && core.state.cia == 4U);
+            assert(core.state.cr ==
+                ((old_cr & ~cr_mask) | (xer_nibble << shift)));
+            assert(core.state.xer == (old_xer & 0x0FFFFFFFU));
+            const InstructionHistoryEntry& history = result.instruction_history.front();
+            assert(history.opcode_name == "mcrxr");
+            assert(history.has_xer_cr_move && history.xer_cr_field == field);
+            assert(history.xer_cr_value == xer_nibble);
+            const std::string trace = format_instruction_history(result);
+            assert(trace.find("XER[0:3]=0x") != std::string::npos);
+            assert(trace.find("-> cr" + std::to_string(field) + "=0x") !=
+                   std::string::npos);
+        }
+    }
 }
 
 void floating_compare_unordered_tests()
@@ -20379,6 +20420,7 @@ int main(int argc, char* argv[])
     move_condition_register_field_tests();
     move_from_condition_register_tests();
     move_to_condition_register_fields_tests();
+    move_condition_register_from_xer_tests();
     integer_alu_tests();
     and_immediate_shifted_record_tests();
     rotate_left_word_and_mask_register_tests();

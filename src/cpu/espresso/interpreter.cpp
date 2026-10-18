@@ -657,6 +657,7 @@ void set_xer_carry(CpuState& state, bool carry) noexcept
     case Opcode::move_condition_register_field: return "mcrf";
     case Opcode::move_from_condition_register: return "mfcr";
     case Opcode::move_to_condition_register_fields: return "mtcrf";
+    case Opcode::move_condition_register_from_xer: return "mcrxr";
     }
     return "unknown";
 }
@@ -794,6 +795,13 @@ void add_history_source(
     if (opcode == Opcode::move_to_condition_register_fields)
     {
         add_history_source(entry, state, instruction.destination);
+        return entry;
+    }
+    if (opcode == Opcode::move_condition_register_from_xer)
+    {
+        entry.has_xer_cr_move = true;
+        entry.xer_cr_field = instruction.cr_field;
+        entry.xer_cr_value = static_cast<std::uint8_t>(state.xer >> 28U);
         return entry;
     }
     if (opcode == Opcode::floating_move_register || opcode == Opcode::floating_negate ||
@@ -1299,6 +1307,18 @@ std::string format_instruction_history(const RunResult& result)
                      << static_cast<unsigned>(entry.cr_field_destination)
                      << "=0x" << std::hex
                      << static_cast<unsigned>(entry.cr_field_value);
+            }
+        }
+        if (entry.has_xer_cr_move)
+        {
+            text << " XER[0:3]=0x" << std::hex
+                 << static_cast<unsigned>(entry.xer_cr_value);
+            if (entry.completed)
+            {
+                text << " -> cr" << std::dec
+                     << static_cast<unsigned>(entry.xer_cr_field)
+                     << "=0x" << std::hex
+                     << static_cast<unsigned>(entry.xer_cr_value);
             }
         }
         if (entry.has_register_range)
@@ -4014,6 +4034,18 @@ StepResult EspressoCore::step()
             const std::uint32_t field_mask = 0xFU << shift;
             state.cr = (state.cr & ~field_mask) | (source & field_mask);
         }
+        break;
+    }
+
+    case Opcode::move_condition_register_from_xer:
+    {
+        const std::uint32_t value = state.xer >> 28U;
+        const std::uint32_t shift =
+            28U - 4U * static_cast<std::uint32_t>(instruction.cr_field);
+        const std::uint32_t cr_mask = 0xFU << shift;
+        state.cr = (state.cr & ~cr_mask) | ((value & 0xFU) << shift);
+        state.xer &= 0x0FFFFFFFU;
+        pending_history_entry_.xer_cr_value = static_cast<std::uint8_t>(value);
         break;
     }
 
