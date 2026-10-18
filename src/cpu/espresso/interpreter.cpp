@@ -613,6 +613,7 @@ void set_xer_carry(CpuState& state, bool carry) noexcept
     case Opcode::floating_negate: return "fneg";
     case Opcode::floating_absolute_value: return "fabs";
     case Opcode::floating_negative_absolute_value: return "fnabs";
+    case Opcode::floating_move_from_fpscr: return "mffs";
     case Opcode::floating_convert_to_integer_word: return "fctiw";
     case Opcode::floating_convert_to_integer_word_zero: return "fctiwz";
     case Opcode::floating_subtract_double: return "fsub";
@@ -865,6 +866,14 @@ void add_history_source(
         entry.fp_move_source = instruction.fp_source_b;
         entry.fp_move_source_value = state.fpr[instruction.fp_source_b];
         entry.fp_move_destination_ps1 = state.fpr_ps1[instruction.fp_register];
+        return entry;
+    }
+    if (opcode == Opcode::floating_move_from_fpscr)
+    {
+        entry.has_fp_status_move = true;
+        entry.fp_status_move_destination = instruction.fp_register;
+        entry.fp_status_move_source = state.fpscr;
+        entry.fp_status_move_destination_ps1 = state.fpr_ps1[instruction.fp_register];
         return entry;
     }
     if (opcode == Opcode::floating_select)
@@ -1648,6 +1657,20 @@ std::string format_instruction_history(const RunResult& result)
                      << entry.fp_move_destination_value
                      << " (ps1 unchanged=0x" << std::setw(16)
                      << entry.fp_move_destination_ps1 << ')';
+            }
+        }
+        if (entry.has_fp_status_move)
+        {
+            text << " FPSCR=0x" << std::hex << std::setw(8)
+                 << entry.fp_status_move_source;
+            if (entry.completed)
+            {
+                text << " -> f" << std::dec
+                     << static_cast<unsigned>(entry.fp_status_move_destination)
+                     << ".ps0=0x" << std::hex << std::setw(16)
+                     << entry.fp_status_move_result
+                     << " (ps1 unchanged=0x" << std::setw(16)
+                     << entry.fp_status_move_destination_ps1 << ')';
             }
         }
         if (entry.has_immediate)
@@ -3734,6 +3757,14 @@ StepResult EspressoCore::step()
         pending_history_entry_.fp_move_destination_value = result;
         pending_history_entry_.fp_move_destination_ps1 =
             state.fpr_ps1[instruction.fp_register];
+        break;
+    }
+
+    case Opcode::floating_move_from_fpscr:
+    {
+        const std::uint64_t result = 0xFFFFFFFF00000000ULL | state.fpscr;
+        state.fpr[instruction.fp_register] = result;
+        pending_history_entry_.fp_status_move_result = result;
         break;
     }
 

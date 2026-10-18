@@ -128,6 +128,11 @@ struct InstructionHistoryEntry
     std::uint64_t fp_move_source_value{};
     std::uint64_t fp_move_destination_value{};
     std::uint64_t fp_move_destination_ps1{};
+    bool has_fp_status_move{};
+    std::uint8_t fp_status_move_destination{};
+    std::uint32_t fp_status_move_source{};
+    std::uint64_t fp_status_move_result{};
+    std::uint64_t fp_status_move_destination_ps1{};
     bool has_fp_select{};
     std::uint8_t fp_select_destination{};
     std::uint8_t fp_select_a{};

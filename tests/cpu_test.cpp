@@ -3712,6 +3712,61 @@ void floating_move_register_tests()
     assert(trace.find("ps1 unchanged=0x403D26E020000000") != std::string::npos);
 }
 
+void floating_move_from_fpscr_tests()
+{
+    constexpr std::uint32_t encoding = 0xFCA0048EU; // mffs f5
+    const DecodedInstruction decoded = decode(encoding);
+    assert(decoded.opcode == Opcode::floating_move_from_fpscr);
+    assert(decoded.fp_register == 5U);
+    assert(((encoding >> 1U) & 0x3FFU) == 583U);
+    assert(decode(encoding | 1U).opcode == Opcode::unsupported); // mffs. needs CR1
+    assert(decode(encoding | (1U << 11U)).opcode == Opcode::unsupported);
+
+    EspressoCore core(0x100U);
+    core.state.gpr.fill(0xA5A5A5A5U);
+    core.state.fpr.fill(0x0123456789ABCDEFULL);
+    core.state.fpr_ps1.fill(0xFEDCBA9876543210ULL);
+    core.state.fpr_ps1[5] = 0xDEADBEEF01234567ULL;
+    core.state.cr = 0x12345678U;
+    core.state.xer = 0xA00000A5U;
+    core.state.fpscr = 0xA5C3BEEFU;
+    core.state.lr = 0x11223344U;
+    core.state.ctr = 0x55667788U;
+    core.memory.write32_be(0U, encoding);
+    const auto gprs_before = core.state.gpr;
+    const auto fprs_before = core.state.fpr;
+    const auto ps1_before = core.state.fpr_ps1;
+    const RunResult result = core.run(1U);
+    constexpr std::uint64_t expected = 0xFFFFFFFFA5C3BEEFULL;
+    assert(result.reason == StopReason::instruction_limit);
+    assert(result.steps == 1U && core.state.cia == 4U);
+    assert(core.state.fpr[5] == expected);
+    assert(core.state.fpr_ps1 == ps1_before);
+    for (std::size_t reg = 0U; reg < core.state.fpr.size(); ++reg)
+    {
+        if (reg != 5U)
+        {
+            assert(core.state.fpr[reg] == fprs_before[reg]);
+        }
+    }
+    assert(core.state.gpr == gprs_before);
+    assert(core.state.cr == 0x12345678U);
+    assert(core.state.xer == 0xA00000A5U);
+    assert(core.state.fpscr == 0xA5C3BEEFU);
+    assert(core.state.lr == 0x11223344U);
+    assert(core.state.ctr == 0x55667788U);
+    const InstructionHistoryEntry& history = result.instruction_history.front();
+    assert(history.opcode_name == "mffs");
+    assert(history.has_fp_status_move);
+    assert(history.fp_status_move_destination == 5U);
+    assert(history.fp_status_move_source == 0xA5C3BEEFU);
+    assert(history.fp_status_move_result == expected);
+    assert(history.fp_status_move_destination_ps1 == 0xDEADBEEF01234567ULL);
+    const std::string trace = format_instruction_history(result);
+    assert(trace.find("FPSCR=0xA5C3BEEF -> f5.ps0=0xFFFFFFFFA5C3BEEF") !=
+           std::string::npos);
+}
+
 void floating_negate_tests()
 {
     constexpr std::uint32_t wind_waker_word = 0xFD805050U;
@@ -23208,6 +23263,7 @@ int main(int argc, char* argv[])
     floating_multiply_add_single_tests();
     floating_multiply_single_tests();
     floating_move_register_tests();
+    floating_move_from_fpscr_tests();
     floating_negate_tests();
     floating_absolute_value_tests();
     floating_negative_absolute_value_tests();
