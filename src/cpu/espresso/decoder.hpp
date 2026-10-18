@@ -95,6 +95,7 @@ enum class Opcode
     store_word,
     store_multiple_word,
     store_word_indexed,
+    store_word_indexed_update,
     store_word_byte_reverse_indexed,
     store_byte_indexed,
     store_halfword_indexed,
