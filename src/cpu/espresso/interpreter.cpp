@@ -18,6 +18,7 @@ namespace
 {
 
 constexpr std::uint32_t xer_summary_overflow_mask = 0x80000000U;
+constexpr std::uint32_t xer_overflow_mask = 0x40000000U;
 constexpr std::uint32_t xer_carry_mask = 0x20000000U;
 constexpr std::uint32_t espresso_data_cache_block_size = 32U;
 constexpr std::uint8_t cr_less_than = 0x8U;
@@ -539,6 +540,7 @@ void set_xer_carry(CpuState& state, bool carry) noexcept
     case Opcode::add_to_minus_one_extended: return "addme";
     case Opcode::subtract_from_immediate_carry: return "subfic";
     case Opcode::add: return "add";
+    case Opcode::add_overflow: return "addo";
     case Opcode::subtract_from: return "subf";
     case Opcode::subtract_from_carrying: return "subfc";
     case Opcode::subtract_from_extended: return "subfe";
@@ -733,6 +735,10 @@ void add_history_source(
          instruction.opcode == Opcode::bitwise_nand ||
          instruction.opcode == Opcode::bitwise_nor ||
          instruction.opcode == Opcode::bitwise_or_complement) && instruction.record)
+    {
+        entry.opcode_name += '.';
+    }
+    if (instruction.opcode == Opcode::add_overflow && instruction.record)
     {
         entry.opcode_name += '.';
     }
@@ -1094,6 +1100,7 @@ void add_history_source(
         add_history_source(entry, state, instruction.source);
         break;
     case Opcode::add:
+    case Opcode::add_overflow:
     case Opcode::add_carrying:
     case Opcode::add_extended:
     case Opcode::subtract_from:
@@ -1201,6 +1208,7 @@ void add_history_source(
     case Opcode::add_immediate_carry:
     case Opcode::subtract_from_immediate_carry:
     case Opcode::add:
+    case Opcode::add_overflow:
     case Opcode::add_carrying:
     case Opcode::add_extended:
     case Opcode::add_to_zero_extended:
@@ -1686,6 +1694,11 @@ std::string format_instruction_history(const RunResult& result)
         {
             text << " CA=" << (entry.carry_result ? '1' : '0');
         }
+        if (entry.has_overflow_result)
+        {
+            text << " OV=" << (entry.overflow_result ? '1' : '0')
+                 << " SO=" << (entry.summary_overflow_result ? '1' : '0');
+        }
         if (entry.has_fp_destination)
         {
             text << " -> f" << std::dec
@@ -1749,6 +1762,10 @@ StepResult EspressoCore::step()
     current_instruction_word_fetched_ = true;
     const DecodedInstruction instruction = decode(instruction_word);
     pending_history_entry_ = make_history_entry(state, cia, instruction_word, instruction);
+    if (instruction.opcode == Opcode::add_overflow)
+    {
+        pending_history_entry_.has_overflow_result = true;
+    }
     if (instruction.opcode == Opcode::subtract_from_carrying ||
         instruction.opcode == Opcode::subtract_from_extended ||
         instruction.opcode == Opcode::add_carrying ||
@@ -1980,6 +1997,28 @@ StepResult EspressoCore::step()
         const std::uint32_t result =
             state.gpr[instruction.base] + state.gpr[instruction.source];
         state.gpr[instruction.destination] = result;
+        if (instruction.record)
+        {
+            set_record_result(state, result);
+        }
+        break;
+    }
+
+    case Opcode::add_overflow:
+    {
+        const std::uint32_t a = state.gpr[instruction.base];
+        const std::uint32_t b = state.gpr[instruction.source];
+        const std::uint32_t result = a + b;
+        const bool overflow = ((~(a ^ b) & (a ^ result)) & 0x80000000U) != 0U;
+        state.gpr[instruction.destination] = result;
+        if (overflow)
+        {
+            state.xer |= xer_overflow_mask | xer_summary_overflow_mask;
+        }
+        else
+        {
+            state.xer &= ~xer_overflow_mask;
+        }
         if (instruction.record)
         {
             set_record_result(state, result);
@@ -4696,6 +4735,12 @@ StepResult EspressoCore::step()
     if (pending_history_entry_.has_carry_result)
     {
         pending_history_entry_.carry_result = (state.xer & xer_carry_mask) != 0;
+    }
+    if (pending_history_entry_.has_overflow_result)
+    {
+        pending_history_entry_.overflow_result = (state.xer & xer_overflow_mask) != 0U;
+        pending_history_entry_.summary_overflow_result =
+            (state.xer & xer_summary_overflow_mask) != 0U;
     }
     if (pending_history_entry_.has_fp_destination)
     {

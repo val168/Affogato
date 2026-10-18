@@ -26,6 +26,7 @@ enum class Opcode
     add_to_minus_one_extended,
     subtract_from_immediate_carry,
     add,
+    add_overflow,
     subtract_from,
     subtract_from_carrying,
     subtract_from_extended,

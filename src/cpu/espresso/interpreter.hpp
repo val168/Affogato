@@ -50,6 +50,9 @@ struct InstructionHistoryEntry
     bool carry_result{};
     bool has_carry_input{};
     bool carry_input{};
+    bool has_overflow_result{};
+    bool overflow_result{};
+    bool summary_overflow_result{};
     bool has_old_destination{};
     std::uint8_t old_destination_register{};
     std::uint32_t old_destination_value{};
