@@ -2104,6 +2104,57 @@ void data_cache_block_store_tests()
     assert(fault_result.detail.find("read 1 byte(s)") != std::string::npos);
 }
 
+void data_cache_block_touch_for_store_tests()
+{
+    const auto encode_dcbtst = [](std::uint8_t hint, std::uint8_t base,
+                                  std::uint8_t index, bool rc = false) {
+        return (31U << 26U) |
+            (static_cast<std::uint32_t>(hint) << 21U) |
+            (static_cast<std::uint32_t>(base) << 16U) |
+            (static_cast<std::uint32_t>(index) << 11U) |
+            (246U << 1U) | static_cast<std::uint32_t>(rc);
+    };
+
+    constexpr std::uint32_t exact_encoding = 0x7C0421ECU; // dcbtst r4,r4,TH=0
+    const DecodedInstruction decoded = decode(exact_encoding);
+    assert(decoded.opcode == Opcode::data_cache_block_touch_for_store);
+    assert(decoded.base == 4U && decoded.source == 4U);
+    assert(((exact_encoding >> 1U) & 0x3FFU) == 246U);
+    const std::uint32_t hinted_encoding = encode_dcbtst(0x12U, 3U, 4U);
+    assert(decode(hinted_encoding).opcode == Opcode::data_cache_block_touch_for_store);
+    assert(decode(encode_dcbtst(0U, 3U, 4U, true)).opcode == Opcode::unsupported);
+
+    EspressoCore core(0x100U);
+    core.state.gpr.fill(0xA5A5A5A5U);
+    core.state.gpr[0] = 0xDEADBEEFU;
+    core.state.gpr[3] = 0x1000U;
+    core.state.gpr[4] = 0x2000U;
+    core.state.cr = 0x12345678U;
+    core.state.xer = 0xA00000A5U;
+    core.state.lr = 0x10203040U;
+    core.state.ctr = 0x50607080U;
+    core.state.fpscr = 0xCAFEBABEU;
+    core.memory.write32_be(0U, hinted_encoding);
+    const auto gprs_before = core.state.gpr;
+    const auto fprs_before = core.state.fpr;
+    const auto ps1_before = core.state.fpr_ps1;
+    const std::uint32_t cr_before = core.state.cr;
+    const std::uint32_t xer_before = core.state.xer;
+    const std::uint32_t fpscr_before = core.state.fpscr;
+    const RunResult result = core.run(1U);
+    assert(result.reason == StopReason::instruction_limit);
+    assert(core.state.gpr == gprs_before);
+    assert(core.state.fpr == fprs_before && core.state.fpr_ps1 == ps1_before);
+    assert(core.state.cr == cr_before && core.state.xer == xer_before);
+    assert(core.state.lr == 0x10203040U && core.state.ctr == 0x50607080U);
+    assert(core.state.fpscr == fpscr_before);
+    const InstructionHistoryEntry& history = result.instruction_history.front();
+    assert(history.opcode_name == "dcbtst");
+    assert(history.has_effective_address && history.effective_address == 0x3000U);
+    assert(history.source_count == 2U);
+    assert(history.source_registers[0] == 3U && history.source_registers[1] == 4U);
+}
+
 void data_cache_block_flush_tests()
 {
     const auto encode_dcbf = [](std::uint8_t base, std::uint8_t index,
@@ -23808,6 +23859,7 @@ int main(int argc, char* argv[])
     enforce_in_order_io_tests();
     data_cache_block_zero_tests();
     data_cache_block_touch_tests();
+    data_cache_block_touch_for_store_tests();
     data_cache_block_store_tests();
     data_cache_block_flush_tests();
     instruction_cache_block_invalidate_tests();

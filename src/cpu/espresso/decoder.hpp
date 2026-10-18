@@ -72,6 +72,7 @@ enum class Opcode
     enforce_in_order_io,
     instruction_cache_block_invalidate,
     data_cache_block_touch,
+    data_cache_block_touch_for_store,
     data_cache_block_store,
     data_cache_block_flush,
     data_cache_block_zero,

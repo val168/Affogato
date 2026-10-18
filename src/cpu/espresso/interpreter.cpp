@@ -594,6 +594,7 @@ void set_xer_carry(CpuState& state, bool carry) noexcept
     case Opcode::enforce_in_order_io: return "eieio";
     case Opcode::instruction_cache_block_invalidate: return "icbi";
     case Opcode::data_cache_block_touch: return "dcbt";
+    case Opcode::data_cache_block_touch_for_store: return "dcbtst";
     case Opcode::data_cache_block_store: return "dcbst";
     case Opcode::data_cache_block_flush: return "dcbf";
     case Opcode::data_cache_block_zero: return "dcbz";
@@ -1090,6 +1091,7 @@ void add_history_source(
         opcode == Opcode::store_floating_as_integer_word_indexed ||
         opcode == Opcode::instruction_cache_block_invalidate ||
         opcode == Opcode::data_cache_block_touch ||
+        opcode == Opcode::data_cache_block_touch_for_store ||
         opcode == Opcode::data_cache_block_store ||
         opcode == Opcode::data_cache_block_flush ||
         opcode == Opcode::data_cache_block_zero)
@@ -1278,6 +1280,7 @@ void add_history_source(
         break;
     case Opcode::data_cache_block_zero:
     case Opcode::data_cache_block_touch:
+    case Opcode::data_cache_block_touch_for_store:
     case Opcode::data_cache_block_store:
     case Opcode::data_cache_block_flush:
     case Opcode::instruction_cache_block_invalidate:
@@ -5269,6 +5272,11 @@ StepResult EspressoCore::step()
     case Opcode::data_cache_block_touch:
         // dcbt is a non-faulting prefetch hint. Affogato has no modeled D-cache
         // or cacheability attributes, so the hint has no observable effect.
+        break;
+
+    case Opcode::data_cache_block_touch_for_store:
+        // dcbtst is likewise a non-faulting prefetch hint (for a future store).
+        // With no modeled D-cache or cacheability attributes, it has no effect.
         break;
 
     case Opcode::data_cache_block_store:
