@@ -191,6 +191,12 @@ struct InstructionHistoryEntry
     std::uint8_t cr_field_destination{};
     std::uint8_t cr_field_source{};
     std::uint8_t cr_field_value{};
+    bool has_fpscr_cr_move{};
+    std::uint8_t fpscr_cr_destination{};
+    std::uint8_t fpscr_cr_source{};
+    std::uint8_t fpscr_cr_value{};
+    std::uint32_t fpscr_before_cr_move{};
+    std::uint32_t fpscr_after_cr_move{};
     bool has_xer_cr_move{};
     std::uint8_t xer_cr_field{};
     std::uint8_t xer_cr_value{};

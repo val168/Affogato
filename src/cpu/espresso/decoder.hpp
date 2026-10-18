@@ -189,6 +189,7 @@ enum class Opcode
     condition_bit_nand,
     condition_bit_equivalence,
     move_condition_register_field,
+    move_condition_register_from_fpscr,
     move_from_condition_register,
     move_to_condition_register_fields,
     move_condition_register_from_xer,

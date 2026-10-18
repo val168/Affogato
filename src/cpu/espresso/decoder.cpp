@@ -935,7 +935,16 @@ DecodedInstruction decode(std::uint32_t raw) noexcept
     }
 
     case 63: // Floating-point X-form instructions
-        if (field(raw, 1, 0x3FFU) == 72U &&
+        if (field(raw, 1, 0x3FFU) == 64U &&
+            field(raw, 21U, 0x3U) == 0U &&
+            field(raw, 16U, 0x3U) == 0U &&
+            field(raw, 11U, 0x1FU) == 0U && (raw & 1U) == 0U)
+        {
+            instruction.opcode = Opcode::move_condition_register_from_fpscr;
+            instruction.cr_field = static_cast<std::uint8_t>(field(raw, 23U, 0x7U));
+            instruction.fpscr_field = static_cast<std::uint8_t>(field(raw, 18U, 0x7U));
+        }
+        else if (field(raw, 1, 0x3FFU) == 72U &&
             field(raw, 16, 0x1FU) == 0U && (raw & 1U) == 0U)
         {
             instruction.opcode = Opcode::floating_move_register;

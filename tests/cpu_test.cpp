@@ -1685,6 +1685,111 @@ void move_condition_register_field_tests()
     }
 }
 
+void move_condition_register_from_fpscr_tests()
+{
+    const auto encode_mcrfs = [](std::uint8_t destination, std::uint8_t source,
+                                 std::uint32_t reserved = 0U) {
+        return 0xFC000080U |
+            (static_cast<std::uint32_t>(destination) << 23U) |
+            (static_cast<std::uint32_t>(source) << 18U) | reserved;
+    };
+
+    constexpr std::uint32_t exact = 0xFD800080U; // mcrfs cr3,cr0
+    const DecodedInstruction decoded = decode(exact);
+    assert(decoded.opcode == Opcode::move_condition_register_from_fpscr);
+    assert(decoded.cr_field == 3U && decoded.fpscr_field == 0U);
+    assert(((exact >> 1U) & 0x3FFU) == 64U);
+    assert(decode(exact | 1U).opcode == Opcode::unsupported);
+    assert(decode(encode_mcrfs(3U, 0U, 1U << 21U)).opcode == Opcode::unsupported);
+    assert(decode(encode_mcrfs(3U, 0U, 1U << 16U)).opcode == Opcode::unsupported);
+    assert(decode(encode_mcrfs(3U, 0U, 1U << 11U)).opcode == Opcode::unsupported);
+
+    struct FieldCase
+    {
+        std::uint8_t source_field;
+        std::uint32_t status_bits;
+        std::uint32_t clear_bits;
+        std::uint8_t expected_nibble;
+    };
+    const std::array<FieldCase, 8> cases{{
+        {0U, fpscr::fx_mask | fpscr::fex_mask | fpscr::vx_mask | fpscr::ox_mask |
+                 fpscr::vxisi_mask | fpscr::ve_mask,
+         fpscr::fx_mask | fpscr::ox_mask, 0xFU},
+        {1U, fpscr::ux_mask | fpscr::zx_mask | fpscr::xx_mask |
+                 fpscr::vxsnan_mask | fpscr::ve_mask,
+         fpscr::ux_mask | fpscr::zx_mask | fpscr::xx_mask | fpscr::vxsnan_mask, 0xFU},
+        {2U, fpscr::vxisi_mask | fpscr::vxidi_mask | fpscr::vxzdz_mask |
+                 fpscr::vximz_mask,
+         fpscr::vxisi_mask | fpscr::vxidi_mask | fpscr::vxzdz_mask |
+                 fpscr::vximz_mask, 0xFU},
+        {3U, fpscr::vxvc_mask | fpscr::fr_mask | fpscr::fi_mask | 0x00010000U,
+         fpscr::vxvc_mask, 0xFU},
+        {5U, fpscr::vxsoft_mask | fpscr::vxsqrt_mask | fpscr::vxcvi_mask | 0x00000800U,
+         fpscr::vxsoft_mask | fpscr::vxsqrt_mask | fpscr::vxcvi_mask, 0x7U},
+        {4U, fpscr::fpcc_mask, 0U, 0xFU},
+        {6U, fpscr::ve_mask | fpscr::oe_mask | fpscr::ue_mask | fpscr::ze_mask,
+         0U, 0xFU},
+        {7U, fpscr::rn_mask, 0U, 0x3U},
+    }};
+
+    for (const FieldCase& test : cases)
+    {
+        EspressoCore core(0x100U);
+        constexpr std::uint8_t destination_field = 6U;
+        core.state.cr = 0xA5C39E71U;
+        core.state.gpr[9] = 0x12345678U;
+        core.state.fpr[9] = 0xDEADBEEF01234567ULL;
+        core.state.fpr_ps1[9] = 0x76543210FEDCBA98ULL;
+        core.state.xer = 0xA00000A5U;
+        core.state.lr = 0x10203040U;
+        core.state.ctr = 0x50607080U;
+        core.state.fpscr = test.status_bits;
+        core.memory.write32_be(0U, encode_mcrfs(destination_field, test.source_field));
+        const auto gpr_before = core.state.gpr;
+        const auto fpr_before = core.state.fpr;
+        const auto fpr_ps1_before = core.state.fpr_ps1;
+        const std::uint32_t cr_before = core.state.cr;
+        const std::uint32_t xer_before = core.state.xer;
+        const std::uint32_t lr_before = core.state.lr;
+        const std::uint32_t ctr_before = core.state.ctr;
+        const std::uint32_t fpscr_before = core.state.fpscr;
+        const std::uint32_t instruction_before = core.memory.read32_be(0U);
+        const std::uint32_t cr_shift = 28U - 4U * destination_field;
+        const std::uint32_t cr_mask = 0xFU << cr_shift;
+        const std::uint32_t expected_cr =
+            (cr_before & ~cr_mask) |
+            (static_cast<std::uint32_t>(test.expected_nibble) << cr_shift);
+        const RunResult result = core.run(1U);
+        assert(result.steps == 1U && core.state.cia == 4U);
+        assert(core.state.cr == expected_cr);
+        assert(core.state.fpscr == (fpscr_before & ~test.clear_bits));
+        assert(core.state.gpr == gpr_before);
+        assert(core.state.fpr == fpr_before);
+        assert(core.state.fpr_ps1 == fpr_ps1_before);
+        assert(core.state.xer == xer_before);
+        assert(core.state.lr == lr_before && core.state.ctr == ctr_before);
+        assert(core.memory.read32_be(0U) == instruction_before);
+        const InstructionHistoryEntry& history = result.instruction_history.front();
+        assert(history.opcode_name == "mcrfs");
+        assert(history.has_fpscr_cr_move);
+        assert(history.fpscr_cr_source == test.source_field);
+        assert(history.fpscr_cr_destination == destination_field);
+        assert(history.fpscr_cr_value == test.expected_nibble);
+        assert(history.fpscr_before_cr_move == fpscr_before);
+        assert(history.fpscr_after_cr_move == core.state.fpscr);
+    }
+
+    // An unrelated invalid cause survives clearing field 1 and keeps VX asserted.
+    EspressoCore unrelated(0x100U);
+    unrelated.state.fpscr = fpscr::vxsnan_mask | fpscr::vxisi_mask;
+    unrelated.memory.write32_be(0U, encode_mcrfs(0U, 1U));
+    const RunResult unrelated_result = unrelated.run(1U);
+    assert(unrelated_result.steps == 1U);
+    assert(unrelated.state.cr == 0x10000000U);
+    assert((unrelated.state.fpscr & (fpscr::vxisi_mask | fpscr::vx_mask)) ==
+           (fpscr::vxisi_mask | fpscr::vx_mask));
+}
+
 void move_from_condition_register_tests()
 {
     constexpr std::uint32_t instruction = 0x7C600026U;
@@ -24023,6 +24128,7 @@ int main(int argc, char* argv[])
     condition_bit_nand_tests();
     condition_bit_equivalence_tests();
     move_condition_register_field_tests();
+    move_condition_register_from_fpscr_tests();
     move_from_condition_register_tests();
     move_from_xer_tests();
     move_to_xer_tests();

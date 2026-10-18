@@ -715,6 +715,7 @@ void set_xer_carry(CpuState& state, bool carry) noexcept
     case Opcode::condition_bit_nand: return "crnand";
     case Opcode::condition_bit_equivalence: return "creqv";
     case Opcode::move_condition_register_field: return "mcrf";
+    case Opcode::move_condition_register_from_fpscr: return "mcrfs";
     case Opcode::move_from_condition_register: return "mfcr";
     case Opcode::move_to_condition_register_fields: return "mtcrf";
     case Opcode::move_condition_register_from_xer: return "mcrxr";
@@ -895,6 +896,20 @@ void add_history_source(
         const std::uint32_t shift =
             28U - 4U * static_cast<std::uint32_t>(instruction.cr_field_source);
         entry.cr_field_value = static_cast<std::uint8_t>((state.cr >> shift) & 0xFU);
+        return entry;
+    }
+    if (opcode == Opcode::move_condition_register_from_fpscr)
+    {
+        entry.has_fpscr_cr_move = true;
+        entry.fpscr_cr_destination = instruction.cr_field;
+        entry.fpscr_cr_source = instruction.fpscr_field;
+        const std::uint32_t shift =
+            28U - 4U * static_cast<std::uint32_t>(instruction.fpscr_field);
+        const std::uint32_t valid_field_mask =
+            instruction.fpscr_field == 5U ? 0x7U : 0xFU;
+        entry.fpscr_cr_value = static_cast<std::uint8_t>(
+            (state.fpscr >> shift) & valid_field_mask);
+        entry.fpscr_before_cr_move = state.fpscr;
         return entry;
     }
     if (opcode == Opcode::move_to_condition_register_fields)
@@ -1534,6 +1549,22 @@ std::string format_instruction_history(const RunResult& result)
                      << static_cast<unsigned>(entry.cr_field_destination)
                      << "=0x" << std::hex
                      << static_cast<unsigned>(entry.cr_field_value);
+            }
+        }
+        if (entry.has_fpscr_cr_move)
+        {
+            text << " FPSCR" << std::dec
+                 << static_cast<unsigned>(entry.fpscr_cr_source) << "=0x"
+                 << std::hex << static_cast<unsigned>(entry.fpscr_cr_value)
+                 << " -> cr" << std::dec
+                 << static_cast<unsigned>(entry.fpscr_cr_destination) << "=0x"
+                 << std::hex << static_cast<unsigned>(entry.fpscr_cr_value)
+                 << " FPSCR=0x" << std::setw(8)
+                 << entry.fpscr_before_cr_move;
+            if (entry.completed)
+            {
+                text << " -> 0x" << std::hex << std::setw(8)
+                     << entry.fpscr_after_cr_move;
             }
         }
         if (entry.has_xer_cr_move)
@@ -5499,6 +5530,50 @@ StepResult EspressoCore::step()
         const std::uint32_t destination_mask = 0xFU << destination_shift;
         state.cr = (state.cr & ~destination_mask) | (value << destination_shift);
         pending_history_entry_.cr_field_value = static_cast<std::uint8_t>(value);
+        break;
+    }
+
+    case Opcode::move_condition_register_from_fpscr:
+    {
+        const std::uint32_t shift =
+            28U - 4U * static_cast<std::uint32_t>(instruction.fpscr_field);
+        const std::uint32_t valid_field_mask =
+            instruction.fpscr_field == 5U ? 0x7U : 0xFU;
+        const std::uint32_t source_value =
+            (state.fpscr >> shift) & valid_field_mask;
+        const std::uint32_t cr_shift =
+            28U - 4U * static_cast<std::uint32_t>(instruction.cr_field);
+        const std::uint32_t cr_mask = 0xFU << cr_shift;
+        state.cr = (state.cr & ~cr_mask) | (source_value << cr_shift);
+
+        std::uint32_t clear_mask = 0U;
+        switch (instruction.fpscr_field)
+        {
+        case 0U:
+            clear_mask = fpscr::fx_mask | fpscr::ox_mask;
+            break;
+        case 1U:
+            clear_mask = fpscr::ux_mask | fpscr::zx_mask | fpscr::xx_mask |
+                fpscr::vxsnan_mask;
+            break;
+        case 2U:
+            clear_mask = fpscr::vxisi_mask | fpscr::vxidi_mask |
+                fpscr::vxzdz_mask | fpscr::vximz_mask;
+            break;
+        case 3U:
+            clear_mask = fpscr::vxvc_mask;
+            break;
+        case 5U:
+            clear_mask = fpscr::vxsoft_mask | fpscr::vxsqrt_mask |
+                fpscr::vxcvi_mask;
+            break;
+        default:
+            break;
+        }
+        state.fpscr &= ~clear_mask;
+        update_fpscr_summaries(state);
+        pending_history_entry_.fpscr_after_cr_move = state.fpscr;
+        pending_history_entry_.cr_field_value = static_cast<std::uint8_t>(source_value);
         break;
     }
 
