@@ -8213,6 +8213,99 @@ void fs_init_hle_tests()
     assert(second.fs_initialized);
 }
 
+void proc_ui_init_hle_tests()
+{
+    constexpr std::uint32_t return_address = 0x02740124U;
+    constexpr std::uint32_t save_callback = 0x02034F88U;
+    constexpr std::uint32_t replacement_callback = 0x02034820U;
+
+    EspressoCore core(0x4000U);
+    register_coreinit_hle(core.hle);
+    const std::uint32_t import = core.hle.bind_import("proc_ui", "ProcUIInit");
+    assert(!core.proc_ui_initialized);
+    assert(core.proc_ui_save_callback == 0U);
+    assert(!core.proc_ui_in_foreground);
+
+    core.memory.fill_bytes(0U, core.memory.size(), 0xA7U);
+    for (std::uint32_t reg = 0U; reg < core.state.gpr.size(); ++reg)
+    {
+        core.state.gpr[reg] = 0xA1000000U + reg * 0x101U;
+    }
+    for (std::uint32_t reg = 0U; reg < core.state.fpr.size(); ++reg)
+    {
+        core.state.fpr[reg] = 0x1111000000000000ULL + reg;
+        core.state.fpr_ps1[reg] = 0x2222000000000000ULL + reg;
+    }
+    core.state.gpr[3] = save_callback;
+    core.state.lr = return_address;
+    core.state.cr = 0x12345678U;
+    core.state.xer = 0xA00000A5U;
+    core.state.ctr = 0xCAFEBABEU;
+    core.state.fpscr = 0x5A5AA55AU;
+    core.state.cia = import;
+    const auto gprs_before = core.state.gpr;
+    const auto fprs_before = core.state.fpr;
+    const auto ps1_before = core.state.fpr_ps1;
+    const std::uint32_t cr_before = core.state.cr;
+    const std::uint32_t xer_before = core.state.xer;
+    const std::uint32_t ctr_before = core.state.ctr;
+    const std::uint32_t fpscr_before = core.state.fpscr;
+    std::vector<std::uint8_t> memory_before(core.memory.size());
+    core.memory.read_bytes(0U, memory_before);
+
+    assert(core.step() == StepResult::executed);
+    assert(core.state.cia == return_address);
+    assert(core.state.gpr == gprs_before); // void ABI; r3 is not a return value
+    assert(core.state.fpr == fprs_before);
+    assert(core.state.fpr_ps1 == ps1_before);
+    assert(core.state.cr == cr_before);
+    assert(core.state.xer == xer_before);
+    assert(core.state.ctr == ctr_before);
+    assert(core.state.fpscr == fpscr_before);
+    assert(core.proc_ui_initialized);
+    assert(core.proc_ui_save_callback == save_callback);
+    assert(core.proc_ui_save_callback_ex == 0U);
+    assert(core.proc_ui_save_callback_ex_argument == 0U);
+    assert(core.proc_ui_in_foreground);
+    assert(!core.proc_ui_in_shutdown);
+    assert(core.proc_ui_status == 0U); // PROCUI_STATUS_IN_FOREGROUND
+    assert(!core.proc_ui_draw_done_release);
+    std::vector<std::uint8_t> memory_after(core.memory.size());
+    core.memory.read_bytes(0U, memory_after);
+    assert(memory_after == memory_before);
+
+    // Re-initialization replaces the callback but keeps the persistent session
+    // initialized and in its current foreground state.
+    core.state.gpr[3] = replacement_callback;
+    core.state.lr = return_address + 4U;
+    core.state.cia = import;
+    assert(core.step() == StepResult::executed);
+    assert(core.state.gpr[3] == replacement_callback);
+    assert(core.state.cia == return_address + 4U);
+    assert(core.proc_ui_initialized);
+    assert(core.proc_ui_save_callback == replacement_callback);
+    assert(core.proc_ui_in_foreground);
+    assert(core.proc_ui_status == 0U);
+
+    EspressoCore other(0x4000U);
+    register_coreinit_hle(other.hle);
+    const std::uint32_t other_import = other.hle.bind_import("proc_ui", "ProcUIInit");
+    other.state.gpr[3] = 0x02001000U;
+    other.state.lr = return_address + 8U;
+    other.state.cia = other_import;
+    assert(other.step() == StepResult::executed);
+    assert(other.proc_ui_initialized);
+    assert(other.proc_ui_save_callback == 0x02001000U);
+    assert(core.proc_ui_save_callback == replacement_callback);
+
+    core.reset();
+    assert(!core.proc_ui_initialized);
+    assert(core.proc_ui_save_callback == 0U);
+    assert(!core.proc_ui_in_foreground);
+    assert(other.proc_ui_initialized);
+    assert(other.proc_ui_in_foreground);
+}
+
 void nn_save_init_hle_tests()
 {
     constexpr std::uint32_t return_address = 0x0274226CU;
@@ -18247,6 +18340,7 @@ int main(int argc, char* argv[])
     rpx_loader_tests();
     hle_dispatch_tests();
     nn_olv_hle_tests();
+    proc_ui_init_hle_tests();
     guest_mutex_tests();
     memset_hle_tests();
     memcpy_hle_tests();

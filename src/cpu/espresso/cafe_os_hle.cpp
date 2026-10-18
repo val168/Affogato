@@ -759,6 +759,33 @@ bool initialize_default_guest_heaps(EspressoCore& core)
 void register_coreinit_hle(HleDispatcher& dispatcher)
 {
     dispatcher.register_function(
+        "proc_ui",
+        "ProcUIInit",
+        [](EspressoCore& core) {
+            // ProcUIInit takes the save-ready callback in r3. Cemu likewise
+            // installs/replaces this pointer before its idempotent internal
+            // initialization check.
+            core.proc_ui_save_callback = core.state.gpr[3];
+            core.proc_ui_save_callback_ex = 0U;
+            core.proc_ui_save_callback_ex_argument = 0U;
+
+            if (core.proc_ui_initialized)
+            {
+                return;
+            }
+
+            // ProcUI starts foreground with status IN_FOREGROUND (0), and is
+            // not shutting down. Affogato has one synchronous guest lane; it
+            // does not yet model ProcUI's Cafe message queue, events, or worker
+            // threads, so the save callback is retained but not invoked here.
+            core.proc_ui_initialized = true;
+            core.proc_ui_in_foreground = true;
+            core.proc_ui_in_shutdown = false;
+            core.proc_ui_status = 0U;
+            core.proc_ui_draw_done_release = false;
+        });
+
+    dispatcher.register_function(
         "coreinit",
         "OSGetSystemInfo",
         [](EspressoCore& core) {
