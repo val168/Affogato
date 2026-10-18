@@ -88,7 +88,7 @@ constexpr std::uint64_t binary64_infinity_bits = 0x7FF0000000000000ULL;
 constexpr std::uint32_t implemented_invalid_masks =
     fpscr::vxsnan_mask | fpscr::vxzdz_mask | fpscr::vximz_mask |
     fpscr::vxidi_mask | fpscr::vxisi_mask | fpscr::vxcvi_mask |
-    fpscr::vxvc_mask;
+    fpscr::vxvc_mask | fpscr::vxsqrt_mask | fpscr::vxsoft_mask;
 
 void update_fpscr_summaries(CpuState& state) noexcept
 {
@@ -103,6 +103,10 @@ void update_fpscr_summaries(CpuState& state) noexcept
          (state.fpscr & fpscr::ve_mask) != 0U) ||
         ((state.fpscr & fpscr::zx_mask) != 0U &&
          (state.fpscr & fpscr::ze_mask) != 0U) ||
+        ((state.fpscr & fpscr::ox_mask) != 0U &&
+         (state.fpscr & fpscr::oe_mask) != 0U) ||
+        ((state.fpscr & fpscr::ux_mask) != 0U &&
+         (state.fpscr & fpscr::ue_mask) != 0U) ||
         ((state.fpscr & fpscr::xx_mask) != 0U &&
          (state.fpscr & fpscr::xe_mask) != 0U);
     if (enabled_exception)
@@ -621,6 +625,7 @@ void set_xer_carry(CpuState& state, bool carry) noexcept
     case Opcode::floating_absolute_value: return "fabs";
     case Opcode::floating_negative_absolute_value: return "fnabs";
     case Opcode::floating_move_from_fpscr: return "mffs";
+    case Opcode::floating_move_to_fpscr_bit_zero: return "mtfsb0";
     case Opcode::floating_convert_to_integer_word: return "fctiw";
     case Opcode::floating_convert_to_integer_word_zero: return "fctiwz";
     case Opcode::floating_subtract_double: return "fsub";
@@ -918,6 +923,13 @@ void add_history_source(
         entry.fp_status_move_destination = instruction.fp_register;
         entry.fp_status_move_source = state.fpscr;
         entry.fp_status_move_destination_ps1 = state.fpr_ps1[instruction.fp_register];
+        return entry;
+    }
+    if (opcode == Opcode::floating_move_to_fpscr_bit_zero)
+    {
+        entry.has_fpscr_bit_clear = true;
+        entry.fpscr_bit_number = instruction.fpscr_bit;
+        entry.fpscr_before_bit_clear = state.fpscr;
         return entry;
     }
     if (opcode == Opcode::floating_select)
@@ -1722,6 +1734,18 @@ std::string format_instruction_history(const RunResult& result)
                      << entry.fp_status_move_result
                      << " (ps1 unchanged=0x" << std::setw(16)
                      << entry.fp_status_move_destination_ps1 << ')';
+            }
+        }
+        if (entry.has_fpscr_bit_clear)
+        {
+            text << " BT=" << std::dec
+                 << static_cast<unsigned>(entry.fpscr_bit_number)
+                 << " FPSCR=0x" << std::hex << std::setw(8)
+                 << entry.fpscr_before_bit_clear;
+            if (entry.completed)
+            {
+                text << " -> 0x" << std::hex << std::setw(8)
+                     << entry.fpscr_after_bit_clear;
             }
         }
         if (entry.has_immediate)
@@ -3855,6 +3879,21 @@ StepResult EspressoCore::step()
         const std::uint64_t result = 0xFFFFFFFF00000000ULL | state.fpscr;
         state.fpr[instruction.fp_register] = result;
         pending_history_entry_.fp_status_move_result = result;
+        break;
+    }
+
+    case Opcode::floating_move_to_fpscr_bit_zero:
+    {
+        // FPSCR bits 1 (FEX) and 2 (VX) are summary bits and cannot be written
+        // directly; update_fpscr_summaries derives them from exception state.
+        if (instruction.fpscr_bit != 1U && instruction.fpscr_bit != 2U)
+        {
+            const std::uint32_t bit_mask =
+                1U << (31U - instruction.fpscr_bit);
+            state.fpscr &= ~bit_mask;
+            update_fpscr_summaries(state);
+        }
+        pending_history_entry_.fpscr_after_bit_clear = state.fpscr;
         break;
     }
 

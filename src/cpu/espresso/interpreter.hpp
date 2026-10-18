@@ -147,6 +147,10 @@ struct InstructionHistoryEntry
     std::uint32_t fp_status_move_source{};
     std::uint64_t fp_status_move_result{};
     std::uint64_t fp_status_move_destination_ps1{};
+    bool has_fpscr_bit_clear{};
+    std::uint8_t fpscr_bit_number{};
+    std::uint32_t fpscr_before_bit_clear{};
+    std::uint32_t fpscr_after_bit_clear{};
     bool has_fp_select{};
     std::uint8_t fp_select_destination{};
     std::uint8_t fp_select_a{};

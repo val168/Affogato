@@ -102,6 +102,7 @@ enum class Opcode
     floating_absolute_value,
     floating_negative_absolute_value,
     floating_move_from_fpscr,
+    floating_move_to_fpscr_bit_zero,
     floating_convert_to_integer_word,
     floating_convert_to_integer_word_zero,
     floating_select,
@@ -211,6 +212,7 @@ struct DecodedInstruction
     std::uint8_t fp_compare_a{};
     std::uint8_t fp_compare_b{};
     std::uint8_t fp_source_c{};
+    std::uint8_t fpscr_bit{};
     std::uint8_t branch_options{};
     std::uint8_t condition_bit{};
     std::uint8_t shift{};

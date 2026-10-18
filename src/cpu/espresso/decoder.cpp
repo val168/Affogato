@@ -969,6 +969,12 @@ DecodedInstruction decode(std::uint32_t raw) noexcept
             instruction.opcode = Opcode::floating_move_from_fpscr;
             instruction.fp_register = static_cast<std::uint8_t>(field(raw, 21, 0x1FU));
         }
+        else if (field(raw, 1, 0x3FFU) == 70U &&
+                 field(raw, 11, 0x3FFU) == 0U && (raw & 1U) == 0U)
+        {
+            instruction.opcode = Opcode::floating_move_to_fpscr_bit_zero;
+            instruction.fpscr_bit = static_cast<std::uint8_t>(field(raw, 21, 0x1FU));
+        }
         else if (field(raw, 1, 0x3FFU) == 15U &&
                  field(raw, 16, 0x1FU) == 0U && (raw & 1U) == 0U)
         {

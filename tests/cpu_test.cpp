@@ -3969,6 +3969,93 @@ void floating_move_from_fpscr_tests()
            std::string::npos);
 }
 
+void floating_move_to_fpscr_bit_zero_tests()
+{
+    const auto encode_mtfsb0 = [](std::uint8_t bit, bool record = false,
+                                 std::uint32_t reserved = 0U) {
+        return (63U << 26U) |
+            (static_cast<std::uint32_t>(bit) << 21U) |
+            reserved | (70U << 1U) | static_cast<std::uint32_t>(record);
+    };
+
+    constexpr std::uint32_t clear_vxsnan = 0xFCE0008CU; // mtfsb0 7
+    const DecodedInstruction decoded = decode(clear_vxsnan);
+    assert(decoded.opcode == Opcode::floating_move_to_fpscr_bit_zero);
+    assert(decoded.fpscr_bit == 7U);
+    assert(((clear_vxsnan >> 1U) & 0x3FFU) == 70U);
+    assert(decode(encode_mtfsb0(7U, true)).opcode == Opcode::unsupported);
+    assert(decode(encode_mtfsb0(7U, false, 1U << 11U)).opcode ==
+           Opcode::unsupported);
+
+    EspressoCore core(0x100U);
+    core.state.gpr.fill(0xA5A5A5A5U);
+    core.state.fpr.fill(0x0123456789ABCDEFULL);
+    core.state.fpr_ps1.fill(0xFEDCBA9876543210ULL);
+    core.state.cr = 0x12345678U;
+    core.state.xer = 0xA00000A5U;
+    core.state.lr = 0x11223344U;
+    core.state.ctr = 0x55667788U;
+    core.state.fpscr = fpscr::fx_mask | fpscr::fex_mask | fpscr::vx_mask |
+        fpscr::ve_mask | fpscr::vxsnan_mask | 0x00006000U;
+    core.memory.write32_be(0U, clear_vxsnan);
+    const auto gprs_before = core.state.gpr;
+    const auto fprs_before = core.state.fpr;
+    const auto ps1_before = core.state.fpr_ps1;
+    const std::uint32_t fpscr_before = core.state.fpscr;
+    const RunResult result = core.run(1U);
+    const std::uint32_t expected_fpscr =
+        fpscr_before & ~(fpscr::vxsnan_mask | fpscr::vx_mask | fpscr::fex_mask);
+    assert(result.reason == StopReason::instruction_limit && result.steps == 1U);
+    assert(core.state.fpscr == expected_fpscr);
+    assert(core.state.gpr == gprs_before);
+    assert(core.state.fpr == fprs_before && core.state.fpr_ps1 == ps1_before);
+    assert(core.state.cr == 0x12345678U && core.state.xer == 0xA00000A5U);
+    assert(core.state.lr == 0x11223344U && core.state.ctr == 0x55667788U);
+    const InstructionHistoryEntry& history = result.instruction_history.front();
+    assert(history.opcode_name == "mtfsb0");
+    assert(history.has_fpscr_bit_clear && history.fpscr_bit_number == 7U);
+    assert(history.fpscr_before_bit_clear == fpscr_before);
+    assert(history.fpscr_after_bit_clear == expected_fpscr);
+    const std::string trace = format_instruction_history(result);
+    assert(trace.find("mtfsb0 BT=7 FPSCR=") != std::string::npos);
+    assert(trace.find("-> 0x") != std::string::npos);
+
+    for (const std::uint8_t summary_bit : {1U, 2U})
+    {
+        EspressoCore summary(0x100U);
+        summary.state.fpscr = fpscr::fx_mask | fpscr::fex_mask |
+            fpscr::vx_mask | fpscr::vxsnan_mask;
+        summary.memory.write32_be(0U, encode_mtfsb0(summary_bit));
+        const std::uint32_t before = summary.state.fpscr;
+        const RunResult summary_result = summary.run(1U);
+        assert(summary_result.reason == StopReason::instruction_limit);
+        assert(summary.state.fpscr == before);
+    }
+
+    constexpr std::array<std::uint8_t, 2> summary_bits{3U, 4U};
+    constexpr std::array<std::uint32_t, 2> exception_masks{
+        fpscr::ox_mask, fpscr::ux_mask};
+    constexpr std::array<std::uint32_t, 2> enable_masks{
+        fpscr::oe_mask, fpscr::ue_mask};
+    for (std::size_t index = 0U; index < summary_bits.size(); ++index)
+    {
+        EspressoCore summary(0x100U);
+        summary.state.fpscr = fpscr::fx_mask | fpscr::fex_mask |
+            exception_masks[index] | enable_masks[index];
+        summary.memory.write32_be(0U, encode_mtfsb0(summary_bits[index]));
+        const RunResult summary_result = summary.run(1U);
+        assert(summary_result.reason == StopReason::instruction_limit);
+        assert(summary.state.fpscr == (fpscr::fx_mask | enable_masks[index]));
+    }
+
+    EspressoCore clear_fx(0x100U);
+    clear_fx.state.fpscr = fpscr::fx_mask | fpscr::xx_mask;
+    clear_fx.memory.write32_be(0U, encode_mtfsb0(0U));
+    const RunResult clear_fx_result = clear_fx.run(1U);
+    assert(clear_fx_result.reason == StopReason::instruction_limit);
+    assert(clear_fx.state.fpscr == fpscr::xx_mask);
+}
+
 void floating_negate_tests()
 {
     constexpr std::uint32_t wind_waker_word = 0xFD805050U;
@@ -23876,6 +23963,7 @@ int main(int argc, char* argv[])
     floating_multiply_single_tests();
     floating_move_register_tests();
     floating_move_from_fpscr_tests();
+    floating_move_to_fpscr_bit_zero_tests();
     floating_negate_tests();
     floating_absolute_value_tests();
     floating_negative_absolute_value_tests();
