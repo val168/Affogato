@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cctype>
 #include <cfloat>
 #include <cstdint>
@@ -269,6 +270,31 @@ std::string format_result(const affogato::EmulatorRunResult& result)
     return text.str();
 }
 
+std::string format_progress(
+    const affogato::EmulatorRunResult& result,
+    std::size_t total_steps,
+    std::chrono::milliseconds file_read_time,
+    std::chrono::milliseconds rpx_load_time,
+    std::chrono::milliseconds guest_run_time)
+{
+    std::ostringstream text;
+    text << "RPX execution in progress"
+         << "\nLoaded entry point: 0x" << std::hex << std::uppercase
+         << result.image.entry_point
+         << "\nSections loaded: " << std::dec << result.image.loaded_sections
+         << "\nExecuted instructions: " << total_steps
+         << "\nCurrent CIA: 0x" << std::hex << std::uppercase
+         << result.execution.cia
+         << "\nGPR3: " << std::dec << result.gpr3
+         << "\nFile read: " << file_read_time.count() << " ms"
+         << "\nRPX load: " << rpx_load_time.count() << " ms"
+         << "\nGuest run so far: " << guest_run_time.count() << " ms";
+    const std::string history =
+        affogato::cpu::espresso::format_instruction_history(result.execution);
+    if (!history.empty()) text << "\nRecent instruction trace:\n" << history;
+    return text.str();
+}
+
 struct WorkerResult
 {
     std::mutex mutex;
@@ -285,13 +311,14 @@ void launch_game(const fs::path& path, WorkerResult& worker, std::jthread& threa
     if (thread.joinable()) thread.join();
     {
         std::lock_guard lock(worker.mutex);
-        worker.message = "Loading " + path_utf8(path) + " ...";
+        worker.message = "Reading RPX " + path_utf8(path) + " ...";
     }
     thread = std::jthread([path, &worker]
     {
         std::string message;
         try
         {
+            const auto file_read_start = std::chrono::steady_clock::now();
             std::ifstream input(path, std::ios::binary | std::ios::ate);
             if (!input)
             {
@@ -304,14 +331,62 @@ void launch_game(const fs::path& path, WorkerResult& worker, std::jthread& threa
             }
             std::vector<std::uint8_t> bytes(static_cast<std::size_t>(length));
             input.seekg(0);
-            if (!bytes.empty() && !input.read(reinterpret_cast<char*>(bytes.data()), length))
+            if (!bytes.empty() && !input.read(
+                    reinterpret_cast<char*>(bytes.data()),
+                    static_cast<std::streamsize>(bytes.size())))
             {
                 throw std::runtime_error("Could not read the complete RPX file.");
             }
+            const auto file_read_end = std::chrono::steady_clock::now();
+            const auto file_read_time = std::chrono::duration_cast<std::chrono::milliseconds>(
+                file_read_end - file_read_start);
+
+            const auto rpx_load_start = std::chrono::steady_clock::now();
             affogato::Emulator emulator;
-            (void)emulator.load_rpx(bytes);
-            constexpr std::size_t rpx_instruction_limit = 500'000'000U;
-            message = format_result(emulator.run(rpx_instruction_limit));
+            static_cast<void>(emulator.load_rpx(bytes));
+            const auto rpx_load_end = std::chrono::steady_clock::now();
+            const auto rpx_load_time = std::chrono::duration_cast<std::chrono::milliseconds>(
+                rpx_load_end - rpx_load_start);
+
+            constexpr std::size_t rpx_instruction_limit = 1'000'000'000U;
+            constexpr std::size_t progress_chunk_size = 1'000'000U;
+            std::size_t total_steps = 0;
+            auto guest_run_start = std::chrono::steady_clock::now();
+            affogato::EmulatorRunResult run_result{};
+            {
+                std::lock_guard lock(worker.mutex);
+                worker.message = "RPX loaded; starting guest execution.\nFile read: " +
+                    std::to_string(file_read_time.count()) + " ms; RPX load: " +
+                    std::to_string(rpx_load_time.count()) + " ms.";
+            }
+            while (total_steps < rpx_instruction_limit)
+            {
+                const std::size_t chunk_size = std::min(
+                    progress_chunk_size, rpx_instruction_limit - total_steps);
+                run_result = emulator.run(chunk_size);
+                total_steps += run_result.execution.steps;
+                run_result.execution.steps = total_steps;
+                if (run_result.execution.reason !=
+                    affogato::cpu::espresso::StopReason::instruction_limit)
+                {
+                    break;
+                }
+
+                const auto now = std::chrono::steady_clock::now();
+                const auto guest_run_time = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    now - guest_run_start);
+                message = format_progress(
+                    run_result, total_steps, file_read_time, rpx_load_time, guest_run_time);
+                std::lock_guard lock(worker.mutex);
+                worker.message = message;
+            }
+            const auto guest_run_end = std::chrono::steady_clock::now();
+            const auto guest_run_time = std::chrono::duration_cast<std::chrono::milliseconds>(
+                guest_run_end - guest_run_start);
+            message = format_result(run_result) +
+                "\n\nPhase timings: file read " + std::to_string(file_read_time.count()) +
+                " ms; RPX load " + std::to_string(rpx_load_time.count()) +
+                " ms; guest execution " + std::to_string(guest_run_time.count()) + " ms.";
         }
         catch (const std::exception& exception)
         {
@@ -636,7 +711,7 @@ int run_frontend()
             ImGui::EndDisabled();
         }
         if (worker.running) ImGui::SameLine();
-        if (worker.running) ImGui::Text("Running RPX...");
+        if (worker.running) ImGui::Text("RPX loading / guest execution in progress...");
         ImGui::SeparatorText("Launch diagnostics");
         std::string message;
         {
