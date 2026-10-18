@@ -860,13 +860,15 @@ DecodedInstruction decode(std::uint32_t raw) noexcept
     case 59: // Single-precision A-form arithmetic
     {
         const std::uint32_t extended_opcode = field(raw, 1, 0x1FU);
-        if (extended_opcode == 18U || extended_opcode == 21U)
+        if (extended_opcode == 18U || extended_opcode == 20U ||
+            extended_opcode == 21U)
         {
             if (field(raw, 6, 0x1FU) == 0U && (raw & 1U) == 0U)
             {
                 instruction.opcode = extended_opcode == 18U
                     ? Opcode::floating_divide_single
-                    : Opcode::floating_add_single;
+                    : extended_opcode == 20U ? Opcode::floating_subtract_single
+                                              : Opcode::floating_add_single;
                 instruction.fp_register = static_cast<std::uint8_t>(field(raw, 21, 0x1FU));
                 instruction.fp_source_a = static_cast<std::uint8_t>(field(raw, 16, 0x1FU));
                 instruction.fp_source_b = static_cast<std::uint8_t>(field(raw, 11, 0x1FU));
