@@ -124,6 +124,7 @@ enum class Opcode
     store_single_indexed_update,
     store_double,
     store_double_indexed,
+    store_double_indexed_update,
     store_double_update,
     paired_single_merge10,
     condition_bit_and,
