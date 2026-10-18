@@ -117,6 +117,7 @@ enum class Opcode
     condition_bit_and,
     condition_bit_and_complement,
     condition_bit_or,
+    condition_bit_or_complement,
 };
 
 struct DecodedInstruction

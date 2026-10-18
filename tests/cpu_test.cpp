@@ -511,6 +511,13 @@ void decoder_tests()
     assert(cror.cr_source_b_bit == 6U);
     assert(decode(0x4C8D3383U).opcode == Opcode::unsupported); // reserved bit 0
 
+    const DecodedInstruction crorc = decode(0x4C8D3342U); // crorc 4, 13, 6
+    assert(crorc.opcode == Opcode::condition_bit_or_complement);
+    assert(crorc.cr_destination_bit == 4U);
+    assert(crorc.cr_source_a_bit == 13U);
+    assert(crorc.cr_source_b_bit == 6U);
+    assert(decode(0x4C8D3343U).opcode == Opcode::unsupported); // reserved bit 0
+
     const DecodedInstruction cmpwi = decode(0x2E830007U); // cmpwi cr5, r3, 7
     assert(cmpwi.opcode == Opcode::compare_signed_immediate);
     assert(cmpwi.cr_field == 5);
@@ -1295,6 +1302,54 @@ void condition_bit_or_tests()
     alias.memory.write32_be(0U, encode_cror(9U, 9U, 9U));
     assert(alias.step() == StepResult::executed);
     assert(alias.state.cr == cr_mask(9U));
+}
+
+void condition_bit_or_complement_tests()
+{
+    constexpr std::uint8_t destination_bit = 7U;
+    constexpr std::uint8_t source_a_bit = 5U;
+    constexpr std::uint8_t source_b_bit = 6U;
+    const auto encode_crorc = [](std::uint8_t destination,
+                                 std::uint8_t source_a,
+                                 std::uint8_t source_b) {
+        return 0x4C000000U |
+            (static_cast<std::uint32_t>(destination) << 21U) |
+            (static_cast<std::uint32_t>(source_a) << 16U) |
+            (static_cast<std::uint32_t>(source_b) << 11U) |
+            (417U << 1U);
+    };
+    const auto cr_mask = [](std::uint8_t bit) {
+        return 1U << (31U - bit);
+    };
+    const auto set_cr_bit = [&](std::uint32_t value, std::uint8_t bit, bool set) {
+        return set ? value | cr_mask(bit) : value & ~cr_mask(bit);
+    };
+
+    constexpr std::uint32_t instruction = encode_crorc(7U, 5U, 6U);
+    static_assert(instruction == 0x4CE53342U);
+    for (bool a : {false, true})
+    {
+        for (bool b : {false, true})
+        {
+            EspressoCore core(0x100U);
+            core.state.cr = 0xA5A55A5AU;
+            core.state.cr = set_cr_bit(core.state.cr, source_a_bit, a);
+            core.state.cr = set_cr_bit(core.state.cr, source_b_bit, b);
+            core.state.cr = set_cr_bit(core.state.cr, destination_bit, false);
+            core.memory.write32_be(0U, instruction);
+            const std::uint32_t cr_before = core.state.cr;
+            const auto result = core.run(1U);
+            assert(result.steps == 1U && core.state.cia == 4U);
+            assert(core.state.cr == set_cr_bit(
+                cr_before, destination_bit, a || !b));
+            assert(result.instruction_history.front().opcode_name == "crorc");
+            assert(result.instruction_history.front().cr_bit_result == (a || !b));
+            const std::string trace = format_instruction_history(result);
+            assert(trace.find("crorc cr5=") != std::string::npos);
+            assert(trace.find("cr6=") != std::string::npos);
+            assert(trace.find("-> cr7=") != std::string::npos);
+        }
+    }
 }
 
 void floating_compare_unordered_tests()
@@ -17859,6 +17914,7 @@ int main(int argc, char* argv[])
     condition_bit_and_tests();
     condition_bit_and_complement_tests();
     condition_bit_or_tests();
+    condition_bit_or_complement_tests();
     integer_alu_tests();
     and_immediate_shifted_record_tests();
     rotate_left_word_and_mask_register_tests();
