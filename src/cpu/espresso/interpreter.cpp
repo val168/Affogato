@@ -493,6 +493,8 @@ void set_xer_carry(CpuState& state, bool carry) noexcept
             instruction.opcode == Opcode::store_double_indexed ||
             instruction.opcode == Opcode::store_double_indexed_update ||
             instruction.opcode == Opcode::store_floating_as_integer_word_indexed ||
+            instruction.opcode == Opcode::load_string_word_indexed ||
+            instruction.opcode == Opcode::store_string_word_indexed ||
             instruction.opcode == Opcode::data_cache_block_zero ||
             instruction.opcode == Opcode::data_cache_block_store ||
             instruction.opcode == Opcode::data_cache_block_flush;
@@ -514,7 +516,9 @@ void set_xer_carry(CpuState& state, bool carry) noexcept
             instruction.opcode == Opcode::store_floating_as_integer_word_indexed ||
             instruction.opcode == Opcode::load_multiple_word ||
             instruction.opcode == Opcode::load_string_word_immediate ||
+            instruction.opcode == Opcode::load_string_word_indexed ||
             instruction.opcode == Opcode::store_string_word_immediate ||
+            instruction.opcode == Opcode::store_string_word_indexed ||
             instruction.opcode == Opcode::store_multiple_word ||
             instruction.opcode == Opcode::load_single ||
             instruction.opcode == Opcode::load_single_update ||
@@ -542,9 +546,13 @@ void set_xer_carry(CpuState& state, bool carry) noexcept
                    << (instruction.base == 0 ? 0U : state.gpr[instruction.base]) << ')';
             if (indexed)
             {
-                detail << ", rB=" << std::dec << static_cast<unsigned>(instruction.source)
+                const std::uint8_t index_register =
+                    instruction.opcode == Opcode::store_string_word_indexed
+                        ? instruction.destination
+                        : instruction.source;
+                detail << ", rB=" << std::dec << static_cast<unsigned>(index_register)
                        << " (0x" << std::hex << std::setw(8)
-                       << state.gpr[instruction.source] << ')';
+                       << state.gpr[index_register] << ')';
             }
         }
     }
@@ -664,7 +672,9 @@ void set_xer_carry(CpuState& state, bool carry) noexcept
     case Opcode::load_word_zero: return "lwz";
     case Opcode::load_multiple_word: return "lmw";
     case Opcode::load_string_word_immediate: return "lswi";
+    case Opcode::load_string_word_indexed: return "lswx";
     case Opcode::store_string_word_immediate: return "stswi";
+    case Opcode::store_string_word_indexed: return "stswx";
     case Opcode::load_word_update: return "lwzu";
     case Opcode::load_word_indexed: return "lwzx";
     case Opcode::load_word_indexed_update: return "lwzux";
@@ -1101,20 +1111,47 @@ void add_history_source(
         return entry;
     }
     if (opcode == Opcode::load_string_word_immediate ||
-        opcode == Opcode::store_string_word_immediate)
+        opcode == Opcode::load_string_word_indexed ||
+        opcode == Opcode::store_string_word_immediate ||
+        opcode == Opcode::store_string_word_indexed)
     {
-        const bool store = opcode == Opcode::store_string_word_immediate;
+        const bool indexed = opcode == Opcode::load_string_word_indexed ||
+            opcode == Opcode::store_string_word_indexed;
+        const bool store = opcode == Opcode::store_string_word_immediate ||
+            opcode == Opcode::store_string_word_indexed;
         entry.has_string_transfer = true;
         entry.string_transfer_store = store;
+        entry.string_transfer_indexed = indexed;
         entry.string_transfer_first_register = store ? instruction.source : instruction.destination;
         entry.string_transfer_base_register = instruction.base;
         entry.string_transfer_base_value = instruction.base == 0 ? 0U : state.gpr[instruction.base];
-        entry.string_transfer_byte_count = instruction.string_byte_count == 0
-            ? 32U : instruction.string_byte_count;
+        if (indexed)
+        {
+            entry.string_transfer_index_register = store
+                ? instruction.destination
+                : instruction.source;
+            entry.string_transfer_index_value =
+                state.gpr[entry.string_transfer_index_register];
+            entry.string_transfer_byte_count =
+                static_cast<std::uint8_t>(state.xer & 0x7FU);
+            if (instruction.base != 0U)
+            {
+                add_history_source(entry, state, instruction.base);
+            }
+            add_history_source(entry, state, entry.string_transfer_index_register);
+            entry.has_effective_address = true;
+            entry.effective_address = entry.string_transfer_base_value +
+                entry.string_transfer_index_value;
+        }
+        else
+        {
+            entry.string_transfer_byte_count = instruction.string_byte_count == 0
+                ? 32U : instruction.string_byte_count;
+            entry.has_effective_address = true;
+            entry.effective_address = entry.string_transfer_base_value;
+        }
         entry.string_transfer_register_count = static_cast<std::uint8_t>(
             (entry.string_transfer_byte_count + 3U) / 4U);
-        entry.has_effective_address = true;
-        entry.effective_address = entry.string_transfer_base_value;
         for (std::uint8_t i = 0; i < entry.string_transfer_register_count; ++i)
         {
             const std::uint8_t reg = static_cast<std::uint8_t>(
@@ -1619,8 +1656,23 @@ std::string format_instruction_history(const RunResult& result)
         {
             text << " r" << std::dec
                  << static_cast<unsigned>(entry.string_transfer_first_register)
-                 << ",r" << static_cast<unsigned>(entry.string_transfer_base_register) << ','
-                 << static_cast<unsigned>(entry.string_transfer_byte_count);
+                 << ",r" << static_cast<unsigned>(entry.string_transfer_base_register);
+            if (entry.string_transfer_indexed)
+            {
+                text << "=0x" << std::hex << std::setw(8)
+                     << entry.string_transfer_base_value
+                     << " r" << std::dec
+                     << static_cast<unsigned>(entry.string_transfer_index_register)
+                     << "=0x" << std::hex << std::setw(8)
+                     << entry.string_transfer_index_value
+                     << " bytes=" << std::dec
+                     << static_cast<unsigned>(entry.string_transfer_byte_count);
+            }
+            else
+            {
+                text << ','
+                     << static_cast<unsigned>(entry.string_transfer_byte_count);
+            }
             if (entry.string_transfer_store)
             {
                 for (std::uint8_t i = 0; i < entry.string_transfer_register_count; ++i)
@@ -4903,18 +4955,27 @@ StepResult EspressoCore::step()
     }
 
     case Opcode::load_string_word_immediate:
+    case Opcode::load_string_word_indexed:
     {
-        // Snapshot the base and validate/read the complete string before any
-        // destination GPR is changed. lswi may overwrite rA or wrap through r0.
-        const std::uint32_t address = instruction.base == 0
+        const bool indexed = instruction.opcode == Opcode::load_string_word_indexed;
+        // Snapshot indexed EA and count before any destination GPR is changed.
+        const std::uint32_t base = instruction.base == 0U
             ? 0U : state.gpr[instruction.base];
-        const std::size_t byte_count = instruction.string_byte_count == 0
-            ? 32U : instruction.string_byte_count;
-        std::array<std::uint8_t, 32> bytes{};
-        memory.read_bytes(address, std::span<std::uint8_t>(bytes).first(byte_count));
+        const std::uint32_t address = indexed
+            ? base + state.gpr[instruction.source]
+            : base;
+        const std::size_t byte_count = indexed
+            ? static_cast<std::size_t>(state.xer & 0x7FU)
+            : instruction.string_byte_count == 0U
+                ? 32U : instruction.string_byte_count;
+        std::array<std::uint8_t, 127> bytes{};
+        if (byte_count != 0U)
+        {
+            memory.read_bytes(address, std::span<std::uint8_t>(bytes).first(byte_count));
+        }
 
         const std::size_t register_count = (byte_count + 3U) / 4U;
-        std::array<std::uint32_t, 8> values{};
+        std::array<std::uint32_t, 32> values{};
         for (std::size_t i = 0; i < byte_count; ++i)
         {
             const unsigned shift = static_cast<unsigned>(24U - (i % 4U) * 8U);
@@ -4928,12 +4989,19 @@ StepResult EspressoCore::step()
     }
 
     case Opcode::store_string_word_immediate:
+    case Opcode::store_string_word_indexed:
     {
-        const std::uint32_t address = instruction.base == 0
+        const bool indexed = instruction.opcode == Opcode::store_string_word_indexed;
+        const std::uint32_t base = instruction.base == 0U
             ? 0U : state.gpr[instruction.base];
-        const std::size_t byte_count = instruction.string_byte_count == 0
-            ? 32U : instruction.string_byte_count;
-        std::array<std::uint8_t, 32> bytes{};
+        const std::uint32_t address = indexed
+            ? base + state.gpr[instruction.destination]
+            : base;
+        const std::size_t byte_count = indexed
+            ? static_cast<std::size_t>(state.xer & 0x7FU)
+            : instruction.string_byte_count == 0U
+                ? 32U : instruction.string_byte_count;
+        std::array<std::uint8_t, 127> bytes{};
         for (std::size_t i = 0; i < byte_count; ++i)
         {
             const std::uint32_t reg =
@@ -4943,9 +5011,12 @@ StepResult EspressoCore::step()
         }
 
         // Validate and commit the entire output span as one guest write.
-        memory.write_bytes(address, std::span<const std::uint8_t>(bytes).first(byte_count));
-        std::copy_n(bytes.begin(), byte_count,
-                    pending_history_entry_.string_transfer_bytes.begin());
+        if (byte_count != 0U)
+        {
+            memory.write_bytes(address, std::span<const std::uint8_t>(bytes).first(byte_count));
+            std::copy_n(bytes.begin(), byte_count,
+                        pending_history_entry_.string_transfer_bytes.begin());
+        }
         break;
     }
 

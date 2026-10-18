@@ -368,6 +368,28 @@ DecodedInstruction decode(std::uint32_t raw) noexcept
             instruction.base = static_cast<std::uint8_t>(field(raw, 16, 0x1FU));
             instruction.string_byte_count = static_cast<std::uint8_t>(field(raw, 11, 0x1FU));
         }
+        else if ((extended_opcode == 533U || extended_opcode == 661U) &&
+                 (raw & 1U) == 0U)
+        {
+            if (extended_opcode == 533U)
+            {
+                instruction.opcode = Opcode::load_string_word_indexed;
+                instruction.destination =
+                    static_cast<std::uint8_t>(field(raw, 21U, 0x1FU));
+                instruction.source =
+                    static_cast<std::uint8_t>(field(raw, 11U, 0x1FU));
+            }
+            else
+            {
+                instruction.opcode = Opcode::store_string_word_indexed;
+                // For stswx, destination stores RB while source stores RS.
+                instruction.destination =
+                    static_cast<std::uint8_t>(field(raw, 11U, 0x1FU));
+                instruction.source =
+                    static_cast<std::uint8_t>(field(raw, 21U, 0x1FU));
+            }
+            instruction.base = static_cast<std::uint8_t>(field(raw, 16U, 0x1FU));
+        }
         else if (extended_opcode == 922U && field(raw, 11, 0x1FU) == 0U) // extsh
         {
             instruction.opcode = Opcode::extend_sign_halfword;

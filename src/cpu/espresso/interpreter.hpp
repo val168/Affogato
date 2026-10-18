@@ -70,9 +70,12 @@ struct InstructionHistoryEntry
     std::uint32_t string_transfer_base_value{};
     std::uint8_t string_transfer_byte_count{};
     std::uint8_t string_transfer_register_count{};
-    std::array<std::uint8_t, 8> string_transfer_registers{};
-    std::array<std::uint32_t, 8> string_transfer_register_values{};
-    std::array<std::uint8_t, 32> string_transfer_bytes{};
+    std::array<std::uint8_t, 32> string_transfer_registers{};
+    std::array<std::uint32_t, 32> string_transfer_register_values{};
+    std::array<std::uint8_t, 127> string_transfer_bytes{};
+    bool string_transfer_indexed{};
+    std::uint8_t string_transfer_index_register{};
+    std::uint32_t string_transfer_index_value{};
     bool has_register_range{};
     std::uint8_t range_first_register{};
     std::uint8_t range_last_register{};

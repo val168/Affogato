@@ -22702,6 +22702,140 @@ void store_string_word_immediate_tests()
     assert(!fault_result.instruction_history[0].completed);
 }
 
+void load_store_string_word_indexed_tests()
+{
+    const auto encode = [](std::uint16_t xo, std::uint8_t reg,
+                           std::uint8_t base, std::uint8_t index) {
+        return (31U << 26U) |
+            (static_cast<std::uint32_t>(reg) << 21U) |
+            (static_cast<std::uint32_t>(base) << 16U) |
+            (static_cast<std::uint32_t>(index) << 11U) |
+            (static_cast<std::uint32_t>(xo) << 1U);
+    };
+    constexpr std::uint32_t lswx_r5_r3_r4 = 0x7CA3242AU;
+    constexpr std::uint32_t stswx_r6_r3_r4 = 0x7CC3252AU;
+    const DecodedInstruction lswx = decode(lswx_r5_r3_r4);
+    const DecodedInstruction stswx = decode(stswx_r6_r3_r4);
+    assert(lswx.opcode == Opcode::load_string_word_indexed);
+    assert(lswx.destination == 5U && lswx.base == 3U && lswx.source == 4U);
+    assert(stswx.opcode == Opcode::store_string_word_indexed);
+    assert(stswx.source == 6U && stswx.base == 3U && stswx.destination == 4U);
+    assert(decode(lswx_r5_r3_r4 | 1U).opcode == Opcode::unsupported);
+    assert(decode(stswx_r6_r3_r4 | 1U).opcode == Opcode::unsupported);
+
+    EspressoCore load(0x100U);
+    load.state.gpr.fill(0xA5A5A5A5U);
+    load.state.gpr[3] = 0x40U;
+    load.state.gpr[4] = 8U;
+    load.state.gpr[5] = 0xDEADBEEFU;
+    load.state.gpr[6] = 0xCAFEBABEU;
+    load.state.gpr[7] = 0x13579BDFU;
+    load.state.xer = 0xA0000006U; // six bytes; upper XER flags are preserved.
+    const auto load_gprs = load.state.gpr;
+    load.memory.write32_be(0U, encode(533U, 5U, 3U, 4U));
+    load.memory.write8(0x48U, 0x01U);
+    load.memory.write8(0x49U, 0x23U);
+    load.memory.write8(0x4AU, 0x45U);
+    load.memory.write8(0x4BU, 0x67U);
+    load.memory.write8(0x4CU, 0x89U);
+    load.memory.write8(0x4DU, 0xABU);
+    const RunResult load_result = load.run(1U);
+    assert(load_result.steps == 1U && load.state.cia == 4U);
+    assert(load.state.gpr[5] == 0x01234567U);
+    assert(load.state.gpr[6] == 0x89AB0000U);
+    assert(load.state.gpr[7] == load_gprs[7]);
+    assert(load.state.xer == 0xA0000006U);
+    assert(load_result.instruction_history[0].opcode_name == "lswx");
+    assert(load_result.instruction_history[0].effective_address == 0x48U);
+    assert(load_result.instruction_history[0].string_transfer_byte_count == 6U);
+
+    EspressoCore store(0x100U);
+    store.state.gpr[3] = 0x40U;
+    store.state.gpr[4] = 8U;
+    store.state.gpr[6] = 0x11223344U;
+    store.state.gpr[7] = 0x55667788U;
+    store.state.xer = 0xA0000006U;
+    const auto store_gprs = store.state.gpr;
+    store.memory.write32_be(0U, encode(661U, 6U, 3U, 4U));
+    const RunResult store_result = store.run(1U);
+    assert(store_result.steps == 1U && store.state.cia == 4U);
+    assert(store.memory.read32_be(0x48U) == 0x11223344U);
+    assert(store.memory.read16_be(0x4CU) == 0x5566U);
+    assert(store.state.gpr == store_gprs);
+    assert(store.state.xer == 0xA0000006U);
+    assert(store_result.instruction_history[0].opcode_name == "stswx");
+    assert(store_result.instruction_history[0].effective_address == 0x48U);
+
+    // The register sequence wraps through r0, and a partial final word is
+    // left-aligned with the unused low bytes cleared.
+    EspressoCore wraps(0x100U);
+    wraps.state.gpr[3] = 0x40U;
+    wraps.state.gpr[4] = 8U;
+    wraps.state.xer = 5U;
+    wraps.memory.write32_be(0U, encode(533U, 31U, 3U, 4U));
+    wraps.memory.write8(0x48U, 1U);
+    wraps.memory.write8(0x49U, 2U);
+    wraps.memory.write8(0x4AU, 3U);
+    wraps.memory.write8(0x4BU, 4U);
+    wraps.memory.write8(0x4CU, 5U);
+    assert(wraps.step() == StepResult::executed);
+    assert(wraps.state.gpr[31] == 0x01020304U);
+    assert(wraps.state.gpr[0] == 0x05000000U);
+
+    // rA=0 means literal zero while rB=0, when used, remains GPR0.
+    EspressoCore zero_base(0x100U);
+    zero_base.state.gpr[0] = 0x40U;
+    zero_base.state.gpr[4] = 0x40U;
+    zero_base.state.xer = 4U;
+    zero_base.memory.write32_be(0U, encode(533U, 7U, 0U, 0U));
+    zero_base.memory.write32_be(0x40U, 0x89ABCDEFU);
+    assert(zero_base.step() == StepResult::executed);
+    assert(zero_base.state.gpr[7] == 0x89ABCDEFU);
+
+    // Byte count zero performs no guest-memory access and changes no GPR.
+    EspressoCore zero_count(0x100U);
+    zero_count.state.gpr[3] = 0xFFFFFFF0U;
+    zero_count.state.gpr[4] = 0x100U;
+    zero_count.state.gpr[5] = 0xDEADBEEFU;
+    zero_count.state.xer = 0xA0000000U;
+    zero_count.memory.write32_be(0U, encode(533U, 5U, 3U, 4U));
+    assert(zero_count.step() == StepResult::executed);
+    assert(zero_count.state.gpr[5] == 0xDEADBEEFU);
+
+    // Faults validate the complete transfer before modifying GPRs or memory.
+    EspressoCore load_fault(0x100U);
+    load_fault.state.gpr[3] = 0xFCU;
+    load_fault.state.gpr[4] = 0U;
+    load_fault.state.gpr[6] = 0xDEADBEEFU;
+    load_fault.state.gpr[7] = 0xCAFEBABEU;
+    load_fault.state.xer = 8U;
+    load_fault.memory.write32_be(0U, encode(533U, 6U, 3U, 4U));
+    const RunResult failed_load = load_fault.run(1U);
+    assert(failed_load.reason == StopReason::memory_fault);
+    assert(failed_load.detail.find("read 8 byte(s)") != std::string::npos);
+    assert(failed_load.detail.find("rB=4") != std::string::npos);
+    assert(load_fault.state.gpr[6] == 0xDEADBEEFU);
+    assert(load_fault.state.gpr[7] == 0xCAFEBABEU);
+    assert(!failed_load.instruction_history[0].completed);
+
+    EspressoCore store_fault(0x100U);
+    store_fault.state.gpr[3] = 0xFCU;
+    store_fault.state.gpr[4] = 0U;
+    store_fault.state.gpr[6] = 0x11223344U;
+    store_fault.state.gpr[7] = 0x55667788U;
+    store_fault.state.xer = 8U;
+    store_fault.memory.write8(0xFCU, 0xAAU);
+    store_fault.memory.write8(0xFDU, 0xBBU);
+    store_fault.memory.write8(0xFEU, 0xCCU);
+    store_fault.memory.write8(0xFFU, 0xDDU);
+    store_fault.memory.write32_be(0U, encode(661U, 6U, 3U, 4U));
+    const RunResult failed_store = store_fault.run(1U);
+    assert(failed_store.reason == StopReason::memory_fault);
+    assert(failed_store.detail.find("write 8 byte(s)") != std::string::npos);
+    assert(store_fault.memory.read32_be(0xFCU) == 0xAABBCCDDU);
+    assert(!failed_store.instruction_history[0].completed);
+}
+
 void floating_point_load_tests()
 {
     const auto encode_lfs = [](std::uint8_t destination, std::uint8_t base,
@@ -24416,6 +24550,7 @@ int main(int argc, char* argv[])
     multiple_word_load_store_tests();
     load_string_word_immediate_tests();
     store_string_word_immediate_tests();
+    load_store_string_word_indexed_tests();
     function_call_and_stack_tests();
     return 0;
 }
