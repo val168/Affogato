@@ -605,6 +605,7 @@ void set_xer_carry(CpuState& state, bool carry) noexcept
     case Opcode::condition_bit_xor: return "crxor";
     case Opcode::condition_bit_nand: return "crnand";
     case Opcode::condition_bit_equivalence: return "creqv";
+    case Opcode::move_condition_register_field: return "mcrf";
     }
     return "unknown";
 }
@@ -727,6 +728,16 @@ void add_history_source(
         entry.cr_bit_source_b = instruction.cr_source_b_bit;
         entry.cr_bit_source_a_value = read_cr_bit(state, instruction.cr_source_a_bit);
         entry.cr_bit_source_b_value = read_cr_bit(state, instruction.cr_source_b_bit);
+        return entry;
+    }
+    if (opcode == Opcode::move_condition_register_field)
+    {
+        entry.has_cr_field_move = true;
+        entry.cr_field_destination = instruction.cr_field;
+        entry.cr_field_source = instruction.cr_field_source;
+        const std::uint32_t shift =
+            28U - 4U * static_cast<std::uint32_t>(instruction.cr_field_source);
+        entry.cr_field_value = static_cast<std::uint8_t>((state.cr >> shift) & 0xFU);
         return entry;
     }
     if (opcode == Opcode::floating_move_register || opcode == Opcode::floating_negate ||
@@ -1144,6 +1155,19 @@ std::string format_instruction_history(const RunResult& result)
             {
                 text << " -> cr" << static_cast<unsigned>(entry.cr_bit_destination)
                      << '=' << (entry.cr_bit_result ? '1' : '0');
+            }
+        }
+        if (entry.has_cr_field_move)
+        {
+            text << " cr" << std::dec
+                 << static_cast<unsigned>(entry.cr_field_source) << "=0x"
+                 << std::hex << static_cast<unsigned>(entry.cr_field_value);
+            if (entry.completed)
+            {
+                text << " -> cr" << std::dec
+                     << static_cast<unsigned>(entry.cr_field_destination)
+                     << "=0x" << std::hex
+                     << static_cast<unsigned>(entry.cr_field_value);
             }
         }
         if (entry.has_register_range)
@@ -3566,6 +3590,19 @@ StepResult EspressoCore::step()
             state.cr &= ~destination_mask;
         }
         pending_history_entry_.cr_bit_result = result;
+        break;
+    }
+
+    case Opcode::move_condition_register_field:
+    {
+        const std::uint32_t source_shift =
+            28U - 4U * static_cast<std::uint32_t>(instruction.cr_field_source);
+        const std::uint32_t destination_shift =
+            28U - 4U * static_cast<std::uint32_t>(instruction.cr_field);
+        const std::uint32_t value = (state.cr >> source_shift) & 0xFU;
+        const std::uint32_t destination_mask = 0xFU << destination_shift;
+        state.cr = (state.cr & ~destination_mask) | (value << destination_shift);
+        pending_history_entry_.cr_field_value = static_cast<std::uint8_t>(value);
         break;
     }
 

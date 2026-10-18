@@ -140,6 +140,10 @@ struct InstructionHistoryEntry
     bool cr_bit_source_a_value{};
     bool cr_bit_source_b_value{};
     bool cr_bit_result{};
+    bool has_cr_field_move{};
+    std::uint8_t cr_field_destination{};
+    std::uint8_t cr_field_source{};
+    std::uint8_t cr_field_value{};
     bool completed{};
 };
 

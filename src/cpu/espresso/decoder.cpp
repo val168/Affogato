@@ -226,6 +226,17 @@ DecodedInstruction decode(std::uint32_t raw) noexcept
             instruction.cr_source_b_bit =
                 static_cast<std::uint8_t>(field(raw, 11, 0x1FU));
         }
+        else if (extended_opcode == 0U &&
+                 field(raw, 21U, 0x3U) == 0U &&
+                 field(raw, 16U, 0x3U) == 0U &&
+                 (raw & 1U) == 0U)
+        {
+            instruction.opcode = Opcode::move_condition_register_field;
+            instruction.cr_field =
+                static_cast<std::uint8_t>(field(raw, 23U, 0x7U));
+            instruction.cr_field_source =
+                static_cast<std::uint8_t>(field(raw, 18U, 0x7U));
+        }
         else if (extended_opcode == 16 || extended_opcode == 528)
         {
             instruction.opcode = extended_opcode == 16

@@ -122,6 +122,7 @@ enum class Opcode
     condition_bit_xor,
     condition_bit_nand,
     condition_bit_equivalence,
+    move_condition_register_field,
 };
 
 struct DecodedInstruction
@@ -137,6 +138,7 @@ struct DecodedInstruction
     std::uint8_t fp_source_b{};
     std::uint8_t base{};
     std::uint8_t cr_field{};
+    std::uint8_t cr_field_source{};
     std::uint8_t cr_destination_bit{};
     std::uint8_t cr_source_a_bit{};
     std::uint8_t cr_source_b_bit{};

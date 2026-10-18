@@ -546,6 +546,13 @@ void decoder_tests()
     assert(creqv.cr_source_b_bit == 6U);
     assert(decode(0x4C8D3243U).opcode == Opcode::unsupported); // reserved bit 0
 
+    const DecodedInstruction mcrf = decode(0x4C880000U); // mcrf cr1, cr2
+    assert(mcrf.opcode == Opcode::move_condition_register_field);
+    assert(mcrf.cr_field == 1U);
+    assert(mcrf.cr_field_source == 2U);
+    assert(decode(0x4C880001U).opcode == Opcode::unsupported); // reserved bit 0
+    assert(decode(0x4CA80000U).opcode == Opcode::unsupported); // reserved field
+
     const DecodedInstruction cmpwi = decode(0x2E830007U); // cmpwi cr5, r3, 7
     assert(cmpwi.opcode == Opcode::compare_signed_immediate);
     assert(cmpwi.cr_field == 5);
@@ -1564,6 +1571,38 @@ void condition_bit_equivalence_tests()
                 cr_before, destination_bit, expected));
             assert(result.instruction_history.front().opcode_name == "creqv");
             assert(result.instruction_history.front().cr_bit_result == expected);
+        }
+    }
+}
+
+void move_condition_register_field_tests()
+{
+    const auto encode_mcrf = [](std::uint8_t destination, std::uint8_t source) {
+        return 0x4C000000U |
+            (static_cast<std::uint32_t>(destination) << 23U) |
+            (static_cast<std::uint32_t>(source) << 18U);
+    };
+    for (std::uint8_t destination = 0U; destination < 8U; ++destination)
+    {
+        for (std::uint8_t source = 0U; source < 8U; ++source)
+        {
+            EspressoCore core(0x100U);
+            core.state.cr = 0x12345678U ^
+                (static_cast<std::uint32_t>(source) * 0x11111111U);
+            const std::uint32_t original_cr = core.state.cr;
+            const std::uint32_t source_shift = 28U - 4U * source;
+            const std::uint32_t destination_shift = 28U - 4U * destination;
+            const std::uint32_t value = (original_cr >> source_shift) & 0xFU;
+            const std::uint32_t mask = 0xFU << destination_shift;
+            core.memory.write32_be(0U, encode_mcrf(destination, source));
+            const auto result = core.run(1U);
+            assert(result.steps == 1U && core.state.cia == 4U);
+            assert(core.state.cr == ((original_cr & ~mask) | (value << destination_shift)));
+            assert(result.instruction_history.front().opcode_name == "mcrf");
+            assert(result.instruction_history.front().has_cr_field_move);
+            assert(result.instruction_history.front().cr_field_value == value);
+            const std::string trace = format_instruction_history(result);
+            assert(trace.find("cr" + std::to_string(source) + "=0x") != std::string::npos);
         }
     }
 }
@@ -18135,6 +18174,7 @@ int main(int argc, char* argv[])
     condition_bit_xor_tests();
     condition_bit_nand_tests();
     condition_bit_equivalence_tests();
+    move_condition_register_field_tests();
     integer_alu_tests();
     and_immediate_shifted_record_tests();
     rotate_left_word_and_mask_register_tests();
