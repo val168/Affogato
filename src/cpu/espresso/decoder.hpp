@@ -71,6 +71,7 @@ enum class Opcode
     floating_multiply_add_single,
     floating_multiply_subtract_single,
     floating_negative_multiply_subtract_single,
+    floating_negative_multiply_add_single,
     floating_multiply_add_double,
     floating_multiply_subtract_double,
     floating_negative_multiply_add_double,

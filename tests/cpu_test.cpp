@@ -2727,6 +2727,32 @@ void floating_subtract_single_tests()
            std::string::npos);
 }
 
+void floating_negative_multiply_add_single_tests()
+{
+    constexpr std::uint32_t instruction = (59U << 26U) | (1U << 21U) |
+        (2U << 16U) | (3U << 11U) | (4U << 6U) | (31U << 1U);
+    const DecodedInstruction decoded = decode(instruction);
+    assert(decoded.opcode == Opcode::floating_negative_multiply_add_single);
+    assert(decoded.fp_register == 1U);
+    assert(decoded.fp_source_a == 2U);
+    assert(decoded.fp_source_b == 3U);
+    assert(decoded.fp_source_c == 4U);
+    assert(((instruction >> 1U) & 0x1FU) == 31U);
+    assert(decode(instruction | 1U).opcode == Opcode::unsupported);
+
+    EspressoCore core(16U);
+    core.state.fpr[2] = 0x4000000000000000ULL; // 2
+    core.state.fpr[3] = 0x4010000000000000ULL; // 4
+    core.state.fpr[4] = 0x4008000000000000ULL; // 3
+    core.state.fpr_ps1[1] = 0xDEADBEEF01234567ULL;
+    core.memory.write32_be(0U, instruction);
+    const RunResult result = core.run(1U);
+    assert(result.steps == 1U);
+    assert(core.state.fpr[1] == 0xC024000000000000ULL); // -(2*3 + 4) = -10
+    assert(core.state.fpr_ps1[1] == 0xC024000000000000ULL);
+    assert(format_instruction_history(result).find("fnmadds") != std::string::npos);
+}
+
 void floating_negative_multiply_subtract_single_tests()
 {
     constexpr std::uint32_t instruction = (59U << 26U) | (1U << 21U) |
@@ -21343,6 +21369,7 @@ int main(int argc, char* argv[])
     floating_divide_double_tests();
     floating_add_single_tests();
     floating_subtract_single_tests();
+    floating_negative_multiply_add_single_tests();
     floating_negative_multiply_subtract_single_tests();
     floating_multiply_subtract_single_tests();
     floating_multiply_add_single_tests();
