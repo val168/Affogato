@@ -24211,7 +24211,7 @@ int main(int argc, char* argv[])
 {
     bool recompiler_requested = false;
     const char* rpx_path = nullptr;
-    std::size_t rpx_instruction_limit = 1'000'000'000U;
+    std::size_t rpx_instruction_limit = 5'000'000'000ULL;
     for (int argument = 1; argument < argc; ++argument)
     {
         const std::string_view option(argv[argument]);

@@ -367,7 +367,7 @@ void launch_game(
             const auto rpx_load_time = std::chrono::duration_cast<std::chrono::milliseconds>(
                 rpx_load_end - rpx_load_start);
 
-            constexpr std::size_t rpx_instruction_limit = 1'000'000'000U;
+            constexpr std::size_t rpx_instruction_limit = 5'000'000'000ULL;
             constexpr std::size_t progress_chunk_size = 1'000'000U;
             std::size_t total_steps = 0;
             auto guest_run_start = std::chrono::steady_clock::now();
