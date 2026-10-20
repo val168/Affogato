@@ -24372,6 +24372,45 @@ int main(int argc, char* argv[])
             std::cout << "Guest GPR3: 0x" << std::hex << core.state.gpr[3]
                       << "  GPR4: 0x" << core.state.gpr[4]
                       << "  GPR5: 0x" << core.state.gpr[5] << std::dec << '\n';
+            bool has_gx2_calls = false;
+            for (const auto& statistic : session_result.hle_call_statistics)
+            {
+                if (statistic.name.starts_with("gx2::") ||
+                    statistic.name.starts_with("coreinit::GX2"))
+                {
+                    if (!has_gx2_calls)
+                    {
+                        std::cout << "GX2 HLE calls:\n";
+                        has_gx2_calls = true;
+                    }
+                    std::cout << "  " << statistic.name << ": "
+                              << statistic.calls << '\n';
+                }
+            }
+            if (core.gx2.tv_scan_buffer_configured)
+            {
+                std::cout << "GX2 TV scan buffer: guest=0x" << std::hex
+                          << core.gx2.tv_scan_buffer_address << " size=0x"
+                          << core.gx2.tv_scan_buffer_size << std::dec << " mode="
+                          << core.gx2.tv_render_mode << " format="
+                          << core.gx2.tv_surface_format << " buffering="
+                          << core.gx2.tv_buffering_mode << " extent="
+                          << core.gx2.tv_scan_width << 'x' << core.gx2.tv_scan_height
+                          << '\n';
+            }
+            if (core.gx2.drc_scan_buffer_configured)
+            {
+                std::cout << "GX2 DRC scan buffer: guest=0x" << std::hex
+                          << core.gx2.drc_scan_buffer_address << " size=0x"
+                          << core.gx2.drc_scan_buffer_size << std::dec << " mode="
+                          << core.gx2.drc_render_mode << " format="
+                          << core.gx2.drc_surface_format << " buffering="
+                          << core.gx2.drc_buffering_mode << " extent="
+                          << core.gx2.drc_scan_width << 'x' << core.gx2.drc_scan_height
+                          << " pitch=" << core.gx2.drc_scan_pitch << '\n';
+            }
+            std::cout << "GX2 pending context-register commands: "
+                      << core.gx2.pending_commands.size() << '\n';
             if (recompiler_requested)
             {
                 const auto& stats = session_result.recompiler_statistics;
