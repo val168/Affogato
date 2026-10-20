@@ -60,7 +60,7 @@ EmulatorRunResult Emulator::run(std::size_t max_steps, ExecutionMode mode)
         ? recompiler_.run(core_, max_steps)
         : core_.run(max_steps);
     return {loaded_image_, std::move(execution), core_.state.gpr[3], mode,
-            recompiler_.statistics()};
+            recompiler_.statistics(), core_.hle.call_statistics_snapshot()};
 }
 
 }

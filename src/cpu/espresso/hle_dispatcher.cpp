@@ -136,6 +136,7 @@ HleDispatchResult HleDispatcher::dispatch(EspressoCore& core, std::uint32_t addr
     }
 
     const BoundImport& binding = imported->second;
+    ++call_counts_[binding.name];
     if (!binding.handler)
     {
         last_unimplemented_call_ = binding.name.first + "::" + binding.name.second;
@@ -147,6 +148,17 @@ HleDispatchResult HleDispatcher::dispatch(EspressoCore& core, std::uint32_t addr
     core.state.cia = return_address;
     last_unimplemented_call_.clear();
     return HleDispatchResult::executed;
+}
+
+std::vector<HleCallStatistic> HleDispatcher::call_statistics_snapshot() const
+{
+    std::vector<HleCallStatistic> result;
+    result.reserve(call_counts_.size());
+    for (const auto& [name, calls] : call_counts_)
+    {
+        result.push_back({name.first + "::" + name.second, calls});
+    }
+    return result;
 }
 
 }

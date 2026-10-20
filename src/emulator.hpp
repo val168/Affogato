@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <span>
+#include <vector>
 
 namespace affogato
 {
@@ -24,6 +25,7 @@ struct EmulatorRunResult
     std::uint32_t gpr3{};
     ExecutionMode mode{ExecutionMode::interpreter};
     cpu::espresso::RecompilerStatistics recompiler_statistics{};
+    std::vector<cpu::espresso::HleCallStatistic> hle_call_statistics;
 };
 
 class Emulator

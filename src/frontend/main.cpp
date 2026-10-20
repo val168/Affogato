@@ -276,6 +276,19 @@ std::string format_result(const affogato::EmulatorRunResult& result)
     {
         text << "\nReturned value observed in r3: 42";
     }
+    bool has_gx2_calls = false;
+    for (const auto& statistic : result.hle_call_statistics)
+    {
+        if (statistic.name.starts_with("gx2::") || statistic.name.starts_with("coreinit::GX2"))
+        {
+            if (!has_gx2_calls)
+            {
+                text << "\nGX2 HLE calls:";
+                has_gx2_calls = true;
+            }
+            text << "\n  " << statistic.name << ": " << statistic.calls;
+        }
+    }
     return text.str();
 }
 
@@ -305,6 +318,15 @@ std::string format_progress(
              << "\nCompiled blocks: " << result.recompiler_statistics.compiled_blocks
              << "\nBlock-cache hits: " << result.recompiler_statistics.cache_hits;
     }
+    std::uint64_t gx2_call_total = 0U;
+    for (const auto& statistic : result.hle_call_statistics)
+    {
+        if (statistic.name.starts_with("gx2::") || statistic.name.starts_with("coreinit::GX2"))
+        {
+            gx2_call_total += statistic.calls;
+        }
+    }
+    text << "\nGX2 HLE calls observed: " << gx2_call_total;
     const std::string history =
         affogato::cpu::espresso::format_instruction_history(result.execution);
     if (!history.empty()) text << "\nRecent instruction trace:\n" << history;

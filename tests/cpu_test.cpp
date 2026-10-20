@@ -10657,6 +10657,33 @@ void hle_dispatch_tests()
     thread_core.state.gpr[4] = 0xFFFFFFFFU;
     assert(thread_core.step() == StepResult::executed);
     assert(thread_core.memory.read32_be(thread_address + 0x5BCU) == thread_type_before);
+
+    const auto hle_calls = thread_core.hle.call_statistics_snapshot();
+    const auto call_count = [&hle_calls](std::string_view name)
+    {
+        const auto found = std::ranges::find_if(hle_calls, [name](const auto& statistic)
+        {
+            return statistic.name == name;
+        });
+        return found == hle_calls.end() ? 0U : found->calls;
+    };
+    assert(call_count("coreinit::OSGetCurrentThread") == 2U);
+    assert(call_count("coreinit::OSSetThreadSpecific") == 2U);
+    assert(call_count("coreinit::OSGetThreadSpecific") == 3U);
+
+    const std::uint32_t unknown_gx2_import =
+        thread_core.hle.bind_import("gx2", "GX2UnimplementedForStatisticsTest");
+    thread_core.state.cia = unknown_gx2_import;
+    thread_core.state.lr = 0x7CU;
+    assert(thread_core.step() == StepResult::unimplemented_hle_call);
+    const auto calls_after_unimplemented = thread_core.hle.call_statistics_snapshot();
+    const auto unimplemented_count = std::ranges::find_if(
+        calls_after_unimplemented, [](const auto& statistic)
+        {
+            return statistic.name == "gx2::GX2UnimplementedForStatisticsTest";
+        });
+    assert(unimplemented_count != calls_after_unimplemented.end());
+    assert(unimplemented_count->calls == 1U);
 }
 
 void nn_olv_hle_tests()

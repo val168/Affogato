@@ -7,6 +7,7 @@
 #include <stdexcept>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace affogato::cpu::espresso
 {
@@ -25,6 +26,12 @@ enum class HleDispatchResult
     not_hle,
     executed,
     unimplemented,
+};
+
+struct HleCallStatistic
+{
+    std::string name;
+    std::uint64_t calls{};
 };
 
 class HleDispatcher
@@ -54,6 +61,7 @@ public:
         const std::string& library,
         const std::string& symbol) const;
     [[nodiscard]] HleDispatchResult dispatch(EspressoCore& core, std::uint32_t address);
+    [[nodiscard]] std::vector<HleCallStatistic> call_statistics_snapshot() const;
 
     [[nodiscard]] const std::string& last_unimplemented_call() const noexcept
     {
@@ -81,6 +89,7 @@ private:
     std::map<ImportName, std::uint32_t> addresses_;
     std::map<ImportName, std::uint32_t> data_addresses_;
     std::map<std::uint32_t, BoundImport> bound_imports_;
+    std::map<ImportName, std::uint64_t> call_counts_;
     std::uint32_t next_import_address_{first_import_address};
     std::uint32_t next_data_address_{first_data_address};
     std::string last_unimplemented_call_;
