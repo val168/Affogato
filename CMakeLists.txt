@@ -2,6 +2,10 @@ cmake_minimum_required(VERSION 3.25)
 
 project(Affogato LANGUAGES CXX)
 
+# GLFW is built from source with the same MinGW toolchain as Affogato. It is
+# used by the graphics frontend for Vulkan-capable windows and surfaces.
+enable_language(C)
+
 include(CTest)
 include(FetchContent)
 
@@ -51,6 +55,17 @@ FetchContent_Declare(asmjit
 )
 FetchContent_MakeAvailable(asmjit)
 
+set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(GLFW_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(GLFW_BUILD_DOCS OFF CACHE BOOL "" FORCE)
+set(GLFW_INSTALL OFF CACHE BOOL "" FORCE)
+FetchContent_Declare(glfw
+    GIT_REPOSITORY https://github.com/glfw/glfw.git
+    GIT_TAG 3.5.1
+    GIT_SHALLOW TRUE
+)
+FetchContent_MakeAvailable(glfw)
+
 target_include_directories(affogato_cpu PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
@@ -99,7 +114,11 @@ target_include_directories(affogato_frontend PRIVATE
     third_party/imgui
     third_party/imgui/backends
 )
-target_link_libraries(affogato_frontend PRIVATE affogato_cpu SDL3::SDL3-static)
+target_link_libraries(affogato_frontend PRIVATE
+    affogato_cpu
+    SDL3::SDL3-static
+    glfw
+)
 set_target_properties(affogato_frontend PROPERTIES
     OUTPUT_NAME "AffogatoFrontend"
     CXX_STANDARD 23
