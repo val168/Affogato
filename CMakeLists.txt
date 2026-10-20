@@ -9,6 +9,8 @@ enable_language(C)
 include(CTest)
 include(FetchContent)
 
+find_package(Vulkan 1.3 REQUIRED)
+
 if(NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
     message(FATAL_ERROR "Affogato currently requires a 64-bit host.")
 endif()
@@ -118,6 +120,7 @@ target_link_libraries(affogato_frontend PRIVATE
     affogato_cpu
     SDL3::SDL3-static
     glfw
+    Vulkan::Vulkan
 )
 set_target_properties(affogato_frontend PROPERTIES
     OUTPUT_NAME "AffogatoFrontend"
