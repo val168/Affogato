@@ -107,10 +107,14 @@ set_target_properties(affogato_frontend PROPERTIES
     CXX_EXTENSIONS NO
 )
 
+# Keep Debug symbols and assertions, but optimize the CPU execution library.
+# Without this, even the recompiler's C++ dispatch and interpreter fallbacks
+# run at -O0 and dominate time spent executing generated guest code.
 if(MSVC)
     target_compile_options(affogato_cpu PRIVATE
         /W4
         /permissive-
+        $<$<CONFIG:Debug>:/O2>
     )
     target_compile_options(affogato PRIVATE
         /W4
@@ -125,6 +129,7 @@ else()
         -Wall
         -Wextra
         -Wpedantic
+        $<$<CONFIG:Debug>:-O2>
     )
     target_compile_options(affogato PRIVATE
         -Wall
