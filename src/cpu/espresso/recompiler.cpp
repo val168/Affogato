@@ -35,10 +35,15 @@ struct NativeExecutionContext
 {
     GuestMemory* memory{};
     std::array<NativeMemoryRecord, 64> memory_records{};
+    std::uint64_t memory_access_calls{};
     bool failed{};
     bool guest_memory_fault{};
     std::exception_ptr exception{};
     std::uint32_t fault_cia{};
+    std::uint32_t failed_address{};
+    std::uint32_t failed_width{};
+    std::uint32_t failed_flags{};
+    std::uint32_t failed_instruction_index{};
 };
 
 static_assert(std::is_standard_layout_v<NativeExecutionContext>);
@@ -55,6 +60,16 @@ extern "C" std::uint32_t native_memory_access(
 {
     try
     {
+        ++context->memory_access_calls;
+        if (instruction_index >= context->memory_records.size())
+        {
+            context->failed = true;
+            context->failed_address = address;
+            context->failed_width = width;
+            context->failed_flags = flags;
+            context->failed_instruction_index = instruction_index;
+            return 0U;
+        }
         NativeMemoryRecord& record = context->memory_records[instruction_index];
         record.address = address;
         record.indexed = (flags & 4U) != 0U;
@@ -66,7 +81,13 @@ extern "C" std::uint32_t native_memory_access(
             case 1: context->memory->write8(address, static_cast<std::uint8_t>(value)); break;
             case 2: context->memory->write16_be(address, static_cast<std::uint16_t>(value)); break;
             case 4: context->memory->write32_be(address, value); break;
-            default: context->failed = true; return 0;
+            default:
+                context->failed = true;
+                context->failed_address = address;
+                context->failed_width = width;
+                context->failed_flags = flags;
+                context->failed_instruction_index = instruction_index;
+                return 0U;
             }
             return 0;
         }
@@ -77,7 +98,13 @@ extern "C" std::uint32_t native_memory_access(
         case 1: loaded = context->memory->read8(address); break;
         case 2: loaded = context->memory->read16_be(address); break;
         case 4: loaded = context->memory->read32_be(address); break;
-        default: context->failed = true; return 0;
+        default:
+            context->failed = true;
+            context->failed_address = address;
+            context->failed_width = width;
+            context->failed_flags = flags;
+            context->failed_instruction_index = instruction_index;
+            return 0U;
         }
         if ((flags & 2U) != 0U)
         {
@@ -94,6 +121,10 @@ extern "C" std::uint32_t native_memory_access(
     catch (...)
     {
         context->failed = true;
+        context->failed_address = address;
+        context->failed_width = width;
+        context->failed_flags = flags;
+        context->failed_instruction_index = instruction_index;
         context->exception = std::current_exception();
         try
         {
@@ -295,9 +326,7 @@ struct BlockCode
 
 [[nodiscard]] InstructionHistoryEntry native_history(
     const DecodedInstruction& insn,
-    std::uint32_t cia,
-    const CpuState& before,
-    const CpuState& after)
+    std::uint32_t cia)
 {
     InstructionHistoryEntry entry{};
     entry.cia = cia;
@@ -309,8 +338,6 @@ struct BlockCode
     // Native blocks may contain dependencies between guest instructions. Until
     // per-instruction snapshots are emitted into the JIT context, retain the
     // exact native trace identity without reporting potentially stale values.
-    static_cast<void>(before);
-    static_cast<void>(after);
     if (insn.opcode == Opcode::addi || insn.opcode == Opcode::addis ||
         insn.opcode == Opcode::ori || insn.opcode == Opcode::or_immediate_shifted ||
         insn.opcode == Opcode::xor_immediate ||
@@ -334,12 +361,44 @@ struct Recompiler::Impl
     {
         BlockCode block;
         const GuestMemory* memory_owner{};
-        std::uint64_t memory_write_generation{};
+        std::uint32_t first_code_page{};
+        std::uint32_t second_code_page{};
+        std::uint64_t first_page_write_generation{};
+        std::uint64_t second_page_write_generation{};
+        bool spans_two_pages{};
     };
 
     asmjit::JitRuntime runtime;
     std::unordered_map<std::uint32_t, CacheEntry> cache;
+    CacheEntry* last_cache_entry{};
+    std::uint32_t last_cache_address{};
     RecompilerStatistics stats{};
+
+    static void capture_code_page_generations(
+        CacheEntry& entry, const GuestMemory& memory) noexcept
+    {
+        entry.first_code_page = entry.block.address >> 12U;
+        const std::uint32_t last_byte = entry.block.address +
+            static_cast<std::uint32_t>(entry.block.words.size() * sizeof(std::uint32_t) - 1U);
+        entry.second_code_page = last_byte >> 12U;
+        entry.spans_two_pages = entry.second_code_page != entry.first_code_page;
+        entry.first_page_write_generation = memory.page_write_generation(
+            entry.first_code_page << 12U);
+        entry.second_page_write_generation = entry.spans_two_pages
+            ? memory.page_write_generation(entry.second_code_page << 12U)
+            : 0U;
+        entry.memory_owner = &memory;
+    }
+
+    [[nodiscard]] static bool code_page_generations_match(
+        const CacheEntry& entry, const GuestMemory& memory) noexcept
+    {
+        return entry.first_page_write_generation == memory.page_write_generation(
+                   entry.first_code_page << 12U) &&
+            (!entry.spans_two_pages ||
+                entry.second_page_write_generation == memory.page_write_generation(
+                    entry.second_code_page << 12U));
+    }
 
     ~Impl()
     {
@@ -348,6 +407,8 @@ struct Recompiler::Impl
 
     void clear() noexcept
     {
+        last_cache_entry = nullptr;
+        last_cache_address = 0U;
         for (auto& [address, entry] : cache)
         {
             static_cast<void>(address);
@@ -381,6 +442,38 @@ struct Recompiler::Impl
         function->set_arg(0, state);
         function->set_arg(1, context);
 
+        using namespace asmjit;
+        std::array<x86::Gp, 32> guest_gprs{};
+        std::array<bool, 32> guest_gpr_initialized{};
+        const auto read_guest_gpr = [&](std::uint8_t reg) -> x86::Gp {
+            if (!guest_gpr_initialized[reg])
+            {
+                guest_gprs[reg] = compiler.new_gp32("guest_gpr");
+                compiler.mov(guest_gprs[reg], x86::dword_ptr(
+                    state, static_cast<std::int32_t>(gpr_offset(reg))));
+                guest_gpr_initialized[reg] = true;
+            }
+            return guest_gprs[reg];
+        };
+        const auto write_guest_gpr = [&](std::uint8_t reg, x86::Gp value) {
+            if (!guest_gpr_initialized[reg])
+            {
+                guest_gprs[reg] = compiler.new_gp32("guest_gpr");
+                guest_gpr_initialized[reg] = true;
+            }
+            compiler.mov(guest_gprs[reg], value);
+        };
+        const auto flush_guest_gprs = [&]() {
+            for (std::uint8_t reg = 0; reg < guest_gprs.size(); ++reg)
+            {
+                if (guest_gpr_initialized[reg])
+                {
+                    compiler.mov(x86::dword_ptr(
+                        state, static_cast<std::int32_t>(gpr_offset(reg))), guest_gprs[reg]);
+                }
+            }
+        };
+
         for (std::size_t index = 0; index < block.instructions.size(); ++index)
         {
             const DecodedInstruction& insn = block.instructions[index];
@@ -390,6 +483,12 @@ struct Recompiler::Impl
             case Opcode::addi:
             case Opcode::addis:
             {
+                if (insn.base != 0U && insn.destination == insn.base)
+                {
+                    compiler.add(read_guest_gpr(insn.destination),
+                                 imm(immediate_value(insn)));
+                    break;
+                }
                 x86::Gp value = compiler.new_gp32("value");
                 if (insn.base == 0U)
                 {
@@ -397,12 +496,10 @@ struct Recompiler::Impl
                 }
                 else
                 {
-                    compiler.mov(value, x86::dword_ptr(
-                        state, static_cast<std::int32_t>(gpr_offset(insn.base))));
+                    compiler.mov(value, read_guest_gpr(insn.base));
                 }
                 compiler.add(value, imm(immediate_value(insn)));
-                compiler.mov(x86::dword_ptr(
-                    state, static_cast<std::int32_t>(gpr_offset(insn.destination))), value);
+                write_guest_gpr(insn.destination, value);
                 break;
             }
             case Opcode::ori:
@@ -410,15 +507,17 @@ struct Recompiler::Impl
             case Opcode::xor_immediate:
             case Opcode::xor_immediate_shifted:
             {
-                x86::Gp value = compiler.new_gp32("value");
-                compiler.mov(value, x86::dword_ptr(
-                    state, static_cast<std::int32_t>(gpr_offset(insn.source))));
+                x86::Gp value = read_guest_gpr(insn.source);
+                if (insn.destination != insn.source)
+                {
+                    value = compiler.new_gp32("value");
+                    compiler.mov(value, read_guest_gpr(insn.source));
+                }
                 if (insn.opcode == Opcode::ori || insn.opcode == Opcode::or_immediate_shifted)
                     compiler.or_(value, imm(immediate_value(insn)));
                 else
                     compiler.xor_(value, imm(immediate_value(insn)));
-                compiler.mov(x86::dword_ptr(
-                    state, static_cast<std::int32_t>(gpr_offset(insn.destination))), value);
+                write_guest_gpr(insn.destination, value);
                 break;
             }
             case Opcode::add:
@@ -428,22 +527,43 @@ struct Recompiler::Impl
             case Opcode::bitwise_xor:
             {
                 x86::Gp lhs = compiler.new_gp32("lhs");
-                x86::Gp rhs = compiler.new_gp32("rhs");
-                compiler.mov(lhs, x86::dword_ptr(
-                    state, static_cast<std::int32_t>(gpr_offset(insn.base))));
-                compiler.mov(rhs, x86::dword_ptr(
-                    state, static_cast<std::int32_t>(gpr_offset(insn.source))));
-                if (insn.opcode == Opcode::add) compiler.add(lhs, rhs);
+                x86::Gp source_a = read_guest_gpr(insn.base);
+                x86::Gp source_b = read_guest_gpr(insn.source);
+                if (insn.opcode == Opcode::add || insn.opcode == Opcode::bitwise_or ||
+                    insn.opcode == Opcode::bitwise_and || insn.opcode == Opcode::bitwise_xor)
+                {
+                    if (insn.destination == insn.base)
+                    {
+                        lhs = source_a;
+                    }
+                    else if (insn.destination == insn.source)
+                    {
+                        lhs = source_b;
+                    }
+                    else
+                    {
+                        compiler.mov(lhs, source_a);
+                    }
+                    if (insn.opcode == Opcode::add) compiler.add(lhs, source_b);
+                    else if (insn.opcode == Opcode::bitwise_or) compiler.or_(lhs, source_b);
+                    else if (insn.opcode == Opcode::bitwise_and) compiler.and_(lhs, source_b);
+                    else compiler.xor_(lhs, source_b);
+                    write_guest_gpr(insn.destination, lhs);
+                }
                 else if (insn.opcode == Opcode::subtract_from)
                 {
-                    compiler.sub(rhs, lhs);
-                    compiler.mov(lhs, rhs);
+                    if (insn.destination == insn.source)
+                    {
+                        compiler.sub(source_b, source_a);
+                        write_guest_gpr(insn.destination, source_b);
+                    }
+                    else
+                    {
+                        compiler.mov(lhs, source_b);
+                        compiler.sub(lhs, source_a);
+                        write_guest_gpr(insn.destination, lhs);
+                    }
                 }
-                else if (insn.opcode == Opcode::bitwise_or) compiler.or_(lhs, rhs);
-                else if (insn.opcode == Opcode::bitwise_and) compiler.and_(lhs, rhs);
-                else compiler.xor_(lhs, rhs);
-                compiler.mov(x86::dword_ptr(
-                    state, static_cast<std::int32_t>(gpr_offset(insn.destination))), lhs);
                 break;
             }
             case Opcode::branch:
@@ -556,14 +676,12 @@ struct Recompiler::Impl
                     x86::Gp value = compiler.new_gp32("special");
                     compiler.mov(value, x86::dword_ptr(
                         state, static_cast<std::int32_t>(special_offset)));
-                    compiler.mov(x86::dword_ptr(
-                        state, static_cast<std::int32_t>(gpr_offset(insn.destination))), value);
+                    write_guest_gpr(insn.destination, value);
                 }
                 else
                 {
                     x86::Gp value = compiler.new_gp32("gpr");
-                    compiler.mov(value, x86::dword_ptr(
-                        state, static_cast<std::int32_t>(gpr_offset(insn.destination))));
+                    compiler.mov(value, read_guest_gpr(insn.destination));
                     compiler.mov(x86::dword_ptr(
                         state, static_cast<std::int32_t>(special_offset)), value);
                 }
@@ -602,16 +720,14 @@ struct Recompiler::Impl
                 }
                 else
                 {
-                    compiler.mov(address, x86::dword_ptr(
-                        state, static_cast<std::int32_t>(gpr_offset(insn.base))));
+                    compiler.mov(address, read_guest_gpr(insn.base));
                     compiler.mov(x86::dword_ptr(context, static_cast<std::int32_t>(
                         record_base + offsetof(NativeMemoryRecord, base_value))), address);
                 }
                 if (indexed)
                 {
                     x86::Gp index_value = compiler.new_gp32("index");
-                    compiler.mov(index_value, x86::dword_ptr(
-                        state, static_cast<std::int32_t>(gpr_offset(insn.source))));
+                    compiler.mov(index_value, read_guest_gpr(insn.source));
                     compiler.mov(x86::dword_ptr(context, static_cast<std::int32_t>(
                         record_base + offsetof(NativeMemoryRecord, index_value))), index_value);
                     compiler.add(address, index_value);
@@ -624,8 +740,7 @@ struct Recompiler::Impl
                 x86::Gp stored_value = compiler.new_gp32("stored");
                 if (store)
                 {
-                    compiler.mov(stored_value, x86::dword_ptr(
-                        state, static_cast<std::int32_t>(gpr_offset(insn.destination))));
+                    compiler.mov(stored_value, read_guest_gpr(insn.destination));
                 }
                 else
                 {
@@ -660,23 +775,38 @@ struct Recompiler::Impl
                 compiler.jnz(fault);
                 if (!store)
                 {
-                    compiler.mov(x86::dword_ptr(state, static_cast<std::int32_t>(
-                        gpr_offset(insn.destination))), value);
+                    write_guest_gpr(insn.destination, value);
                 }
                 else
                 {
-                    // Any store may modify translated code. Exit to the C++
-                    // dispatcher so the next block validates its cached words.
+                    // A store can only make the instructions already decoded
+                    // into this native block stale if its byte range overlaps
+                    // this block. Other cached blocks validate guest page
+                    // generations when next looked up, so keep running here.
+                    Label store_is_safe = compiler.new_label();
+                    const std::uint32_t block_end = block.address +
+                        static_cast<std::uint32_t>(block.words.size() * sizeof(std::uint32_t));
+                    compiler.cmp(address, imm(block_end));
+                    compiler.jae(store_is_safe);
+                    x86::Gp store_end = compiler.new_gp32("store_end");
+                    compiler.mov(store_end, address);
+                    compiler.add(store_end, imm(width));
+                    compiler.cmp(store_end, imm(block.address));
+                    compiler.jbe(store_is_safe);
+
                     compiler.mov(x86::dword_ptr(state, static_cast<std::int32_t>(
                         offsetof(CpuState, cia))), imm(cia + 4U));
-                    x86::Gp executed = compiler.new_gp32("completed_store");
+                    flush_guest_gprs();
+                    x86::Gp executed = compiler.new_gp32("self_modifying_store");
                     compiler.mov(executed, imm(static_cast<std::uint32_t>(index + 1U)));
                     compiler.ret(executed);
+                    compiler.bind(store_is_safe);
                 }
                 compiler.jmp(completed);
                 compiler.bind(fault);
                 compiler.mov(x86::dword_ptr(state, static_cast<std::int32_t>(
                     offsetof(CpuState, cia))), imm(cia));
+                flush_guest_gprs();
                 x86::Gp executed = compiler.new_gp32("completed_count");
                 compiler.mov(executed, imm(static_cast<std::uint32_t>(index)));
                 compiler.ret(executed);
@@ -700,6 +830,7 @@ struct Recompiler::Impl
                             state, static_cast<std::int32_t>(offsetof(CpuState, cia))),
                          asmjit::imm(next));
         }
+        flush_guest_gprs();
         asmjit::x86::Gp return_value = compiler.new_gp32("step_count");
         compiler.mov(return_value, asmjit::imm(static_cast<std::uint32_t>(block.instructions.size())));
         compiler.ret(return_value);
@@ -758,6 +889,7 @@ RunResult Recompiler::run(EspressoCore& core, std::size_t max_steps)
 
     while (result.steps < max_steps)
     {
+        ++impl_->stats.dispatcher_entries;
         const std::uint32_t start = core.state.cia;
         if (start >= HleDispatcher::first_import_address &&
             start < HleDispatcher::import_address_limit)
@@ -831,87 +963,110 @@ RunResult Recompiler::run(EspressoCore& core, std::size_t max_steps)
         BlockCode* block = nullptr;
         try
         {
-            auto found = impl_->cache.find(start);
-            bool valid = found != impl_->cache.end();
-            if (valid && (found->second.memory_owner != &core.memory ||
-                    found->second.memory_write_generation != core.memory.write_generation()))
-            {
-                const auto& words = found->second.block.words;
-                for (std::size_t i = 0; i < words.size(); ++i)
-                {
-                    if (core.memory.read32_be(start + static_cast<std::uint32_t>(i * 4U)) != words[i])
-                    {
-                        valid = false;
-                        break;
-                    }
-                }
-                if (!valid)
-                {
-                    if (found->second.block.function != nullptr)
-                        static_cast<void>(impl_->runtime.release(found->second.block.function));
-                    impl_->cache.erase(found);
-                    found = impl_->cache.end();
-                }
-                else
-                {
-                    found->second.memory_owner = &core.memory;
-                    found->second.memory_write_generation =
-                        core.memory.write_generation();
-                }
-            }
-
-            if (valid)
+            if (impl_->last_cache_entry != nullptr &&
+                impl_->last_cache_address == start &&
+                impl_->last_cache_entry->memory_owner == &core.memory &&
+                Impl::code_page_generations_match(
+                    *impl_->last_cache_entry, core.memory))
             {
                 ++impl_->stats.cache_hits;
-                block = &found->second.block;
+                ++impl_->stats.last_block_cache_hits;
+                block = &impl_->last_cache_entry->block;
             }
             else
             {
-                BlockCode candidate{};
-                candidate.address = start;
-                constexpr std::size_t max_block_instructions = 64U;
-                for (std::size_t i = 0; i < max_block_instructions; ++i)
+                auto found = impl_->cache.find(start);
+                bool valid = found != impl_->cache.end();
+                if (valid && (found->second.memory_owner != &core.memory ||
+                        !Impl::code_page_generations_match(found->second, core.memory)))
                 {
-                    const std::uint32_t cia = start + static_cast<std::uint32_t>(i * 4U);
-                    if (cia >= HleDispatcher::first_import_address &&
-                        cia < HleDispatcher::import_address_limit)
+                    const auto& words = found->second.block.words;
+                    for (std::size_t i = 0; i < words.size(); ++i)
                     {
-                        break;
+                        if (core.memory.read32_be(
+                                start + static_cast<std::uint32_t>(i * 4U)) != words[i])
+                        {
+                            valid = false;
+                            break;
+                        }
                     }
-                    std::uint32_t word{};
-                    try
+                    if (!valid)
                     {
-                        word = core.memory.read32_be(cia);
+                        if (impl_->last_cache_entry == &found->second)
+                        {
+                            impl_->last_cache_entry = nullptr;
+                            impl_->last_cache_address = 0U;
+                        }
+                        if (found->second.block.function != nullptr)
+                            static_cast<void>(impl_->runtime.release(found->second.block.function));
+                        impl_->cache.erase(found);
+                        found = impl_->cache.end();
                     }
-                    catch (const GuestMemoryFault&)
+                    else
                     {
-                        if (candidate.instructions.empty()) throw;
-                        break;
-                    }
-                    const DecodedInstruction decoded = decode(word);
-                    if (!is_native_instruction(decoded))
-                    {
-                        break;
-                    }
-                    candidate.words.push_back(word);
-                    candidate.instructions.push_back(decoded);
-                    if (decoded.opcode == Opcode::branch ||
-                        decoded.opcode == Opcode::conditional_branch ||
-                        decoded.opcode == Opcode::conditional_branch_to_link_register ||
-                        decoded.opcode == Opcode::conditional_branch_to_count_register)
-                    {
-                        break;
+                        Impl::capture_code_page_generations(found->second, core.memory);
                     }
                 }
-                if (!candidate.instructions.empty() && impl_->compile(candidate))
+
+                if (valid)
                 {
-                    auto [inserted, did_insert] = impl_->cache.emplace(
-                        start, Impl::CacheEntry{
-                            std::move(candidate), &core.memory,
-                            core.memory.write_generation()});
-                    static_cast<void>(did_insert);
-                    ++impl_->stats.compiled_blocks;
-                    block = &inserted->second.block;
+                    ++impl_->stats.cache_hits;
+                    block = &found->second.block;
+                    impl_->last_cache_entry = &found->second;
+                    impl_->last_cache_address = start;
+                }
+                else
+                {
+                    ++impl_->stats.block_lookup_misses;
+                    BlockCode candidate{};
+                    candidate.address = start;
+                    constexpr std::size_t max_block_instructions = 64U;
+                    for (std::size_t i = 0; i < max_block_instructions; ++i)
+                    {
+                        const std::uint32_t cia = start + static_cast<std::uint32_t>(i * 4U);
+                        if (cia >= HleDispatcher::first_import_address &&
+                            cia < HleDispatcher::import_address_limit)
+                        {
+                            break;
+                        }
+                        std::uint32_t word{};
+                        try
+                        {
+                            word = core.memory.read32_be(cia);
+                        }
+                        catch (const GuestMemoryFault&)
+                        {
+                            if (candidate.instructions.empty()) throw;
+                            break;
+                        }
+                        const DecodedInstruction decoded = decode(word);
+                        if (!is_native_instruction(decoded))
+                        {
+                            break;
+                        }
+                        candidate.words.push_back(word);
+                        candidate.instructions.push_back(decoded);
+                        if (decoded.opcode == Opcode::branch ||
+                            decoded.opcode == Opcode::conditional_branch ||
+                            decoded.opcode == Opcode::conditional_branch_to_link_register ||
+                            decoded.opcode == Opcode::conditional_branch_to_count_register)
+                        {
+                            break;
+                        }
+                    }
+                    if (!candidate.instructions.empty() && impl_->compile(candidate))
+                    {
+                        Impl::CacheEntry entry{};
+                        entry.block = std::move(candidate);
+                        Impl::capture_code_page_generations(entry, core.memory);
+                        auto [inserted, did_insert] = impl_->cache.emplace(start,
+                                                                          std::move(entry));
+                        static_cast<void>(did_insert);
+                        ++impl_->stats.compiled_blocks;
+                        block = &inserted->second.block;
+                        impl_->last_cache_entry = &inserted->second;
+                        impl_->last_cache_address = start;
+                    }
                 }
             }
         }
@@ -996,19 +1151,24 @@ RunResult Recompiler::run(EspressoCore& core, std::size_t max_steps)
             continue;
         }
 
-        const CpuState before = core.state;
         NativeExecutionContext context{};
         context.memory = &core.memory;
         const std::uint32_t executed = block->function(&core.state, &context);
+        impl_->stats.memory_slow_path_calls += context.memory_access_calls;
         impl_->stats.native_instructions += executed;
-        for (std::size_t i = 0; i < executed; ++i)
+        // RunResult exposes only the most recent 32 history records. A native
+        // block can execute 64 instructions, so records older than the final
+        // history window are guaranteed to be overwritten before observation.
+        const std::size_t first_history_index = executed > instruction_history_capacity
+            ? static_cast<std::size_t>(executed) - instruction_history_capacity
+            : 0U;
+        for (std::size_t i = first_history_index; i < executed; ++i)
         {
             const std::uint32_t cia = block->address + static_cast<std::uint32_t>(i * 4U);
             const DecodedInstruction& insn = block->instructions[i];
             if (!is_memory_instruction(insn.opcode))
             {
-                core.append_instruction_history(native_history(
-                    insn, cia, before, core.state));
+                core.append_instruction_history(native_history(insn, cia));
                 continue;
             }
 
@@ -1077,7 +1237,18 @@ RunResult Recompiler::run(EspressoCore& core, std::size_t max_steps)
                 else if (context.exception)
                     std::rethrow_exception(context.exception);
                 result.reason = StopReason::hle_error;
-                result.detail = "native memory helper failed without an exception";
+                {
+                    std::ostringstream detail;
+                    detail << "native memory helper failed without an exception: address=0x"
+                           << std::hex << context.failed_address << " width=" << std::dec
+                           << context.failed_width << " flags=0x" << std::hex
+                           << context.failed_flags << " instruction_index=" << std::dec
+                           << context.failed_instruction_index << " calls="
+                           << context.memory_access_calls << " guest_memory_fault="
+                           << context.guest_memory_fault << " exception="
+                           << static_cast<bool>(context.exception);
+                    result.detail = detail.str();
+                }
                 include_history();
                 return result;
             }

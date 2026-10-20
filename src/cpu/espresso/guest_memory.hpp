@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <span>
 #include <stdexcept>
+#include <unordered_map>
 #include <vector>
 
 namespace affogato::cpu::espresso
@@ -39,7 +40,8 @@ class GuestMemory
 {
 public:
     explicit GuestMemory(std::size_t size)
-        : bytes_(size)
+        : bytes_(size),
+          flat_page_write_generations_((size + guest_page_size - 1U) / guest_page_size)
     {
     }
 
@@ -51,6 +53,18 @@ public:
     [[nodiscard]] std::uint64_t write_generation() const noexcept
     {
         return write_generation_;
+    }
+
+    [[nodiscard]] std::uint64_t page_write_generation(
+        std::uint32_t address) const noexcept
+    {
+        const std::uint32_t page = address / guest_page_size;
+        if (page < flat_page_write_generations_.size())
+        {
+            return flat_page_write_generations_[page];
+        }
+        const auto found = sparse_page_write_generations_.find(page);
+        return found == sparse_page_write_generations_.end() ? 0U : found->second;
     }
 
     void validate_write_range(std::uint32_t address, std::size_t width) const
@@ -79,6 +93,10 @@ public:
 
     [[nodiscard]] std::uint8_t read8(std::uint32_t address) const
     {
+        if (is_flat_range(address, 1U))
+        {
+            return bytes_[address];
+        }
         validate_access(address, 1, GuestMemoryAccess::read);
         return storage_from(address)[0];
     }
@@ -105,9 +123,17 @@ public:
 
     void write8(std::uint32_t address, std::uint8_t value)
     {
+        if (is_flat_range(address, 1U))
+        {
+            bytes_[address] = value;
+            ++write_generation_;
+            mark_page_written(address / guest_page_size);
+            return;
+        }
         validate_access(address, 1, GuestMemoryAccess::write);
         storage_from(address)[0] = value;
         ++write_generation_;
+        mark_page_written(address / guest_page_size);
     }
 
     void write_bytes(std::uint32_t address, std::span<const std::uint8_t> values)
@@ -124,7 +150,11 @@ public:
                         destination.begin());
             copied += count;
         }
-        if (!values.empty()) ++write_generation_;
+        if (!values.empty())
+        {
+            ++write_generation_;
+            mark_pages_written(address, values.size());
+        }
     }
 
     // Guest ranges must not overlap, matching memcpy's contract. Both ranges
@@ -177,6 +207,7 @@ public:
             filled += count;
         }
         ++write_generation_;
+        mark_pages_written(address, length);
     }
 
     void zero_fill(std::uint32_t address, std::size_t length)
@@ -186,59 +217,210 @@ public:
 
     [[nodiscard]] std::uint16_t read16_be(std::uint32_t address) const
     {
+        if (is_flat_range(address, sizeof(std::uint16_t)))
+        {
+            return static_cast<std::uint16_t>(
+                (static_cast<std::uint16_t>(bytes_[address]) << 8U) |
+                static_cast<std::uint16_t>(bytes_[address + 1U]));
+        }
         validate_access(address, sizeof(std::uint16_t), GuestMemoryAccess::read);
-        const auto high = static_cast<std::uint16_t>(read8(address));
-        const auto low = static_cast<std::uint16_t>(read8(address + 1U));
+        const auto first_segment = storage_from(address);
+        const auto high = static_cast<std::uint16_t>(first_segment[0]);
+        const auto low = static_cast<std::uint16_t>(
+            first_segment.size() >= sizeof(std::uint16_t)
+                ? first_segment[1]
+                : storage_from(address + 1U)[0]);
         return static_cast<std::uint16_t>((high << 8U) | low);
     }
 
     [[nodiscard]] std::uint32_t read32_be(std::uint32_t address) const
     {
+        if (is_flat_range(address, sizeof(std::uint32_t)))
+        {
+            return (static_cast<std::uint32_t>(bytes_[address]) << 24U) |
+                   (static_cast<std::uint32_t>(bytes_[address + 1U]) << 16U) |
+                   (static_cast<std::uint32_t>(bytes_[address + 2U]) << 8U) |
+                   static_cast<std::uint32_t>(bytes_[address + 3U]);
+        }
         validate_access(address, sizeof(std::uint32_t), GuestMemoryAccess::read);
-        return (static_cast<std::uint32_t>(read8(address)) << 24U) |
-               (static_cast<std::uint32_t>(read8(address + 1U)) << 16U) |
-               (static_cast<std::uint32_t>(read8(address + 2U)) << 8U) |
-               static_cast<std::uint32_t>(read8(address + 3U));
+        const auto first_segment = storage_from(address);
+        std::uint32_t value = 0U;
+        if (first_segment.size() >= sizeof(std::uint32_t))
+        {
+            for (std::size_t byte = 0; byte < sizeof(std::uint32_t); ++byte)
+            {
+                value = (value << 8U) | first_segment[byte];
+            }
+            return value;
+        }
+        for (std::uint32_t byte = 0; byte < sizeof(std::uint32_t); ++byte)
+        {
+            const auto segment = byte == 0U
+                ? first_segment
+                : storage_from(address + byte);
+            value = (value << 8U) | segment[0];
+        }
+        return value;
     }
 
     [[nodiscard]] std::uint64_t read64_be(std::uint32_t address) const
     {
+        if (is_flat_range(address, sizeof(std::uint64_t)))
+        {
+            std::uint64_t value = 0;
+            for (std::size_t byte = 0; byte < sizeof(std::uint64_t); ++byte)
+            {
+                value = (value << 8U) | bytes_[address + byte];
+            }
+            return value;
+        }
         validate_access(address, sizeof(std::uint64_t), GuestMemoryAccess::read);
+        const auto first_segment = storage_from(address);
         std::uint64_t value = 0;
+        if (first_segment.size() >= sizeof(std::uint64_t))
+        {
+            for (std::size_t byte = 0; byte < sizeof(std::uint64_t); ++byte)
+            {
+                value = (value << 8U) | first_segment[byte];
+            }
+            return value;
+        }
         for (std::uint32_t byte = 0; byte < sizeof(std::uint64_t); ++byte)
         {
-            value = (value << 8U) | read8(address + byte);
+            const auto segment = byte == 0U ? first_segment : storage_from(address + byte);
+            value = (value << 8U) | segment[0];
         }
         return value;
     }
 
     void write16_be(std::uint32_t address, std::uint16_t value)
     {
+        if (is_flat_range(address, sizeof(std::uint16_t)))
+        {
+            bytes_[address] = static_cast<std::uint8_t>(value >> 8U);
+            bytes_[address + 1U] = static_cast<std::uint8_t>(value);
+            ++write_generation_;
+            mark_pages_written(address, sizeof(std::uint16_t));
+            return;
+        }
         validate_access(address, sizeof(std::uint16_t), GuestMemoryAccess::write);
-        write8(address, static_cast<std::uint8_t>(value >> 8U));
-        write8(address + 1U, static_cast<std::uint8_t>(value));
+        auto first_segment = storage_from(address);
+        if (first_segment.size() >= sizeof(std::uint16_t))
+        {
+            first_segment[0] = static_cast<std::uint8_t>(value >> 8U);
+            first_segment[1] = static_cast<std::uint8_t>(value);
+        }
+        else
+        {
+            first_segment[0] = static_cast<std::uint8_t>(value >> 8U);
+            storage_from(address + 1U)[0] = static_cast<std::uint8_t>(value);
+        }
+        ++write_generation_;
+        mark_pages_written(address, sizeof(std::uint16_t));
     }
 
     void write32_be(std::uint32_t address, std::uint32_t value)
     {
+        if (is_flat_range(address, sizeof(std::uint32_t)))
+        {
+            bytes_[address] = static_cast<std::uint8_t>(value >> 24U);
+            bytes_[address + 1U] = static_cast<std::uint8_t>(value >> 16U);
+            bytes_[address + 2U] = static_cast<std::uint8_t>(value >> 8U);
+            bytes_[address + 3U] = static_cast<std::uint8_t>(value);
+            ++write_generation_;
+            mark_pages_written(address, sizeof(std::uint32_t));
+            return;
+        }
         validate_access(address, sizeof(std::uint32_t), GuestMemoryAccess::write);
-        write8(address, static_cast<std::uint8_t>(value >> 24U));
-        write8(address + 1U, static_cast<std::uint8_t>(value >> 16U));
-        write8(address + 2U, static_cast<std::uint8_t>(value >> 8U));
-        write8(address + 3U, static_cast<std::uint8_t>(value));
+        auto first_segment = storage_from(address);
+        if (first_segment.size() >= sizeof(std::uint32_t))
+        {
+            first_segment[0] = static_cast<std::uint8_t>(value >> 24U);
+            first_segment[1] = static_cast<std::uint8_t>(value >> 16U);
+            first_segment[2] = static_cast<std::uint8_t>(value >> 8U);
+            first_segment[3] = static_cast<std::uint8_t>(value);
+            ++write_generation_;
+            mark_pages_written(address, sizeof(std::uint32_t));
+            return;
+        }
+        for (std::uint32_t byte = 0; byte < sizeof(std::uint32_t); ++byte)
+        {
+            const auto segment = byte == 0U ? first_segment : storage_from(address + byte);
+            segment[0] = static_cast<std::uint8_t>(
+                value >> ((sizeof(std::uint32_t) - 1U - byte) * 8U));
+        }
+        ++write_generation_;
+        mark_pages_written(address, sizeof(std::uint32_t));
     }
 
     void write64_be(std::uint32_t address, std::uint64_t value)
     {
+        if (is_flat_range(address, sizeof(std::uint64_t)))
+        {
+            for (std::uint32_t byte = 0; byte < sizeof(std::uint64_t); ++byte)
+            {
+                const unsigned shift = static_cast<unsigned>((7U - byte) * 8U);
+                bytes_[address + byte] = static_cast<std::uint8_t>(value >> shift);
+            }
+            ++write_generation_;
+            mark_pages_written(address, sizeof(std::uint64_t));
+            return;
+        }
         validate_access(address, sizeof(std::uint64_t), GuestMemoryAccess::write);
+        auto first_segment = storage_from(address);
+        if (first_segment.size() >= sizeof(std::uint64_t))
+        {
+            for (std::uint32_t byte = 0; byte < sizeof(std::uint64_t); ++byte)
+            {
+                const unsigned shift = static_cast<unsigned>((7U - byte) * 8U);
+                first_segment[byte] = static_cast<std::uint8_t>(value >> shift);
+            }
+            ++write_generation_;
+            mark_pages_written(address, sizeof(std::uint64_t));
+            return;
+        }
         for (std::uint32_t byte = 0; byte < sizeof(std::uint64_t); ++byte)
         {
             const unsigned shift = static_cast<unsigned>((7U - byte) * 8U);
-            write8(address + byte, static_cast<std::uint8_t>(value >> shift));
+            const auto segment = byte == 0U ? first_segment : storage_from(address + byte);
+            segment[0] = static_cast<std::uint8_t>(value >> shift);
         }
+        ++write_generation_;
+        mark_pages_written(address, sizeof(std::uint64_t));
     }
 
 private:
+    static constexpr std::uint32_t guest_page_size = 0x1000U;
+
+    [[nodiscard]] bool is_flat_range(
+        std::uint32_t address, std::size_t width) const noexcept
+    {
+        return address <= bytes_.size() && width <= bytes_.size() - address;
+    }
+
+    void mark_page_written(std::uint32_t page)
+    {
+        if (page < flat_page_write_generations_.size())
+        {
+            ++flat_page_write_generations_[page];
+        }
+        else
+        {
+            ++sparse_page_write_generations_[page];
+        }
+    }
+
+    void mark_pages_written(std::uint32_t address, std::size_t width)
+    {
+        const std::uint64_t first_page = address / guest_page_size;
+        const std::uint64_t last_page =
+            (static_cast<std::uint64_t>(address) + width - 1U) / guest_page_size;
+        for (std::uint64_t page = first_page; page <= last_page; ++page)
+        {
+            mark_page_written(static_cast<std::uint32_t>(page));
+        }
+    }
+
     struct MappedRegion
     {
         std::uint32_t address{};
@@ -349,6 +531,8 @@ private:
 
     std::vector<std::uint8_t> bytes_;
     std::vector<MappedRegion> mapped_regions_;
+    std::vector<std::uint64_t> flat_page_write_generations_;
+    std::unordered_map<std::uint32_t, std::uint64_t> sparse_page_write_generations_;
     std::uint64_t write_generation_{};
 };
 

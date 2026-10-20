@@ -3,6 +3,7 @@
 
 #include <chrono>
 #include <cstdint>
+#include <iomanip>
 #include <iostream>
 
 namespace
@@ -26,6 +27,28 @@ void install_loop(affogato::cpu::espresso::EspressoCore& core)
     core.state.cia = guest_code;
 }
 
+void install_tiny_loop(affogato::cpu::espresso::EspressoCore& core)
+{
+    // addi r3,r3,1; b back to the addi. This deliberately makes every
+    // compiled block only two guest instructions to expose dispatch overhead.
+    core.memory.write32_be(guest_code, 0x38630001U);
+    core.memory.write32_be(guest_code + 4U,
+        (18U << 26U) | (static_cast<std::uint32_t>(-4) & 0x03FFFFFCU));
+    core.state.cia = guest_code;
+}
+
+void install_memory_loop(affogato::cpu::espresso::EspressoCore& core)
+{
+    // lwz r4,0(r5); addi r4,r4,1; stw r4,0(r5); b back to lwz.
+    core.memory.write32_be(guest_code, 0x80850000U);
+    core.memory.write32_be(guest_code + 4U, 0x38840001U);
+    core.memory.write32_be(guest_code + 8U, 0x90850000U);
+    core.memory.write32_be(guest_code + 12U,
+        (18U << 26U) | (static_cast<std::uint32_t>(-12) & 0x03FFFFFCU));
+    core.state.gpr[5] = 0x800U;
+    core.state.cia = guest_code;
+}
+
 }
 
 int main()
@@ -42,6 +65,7 @@ int main()
     compiled.state.gpr[3] = 0U;
     const std::uint64_t native_before = recompiler.statistics().native_instructions;
     const std::uint64_t fallbacks_before = recompiler.statistics().interpreter_fallbacks;
+    const RecompilerStatistics stats_before = recompiler.statistics();
 
     const auto interpreter_start = std::chrono::steady_clock::now();
     const RunResult interpreter_result = interpreted.run(benchmark_steps);
@@ -55,17 +79,122 @@ int main()
         interpreter_end - interpreter_start).count();
     const auto recompiler_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
         recompiler_end - recompiler_start).count();
+    const RecompilerStatistics& stats_after = recompiler.statistics();
     std::cout << "Guest steps: " << benchmark_steps
               << "\nInterpreter: " << interpreter_ms << " ms"
               << "\nRecompiler: " << recompiler_ms << " ms"
+              << "\nSpeedup: " << std::fixed << std::setprecision(2)
+              << static_cast<double>(interpreter_ms) /
+                    static_cast<double>(recompiler_ms)
+              << "x vs interpreter"
+              << "\nCompiled blocks: "
+              << stats_after.compiled_blocks - stats_before.compiled_blocks
+              << "\nDispatcher entries: "
+              << stats_after.dispatcher_entries - stats_before.dispatcher_entries
+              << "\nBlock cache hits: "
+              << stats_after.cache_hits - stats_before.cache_hits
+              << "\nLast-block cache hits: "
+              << stats_after.last_block_cache_hits - stats_before.last_block_cache_hits
+              << "\nBlock lookup misses: "
+              << stats_after.block_lookup_misses - stats_before.block_lookup_misses
+              << "\nDirect-link hits: "
+              << stats_after.direct_link_hits - stats_before.direct_link_hits
               << "\nNative guest instructions: "
               << recompiler.statistics().native_instructions - native_before
+              << "\nMemory slow-path calls: "
+              << stats_after.memory_slow_path_calls - stats_before.memory_slow_path_calls
               << "\nInterpreter fallbacks: "
               << recompiler.statistics().interpreter_fallbacks - fallbacks_before
               << "\nGPR3 interpreter/JIT: " << interpreted.state.gpr[3]
               << '/' << compiled.state.gpr[3] << '\n';
 
+    EspressoCore tiny_interpreted(0x1000U);
+    EspressoCore tiny_compiled(0x1000U);
+    install_tiny_loop(tiny_interpreted);
+    install_tiny_loop(tiny_compiled);
+    Recompiler tiny_recompiler;
+    static_cast<void>(tiny_recompiler.run(tiny_compiled, 2U));
+    tiny_compiled.state.cia = guest_code;
+    tiny_compiled.state.gpr[3] = 0U;
+    const RecompilerStatistics tiny_stats_before = tiny_recompiler.statistics();
+    const auto tiny_interpreter_start = std::chrono::steady_clock::now();
+    const RunResult tiny_interpreter_result = tiny_interpreted.run(benchmark_steps);
+    const auto tiny_interpreter_end = std::chrono::steady_clock::now();
+    const auto tiny_recompiler_start = std::chrono::steady_clock::now();
+    const RunResult tiny_recompiler_result = tiny_recompiler.run(tiny_compiled, benchmark_steps);
+    const auto tiny_recompiler_end = std::chrono::steady_clock::now();
+    const auto tiny_interpreter_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        tiny_interpreter_end - tiny_interpreter_start).count();
+    const auto tiny_recompiler_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        tiny_recompiler_end - tiny_recompiler_start).count();
+    const RecompilerStatistics& tiny_stats_after = tiny_recompiler.statistics();
+    std::cout << "\nDispatch-heavy workload (2 guest instructions/block):"
+              << "\nInterpreter: " << tiny_interpreter_ms << " ms"
+              << "\nRecompiler: " << tiny_recompiler_ms << " ms"
+              << "\nSpeedup: " << std::fixed << std::setprecision(2)
+              << static_cast<double>(tiny_interpreter_ms) /
+                    static_cast<double>(tiny_recompiler_ms)
+              << "x vs interpreter"
+              << "\nDispatcher entries: "
+              << tiny_stats_after.dispatcher_entries -
+                    tiny_stats_before.dispatcher_entries
+              << "\nLast-block cache hits: "
+              << tiny_stats_after.last_block_cache_hits -
+                    tiny_stats_before.last_block_cache_hits
+              << "\nNative guest instructions: "
+              << tiny_stats_after.native_instructions -
+                    tiny_stats_before.native_instructions
+              << "\nInterpreter fallbacks: "
+              << tiny_stats_after.interpreter_fallbacks -
+                    tiny_stats_before.interpreter_fallbacks
+              << "\nGPR3 interpreter/JIT: " << tiny_interpreted.state.gpr[3]
+              << '/' << tiny_compiled.state.gpr[3] << '\n';
+
+    EspressoCore memory_interpreted(0x1000U);
+    EspressoCore memory_compiled(0x1000U);
+    install_memory_loop(memory_interpreted);
+    install_memory_loop(memory_compiled);
+    Recompiler memory_recompiler;
+    static_cast<void>(memory_recompiler.run(memory_compiled, 4U));
+    memory_compiled.state.cia = guest_code;
+    memory_compiled.state.gpr[4] = 0U;
+    memory_compiled.memory.write32_be(0x800U, 0U);
+    const auto memory_interpreter_start = std::chrono::steady_clock::now();
+    const RunResult memory_interpreter_result = memory_interpreted.run(benchmark_steps);
+    const auto memory_interpreter_end = std::chrono::steady_clock::now();
+    const auto memory_recompiler_start = std::chrono::steady_clock::now();
+    const RunResult memory_recompiler_result =
+        memory_recompiler.run(memory_compiled, benchmark_steps);
+    const auto memory_recompiler_end = std::chrono::steady_clock::now();
+    const auto memory_interpreter_ms =
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            memory_interpreter_end - memory_interpreter_start).count();
+    const auto memory_recompiler_ms =
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            memory_recompiler_end - memory_recompiler_start).count();
+    std::cout << "\nMemory-heavy workload (lwz/addi/stw/branch loop):"
+              << "\nInterpreter: " << memory_interpreter_ms << " ms"
+              << "\nRecompiler: " << memory_recompiler_ms << " ms"
+              << "\nSpeedup: " << std::fixed << std::setprecision(2)
+              << static_cast<double>(memory_interpreter_ms) /
+                    static_cast<double>(memory_recompiler_ms)
+              << "x vs interpreter"
+              << "\nGuest memory result interpreter/JIT: "
+              << memory_interpreted.memory.read32_be(0x800U) << '/'
+              << memory_compiled.memory.read32_be(0x800U)
+              << "\nMemory slow-path calls: "
+              << memory_recompiler.statistics().memory_slow_path_calls
+              << "\nInterpreter fallbacks: "
+              << memory_recompiler.statistics().interpreter_fallbacks << '\n';
+
     return interpreter_result.steps == benchmark_steps &&
         recompiler_result.steps == benchmark_steps &&
-        interpreted.state.gpr[3] == compiled.state.gpr[3] ? 0 : 1;
+        interpreted.state.gpr[3] == compiled.state.gpr[3] &&
+        tiny_interpreter_result.steps == benchmark_steps &&
+        tiny_recompiler_result.steps == benchmark_steps &&
+        tiny_interpreted.state.gpr[3] == tiny_compiled.state.gpr[3] &&
+        memory_interpreter_result.steps == benchmark_steps &&
+        memory_recompiler_result.steps == benchmark_steps &&
+        memory_interpreted.memory.read32_be(0x800U) ==
+            memory_compiled.memory.read32_be(0x800U) ? 0 : 1;
 }

@@ -851,6 +851,22 @@ void guest_memory_tests()
     assert(memory.read8(5) == 0xCD);
     assert(memory.read16_be(4) == 0xABCDU);
 
+    GuestMemory page_versions(0x3000U);
+    const std::uint64_t code_page_before = page_versions.page_write_generation(0x100U);
+    const std::uint64_t unrelated_page_before = page_versions.page_write_generation(0x1100U);
+    page_versions.write8(0x100U, 0xAAU);
+    assert(page_versions.page_write_generation(0x100U) == code_page_before + 1U);
+    assert(page_versions.page_write_generation(0x1100U) == unrelated_page_before);
+    page_versions.write_bytes(0x0FFEU, std::array<std::uint8_t, 4>{1U, 2U, 3U, 4U});
+    assert(page_versions.page_write_generation(0x100U) == code_page_before + 2U);
+    assert(page_versions.page_write_generation(0x1100U) == unrelated_page_before + 1U);
+    page_versions.map_region(0xC0000000U, 0x2000U);
+    const std::uint64_t sparse_page_before =
+        page_versions.page_write_generation(0xC0000000U);
+    page_versions.write8(0xC0000000U, 0xBBU);
+    assert(page_versions.page_write_generation(0xC0000000U) == sparse_page_before + 1U);
+    assert(page_versions.page_write_generation(0xC0001000U) == 0U);
+
     memory.map_region(0xC0000000U, 0x20);
     memory.write32_be(0xC0000018U, 0x03F00024U);
     assert(memory.read32_be(0xC0000018U) == 0x03F00024U);
@@ -24193,12 +24209,51 @@ void function_call_and_stack_tests()
 
 int main(int argc, char* argv[])
 {
-    if (argc == 2)
+    bool recompiler_requested = false;
+    const char* rpx_path = nullptr;
+    std::size_t rpx_instruction_limit = 1'000'000'000U;
+    for (int argument = 1; argument < argc; ++argument)
     {
-        std::ifstream input(argv[1], std::ios::binary);
+        const std::string_view option(argv[argument]);
+        if (option == "--recompiler")
+        {
+            recompiler_requested = true;
+        }
+        else if (option == "--limit" && argument + 1 < argc)
+        {
+            try
+            {
+                rpx_instruction_limit = std::stoull(argv[++argument]);
+            }
+            catch (const std::exception&)
+            {
+                std::cerr << "invalid instruction limit\n";
+                return 2;
+            }
+        }
+        else if (rpx_path == nullptr)
+        {
+            rpx_path = argv[argument];
+        }
+        else
+        {
+            std::cerr << "usage: affogato_cpu_tests [--recompiler] [--limit N] <path-to-rpx>\n";
+            return 2;
+        }
+    }
+    const bool rpx_requested = rpx_path != nullptr;
+    if (argc > 1 && (!rpx_requested || rpx_instruction_limit == 0U))
+    {
+        std::cerr << "usage: affogato_cpu_tests [--recompiler] [--limit N] <path-to-rpx>\n";
+        return 2;
+    }
+
+    if (rpx_requested)
+    {
+        std::ifstream input(rpx_path, std::ios::binary);
         if (!input)
         {
-            std::cerr << "could not open RPX: " << argv[1] << '\n';
+            std::cerr << "could not open RPX: " << rpx_path << '\n';
             return 1;
         }
         const std::vector<char> file_bytes{
@@ -24207,7 +24262,6 @@ int main(int argc, char* argv[])
 
         try
         {
-            constexpr std::size_t rpx_instruction_limit = 1'000'000'000U;
             affogato::Emulator emulator;
             const auto image = emulator.load_rpx(file);
             std::cout << "Loaded RPX entry point 0x" << std::hex << image.entry_point
@@ -24244,7 +24298,10 @@ int main(int argc, char* argv[])
                           << alignment4_capacity << std::dec << '\n';
             }
             const bool nn_save_initialized_before_run = core.nn_save_initialized;
-            const auto session_result = emulator.run(rpx_instruction_limit);
+            const auto session_result = emulator.run(
+                rpx_instruction_limit,
+                recompiler_requested ? affogato::ExecutionMode::recompiler
+                                     : affogato::ExecutionMode::interpreter);
             const auto& execution = session_result.execution;
             if (foreground_heap != 0U && mem2_heap != 0U)
             {
@@ -24288,6 +24345,20 @@ int main(int argc, char* argv[])
             std::cout << "Guest GPR3: 0x" << std::hex << core.state.gpr[3]
                       << "  GPR4: 0x" << core.state.gpr[4]
                       << "  GPR5: 0x" << core.state.gpr[5] << std::dec << '\n';
+            if (recompiler_requested)
+            {
+                const auto& stats = session_result.recompiler_statistics;
+                std::cout << "Recompiler stats: compiled blocks=" << stats.compiled_blocks
+                          << " dispatcher entries=" << stats.dispatcher_entries
+                          << " cache hits=" << stats.cache_hits
+                          << " last-block hits=" << stats.last_block_cache_hits
+                          << " lookup misses=" << stats.block_lookup_misses
+                          << " direct-link hits=" << stats.direct_link_hits
+                          << " native instructions=" << stats.native_instructions
+                          << " memory slow-path calls=" << stats.memory_slow_path_calls
+                          << " interpreter fallbacks=" << stats.interpreter_fallbacks
+                          << '\n';
+            }
             std::cout << "nn_save initialized before execution: "
                       << (nn_save_initialized_before_run ? "true" : "false")
                       << "  after: "

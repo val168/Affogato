@@ -15,6 +15,11 @@ struct RecompilerStatistics
 {
     std::uint64_t compiled_blocks{};
     std::uint64_t cache_hits{};
+    std::uint64_t last_block_cache_hits{};
+    std::uint64_t block_lookup_misses{};
+    std::uint64_t dispatcher_entries{};
+    std::uint64_t direct_link_hits{};
+    std::uint64_t memory_slow_path_calls{};
     std::uint64_t native_instructions{};
     std::uint64_t interpreter_fallbacks{};
     std::unordered_map<std::uint16_t, std::uint64_t> fallbacks_by_opcode;

@@ -115,6 +115,41 @@ void recompiler_step_budget_test()
     assert(recompiler.statistics().interpreter_fallbacks == 2U);
 }
 
+void recompiler_recent_history_window_test()
+{
+    constexpr std::uint32_t start = 0x100U;
+    constexpr std::size_t instruction_count = 80U;
+    EspressoCore interpreted(0x1000U);
+    EspressoCore compiled(0x1000U);
+    for (std::size_t i = 0; i < instruction_count; ++i)
+    {
+        interpreted.memory.write32_be(
+            start + static_cast<std::uint32_t>(i * 4U), 0x38630001U);
+        compiled.memory.write32_be(
+            start + static_cast<std::uint32_t>(i * 4U), 0x38630001U);
+    }
+    interpreted.state.cia = start;
+    compiled.state.cia = start;
+
+    const RunResult oracle = interpreted.run(instruction_count);
+    Recompiler recompiler;
+    const RunResult actual = recompiler.run(compiled, instruction_count);
+
+    assert(actual.steps == oracle.steps);
+    assert(actual.cia == oracle.cia);
+    assert(compiled.state.gpr == interpreted.state.gpr);
+    assert(compiled.state.gpr[3] == instruction_count);
+    assert(actual.instruction_history.size() == instruction_history_capacity);
+    for (std::size_t i = 0; i < instruction_history_capacity; ++i)
+    {
+        const std::uint32_t expected_cia = start + static_cast<std::uint32_t>(
+            (instruction_count - instruction_history_capacity + i) * 4U);
+        assert(actual.instruction_history[i].cia == expected_cia);
+        assert(actual.instruction_history[i].opcode_name == "addi");
+        assert(actual.instruction_history[i].completed);
+    }
+}
+
 void recompiler_branch_test()
 {
     EspressoCore core(0x1000U);
@@ -287,6 +322,39 @@ void recompiler_memory_tests()
     assert(indexed_compiled.state.gpr[3] == 0xFEDCBA98U);
     assert(indexed_compiled.state.gpr[6] == 0x000000FEU);
     assert(indexed_compiled.state.gpr[7] == 0xFFFF8001U);
+
+    // Memory instructions must observe values still resident in the block-local
+    // guest-register cache, including a freshly computed base and store source.
+    EspressoCore memory_dependencies_interpreted(0x1000U);
+    EspressoCore memory_dependencies_compiled(0x1000U);
+    const std::array<std::uint32_t, 4> memory_dependency_program{
+        0x38800200U, // addi r4,r0,0x200
+        0x80C40000U, // lwz r6,0(r4)
+        0x38A01234U, // addi r5,r0,0x1234
+        0x90A40004U, // stw r5,4(r4)
+    };
+    for (EspressoCore* core : {&memory_dependencies_interpreted,
+                               &memory_dependencies_compiled})
+    {
+        for (std::size_t i = 0; i < memory_dependency_program.size(); ++i)
+        {
+            core->memory.write32_be(
+                0x100U + static_cast<std::uint32_t>(i * 4U),
+                memory_dependency_program[i]);
+        }
+        core->memory.write32_be(0x200U, 0xABCDU);
+        core->state.cia = 0x100U;
+    }
+    const RunResult memory_dependency_oracle =
+        memory_dependencies_interpreted.run(memory_dependency_program.size());
+    Recompiler memory_dependency_recompiler;
+    const RunResult memory_dependency_actual = memory_dependency_recompiler.run(
+        memory_dependencies_compiled, memory_dependency_program.size());
+    assert(memory_dependency_actual.steps == memory_dependency_oracle.steps);
+    assert(memory_dependencies_compiled.state.gpr ==
+           memory_dependencies_interpreted.state.gpr);
+    assert(memory_dependencies_compiled.memory.read32_be(0x204U) == 0x1234U);
+    assert(memory_dependencies_compiled.state.gpr[6] == 0xABCDU);
 }
 
 void recompiler_memory_fault_test()
@@ -332,7 +400,7 @@ void recompiler_self_modifying_code_test()
     assert(recompiler.statistics().compiled_blocks == 2U);
 
     // A translated guest store can rewrite a block which was already cached.
-    // The store must exit native code before that block is entered again.
+    // The dispatcher must validate the changed code before it is entered again.
     EspressoCore guest_modified(0x1000U);
     guest_modified.memory.write32_be(0x100U, 0x90A40000U); // stw r5,0(r4)
     guest_modified.memory.write32_be(0x104U, 0x38600001U); // addi r3,r0,1
@@ -346,6 +414,23 @@ void recompiler_self_modifying_code_test()
     assert(guest_modified.state.cia == 0x104U);
     assert(guest_writer.run(guest_modified, 1U).steps == 1U);
     assert(guest_modified.state.gpr[3] == 2U);
+
+    // If a store rewrites a later instruction in the currently executing
+    // native block, it must exit before stale decoded instructions run.
+    EspressoCore intra_block_modified(0x1000U);
+    intra_block_modified.memory.write32_be(0x100U, 0x90A40000U); // stw r5,0(r4)
+    intra_block_modified.memory.write32_be(0x104U, 0x38600001U); // addi r3,r0,1
+    intra_block_modified.memory.write32_be(0x108U, 0x38C00001U); // addi r6,r0,1
+    intra_block_modified.state.gpr[4] = 0x108U;
+    intra_block_modified.state.gpr[5] = 0x38C00002U; // replace with addi r6,r0,2
+    intra_block_modified.state.cia = 0x100U;
+    Recompiler intra_block_writer;
+    const RunResult intra_block_result = intra_block_writer.run(
+        intra_block_modified, 3U);
+    assert(intra_block_result.steps == 3U);
+    assert(intra_block_modified.state.gpr[3] == 1U);
+    assert(intra_block_modified.state.gpr[6] == 2U);
+    assert(intra_block_modified.memory.read32_be(0x108U) == 0x38C00002U);
 
     guest_writer.clear_cache();
     assert(guest_writer.statistics().compiled_blocks == 0U);
@@ -444,6 +529,7 @@ int main()
     recompiler_differential_arithmetic_test();
     recompiler_logical_differential_test();
     recompiler_step_budget_test();
+    recompiler_recent_history_window_test();
     recompiler_branch_test();
     recompiler_conditional_branch_tests();
     recompiler_special_register_move_tests();
