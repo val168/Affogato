@@ -1,4 +1,5 @@
 #include "emulator.hpp"
+#include "gpu/vulkan/vulkan_renderer.hpp"
 
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_dialog.h>
@@ -551,6 +552,19 @@ int run_frontend()
     ImGui_ImplSDL3_InitForSDLRenderer(window, renderer);
     ImGui_ImplSDLRenderer3_Init(renderer);
 
+    current_stage = "Vulkan output initialization";
+    std::optional<affogato::gpu::vulkan::VulkanRenderer> vulkan_output;
+    try
+    {
+        vulkan_output.emplace();
+        std::cout << "Vulkan output device: " << vulkan_output->device_name() << '\n';
+    }
+    catch (const std::exception& error)
+    {
+        std::cerr << "Vulkan output unavailable; keeping the library frontend active: "
+                  << error.what() << '\n';
+    }
+
     current_stage = "loading saved game folders";
     char* preference_path = SDL_GetPrefPath("Affogato", "Affogato");
     const fs::path config_file = preference_path != nullptr
@@ -574,6 +588,11 @@ int run_frontend()
     bool done = false;
     while (!done)
     {
+        if (vulkan_output)
+        {
+            vulkan_output->poll_events();
+            if (vulkan_output->should_close()) done = true;
+        }
         SDL_Event event;
         while (SDL_PollEvent(&event))
         {
@@ -769,6 +788,12 @@ int run_frontend()
         SDL_RenderClear(renderer);
         ImGui_ImplSDLRenderer3_RenderDrawData(ImGui::GetDrawData(), renderer);
         SDL_RenderPresent(renderer);
+
+        if (vulkan_output)
+        {
+            current_stage = "presenting Vulkan output";
+            vulkan_output->render_frame();
+        }
     }
 
     current_stage = "saving game folders and shutting down";

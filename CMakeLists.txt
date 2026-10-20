@@ -105,6 +105,7 @@ add_subdirectory(third_party/SDL EXCLUDE_FROM_ALL)
 
 add_executable(affogato_frontend
     src/frontend/main.cpp
+    src/gpu/vulkan/vulkan_renderer.cpp
     third_party/imgui/imgui.cpp
     third_party/imgui/imgui_draw.cpp
     third_party/imgui/imgui_tables.cpp
