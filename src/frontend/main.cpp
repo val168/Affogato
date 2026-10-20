@@ -239,6 +239,14 @@ std::string format_result(const affogato::EmulatorRunResult& result)
          << "\nExecuted instructions: " << result.execution.steps
          << "\nStop CIA: 0x" << std::hex << std::uppercase << result.execution.cia
          << "\nGPR3: " << std::dec << result.gpr3;
+    if (result.mode == affogato::ExecutionMode::recompiler)
+    {
+        text << "\nExecution mode: experimental x86-64 recompiler"
+             << "\nNative instructions: " << result.recompiler_statistics.native_instructions
+             << "\nInterpreter fallbacks: " << result.recompiler_statistics.interpreter_fallbacks
+             << "\nCompiled blocks: " << result.recompiler_statistics.compiled_blocks
+             << "\nBlock-cache hits: " << result.recompiler_statistics.cache_hits;
+    }
     switch (result.execution.reason)
     {
     case StopReason::instruction_limit:
@@ -289,6 +297,13 @@ std::string format_progress(
          << "\nFile read: " << file_read_time.count() << " ms"
          << "\nRPX load: " << rpx_load_time.count() << " ms"
          << "\nGuest run so far: " << guest_run_time.count() << " ms";
+    if (result.mode == affogato::ExecutionMode::recompiler)
+    {
+        text << "\nNative instructions: " << result.recompiler_statistics.native_instructions
+             << "\nInterpreter fallbacks: " << result.recompiler_statistics.interpreter_fallbacks
+             << "\nCompiled blocks: " << result.recompiler_statistics.compiled_blocks
+             << "\nBlock-cache hits: " << result.recompiler_statistics.cache_hits;
+    }
     const std::string history =
         affogato::cpu::espresso::format_instruction_history(result.execution);
     if (!history.empty()) text << "\nRecent instruction trace:\n" << history;
@@ -302,7 +317,11 @@ struct WorkerResult
     std::atomic_bool running{};
 };
 
-void launch_game(const fs::path& path, WorkerResult& worker, std::jthread& thread)
+void launch_game(
+    const fs::path& path,
+    WorkerResult& worker,
+    std::jthread& thread,
+    affogato::ExecutionMode execution_mode)
 {
     if (worker.running.exchange(true))
     {
@@ -313,7 +332,7 @@ void launch_game(const fs::path& path, WorkerResult& worker, std::jthread& threa
         std::lock_guard lock(worker.mutex);
         worker.message = "Reading RPX " + path_utf8(path) + " ...";
     }
-    thread = std::jthread([path, &worker]
+    thread = std::jthread([path, &worker, execution_mode]
     {
         std::string message;
         try
@@ -363,7 +382,7 @@ void launch_game(const fs::path& path, WorkerResult& worker, std::jthread& threa
             {
                 const std::size_t chunk_size = std::min(
                     progress_chunk_size, rpx_instruction_limit - total_steps);
-                run_result = emulator.run(chunk_size);
+                run_result = emulator.run(chunk_size, execution_mode);
                 total_steps += run_result.execution.steps;
                 run_result.execution.steps = total_steps;
                 if (run_result.execution.reason !=
@@ -551,6 +570,7 @@ int run_frontend()
     WorkerResult worker;
     std::jthread launch_thread;
     bool grid_view = false;
+    bool use_recompiler = false;
     bool done = false;
     while (!done)
     {
@@ -667,7 +687,9 @@ int run_frontend()
                 {
                     selected_game = i;
                     if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
-                        launch_game(games[i].rpx_path, worker, launch_thread);
+                        launch_game(games[i].rpx_path, worker, launch_thread,
+                            use_recompiler ? affogato::ExecutionMode::recompiler
+                                           : affogato::ExecutionMode::interpreter);
                 }
                 ImGui::SameLine(260);
                 ImGui::TextDisabled("%s", path_utf8(games[i].rpx_path).c_str());
@@ -690,7 +712,9 @@ int run_frontend()
                     {
                         selected_game = i;
                         if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
-                            launch_game(games[i].rpx_path, worker, launch_thread);
+                        launch_game(games[i].rpx_path, worker, launch_thread,
+                            use_recompiler ? affogato::ExecutionMode::recompiler
+                                           : affogato::ExecutionMode::interpreter);
                     }
                     ImGui::TextWrapped("%s", path_utf8(games[i].rpx_path).c_str());
                     ImGui::EndGroup();
@@ -707,9 +731,15 @@ int run_frontend()
             ImGui::SameLine();
             const bool launch_in_progress = worker.running.load();
             ImGui::BeginDisabled(launch_in_progress);
-            if (ImGui::Button("Launch")) launch_game(games[*selected_game].rpx_path, worker, launch_thread);
+            if (ImGui::Button("Launch"))
+                launch_game(games[*selected_game].rpx_path, worker, launch_thread,
+                    use_recompiler ? affogato::ExecutionMode::recompiler
+                                   : affogato::ExecutionMode::interpreter);
             ImGui::EndDisabled();
         }
+        ImGui::BeginDisabled(worker.running.load());
+        ImGui::Checkbox("Use experimental x86-64 recompiler", &use_recompiler);
+        ImGui::EndDisabled();
         if (worker.running) ImGui::SameLine();
         if (worker.running) ImGui::Text("RPX loading / guest execution in progress...");
         ImGui::SeparatorText("Launch diagnostics");

@@ -3,6 +3,7 @@ cmake_minimum_required(VERSION 3.25)
 project(Affogato LANGUAGES CXX)
 
 include(CTest)
+include(FetchContent)
 
 if(NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
     message(FATAL_ERROR "Affogato currently requires a 64-bit host.")
@@ -33,16 +34,28 @@ add_library(affogato_cpu STATIC
     src/cpu/espresso/gx2_hle.cpp
     src/cpu/espresso/rpx_loader.cpp
     src/cpu/espresso/interpreter.cpp
+    src/cpu/espresso/recompiler.cpp
     src/cpu/espresso/nn_olv_hle.cpp
     src/cpu/espresso/nn_save_hle.cpp
     src/emulator.cpp
 )
 
+# Pin the JIT backend so local builds and CI use the same assembler/compiler
+# implementation. The interpreter remains available on every build.
+set(ASMJIT_NO_INSTALL ON CACHE BOOL "" FORCE)
+set(ASMJIT_STATIC ON CACHE BOOL "" FORCE)
+FetchContent_Declare(asmjit
+    GIT_REPOSITORY https://github.com/asmjit/asmjit.git
+    GIT_TAG 0464e1c8f1f43c861a0c73d4e59437fff255cdd9
+    GIT_SHALLOW FALSE
+)
+FetchContent_MakeAvailable(asmjit)
+
 target_include_directories(affogato_cpu PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 
-target_link_libraries(affogato_cpu PRIVATE ZLIB::ZLIBSTATIC)
+target_link_libraries(affogato_cpu PRIVATE ZLIB::ZLIBSTATIC asmjit::asmjit)
 
 set_target_properties(affogato_cpu PROPERTIES
     OUTPUT_NAME "Affogato"
@@ -147,14 +160,43 @@ if(BUILD_TESTING)
         target_compile_options(affogato_cpu_tests PRIVATE
             /W4
             /permissive-
+            /UNDEBUG
         )
     else()
         target_compile_options(affogato_cpu_tests PRIVATE
             -Wall
             -Wextra
             -Wpedantic
+            -UNDEBUG
         )
     endif()
 
     add_test(NAME affogato_cpu_tests COMMAND affogato_cpu_tests)
+
+    add_executable(affogato_recompiler_tests
+        tests/recompiler_test.cpp
+    )
+    target_link_libraries(affogato_recompiler_tests PRIVATE affogato_cpu)
+    set_target_properties(affogato_recompiler_tests PROPERTIES
+        CXX_STANDARD 23
+        CXX_STANDARD_REQUIRED YES
+        CXX_EXTENSIONS NO
+    )
+    if(MSVC)
+        target_compile_options(affogato_recompiler_tests PRIVATE /W4 /permissive- /UNDEBUG)
+    else()
+        target_compile_options(affogato_recompiler_tests PRIVATE
+            -Wall -Wextra -Wpedantic -UNDEBUG)
+    endif()
+    add_test(NAME affogato_recompiler_tests COMMAND affogato_recompiler_tests)
+
+    add_executable(affogato_recompiler_benchmark
+        tests/recompiler_benchmark.cpp
+    )
+    target_link_libraries(affogato_recompiler_benchmark PRIVATE affogato_cpu)
+    set_target_properties(affogato_recompiler_benchmark PROPERTIES
+        CXX_STANDARD 23
+        CXX_STANDARD_REQUIRED YES
+        CXX_EXTENSIONS NO
+    )
 endif()

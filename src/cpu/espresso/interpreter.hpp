@@ -322,6 +322,8 @@ public:
     std::uint32_t mem2_heap_region_end{};
 
 private:
+    friend class Recompiler;
+
     // Scoped approximation until Espresso instruction-cycle accounting exists.
     std::chrono::steady_clock::time_point timebase_origin_{
         std::chrono::steady_clock::now()};

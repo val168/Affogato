@@ -49,15 +49,18 @@ cpu::espresso::RpxLoadResult Emulator::load_rpx(std::span<const std::uint8_t> fi
     return loaded_image_;
 }
 
-EmulatorRunResult Emulator::run(std::size_t max_steps)
+EmulatorRunResult Emulator::run(std::size_t max_steps, ExecutionMode mode)
 {
     if (!has_loaded_image_)
     {
         throw std::logic_error("load an RPX before running the Emulator session");
     }
 
-    cpu::espresso::RunResult execution = core_.run(max_steps);
-    return {loaded_image_, std::move(execution), core_.state.gpr[3]};
+    cpu::espresso::RunResult execution = mode == ExecutionMode::recompiler
+        ? recompiler_.run(core_, max_steps)
+        : core_.run(max_steps);
+    return {loaded_image_, std::move(execution), core_.state.gpr[3], mode,
+            recompiler_.statistics()};
 }
 
 }

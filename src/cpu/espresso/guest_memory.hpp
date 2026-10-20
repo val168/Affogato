@@ -48,6 +48,11 @@ public:
         return bytes_.size();
     }
 
+    [[nodiscard]] std::uint64_t write_generation() const noexcept
+    {
+        return write_generation_;
+    }
+
     void validate_write_range(std::uint32_t address, std::size_t width) const
     {
         validate_access(address, width, GuestMemoryAccess::write);
@@ -102,6 +107,7 @@ public:
     {
         validate_access(address, 1, GuestMemoryAccess::write);
         storage_from(address)[0] = value;
+        ++write_generation_;
     }
 
     void write_bytes(std::uint32_t address, std::span<const std::uint8_t> values)
@@ -118,6 +124,7 @@ public:
                         destination.begin());
             copied += count;
         }
+        if (!values.empty()) ++write_generation_;
     }
 
     // Guest ranges must not overlap, matching memcpy's contract. Both ranges
@@ -169,6 +176,7 @@ public:
             std::fill_n(destination.begin(), count, value);
             filled += count;
         }
+        ++write_generation_;
     }
 
     void zero_fill(std::uint32_t address, std::size_t length)
@@ -341,6 +349,7 @@ private:
 
     std::vector<std::uint8_t> bytes_;
     std::vector<MappedRegion> mapped_regions_;
+    std::uint64_t write_generation_{};
 };
 
 }

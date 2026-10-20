@@ -1,6 +1,7 @@
 #pragma once
 
 #include "cpu/espresso/interpreter.hpp"
+#include "cpu/espresso/recompiler.hpp"
 #include "cpu/espresso/rpx_loader.hpp"
 
 #include <cstddef>
@@ -10,11 +11,19 @@
 namespace affogato
 {
 
+enum class ExecutionMode
+{
+    interpreter,
+    recompiler,
+};
+
 struct EmulatorRunResult
 {
     cpu::espresso::RpxLoadResult image;
     cpu::espresso::RunResult execution;
     std::uint32_t gpr3{};
+    ExecutionMode mode{ExecutionMode::interpreter};
+    cpu::espresso::RecompilerStatistics recompiler_statistics{};
 };
 
 class Emulator
@@ -28,7 +37,9 @@ public:
 
     [[nodiscard]] cpu::espresso::RpxLoadResult load_rpx(
         std::span<const std::uint8_t> file);
-    [[nodiscard]] EmulatorRunResult run(std::size_t max_steps = 1'000'000);
+    [[nodiscard]] EmulatorRunResult run(
+        std::size_t max_steps = 1'000'000,
+        ExecutionMode mode = ExecutionMode::interpreter);
 
     [[nodiscard]] const cpu::espresso::EspressoCore& core() const noexcept
     {
@@ -37,6 +48,7 @@ public:
 
 private:
     cpu::espresso::EspressoCore core_;
+    cpu::espresso::Recompiler recompiler_;
     cpu::espresso::RpxLoadResult loaded_image_{};
     bool has_loaded_image_{};
 };
