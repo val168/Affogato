@@ -150,6 +150,29 @@ constexpr std::uint32_t fs_mode_exec_group = 0x010U;
 constexpr std::uint32_t fs_mode_read_other = 0x004U;
 constexpr std::uint32_t fs_mode_write_other = 0x002U;
 constexpr std::uint32_t fs_mode_exec_other = 0x001U;
+
+std::uint32_t fs_mode_from_host_permissions(
+    const std::filesystem::perms permissions)
+{
+    std::uint32_t mode = 0U;
+    const auto add_mode = [&](const std::filesystem::perms permission,
+                              const std::uint32_t guest_mode) {
+        if ((permissions & permission) != std::filesystem::perms::none)
+        {
+            mode |= guest_mode;
+        }
+    };
+    add_mode(std::filesystem::perms::owner_read, fs_mode_read_owner);
+    add_mode(std::filesystem::perms::owner_write, fs_mode_write_owner);
+    add_mode(std::filesystem::perms::owner_exec, fs_mode_exec_owner);
+    add_mode(std::filesystem::perms::group_read, fs_mode_read_group);
+    add_mode(std::filesystem::perms::group_write, fs_mode_write_group);
+    add_mode(std::filesystem::perms::group_exec, fs_mode_exec_group);
+    add_mode(std::filesystem::perms::others_read, fs_mode_read_other);
+    add_mode(std::filesystem::perms::others_write, fs_mode_write_other);
+    add_mode(std::filesystem::perms::others_exec, fs_mode_exec_other);
+    return mode;
+}
 constexpr std::uint32_t fs_fast_mutex_tag = 0x664D7458U;
 constexpr std::uint32_t fs_fast_mutex_size = 0x2CU;
 constexpr std::uint32_t fs_alarm_tag = 0x614C724DU;
@@ -2112,23 +2135,7 @@ void register_coreinit_hle(HleDispatcher& dispatcher)
 
                 if (status == fs_status_ok || stat_flags == fs_stat_flag_directory)
                 {
-                    const auto permissions = file_status.permissions();
-                    const auto add_mode = [&](std::filesystem::perms permission,
-                                              std::uint32_t guest_mode) {
-                        if ((permissions & permission) != std::filesystem::perms::none)
-                        {
-                            mode |= guest_mode;
-                        }
-                    };
-                    add_mode(std::filesystem::perms::owner_read, fs_mode_read_owner);
-                    add_mode(std::filesystem::perms::owner_write, fs_mode_write_owner);
-                    add_mode(std::filesystem::perms::owner_exec, fs_mode_exec_owner);
-                    add_mode(std::filesystem::perms::group_read, fs_mode_read_group);
-                    add_mode(std::filesystem::perms::group_write, fs_mode_write_group);
-                    add_mode(std::filesystem::perms::group_exec, fs_mode_exec_group);
-                    add_mode(std::filesystem::perms::others_read, fs_mode_read_other);
-                    add_mode(std::filesystem::perms::others_write, fs_mode_write_other);
-                    add_mode(std::filesystem::perms::others_exec, fs_mode_exec_other);
+                    mode = fs_mode_from_host_permissions(file_status.permissions());
                 }
             }
 
@@ -2365,6 +2372,133 @@ void register_coreinit_hle(HleDispatcher& dispatcher)
                     {handle, client, *host_path, 0U});
                 core.next_fs_file_handle = handle + 1U;
                 core.memory.write32_be(guest_handle_address, handle);
+            }
+
+            core.memory.write32_be(
+                command_body + fs_cmd_block_status_offset,
+                fs_cmd_block_available_status);
+            core.memory.write32_be(
+                command_body + fs_cmd_block_async_result_status_offset,
+                status);
+            core.state.gpr[3] = status;
+        });
+    dispatcher.register_function(
+        "coreinit",
+        "FSGetStatFile",
+        [](EspressoCore& core) {
+            const std::uint32_t client = core.state.gpr[3];
+            const std::uint32_t command_block = core.state.gpr[4];
+            const std::uint32_t handle = core.state.gpr[5];
+            const std::uint32_t guest_stat_address = core.state.gpr[6];
+            if (!core.fs_initialized || client == 0U || command_block == 0U ||
+                handle == 0U || guest_stat_address == 0U)
+            {
+                core.state.gpr[3] = fs_status_fatal_error;
+                return;
+            }
+
+            const auto registration = std::find_if(
+                core.fs_clients.begin(), core.fs_clients.end(),
+                [client](const FsClientRegistration& candidate) {
+                    return candidate.client_address == client;
+                });
+            if (registration == core.fs_clients.end())
+            {
+                core.state.gpr[3] = fs_status_fatal_error;
+                return;
+            }
+            const auto open_file = std::find_if(
+                core.fs_open_files.begin(), core.fs_open_files.end(),
+                [client, handle](const FsOpenFileState& candidate) {
+                    return candidate.handle == handle &&
+                           candidate.client_address == client;
+                });
+            if (open_file == core.fs_open_files.end())
+            {
+                core.state.gpr[3] = fs_status_not_found;
+                return;
+            }
+
+            constexpr std::uint64_t guest_address_space_end =
+                std::uint64_t{1} << 32U;
+            const std::uint64_t command_body_address =
+                (static_cast<std::uint64_t>(command_block) +
+                 fs_cmd_block_body_alignment_mask) &
+                ~static_cast<std::uint64_t>(fs_cmd_block_body_alignment_mask);
+            if (command_body_address + fs_cmd_block_async_result_status_offset +
+                    sizeof(std::uint32_t) > guest_address_space_end)
+            {
+                core.state.gpr[3] = fs_status_fatal_error;
+                return;
+            }
+            const std::uint32_t command_body =
+                static_cast<std::uint32_t>(command_body_address);
+            const std::uint32_t command_status = core.memory.read32_be(
+                command_body + fs_cmd_block_status_offset);
+            if (command_status != fs_cmd_block_initialized_status &&
+                command_status != fs_cmd_block_available_status)
+            {
+                core.state.gpr[3] = fs_status_fatal_error;
+                return;
+            }
+
+            core.memory.validate_write_range(guest_stat_address, fs_stat_size);
+            core.memory.validate_write_range(
+                command_body + fs_cmd_block_status_offset,
+                sizeof(std::uint32_t));
+            core.memory.validate_write_range(
+                command_body + fs_cmd_block_async_result_status_offset,
+                sizeof(std::uint32_t));
+
+            std::uint32_t status = fs_status_ok;
+            std::uint32_t file_size = 0U;
+            std::uint32_t mode = 0U;
+            std::error_code error;
+            const auto file_status = std::filesystem::status(
+                open_file->host_path, error);
+            if (error)
+            {
+                status = error == std::errc::permission_denied
+                    ? fs_status_permission_error
+                    : fs_status_not_found;
+            }
+            else if (!std::filesystem::is_regular_file(file_status))
+            {
+                status = fs_status_not_file;
+            }
+            else
+            {
+                const std::uintmax_t size =
+                    std::filesystem::file_size(open_file->host_path, error);
+                if (error)
+                {
+                    status = error == std::errc::permission_denied
+                        ? fs_status_permission_error
+                        : fs_status_not_found;
+                }
+                else if (size > std::numeric_limits<std::uint32_t>::max())
+                {
+                    status = fs_status_file_too_big;
+                }
+                else
+                {
+                    file_size = static_cast<std::uint32_t>(size);
+                    mode = fs_mode_from_host_permissions(file_status.permissions());
+                }
+            }
+
+            if (status == fs_status_ok)
+            {
+                core.memory.zero_fill(guest_stat_address, fs_stat_size);
+                core.memory.write32_be(
+                    guest_stat_address + fs_stat_flags_offset,
+                    fs_stat_flag_file);
+                core.memory.write32_be(
+                    guest_stat_address + fs_stat_mode_offset, mode);
+                core.memory.write32_be(
+                    guest_stat_address + fs_stat_size_offset, file_size);
+                // Allocation, quota, identity and timestamps are not exposed
+                // by the portable host filesystem API.
             }
 
             core.memory.write32_be(

@@ -11928,6 +11928,7 @@ void fs_open_file_hle_tests()
     constexpr std::uint32_t guest_path = 0x6000U;
     constexpr std::uint32_t guest_mode = 0x6100U;
     constexpr std::uint32_t guest_handle = 0x6400U;
+    constexpr std::uint32_t guest_stat = 0x6800U;
     constexpr std::uint32_t fs_status_offset = 0x93CU;
     constexpr std::uint32_t async_result_status_offset = 0x990U;
 
@@ -11948,6 +11949,8 @@ void fs_open_file_hle_tests()
     EspressoCore core(0x8000U);
     register_coreinit_hle(core.hle);
     const std::uint32_t import = core.hle.bind_import("coreinit", "FSOpenFile");
+    const std::uint32_t stat_import =
+        core.hle.bind_import("coreinit", "FSGetStatFile");
     core.fs_initialized = true;
     core.fs_content_root = content_root;
     core.fs_clients.push_back({client_address, 0x2040U, 1U});
@@ -12007,6 +12010,28 @@ void fs_open_file_hle_tests()
     assert(core.fs_open_files[0].position == 0U);
     assert(core.memory.read32_be(command_body + fs_status_offset) == 0x0D900A24U);
     assert(core.memory.read32_be(command_body + async_result_status_offset) == 0U);
+
+    core.memory.fill_bytes(guest_stat, 0x64U, 0xA5U);
+    core.state.cia = stat_import;
+    core.state.lr = return_address;
+    core.state.gpr[3] = client_address;
+    core.state.gpr[4] = command_block;
+    core.state.gpr[5] = core.memory.read32_be(guest_handle);
+    core.state.gpr[6] = guest_stat;
+    core.state.gpr[7] = 0xFFFFFFFFU;
+    const auto stated = core.run(1U);
+    assert(stated.reason == StopReason::instruction_limit);
+    assert(core.state.cia == return_address);
+    assert(core.state.gpr[3] == 0U);
+    assert(core.memory.read32_be(guest_stat) == 0x01000000U);
+    assert(core.memory.read32_be(guest_stat + 0x10U) ==
+           static_cast<std::uint32_t>(std::string_view("shader-cache-data").size()));
+    assert(core.memory.read32_be(guest_stat + 0x14U) == 0U);
+    assert(core.memory.read64_be(guest_stat + 0x18U) == 0U);
+    for (std::uint32_t offset = 0x24U; offset < 0x64U; ++offset)
+    {
+        assert(core.memory.read8(guest_stat + offset) == 0U);
+    }
 
     // Content is mounted read-only; a write mode is refused without creating
     // a handle or overwriting the caller's output parameter.
