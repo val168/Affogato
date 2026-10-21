@@ -66,6 +66,8 @@ constexpr std::uint32_t gx2_surface_format_unorm_r8_g8_b8_a8 = 0x1AU;
 constexpr std::uint32_t gx2_buffering_mode_single = 1U;
 constexpr std::uint32_t gx2_buffering_mode_double = 2U;
 constexpr std::uint32_t gx2_buffering_mode_triple = 3U;
+// The Wii U GFD/GX2 resource format identifies this platform as GPU version 2.
+constexpr std::uint32_t gx2_gpu_version = 2U;
 
 struct TvDimensions
 {
@@ -564,6 +566,13 @@ Gx2RuntimeState initialize_gx2(EspressoCore& core, std::uint32_t attribute_addre
 
 void register_gx2_hle(HleDispatcher& dispatcher)
 {
+    dispatcher.register_function(
+        "gx2",
+        "GX2TempGetGPUVersion",
+        [](EspressoCore& core) {
+            core.state.gpr[3] = gx2_gpu_version;
+        });
+
     dispatcher.register_function(
         "gx2",
         "GX2Init",
