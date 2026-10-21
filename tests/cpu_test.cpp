@@ -16156,6 +16156,111 @@ void gx2_temp_get_gpu_version_hle_tests()
     assert(core.run(1U).hle_call == "coreinit::GX2TempGetGPUVersion");
 }
 
+void gx2_invalidate_hle_tests()
+{
+    constexpr std::uint32_t return_address = 0x027521E4U;
+    constexpr std::uint32_t flags_cpu_shader = 0x48U;
+    constexpr std::uint32_t buffer = 0x100U;
+    constexpr std::uint32_t size = 0x270U;
+
+    EspressoCore core(0x1000U);
+    register_gx2_hle(core.hle);
+    const std::uint32_t import = core.hle.bind_import("gx2", "GX2Invalidate");
+    assert(import != 0U);
+
+    core.state.gpr.fill(0xA2000000U);
+    core.state.gpr[3] = flags_cpu_shader;
+    core.state.gpr[4] = buffer;
+    core.state.gpr[5] = size;
+    core.state.lr = return_address;
+    core.state.cr = 0x23456789U;
+    core.state.xer = 0x98765432U;
+    core.state.ctr = 0xD00DFEEDU;
+    core.state.fpscr = 0x5AA5A55AU;
+    for (std::size_t index = 0U; index < core.state.fpr.size(); ++index)
+    {
+        core.state.fpr[index] = 0x3333000000000000ULL + index;
+        core.state.fpr_ps1[index] = 0x4444000000000000ULL + index;
+    }
+    const auto gprs_before = core.state.gpr;
+    const auto fprs_before = core.state.fpr;
+    const auto ps1_before = core.state.fpr_ps1;
+    const std::uint32_t cr_before = core.state.cr;
+    const std::uint32_t xer_before = core.state.xer;
+    const std::uint32_t ctr_before = core.state.ctr;
+    const std::uint32_t fpscr_before = core.state.fpscr;
+    std::vector<std::uint8_t> memory_before(core.memory.size());
+    core.memory.read_bytes(0U, memory_before);
+
+    core.state.cia = import;
+    assert(core.run(1U).reason == StopReason::instruction_limit);
+    assert(core.state.gpr == gprs_before);
+    assert(core.state.fpr == fprs_before);
+    assert(core.state.fpr_ps1 == ps1_before);
+    assert(core.state.cr == cr_before);
+    assert(core.state.xer == xer_before);
+    assert(core.state.ctr == ctr_before);
+    assert(core.state.fpscr == fpscr_before);
+    assert(core.state.lr == return_address);
+    assert(core.state.cia == return_address);
+    std::vector<std::uint8_t> memory_after(core.memory.size());
+    core.memory.read_bytes(0U, memory_after);
+    assert(memory_after == memory_before);
+}
+
+void gx2_calc_fetch_shader_size_ex_hle_tests()
+{
+    constexpr std::uint32_t return_address = 0x027508B4U;
+    EspressoCore core(0x1000U);
+    register_gx2_hle(core.hle);
+    const std::uint32_t import = core.hle.bind_import(
+        "gx2", "GX2CalcFetchShaderSizeEx");
+    assert(import != 0U);
+
+    const auto calculate = [&](std::uint32_t attribute_count,
+                               std::uint32_t fetch_type,
+                               std::uint32_t tessellation_mode) {
+        core.state.gpr[3] = attribute_count;
+        core.state.gpr[4] = fetch_type;
+        core.state.gpr[5] = tessellation_mode;
+        core.state.cia = import;
+        core.state.lr = return_address;
+        return core.run(1U);
+    };
+
+    core.state.gpr.fill(0xA3000000U);
+    core.state.gpr[6] = 0xCAFEBABEU;
+    core.state.cr = 0x3456789AU;
+    core.state.xer = 0xA5A55A5AU;
+    core.state.ctr = 0x87654321U;
+    core.state.fpscr = 0x5AA5A55AU;
+    const auto gprs_before = core.state.gpr;
+    const std::uint32_t cr_before = core.state.cr;
+    const std::uint32_t xer_before = core.state.xer;
+    const std::uint32_t ctr_before = core.state.ctr;
+    const std::uint32_t fpscr_before = core.state.fpscr;
+
+    assert(calculate(0U, 0U, 0U).reason == StopReason::instruction_limit);
+    assert(core.state.gpr[3] == 0U);
+    assert(calculate(2U, 0U, 0U).reason == StopReason::instruction_limit);
+    assert(core.state.gpr[3] == 0x20U);
+    assert(calculate(3U, 0U, 0U).reason == StopReason::instruction_limit);
+    assert(core.state.gpr[3] == 0x30U);
+    for (std::size_t index = 6U; index < core.state.gpr.size(); ++index)
+    {
+        assert(core.state.gpr[index] == gprs_before[index]);
+    }
+    assert(core.state.cr == cr_before);
+    assert(core.state.xer == xer_before);
+    assert(core.state.ctr == ctr_before);
+    assert(core.state.fpscr == fpscr_before);
+    assert(core.state.cia == return_address);
+
+    assert(calculate(2U, 1U, 0U).reason == StopReason::hle_error);
+    assert(calculate(2U, 0U, 1U).reason == StopReason::hle_error);
+    assert(calculate(0x10000000U, 0U, 0U).reason == StopReason::hle_error);
+}
+
 void gx2_init_hle_tests()
 {
     constexpr std::uint32_t return_address = 0x0274BD9CU;
@@ -25787,6 +25892,8 @@ int main(int argc, char* argv[])
     mem_get_allocatable_size_for_frm_heap_ex_hle_tests();
     mem_alloc_from_frm_heap_ex_hle_tests();
     gx2_temp_get_gpu_version_hle_tests();
+    gx2_invalidate_hle_tests();
+    gx2_calc_fetch_shader_size_ex_hle_tests();
     gx2_init_hle_tests();
     gx2_clear_color_hle_tests();
     gx2_set_color_buffer_hle_tests();

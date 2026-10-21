@@ -68,6 +68,7 @@ constexpr std::uint32_t gx2_buffering_mode_double = 2U;
 constexpr std::uint32_t gx2_buffering_mode_triple = 3U;
 // The Wii U GFD/GX2 resource format identifies this platform as GPU version 2.
 constexpr std::uint32_t gx2_gpu_version = 2U;
+constexpr std::uint32_t gx2_fetch_shader_instruction_size = 0x10U;
 
 struct TvDimensions
 {
@@ -571,6 +572,50 @@ void register_gx2_hle(HleDispatcher& dispatcher)
         "GX2TempGetGPUVersion",
         [](EspressoCore& core) {
             core.state.gpr[3] = gx2_gpu_version;
+        });
+
+    dispatcher.register_function(
+        "gx2",
+        "GX2Invalidate",
+        [](EspressoCore&) {
+            // Affogato currently has one coherent guest-memory backing store
+            // and no modeled Espresso data cache, Latte shader cache, or
+            // deferred GPU reads. The invalidation is therefore already
+            // satisfied by the memory model; keep this void API from
+            // fabricating a return value or changing guest state.
+        });
+
+    dispatcher.register_function(
+        "gx2",
+        "GX2CalcFetchShaderSizeEx",
+        [](EspressoCore& core) {
+            constexpr const char* api_name = "gx2::GX2CalcFetchShaderSizeEx";
+            const std::uint32_t attribute_count = core.state.gpr[3];
+            const std::uint32_t fetch_shader_type = core.state.gpr[4];
+            const std::uint32_t tessellation_mode = core.state.gpr[5];
+
+            // In the non-tessellated mode each input attribute produces one
+            // 16-byte Latte VFETCH instruction. The supported start-up path
+            // uses GX2_FETCH_SHADER_TESSELLATION_NONE / DISCRETE; other modes
+            // need the additional tessellation fetch-program generation and
+            // must not be silently approximated.
+            if (fetch_shader_type != 0U || tessellation_mode != 0U)
+            {
+                throw HleExecutionError(
+                    std::string(api_name) +
+                    ": only non-tessellated fetch shaders are implemented");
+            }
+
+            if (attribute_count >
+                std::numeric_limits<std::uint32_t>::max() /
+                    gx2_fetch_shader_instruction_size)
+            {
+                throw HleExecutionError(
+                    std::string(api_name) + ": calculated size overflows uint32_t");
+            }
+
+            core.state.gpr[3] =
+                attribute_count * gx2_fetch_shader_instruction_size;
         });
 
     dispatcher.register_function(
