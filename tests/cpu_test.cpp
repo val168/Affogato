@@ -4,6 +4,7 @@
 #include "cpu/espresso/guest_memory.hpp"
 #include "cpu/espresso/guest_mutex.hpp"
 #include "cpu/espresso/interpreter.hpp"
+#include "cpu/espresso/nn_act_hle.hpp"
 #include "cpu/espresso/nn_olv_hle.hpp"
 #include "cpu/espresso/nn_save_hle.hpp"
 #include "cpu/espresso/rpx_loader.hpp"
@@ -12453,6 +12454,124 @@ void guest_thread_cooperative_context_switch_tests()
     assert(core.memory.read8(worker + 0x324U) == 1U); // READY
     assert(core.memory.read32_be(worker + 0x98U) == after_worker_sleep);
     assert(core.guest_scheduler_ticks == sleep_ticks);
+}
+
+void nn_act_initialize_hle_tests()
+{
+    constexpr std::uint32_t return_address = 0x0274226CU;
+    constexpr std::uint32_t memory_size = 0x10000U;
+
+    EspressoCore core(memory_size);
+    register_nn_act_hle(core.hle);
+    assert(core.nn_act_initialize_count == 0U);
+    const std::uint32_t initialize = core.hle.bind_import(
+        "nn_act", "Initialize__Q2_2nn3actFv");
+    core.state.cia = initialize;
+    core.state.lr = return_address;
+    core.state.gpr[3] = 0xDEADBEEFU;
+    core.state.gpr[4] = 0x12345678U;
+    core.state.gpr[5] = 0xCAFEBABEU;
+    core.state.cr = 0x12345678U;
+    core.state.xer = 0xA00000A5U;
+    core.state.ctr = 0xCAFEBABEU;
+    core.state.fpscr = 0x5A5AA55AU;
+    core.state.fpr[2] = 0x1122334455667788ULL;
+    core.state.fpr_ps1[2] = 0x8877665544332211ULL;
+    core.memory.write32_be(0x200U, 0xA1B2C3D4U);
+
+    const CpuState before = core.state;
+    const RunResult first = core.run(1U);
+    assert(first.reason == StopReason::instruction_limit);
+    assert(first.steps == 1U);
+    assert(core.nn_act_initialize_count == 1U);
+    assert(core.state.gpr[3] == 0U); // nn::Result success
+    assert(core.state.gpr[4] == before.gpr[4]);
+    assert(core.state.gpr[5] == before.gpr[5]);
+    assert(core.state.cia == return_address);
+    assert(core.state.lr == before.lr);
+    assert(core.state.cr == before.cr);
+    assert(core.state.xer == before.xer);
+    assert(core.state.ctr == before.ctr);
+    assert(core.state.fpscr == before.fpscr);
+    assert(core.state.fpr == before.fpr);
+    assert(core.state.fpr_ps1 == before.fpr_ps1);
+    for (std::size_t reg = 0U; reg < core.state.gpr.size(); ++reg)
+    {
+        if (reg != 3U)
+        {
+            assert(core.state.gpr[reg] == before.gpr[reg]);
+        }
+    }
+    assert(core.memory.read32_be(0x200U) == 0xA1B2C3D4U);
+
+    // The API permits repeated initialization; track each successful guest
+    // call rather than collapsing the lifecycle to a one-shot boolean.
+    core.state.cia = initialize;
+    core.state.lr = return_address + 4U;
+    core.state.gpr[3] = 0xFFFFFFFFU;
+    const RunResult repeated = core.run(1U);
+    assert(repeated.reason == StopReason::instruction_limit);
+    assert(core.nn_act_initialize_count == 2U);
+    assert(core.state.gpr[3] == 0U);
+    assert(core.state.cia == return_address + 4U);
+
+    core.reset();
+    assert(core.nn_act_initialize_count == 0U);
+    core.state.cia = initialize;
+    core.state.lr = return_address + 8U;
+    const RunResult after_reset = core.run(1U);
+    assert(after_reset.reason == StopReason::instruction_limit);
+    assert(core.nn_act_initialize_count == 1U);
+    assert(core.state.gpr[3] == 0U);
+
+    const std::uint32_t get_slot = core.hle.bind_import(
+        "nn_act", "GetSlotNo__Q2_2nn3actFv");
+    core.state.cia = get_slot;
+    core.state.lr = return_address + 0x0CU;
+    core.state.gpr[3] = 0xDEADBEEFU;
+    core.state.gpr[4] = 0x12345678U;
+    const CpuState before_get_slot = core.state;
+    const RunResult slot_result = core.run(1U);
+    assert(slot_result.reason == StopReason::instruction_limit);
+    assert(core.state.gpr[3] == 1U);
+    assert(core.nn_act_current_slot == 1U);
+    assert(core.state.gpr[4] == before_get_slot.gpr[4]);
+    assert(core.state.cia == return_address + 0x0CU);
+    assert(core.state.lr == before_get_slot.lr);
+    assert(core.state.cr == before_get_slot.cr);
+    assert(core.state.xer == before_get_slot.xer);
+    assert(core.state.ctr == before_get_slot.ctr);
+    assert(core.state.fpscr == before_get_slot.fpscr);
+    assert(core.state.fpr == before_get_slot.fpr);
+    assert(core.state.fpr_ps1 == before_get_slot.fpr_ps1);
+    for (std::size_t reg = 0U; reg < core.state.gpr.size(); ++reg)
+    {
+        if (reg != 3U)
+        {
+            assert(core.state.gpr[reg] == before_get_slot.gpr[reg]);
+        }
+    }
+    assert(core.memory.read32_be(0x200U) == 0xA1B2C3D4U);
+
+    // Exercise normal Emulator registration and the RPX import binding path.
+    RpxImportOptions import_options;
+    import_options.library = "nn_act";
+    RpxRelocationSymbol import_symbol{
+        "Initialize__Q2_2nn3actFv", import_options.section_address +
+            import_options.slot_offset, 1U, 2U, 8U, 0};
+    RpxRelocationOptions relocation;
+    relocation.type = 10U;
+    relocation.offset = 4U;
+    relocation.branch_instruction = 0x48000001U;
+    const auto import_rpx = make_minimal_compressed_rpx(
+        0x02000000U, 16U, import_symbol, relocation, import_options);
+    affogato::Emulator emulator(0x40000U);
+    static_cast<void>(emulator.load_rpx(import_rpx));
+    const auto emulator_result = emulator.run(3U);
+    assert(emulator_result.execution.reason == StopReason::instruction_limit);
+    assert(emulator.core().nn_act_initialize_count == 1U);
+    assert(emulator.core().state.gpr[3] == 0U);
+    assert(emulator.core().state.cia == 0x02000008U);
 }
 
 void nn_save_init_hle_tests()
@@ -25136,6 +25255,7 @@ int main(int argc, char* argv[])
     os_block_move_hle_tests();
     os_block_set_hle_tests();
     os_get_system_info_hle_tests();
+    nn_act_initialize_hle_tests();
     nn_save_init_hle_tests();
     fs_init_hle_tests();
     fs_add_client_hle_tests();

@@ -259,6 +259,8 @@ public:
         guest_thread_switches = 0U;
         guest_threads.clear();
         fs_initialized = false;
+        nn_act_initialize_count = 0U;
+        nn_act_current_slot = 1U;
         nn_save_initialized = false;
         proc_ui_initialized = false;
         proc_ui_save_callback = 0U;
@@ -333,6 +335,8 @@ public:
     std::uint64_t guest_thread_switches{};
     std::vector<GuestThreadRuntimeState> guest_threads;
     bool fs_initialized{};
+    std::uint32_t nn_act_initialize_count{};
+    std::uint8_t nn_act_current_slot{1U};
     bool nn_save_initialized{};
     bool proc_ui_initialized{};
     std::uint32_t proc_ui_save_callback{};
