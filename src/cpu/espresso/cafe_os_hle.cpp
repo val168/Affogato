@@ -110,6 +110,12 @@ constexpr std::uint16_t mem2_free_block_tag = 0x4652U; // 'FR'
 constexpr std::uint32_t fs_client_size = 0x1700U;
 constexpr std::uint32_t fs_client_body_size = 0x1620U;
 constexpr std::uint32_t fs_client_body_alignment_mask = 0x3FU;
+constexpr std::uint32_t fs_cmd_block_size = 0xA80U;
+constexpr std::uint32_t fs_cmd_block_body_alignment_mask = 0x3FU;
+constexpr std::uint32_t fs_cmd_block_status_offset = 0x93CU;
+constexpr std::uint32_t fs_cmd_block_priority_offset = 0x9E8U;
+constexpr std::uint32_t fs_cmd_block_initialized_status = 0x0D900A21U;
+constexpr std::uint8_t fs_cmd_block_default_priority = 0x10U;
 constexpr std::uint32_t fs_status_fatal_error = 0xFFFFFC00U;
 constexpr std::uint32_t fs_fast_mutex_tag = 0x664D7458U;
 constexpr std::uint32_t fs_fast_mutex_size = 0x2CU;
@@ -1834,6 +1840,46 @@ void register_coreinit_hle(HleDispatcher& dispatcher)
             // Track Cafe FS-library initialization per emulated core. Client
             // registration and IOSU-backed operations are modeled separately.
             core.fs_initialized = true;
+        });
+    dispatcher.register_function(
+        "coreinit",
+        "FSInitCmdBlock",
+        [](EspressoCore& core) {
+            const std::uint32_t command_block = core.state.gpr[3];
+            if (command_block == 0U)
+            {
+                throw HleExecutionError(
+                    "FSInitCmdBlock received a null FSCmdBlock");
+            }
+
+            const std::uint64_t body_address =
+                (static_cast<std::uint64_t>(command_block) +
+                 fs_cmd_block_body_alignment_mask) &
+                ~static_cast<std::uint64_t>(fs_cmd_block_body_alignment_mask);
+            const std::uint64_t command_block_end =
+                static_cast<std::uint64_t>(command_block) + fs_cmd_block_size;
+            if (command_block_end > (std::uint64_t{1} << 32U) ||
+                body_address + fs_cmd_block_priority_offset + 1U >
+                    command_block_end)
+            {
+                throw HleExecutionError(
+                    "FSInitCmdBlock FSCmdBlock range wraps guest address space");
+            }
+
+            // The guest ABI stores the opaque 0xA80-byte command block, with
+            // its internal body aligned to 64 bytes. Validate the complete
+            // write before clearing anything so a bad guest pointer cannot
+            // leave a partially initialized block.
+            core.memory.validate_write_range(command_block, fs_cmd_block_size);
+            core.memory.zero_fill(command_block, fs_cmd_block_size);
+            core.memory.write32_be(
+                static_cast<std::uint32_t>(body_address) +
+                    fs_cmd_block_status_offset,
+                fs_cmd_block_initialized_status);
+            core.memory.write8(
+                static_cast<std::uint32_t>(body_address) +
+                    fs_cmd_block_priority_offset,
+                fs_cmd_block_default_priority);
         });
     dispatcher.register_function(
         "coreinit",

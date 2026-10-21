@@ -11674,6 +11674,99 @@ void fs_init_hle_tests()
     assert(second.fs_initialized);
 }
 
+void fs_init_cmd_block_hle_tests()
+{
+    constexpr std::uint32_t return_address = 0x02742244U;
+    constexpr std::uint32_t command_block_address = 0x0803U;
+    constexpr std::uint32_t command_block_size = 0xA80U;
+    constexpr std::uint32_t body_alignment_mask = 0x3FU;
+    constexpr std::uint32_t status_offset = 0x93CU;
+    constexpr std::uint32_t priority_offset = 0x9E8U;
+
+    EspressoCore core(0x4000U);
+    register_coreinit_hle(core.hle);
+    const std::uint32_t import =
+        core.hle.bind_import("coreinit", "FSInitCmdBlock");
+    core.memory.fill_bytes(0U, core.memory.size(), 0xA5U);
+
+    for (std::uint32_t reg = 0U; reg < core.state.gpr.size(); ++reg)
+    {
+        core.state.gpr[reg] = 0xA1000000U + reg * 0x101U;
+    }
+    for (std::uint32_t reg = 0U; reg < core.state.fpr.size(); ++reg)
+    {
+        core.state.fpr[reg] = 0x1111000000000000ULL + reg;
+        core.state.fpr_ps1[reg] = 0x2222000000000000ULL + reg;
+    }
+    core.state.gpr[3] = command_block_address;
+    core.state.cr = 0x12345678U;
+    core.state.xer = 0xA00000A5U;
+    core.state.ctr = 0xCAFEBABEU;
+    core.state.fpscr = 0x5A5AA55AU;
+    core.state.lr = return_address;
+    core.state.cia = import;
+
+    const auto gprs_before = core.state.gpr;
+    const auto fpr_before = core.state.fpr;
+    const auto ps1_before = core.state.fpr_ps1;
+    const std::uint32_t cr_before = core.state.cr;
+    const std::uint32_t xer_before = core.state.xer;
+    const std::uint32_t ctr_before = core.state.ctr;
+    const std::uint32_t fpscr_before = core.state.fpscr;
+    const std::uint32_t lr_before = core.state.lr;
+
+    const auto result = core.run(1U);
+    assert(result.reason == StopReason::instruction_limit);
+    assert(result.steps == 1U);
+    assert(core.state.cia == return_address);
+    assert(core.state.gpr == gprs_before);
+    assert(core.state.fpr == fpr_before);
+    assert(core.state.fpr_ps1 == ps1_before);
+    assert(core.state.cr == cr_before);
+    assert(core.state.xer == xer_before);
+    assert(core.state.ctr == ctr_before);
+    assert(core.state.fpscr == fpscr_before);
+    assert(core.state.lr == lr_before);
+
+    const std::uint32_t body = static_cast<std::uint32_t>(
+        (static_cast<std::uint64_t>(command_block_address) +
+         body_alignment_mask) & ~std::uint64_t{body_alignment_mask});
+    std::vector<std::uint8_t> expected(command_block_size, 0U);
+    constexpr std::uint32_t expected_status = 0x0D900A21U;
+    const std::size_t status_in_block =
+        static_cast<std::size_t>(body + status_offset - command_block_address);
+    expected[status_in_block] = static_cast<std::uint8_t>(expected_status >> 24U);
+    expected[status_in_block + 1U] = static_cast<std::uint8_t>(expected_status >> 16U);
+    expected[status_in_block + 2U] = static_cast<std::uint8_t>(expected_status >> 8U);
+    expected[status_in_block + 3U] = static_cast<std::uint8_t>(expected_status);
+    expected[body + priority_offset - command_block_address] = 0x10U;
+
+    std::vector<std::uint8_t> actual(command_block_size);
+    core.memory.read_bytes(command_block_address, actual);
+    assert(actual == expected);
+    assert(core.memory.read8(command_block_address - 1U) == 0xA5U);
+    assert(core.memory.read8(command_block_address + command_block_size) == 0xA5U);
+
+    // A command block that only partially fits must fault before any bytes are
+    // cleared, preserving GuestMemory's whole-range write transactionality.
+    EspressoCore faulting(0x4000U);
+    register_coreinit_hle(faulting.hle);
+    const std::uint32_t fault_import =
+        faulting.hle.bind_import("coreinit", "FSInitCmdBlock");
+    faulting.memory.fill_bytes(0U, faulting.memory.size(), 0x6BU);
+    faulting.state.cia = fault_import;
+    faulting.state.lr = return_address + 4U;
+    faulting.state.gpr[3] = 0x3D00U;
+    std::vector<std::uint8_t> memory_before(faulting.memory.size());
+    faulting.memory.read_bytes(0U, memory_before);
+    const auto fault = faulting.run(1U);
+    assert(fault.reason == StopReason::memory_fault);
+    assert(fault.detail.find("write") != std::string::npos);
+    std::vector<std::uint8_t> memory_after(faulting.memory.size());
+    faulting.memory.read_bytes(0U, memory_after);
+    assert(memory_after == memory_before);
+}
+
 void proc_ui_init_hle_tests()
 {
     constexpr std::uint32_t return_address = 0x02740124U;
@@ -25258,6 +25351,7 @@ int main(int argc, char* argv[])
     nn_act_initialize_hle_tests();
     nn_save_init_hle_tests();
     fs_init_hle_tests();
+    fs_init_cmd_block_hle_tests();
     fs_add_client_hle_tests();
     fs_set_state_change_notification_hle_tests();
     os_get_system_time_hle_tests();
