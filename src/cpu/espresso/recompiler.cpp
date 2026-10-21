@@ -532,6 +532,7 @@ struct Recompiler::Impl
                 if (insn.opcode == Opcode::add || insn.opcode == Opcode::bitwise_or ||
                     insn.opcode == Opcode::bitwise_and || insn.opcode == Opcode::bitwise_xor)
                 {
+                    x86::Gp rhs = source_b;
                     if (insn.destination == insn.base)
                     {
                         lhs = source_a;
@@ -539,15 +540,16 @@ struct Recompiler::Impl
                     else if (insn.destination == insn.source)
                     {
                         lhs = source_b;
+                        rhs = source_a;
                     }
                     else
                     {
                         compiler.mov(lhs, source_a);
                     }
-                    if (insn.opcode == Opcode::add) compiler.add(lhs, source_b);
-                    else if (insn.opcode == Opcode::bitwise_or) compiler.or_(lhs, source_b);
-                    else if (insn.opcode == Opcode::bitwise_and) compiler.and_(lhs, source_b);
-                    else compiler.xor_(lhs, source_b);
+                    if (insn.opcode == Opcode::add) compiler.add(lhs, rhs);
+                    else if (insn.opcode == Opcode::bitwise_or) compiler.or_(lhs, rhs);
+                    else if (insn.opcode == Opcode::bitwise_and) compiler.and_(lhs, rhs);
+                    else compiler.xor_(lhs, rhs);
                     write_guest_gpr(insn.destination, lhs);
                 }
                 else if (insn.opcode == Opcode::subtract_from)
