@@ -135,7 +135,8 @@ constexpr std::uint32_t fs_status_ok = 0U;
 constexpr std::uint32_t fs_status_fatal_error = 0xFFFFFC00U;
 constexpr std::uint32_t fs_status_not_found = 0xFFFFFFFAU;
 constexpr std::uint32_t fs_status_not_file = 0xFFFFFFF9U;
-constexpr std::uint32_t fs_status_permission_error = 0xFFFFFFF7U;
+constexpr std::uint32_t fs_status_access_error = 0xFFFFFFF7U;
+constexpr std::uint32_t fs_status_permission_error = 0xFFFFFFF6U;
 constexpr std::uint32_t fs_status_file_too_big = 0xFFFFFFF5U;
 constexpr std::uint32_t fs_status_media_not_ready = 0xFFFFFFF1U;
 constexpr std::uint32_t fs_stat_flag_directory = 0x80000000U;
@@ -2159,6 +2160,211 @@ void register_coreinit_hle(HleDispatcher& dispatcher)
                     guest_stat_address + fs_stat_created_offset, 0U);
                 core.memory.write64_be(
                     guest_stat_address + fs_stat_modified_offset, 0U);
+            }
+
+            core.memory.write32_be(
+                command_body + fs_cmd_block_status_offset,
+                fs_cmd_block_available_status);
+            core.memory.write32_be(
+                command_body + fs_cmd_block_async_result_status_offset,
+                status);
+            core.state.gpr[3] = status;
+        });
+    dispatcher.register_function(
+        "coreinit",
+        "FSOpenFile",
+        [](EspressoCore& core) {
+            const std::uint32_t client = core.state.gpr[3];
+            const std::uint32_t command_block = core.state.gpr[4];
+            const std::uint32_t guest_path_address = core.state.gpr[5];
+            const std::uint32_t guest_mode_address = core.state.gpr[6];
+            const std::uint32_t guest_handle_address = core.state.gpr[7];
+            if (!core.fs_initialized || client == 0U || command_block == 0U ||
+                guest_path_address == 0U || guest_mode_address == 0U ||
+                guest_handle_address == 0U)
+            {
+                core.state.gpr[3] = fs_status_fatal_error;
+                return;
+            }
+
+            const auto registration = std::find_if(
+                core.fs_clients.begin(), core.fs_clients.end(),
+                [client](const FsClientRegistration& candidate) {
+                    return candidate.client_address == client;
+                });
+            if (registration == core.fs_clients.end())
+            {
+                core.state.gpr[3] = fs_status_fatal_error;
+                return;
+            }
+
+            constexpr std::uint64_t guest_address_space_end =
+                std::uint64_t{1} << 32U;
+            const std::uint64_t command_body_address =
+                (static_cast<std::uint64_t>(command_block) +
+                 fs_cmd_block_body_alignment_mask) &
+                ~static_cast<std::uint64_t>(fs_cmd_block_body_alignment_mask);
+            if (command_body_address + fs_cmd_block_async_result_status_offset +
+                    sizeof(std::uint32_t) > guest_address_space_end)
+            {
+                core.state.gpr[3] = fs_status_fatal_error;
+                return;
+            }
+            const std::uint32_t command_body =
+                static_cast<std::uint32_t>(command_body_address);
+            const std::uint32_t command_status = core.memory.read32_be(
+                command_body + fs_cmd_block_status_offset);
+            if (command_status != fs_cmd_block_initialized_status &&
+                command_status != fs_cmd_block_available_status)
+            {
+                core.state.gpr[3] = fs_status_fatal_error;
+                return;
+            }
+
+            core.memory.validate_write_range(
+                guest_handle_address, sizeof(std::uint32_t));
+            core.memory.validate_write_range(
+                command_body + fs_cmd_block_status_offset,
+                sizeof(std::uint32_t));
+            core.memory.validate_write_range(
+                command_body + fs_cmd_block_async_result_status_offset,
+                sizeof(std::uint32_t));
+
+            const auto read_guest_string = [&](std::uint32_t address,
+                                               std::size_t maximum_length)
+                -> std::optional<std::string> {
+                std::string value;
+                value.reserve(maximum_length);
+                for (std::size_t offset = 0U; offset < maximum_length; ++offset)
+                {
+                    const std::uint64_t current =
+                        static_cast<std::uint64_t>(address) + offset;
+                    if (current >= guest_address_space_end)
+                    {
+                        return std::nullopt;
+                    }
+                    const char character = static_cast<char>(core.memory.read8(
+                        static_cast<std::uint32_t>(current)));
+                    if (character == '\0')
+                    {
+                        return value;
+                    }
+                    value.push_back(character);
+                }
+                return std::nullopt;
+            };
+
+            const auto guest_path = read_guest_string(guest_path_address, 0x280U);
+            const auto guest_mode = read_guest_string(guest_mode_address, 0x10U);
+            std::uint32_t status = fs_status_media_not_ready;
+            std::optional<std::filesystem::path> host_path;
+            constexpr std::string_view content_volume = "/vol/content";
+            if (guest_path && guest_mode && !core.fs_content_root.empty() &&
+                (*guest_path == content_volume ||
+                 (guest_path->size() > content_volume.size() &&
+                  guest_path->starts_with(content_volume) &&
+                  (*guest_path)[content_volume.size()] == '/')))
+            {
+                status = fs_status_not_found;
+                const std::string_view relative_utf8 = guest_path->size() ==
+                        content_volume.size()
+                    ? std::string_view{}
+                    : std::string_view(*guest_path).substr(
+                          content_volume.size() + 1U);
+                std::u8string relative_path_utf8;
+                relative_path_utf8.reserve(relative_utf8.size());
+                for (const unsigned char character : relative_utf8)
+                {
+                    relative_path_utf8.push_back(
+                        static_cast<char8_t>(character));
+                }
+                const std::filesystem::path relative(relative_path_utf8);
+                bool safe_relative_path = !relative.is_absolute();
+                for (const auto& component : relative)
+                {
+                    if (component == "." || component == "..")
+                    {
+                        safe_relative_path = false;
+                        break;
+                    }
+                }
+
+                if (safe_relative_path)
+                {
+                    std::error_code error;
+                    const std::filesystem::path canonical_root =
+                        std::filesystem::canonical(core.fs_content_root, error);
+                    if (!error)
+                    {
+                        const auto candidate = canonical_root / relative;
+                        const auto canonical_candidate =
+                            std::filesystem::canonical(candidate, error);
+                        if (!error)
+                        {
+                            const auto within_root =
+                                canonical_candidate.lexically_relative(canonical_root);
+                            const bool escapes_root =
+                                within_root.empty() && canonical_candidate != canonical_root
+                                    ? true
+                                    : (!within_root.empty() &&
+                                       *within_root.begin() == "..");
+                            if (!escapes_root)
+                            {
+                                host_path = canonical_candidate;
+                            }
+                        }
+                        else if (error == std::errc::permission_denied)
+                        {
+                            status = fs_status_permission_error;
+                        }
+                    }
+                }
+            }
+
+            if (!guest_path || !guest_mode)
+            {
+                status = fs_status_fatal_error;
+            }
+            else if (*guest_mode != "r" && *guest_mode != "rb")
+            {
+                status = fs_status_permission_error;
+            }
+            else if (host_path)
+            {
+                std::error_code error;
+                const auto file_status = std::filesystem::status(*host_path, error);
+                if (error)
+                {
+                    status = error == std::errc::permission_denied
+                        ? fs_status_permission_error
+                        : fs_status_not_found;
+                }
+                else if (!std::filesystem::is_regular_file(file_status))
+                {
+                    status = std::filesystem::is_directory(file_status)
+                        ? fs_status_not_file
+                        : fs_status_access_error;
+                }
+                else
+                {
+                    status = fs_status_ok;
+                }
+            }
+
+            if (status == fs_status_ok &&
+                (core.next_fs_file_handle == 0U ||
+                 core.next_fs_file_handle > 0x7FFFFFFFU))
+            {
+                status = fs_status_fatal_error;
+            }
+            if (status == fs_status_ok)
+            {
+                core.fs_open_files.reserve(core.fs_open_files.size() + 1U);
+                const std::uint32_t handle = core.next_fs_file_handle;
+                core.fs_open_files.push_back(
+                    {handle, client, *host_path, 0U});
+                core.next_fs_file_handle = handle + 1U;
+                core.memory.write32_be(guest_handle_address, handle);
             }
 
             core.memory.write32_be(

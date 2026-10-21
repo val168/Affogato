@@ -11919,6 +11919,116 @@ void fs_get_stat_hle_tests()
     assert(!cleanup_error);
 }
 
+void fs_open_file_hle_tests()
+{
+    constexpr std::uint32_t return_address = 0x0274224CU;
+    constexpr std::uint32_t client_address = 0x2003U;
+    constexpr std::uint32_t command_block = 0x4003U;
+    constexpr std::uint32_t command_body = 0x4040U;
+    constexpr std::uint32_t guest_path = 0x6000U;
+    constexpr std::uint32_t guest_mode = 0x6100U;
+    constexpr std::uint32_t guest_handle = 0x6400U;
+    constexpr std::uint32_t fs_status_offset = 0x93CU;
+    constexpr std::uint32_t async_result_status_offset = 0x990U;
+
+    const auto unique_suffix = std::to_string(
+        std::chrono::steady_clock::now().time_since_epoch().count());
+    const std::filesystem::path content_root =
+        std::filesystem::temp_directory_path() /
+        ("affogato_fsopenfile_" + unique_suffix);
+    std::filesystem::create_directories(content_root / "Cafe" / "Common");
+    {
+        std::ofstream file(content_root / "Cafe" / "Common" / "test.gsh",
+                           std::ios::binary);
+        assert(file.good());
+        file << "shader-cache-data";
+        assert(file.good());
+    }
+
+    EspressoCore core(0x8000U);
+    register_coreinit_hle(core.hle);
+    const std::uint32_t import = core.hle.bind_import("coreinit", "FSOpenFile");
+    core.fs_initialized = true;
+    core.fs_content_root = content_root;
+    core.fs_clients.push_back({client_address, 0x2040U, 1U});
+    core.memory.write32_be(command_body + fs_status_offset, 0x0D900A21U);
+    core.memory.write32_be(guest_handle, 0xA5A5A5A5U);
+
+    for (std::uint32_t reg = 0U; reg < core.state.gpr.size(); ++reg)
+    {
+        core.state.gpr[reg] = 0xB2000000U + reg * 0x101U;
+    }
+    core.state.cr = 0x12345678U;
+    core.state.xer = 0xA00000A5U;
+    core.state.ctr = 0xCAFEBABEU;
+    core.state.fpscr = 0x5A5AA55AU;
+    core.state.lr = return_address;
+
+    const auto invoke = [&](std::string_view path, std::string_view mode) {
+        std::vector<std::uint8_t> path_bytes(path.begin(), path.end());
+        path_bytes.push_back(0U);
+        std::vector<std::uint8_t> mode_bytes(mode.begin(), mode.end());
+        mode_bytes.push_back(0U);
+        core.memory.write_bytes(guest_path, path_bytes);
+        core.memory.write_bytes(guest_mode, mode_bytes);
+        core.state.cia = import;
+        core.state.lr = return_address;
+        core.state.gpr[3] = client_address;
+        core.state.gpr[4] = command_block;
+        core.state.gpr[5] = guest_path;
+        core.state.gpr[6] = guest_mode;
+        core.state.gpr[7] = guest_handle;
+        core.state.gpr[8] = 0xFFFFFFFFU;
+        return core.run(1U);
+    };
+
+    const auto opened = invoke("/vol/content/Cafe/Common/test.gsh", "r");
+    assert(opened.reason == StopReason::instruction_limit);
+    assert(opened.steps == 1U);
+    assert(core.state.cia == return_address);
+    assert(core.state.gpr[3] == 0U);
+    assert(core.state.gpr[4] == command_block);
+    assert(core.state.gpr[5] == guest_path);
+    assert(core.state.gpr[6] == guest_mode);
+    assert(core.state.gpr[7] == guest_handle);
+    assert(core.state.gpr[8] == 0xFFFFFFFFU);
+    for (std::size_t reg = 9U; reg < core.state.gpr.size(); ++reg)
+    {
+        if (reg != 7U)
+        {
+            assert(core.state.gpr[reg] == 0xB2000000U +
+                static_cast<std::uint32_t>(reg) * 0x101U);
+        }
+    }
+    assert(core.memory.read32_be(guest_handle) == 1U);
+    assert(core.fs_open_files.size() == 1U);
+    assert(core.fs_open_files[0].handle == 1U);
+    assert(core.fs_open_files[0].client_address == client_address);
+    assert(core.fs_open_files[0].position == 0U);
+    assert(core.memory.read32_be(command_body + fs_status_offset) == 0x0D900A24U);
+    assert(core.memory.read32_be(command_body + async_result_status_offset) == 0U);
+
+    // Content is mounted read-only; a write mode is refused without creating
+    // a handle or overwriting the caller's output parameter.
+    core.memory.write32_be(guest_handle, 0x5A5A5A5AU);
+    const auto write_open = invoke("/vol/content/Cafe/Common/test.gsh", "w");
+    assert(write_open.reason == StopReason::instruction_limit);
+    assert(core.state.gpr[3] == 0xFFFFFFF6U); // FS_STATUS_PERMISSION_ERROR (-10)
+    assert(core.memory.read32_be(guest_handle) == 0x5A5A5A5AU);
+    assert(core.fs_open_files.size() == 1U);
+
+    const auto missing = invoke("/vol/content/Cafe/Common/missing.gsh", "r");
+    assert(missing.reason == StopReason::instruction_limit);
+    assert(core.state.gpr[3] == 0xFFFFFFFAU); // FS_STATUS_NOT_FOUND (-6)
+    assert(core.memory.read32_be(guest_handle) == 0x5A5A5A5AU);
+    assert(core.fs_open_files.size() == 1U);
+
+    core.reset();
+    std::error_code cleanup_error;
+    std::filesystem::remove_all(content_root, cleanup_error);
+    assert(!cleanup_error);
+}
+
 void proc_ui_init_hle_tests()
 {
     constexpr std::uint32_t return_address = 0x02740124U;
@@ -25505,6 +25615,7 @@ int main(int argc, char* argv[])
     fs_init_hle_tests();
     fs_init_cmd_block_hle_tests();
     fs_get_stat_hle_tests();
+    fs_open_file_hle_tests();
     fs_add_client_hle_tests();
     fs_set_state_change_notification_hle_tests();
     os_get_system_time_hle_tests();
