@@ -11245,6 +11245,8 @@ void memcpy_hle_tests()
     assert(core.state.gpr[5] == 2U);
 }
 
+void os_block_set_hle_tests();
+
 void os_block_move_hle_tests()
 {
     EspressoCore core(0x20U);
@@ -11385,6 +11387,52 @@ void os_block_move_hle_tests()
     core.memory.write16_be(0x14U, 0x2026U);
     invoke(0x16U, 0x14U, 2U, 0U, 0xB8U);
     assert(core.memory.read16_be(0x16U) == 0x2026U);
+    os_block_set_hle_tests();
+}
+
+void os_block_set_hle_tests()
+{
+    EspressoCore core(0x20U);
+    register_coreinit_hle(core.hle);
+    const std::uint32_t import = core.hle.bind_import("coreinit", "OSBlockSet");
+    core.memory.fill_bytes(0U, core.memory.size(), 0xCCU);
+    core.state.cia = import;
+    core.state.lr = 0x90U;
+    core.state.gpr[3] = 5U;
+    core.state.gpr[4] = 0x1A5U;
+    core.state.gpr[5] = 4U;
+    assert(core.step() == StepResult::executed);
+    assert(core.state.cia == 0x90U);
+    assert(core.state.gpr[3] == 5U);
+    assert(core.state.gpr[4] == 0x1A5U);
+    assert(core.state.gpr[5] == 4U);
+    assert(core.memory.read8(4U) == 0xCCU);
+    for (std::uint32_t address = 5U; address < 9U; ++address)
+    {
+        assert(core.memory.read8(address) == 0xA5U);
+    }
+    assert(core.memory.read8(9U) == 0xCCU);
+
+    // A zero-length fill leaves an otherwise unmapped destination untouched.
+    core.state.cia = import;
+    core.state.lr = 0x94U;
+    core.state.gpr[3] = 0x20U;
+    core.state.gpr[4] = 0xDEADBEEFU;
+    core.state.gpr[5] = 0U;
+    assert(core.step() == StepResult::executed);
+    assert(core.state.cia == 0x94U);
+    assert(core.state.gpr[3] == 0x20U);
+
+    core.state.cia = import;
+    core.state.lr = 0x98U;
+    core.state.gpr[3] = 0x20U;
+    core.state.gpr[4] = 0x77U;
+    core.state.gpr[5] = 1U;
+    const RunResult fault = core.run(1U);
+    assert(fault.reason == StopReason::memory_fault);
+    assert(fault.detail.find("write 1 byte(s)") != std::string::npos);
+    assert(fault.detail.find("0x00000020") != std::string::npos);
+    assert(core.state.gpr[3] == 0x20U);
 }
 
 void os_get_system_info_hle_tests()
