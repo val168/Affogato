@@ -11956,6 +11956,8 @@ void fs_open_file_hle_tests()
         core.hle.bind_import("coreinit", "FSGetStatFile");
     const std::uint32_t read_import =
         core.hle.bind_import("coreinit", "FSReadFile");
+    const std::uint32_t close_import =
+        core.hle.bind_import("coreinit", "FSCloseFile");
     core.fs_initialized = true;
     core.fs_content_root = content_root;
     core.fs_clients.push_back({client_address, 0x2040U, 1U});
@@ -12099,6 +12101,24 @@ void fs_open_file_hle_tests()
     assert(core.state.gpr[3] == 0xFFFFFFFAU); // FS_STATUS_NOT_FOUND (-6)
     assert(core.memory.read32_be(guest_handle) == 0x5A5A5A5AU);
     assert(core.fs_open_files.size() == 1U);
+
+    const auto close_file = [&]() {
+        core.state.cia = close_import;
+        core.state.lr = return_address;
+        core.state.gpr[3] = client_address;
+        core.state.gpr[4] = command_block;
+        core.state.gpr[5] = 1U;
+        core.state.gpr[6] = 0xFFFFFFFFU;
+        return core.run(1U);
+    };
+    const auto closed = close_file();
+    assert(closed.reason == StopReason::instruction_limit);
+    assert(core.state.gpr[3] == 0U);
+    assert(core.fs_open_files.empty());
+    const auto closed_again = close_file();
+    assert(closed_again.reason == StopReason::instruction_limit);
+    assert(core.state.gpr[3] == 0xFFFFFFFAU);
+    assert(core.fs_open_files.empty());
 
     core.reset();
     std::error_code cleanup_error;

@@ -2664,6 +2664,80 @@ void register_coreinit_hle(HleDispatcher& dispatcher)
         });
     dispatcher.register_function(
         "coreinit",
+        "FSCloseFile",
+        [](EspressoCore& core) {
+            const std::uint32_t client = core.state.gpr[3];
+            const std::uint32_t command_block = core.state.gpr[4];
+            const std::uint32_t handle = core.state.gpr[5];
+            if (!core.fs_initialized || client == 0U || command_block == 0U ||
+                handle == 0U)
+            {
+                core.state.gpr[3] = fs_status_fatal_error;
+                return;
+            }
+
+            const auto registration = std::find_if(
+                core.fs_clients.begin(), core.fs_clients.end(),
+                [client](const FsClientRegistration& candidate) {
+                    return candidate.client_address == client;
+                });
+            if (registration == core.fs_clients.end())
+            {
+                core.state.gpr[3] = fs_status_fatal_error;
+                return;
+            }
+            const auto open_file = std::find_if(
+                core.fs_open_files.begin(), core.fs_open_files.end(),
+                [client, handle](const FsOpenFileState& candidate) {
+                    return candidate.handle == handle &&
+                           candidate.client_address == client;
+                });
+            if (open_file == core.fs_open_files.end())
+            {
+                core.state.gpr[3] = fs_status_not_found;
+                return;
+            }
+
+            constexpr std::uint64_t guest_address_space_end =
+                std::uint64_t{1} << 32U;
+            const std::uint64_t command_body_address =
+                (static_cast<std::uint64_t>(command_block) +
+                 fs_cmd_block_body_alignment_mask) &
+                ~static_cast<std::uint64_t>(fs_cmd_block_body_alignment_mask);
+            if (command_body_address + fs_cmd_block_async_result_status_offset +
+                    sizeof(std::uint32_t) > guest_address_space_end)
+            {
+                core.state.gpr[3] = fs_status_fatal_error;
+                return;
+            }
+            const std::uint32_t command_body =
+                static_cast<std::uint32_t>(command_body_address);
+            const std::uint32_t command_status = core.memory.read32_be(
+                command_body + fs_cmd_block_status_offset);
+            if (command_status != fs_cmd_block_initialized_status &&
+                command_status != fs_cmd_block_available_status)
+            {
+                core.state.gpr[3] = fs_status_fatal_error;
+                return;
+            }
+            core.memory.validate_write_range(
+                command_body + fs_cmd_block_status_offset,
+                sizeof(std::uint32_t));
+            core.memory.validate_write_range(
+                command_body + fs_cmd_block_async_result_status_offset,
+                sizeof(std::uint32_t));
+
+            core.fs_open_files.erase(open_file);
+            core.memory.write32_be(
+                command_body + fs_cmd_block_status_offset,
+                fs_cmd_block_available_status);
+            core.memory.write32_be(
+                command_body + fs_cmd_block_async_result_status_offset,
+                fs_status_ok);
+            core.state.gpr[3] = fs_status_ok;
+        });
+    dispatcher.register_function(
+        "coreinit",
         "FSAddClient",
         [](EspressoCore& core) {
             constexpr std::uint64_t guest_address_space_end =
