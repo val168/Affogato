@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <array>
 #include <chrono>
+#include <filesystem>
 #include <string>
 #include <vector>
 
@@ -259,6 +260,7 @@ public:
         guest_thread_switches = 0U;
         guest_threads.clear();
         fs_initialized = false;
+        fs_content_root.clear();
         nn_act_initialize_count = 0U;
         nn_act_current_slot = 1U;
         nn_save_initialized = false;
@@ -335,6 +337,7 @@ public:
     std::uint64_t guest_thread_switches{};
     std::vector<GuestThreadRuntimeState> guest_threads;
     bool fs_initialized{};
+    std::filesystem::path fs_content_root;
     std::uint32_t nn_act_initialize_count{};
     std::uint8_t nn_act_current_slot{1U};
     bool nn_save_initialized{};

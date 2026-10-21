@@ -394,7 +394,8 @@ int run_rpx_diagnostic(int argc, char* argv[])
 
     affogato::Emulator emulator;
     const auto load_start = std::chrono::steady_clock::now();
-    const auto image = emulator.load_rpx(bytes);
+    const auto image = emulator.load_rpx(
+        bytes, path.parent_path().parent_path() / "content");
     const auto load_end = std::chrono::steady_clock::now();
     const auto load_time = std::chrono::duration_cast<std::chrono::milliseconds>(
         load_end - load_start);
@@ -566,7 +567,8 @@ void launch_game(
 
             const auto rpx_load_start = std::chrono::steady_clock::now();
             affogato::Emulator emulator;
-            static_cast<void>(emulator.load_rpx(bytes));
+            static_cast<void>(emulator.load_rpx(
+                bytes, path.parent_path().parent_path() / "content"));
             const auto rpx_load_end = std::chrono::steady_clock::now();
             const auto rpx_load_time = std::chrono::duration_cast<std::chrono::milliseconds>(
                 rpx_load_end - rpx_load_start);

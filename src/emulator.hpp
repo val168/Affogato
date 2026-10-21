@@ -6,6 +6,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
 #include <span>
 #include <vector>
 
@@ -38,7 +39,8 @@ public:
     explicit Emulator(std::size_t guest_memory_size = default_guest_memory_size);
 
     [[nodiscard]] cpu::espresso::RpxLoadResult load_rpx(
-        std::span<const std::uint8_t> file);
+        std::span<const std::uint8_t> file,
+        const std::filesystem::path& content_root = {});
     [[nodiscard]] EmulatorRunResult run(
         std::size_t max_steps = 1'000'000,
         ExecutionMode mode = ExecutionMode::interpreter);

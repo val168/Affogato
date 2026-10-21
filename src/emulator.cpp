@@ -22,7 +22,9 @@ Emulator::Emulator(std::size_t guest_memory_size)
     cpu::espresso::register_nn_save_hle(core_.hle);
 }
 
-cpu::espresso::RpxLoadResult Emulator::load_rpx(std::span<const std::uint8_t> file)
+cpu::espresso::RpxLoadResult Emulator::load_rpx(
+    std::span<const std::uint8_t> file,
+    const std::filesystem::path& content_root)
 {
     if (has_loaded_image_)
     {
@@ -34,6 +36,7 @@ cpu::espresso::RpxLoadResult Emulator::load_rpx(std::span<const std::uint8_t> fi
         throw std::invalid_argument("guest memory cannot safely reserve the RPX stack");
     }
 
+    core_.fs_content_root = content_root;
     loaded_image_ = cpu::espresso::load_rpx32_powerpc(core_, file);
     core_.state.gpr[2] = loaded_image_.sda2_base;
     core_.state.gpr[13] = loaded_image_.sda_base;

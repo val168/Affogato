@@ -8,11 +8,13 @@
 #include <array>
 #include <bit>
 #include <chrono>
+#include <filesystem>
 #include <limits>
 #include <optional>
 #include <set>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 
 namespace affogato::cpu::espresso
 {
@@ -115,8 +117,38 @@ constexpr std::uint32_t fs_cmd_block_body_alignment_mask = 0x3FU;
 constexpr std::uint32_t fs_cmd_block_status_offset = 0x93CU;
 constexpr std::uint32_t fs_cmd_block_priority_offset = 0x9E8U;
 constexpr std::uint32_t fs_cmd_block_initialized_status = 0x0D900A21U;
+constexpr std::uint32_t fs_cmd_block_available_status = 0x0D900A24U;
+constexpr std::uint32_t fs_cmd_block_async_result_status_offset = 0x990U;
 constexpr std::uint8_t fs_cmd_block_default_priority = 0x10U;
+constexpr std::uint32_t fs_stat_size = 0x64U;
+constexpr std::uint32_t fs_stat_flags_offset = 0x00U;
+constexpr std::uint32_t fs_stat_mode_offset = 0x04U;
+constexpr std::uint32_t fs_stat_owner_offset = 0x08U;
+constexpr std::uint32_t fs_stat_group_offset = 0x0CU;
+constexpr std::uint32_t fs_stat_size_offset = 0x10U;
+constexpr std::uint32_t fs_stat_allocated_size_offset = 0x14U;
+constexpr std::uint32_t fs_stat_quota_size_offset = 0x18U;
+constexpr std::uint32_t fs_stat_entry_id_offset = 0x20U;
+constexpr std::uint32_t fs_stat_created_offset = 0x24U;
+constexpr std::uint32_t fs_stat_modified_offset = 0x2CU;
+constexpr std::uint32_t fs_status_ok = 0U;
 constexpr std::uint32_t fs_status_fatal_error = 0xFFFFFC00U;
+constexpr std::uint32_t fs_status_not_found = 0xFFFFFFFAU;
+constexpr std::uint32_t fs_status_not_file = 0xFFFFFFF9U;
+constexpr std::uint32_t fs_status_permission_error = 0xFFFFFFF7U;
+constexpr std::uint32_t fs_status_file_too_big = 0xFFFFFFF5U;
+constexpr std::uint32_t fs_status_media_not_ready = 0xFFFFFFF1U;
+constexpr std::uint32_t fs_stat_flag_directory = 0x80000000U;
+constexpr std::uint32_t fs_stat_flag_file = 0x01000000U;
+constexpr std::uint32_t fs_mode_read_owner = 0x400U;
+constexpr std::uint32_t fs_mode_write_owner = 0x200U;
+constexpr std::uint32_t fs_mode_exec_owner = 0x100U;
+constexpr std::uint32_t fs_mode_read_group = 0x040U;
+constexpr std::uint32_t fs_mode_write_group = 0x020U;
+constexpr std::uint32_t fs_mode_exec_group = 0x010U;
+constexpr std::uint32_t fs_mode_read_other = 0x004U;
+constexpr std::uint32_t fs_mode_write_other = 0x002U;
+constexpr std::uint32_t fs_mode_exec_other = 0x001U;
 constexpr std::uint32_t fs_fast_mutex_tag = 0x664D7458U;
 constexpr std::uint32_t fs_fast_mutex_size = 0x2CU;
 constexpr std::uint32_t fs_alarm_tag = 0x614C724DU;
@@ -1880,6 +1912,262 @@ void register_coreinit_hle(HleDispatcher& dispatcher)
                 static_cast<std::uint32_t>(body_address) +
                     fs_cmd_block_priority_offset,
                 fs_cmd_block_default_priority);
+        });
+    dispatcher.register_function(
+        "coreinit",
+        "FSGetStat",
+        [](EspressoCore& core) {
+            const std::uint32_t client = core.state.gpr[3];
+            const std::uint32_t command_block = core.state.gpr[4];
+            const std::uint32_t guest_path_address = core.state.gpr[5];
+            const std::uint32_t guest_stat_address = core.state.gpr[6];
+            if (!core.fs_initialized || client == 0U || command_block == 0U ||
+                guest_path_address == 0U || guest_stat_address == 0U)
+            {
+                core.state.gpr[3] = fs_status_fatal_error;
+                return;
+            }
+
+            const auto registration = std::find_if(
+                core.fs_clients.begin(), core.fs_clients.end(),
+                [client](const FsClientRegistration& candidate) {
+                    return candidate.client_address == client;
+                });
+            if (registration == core.fs_clients.end())
+            {
+                core.state.gpr[3] = fs_status_fatal_error;
+                return;
+            }
+
+            const std::uint64_t command_body_address =
+                (static_cast<std::uint64_t>(command_block) +
+                 fs_cmd_block_body_alignment_mask) &
+                ~static_cast<std::uint64_t>(fs_cmd_block_body_alignment_mask);
+            constexpr std::uint64_t guest_address_space_end =
+                std::uint64_t{1} << 32U;
+            if (command_body_address + fs_cmd_block_async_result_status_offset +
+                    sizeof(std::uint32_t) > guest_address_space_end)
+            {
+                core.state.gpr[3] = fs_status_fatal_error;
+                return;
+            }
+            const std::uint32_t command_body =
+                static_cast<std::uint32_t>(command_body_address);
+            const std::uint32_t command_status = core.memory.read32_be(
+                command_body + fs_cmd_block_status_offset);
+            if (command_status != fs_cmd_block_initialized_status &&
+                command_status != fs_cmd_block_available_status)
+            {
+                core.state.gpr[3] = fs_status_fatal_error;
+                return;
+            }
+
+            core.memory.validate_write_range(
+                guest_stat_address, fs_stat_size);
+            core.memory.validate_write_range(
+                command_body + fs_cmd_block_status_offset,
+                sizeof(std::uint32_t));
+            core.memory.validate_write_range(
+                command_body + fs_cmd_block_async_result_status_offset,
+                sizeof(std::uint32_t));
+
+            constexpr std::size_t maximum_path_size = 0x280U;
+            std::string guest_path;
+            guest_path.reserve(maximum_path_size);
+            bool terminated = false;
+            for (std::size_t offset = 0U; offset < maximum_path_size; ++offset)
+            {
+                const std::uint64_t address =
+                    static_cast<std::uint64_t>(guest_path_address) + offset;
+                if (address >= guest_address_space_end)
+                {
+                    break;
+                }
+                const char character = static_cast<char>(core.memory.read8(
+                    static_cast<std::uint32_t>(address)));
+                if (character == '\0')
+                {
+                    terminated = true;
+                    break;
+                }
+                guest_path.push_back(character);
+            }
+            if (!terminated)
+            {
+                core.state.gpr[3] = fs_status_fatal_error;
+                return;
+            }
+
+            std::uint32_t status = fs_status_media_not_ready;
+            std::optional<std::filesystem::path> host_path;
+            constexpr std::string_view content_volume = "/vol/content";
+            if (!core.fs_content_root.empty() &&
+                (guest_path == content_volume ||
+                 (guest_path.size() > content_volume.size() &&
+                  guest_path.starts_with(content_volume) &&
+                  guest_path[content_volume.size()] == '/')))
+            {
+                status = fs_status_not_found;
+                const std::string_view relative_utf8 = guest_path.size() ==
+                        content_volume.size()
+                    ? std::string_view{}
+                    : std::string_view(guest_path).substr(
+                          content_volume.size() + 1U);
+                std::u8string relative_path_utf8;
+                relative_path_utf8.reserve(relative_utf8.size());
+                for (const unsigned char character : relative_utf8)
+                {
+                    relative_path_utf8.push_back(
+                        static_cast<char8_t>(character));
+                }
+                const std::filesystem::path relative(relative_path_utf8);
+                bool safe_relative_path = !relative.is_absolute();
+                for (const auto& component : relative)
+                {
+                    if (component == "." || component == "..")
+                    {
+                        safe_relative_path = false;
+                        break;
+                    }
+                }
+
+                if (safe_relative_path)
+                {
+                    std::error_code error;
+                    const std::filesystem::path canonical_root =
+                        std::filesystem::canonical(core.fs_content_root, error);
+                    if (!error)
+                    {
+                        const std::filesystem::path candidate = canonical_root / relative;
+                        const std::filesystem::path canonical_candidate =
+                            std::filesystem::canonical(candidate, error);
+                        if (!error)
+                        {
+                            const std::filesystem::path within_root =
+                                canonical_candidate.lexically_relative(canonical_root);
+                            const bool escapes_root =
+                                within_root.empty() && canonical_candidate != canonical_root
+                                    ? true
+                                    : (!within_root.empty() &&
+                                       *within_root.begin() == "..");
+                            if (!escapes_root)
+                            {
+                                host_path = canonical_candidate;
+                            }
+                        }
+                        else if (error == std::errc::permission_denied)
+                        {
+                            status = fs_status_permission_error;
+                        }
+                    }
+                }
+            }
+
+            std::uint32_t stat_flags = 0U;
+            std::uint32_t mode = 0U;
+            std::uint32_t file_size = 0U;
+            if (host_path)
+            {
+                std::error_code error;
+                const std::filesystem::file_status file_status =
+                    std::filesystem::status(*host_path, error);
+                if (error)
+                {
+                    status = error == std::errc::permission_denied
+                        ? fs_status_permission_error
+                        : fs_status_not_found;
+                }
+                else if (std::filesystem::is_directory(file_status))
+                {
+                    status = fs_status_ok;
+                    stat_flags = fs_stat_flag_directory;
+                }
+                else if (std::filesystem::is_regular_file(file_status))
+                {
+                    const std::uintmax_t host_file_size =
+                        std::filesystem::file_size(*host_path, error);
+                    if (error)
+                    {
+                        status = error == std::errc::permission_denied
+                            ? fs_status_permission_error
+                            : fs_status_not_found;
+                    }
+                    else if (host_file_size >
+                             std::numeric_limits<std::uint32_t>::max())
+                    {
+                        status = fs_status_file_too_big;
+                    }
+                    else
+                    {
+                        status = fs_status_ok;
+                        stat_flags = fs_stat_flag_file;
+                        file_size = static_cast<std::uint32_t>(host_file_size);
+                    }
+                }
+                else
+                {
+                    status = fs_status_not_file;
+                }
+
+                if (status == fs_status_ok || stat_flags == fs_stat_flag_directory)
+                {
+                    const auto permissions = file_status.permissions();
+                    const auto add_mode = [&](std::filesystem::perms permission,
+                                              std::uint32_t guest_mode) {
+                        if ((permissions & permission) != std::filesystem::perms::none)
+                        {
+                            mode |= guest_mode;
+                        }
+                    };
+                    add_mode(std::filesystem::perms::owner_read, fs_mode_read_owner);
+                    add_mode(std::filesystem::perms::owner_write, fs_mode_write_owner);
+                    add_mode(std::filesystem::perms::owner_exec, fs_mode_exec_owner);
+                    add_mode(std::filesystem::perms::group_read, fs_mode_read_group);
+                    add_mode(std::filesystem::perms::group_write, fs_mode_write_group);
+                    add_mode(std::filesystem::perms::group_exec, fs_mode_exec_group);
+                    add_mode(std::filesystem::perms::others_read, fs_mode_read_other);
+                    add_mode(std::filesystem::perms::others_write, fs_mode_write_other);
+                    add_mode(std::filesystem::perms::others_exec, fs_mode_exec_other);
+                }
+            }
+
+            if (status == fs_status_ok)
+            {
+                core.memory.zero_fill(guest_stat_address, fs_stat_size);
+                core.memory.write32_be(
+                    guest_stat_address + fs_stat_flags_offset, stat_flags);
+                core.memory.write32_be(
+                    guest_stat_address + fs_stat_mode_offset, mode);
+                core.memory.write32_be(
+                    guest_stat_address + fs_stat_owner_offset, 0U);
+                core.memory.write32_be(
+                    guest_stat_address + fs_stat_group_offset, 0U);
+                core.memory.write32_be(
+                    guest_stat_address + fs_stat_size_offset, file_size);
+                // The host filesystem API does not expose Cafe allocation
+                // units or quota accounting portably. Leave those fields zero
+                // rather than presenting the logical byte size as allocated
+                // storage or inventing title-specific values.
+                core.memory.write32_be(
+                    guest_stat_address + fs_stat_allocated_size_offset,
+                    0U);
+                core.memory.write64_be(
+                    guest_stat_address + fs_stat_quota_size_offset, 0U);
+                core.memory.write32_be(
+                    guest_stat_address + fs_stat_entry_id_offset, 0U);
+                core.memory.write64_be(
+                    guest_stat_address + fs_stat_created_offset, 0U);
+                core.memory.write64_be(
+                    guest_stat_address + fs_stat_modified_offset, 0U);
+            }
+
+            core.memory.write32_be(
+                command_body + fs_cmd_block_status_offset,
+                fs_cmd_block_available_status);
+            core.memory.write32_be(
+                command_body + fs_cmd_block_async_result_status_offset,
+                status);
+            core.state.gpr[3] = status;
         });
     dispatcher.register_function(
         "coreinit",

@@ -19,6 +19,7 @@
 #include <chrono>
 #include <cstdint>
 #include <fstream>
+#include <filesystem>
 #include <iostream>
 #include <iterator>
 #include <optional>
@@ -11765,6 +11766,157 @@ void fs_init_cmd_block_hle_tests()
     std::vector<std::uint8_t> memory_after(faulting.memory.size());
     faulting.memory.read_bytes(0U, memory_after);
     assert(memory_after == memory_before);
+}
+
+void fs_get_stat_hle_tests()
+{
+    constexpr std::uint32_t return_address = 0x0274224CU;
+    constexpr std::uint32_t client_address = 0x2003U;
+    constexpr std::uint32_t client_body = 0x2040U;
+    constexpr std::uint32_t command_block = 0x4003U;
+    constexpr std::uint32_t command_body = 0x4040U;
+    constexpr std::uint32_t guest_path = 0x6000U;
+    constexpr std::uint32_t guest_stat = 0x6400U;
+    constexpr std::uint32_t fs_status_offset = 0x93CU;
+    constexpr std::uint32_t async_result_status_offset = 0x990U;
+    constexpr std::uint32_t stat_size = 0x64U;
+
+    const auto unique_suffix = std::to_string(
+        std::chrono::steady_clock::now().time_since_epoch().count());
+    const std::filesystem::path content_root =
+        std::filesystem::temp_directory_path() /
+        ("affogato_fsgetstat_" + unique_suffix);
+    const std::filesystem::path common_directory = content_root / "Cafe" / "Common";
+    std::filesystem::create_directories(common_directory);
+    const std::filesystem::path file_path = common_directory / "test.gsh";
+    constexpr std::string_view file_contents = "shader-cache-data";
+    {
+        std::ofstream file(file_path, std::ios::binary);
+        assert(file.good());
+        file.write(file_contents.data(),
+                   static_cast<std::streamsize>(file_contents.size()));
+        assert(file.good());
+    }
+
+    EspressoCore core(0x8000U);
+    register_coreinit_hle(core.hle);
+    const std::uint32_t import = core.hle.bind_import("coreinit", "FSGetStat");
+    core.fs_initialized = true;
+    core.fs_content_root = content_root;
+    core.fs_clients.push_back({client_address, client_body, 1U});
+    core.memory.write32_be(command_body + fs_status_offset, 0x0D900A21U);
+    core.memory.fill_bytes(guest_stat, stat_size, 0xA5U);
+
+    for (std::uint32_t reg = 0U; reg < core.state.gpr.size(); ++reg)
+    {
+        core.state.gpr[reg] = 0xA1000000U + reg * 0x101U;
+    }
+    for (std::uint32_t reg = 0U; reg < core.state.fpr.size(); ++reg)
+    {
+        core.state.fpr[reg] = 0x1111000000000000ULL + reg;
+        core.state.fpr_ps1[reg] = 0x2222000000000000ULL + reg;
+    }
+    core.state.cr = 0x12345678U;
+    core.state.xer = 0xA00000A5U;
+    core.state.ctr = 0xCAFEBABEU;
+    core.state.fpscr = 0x5A5AA55AU;
+    core.state.lr = return_address;
+
+    const auto write_path = [&](std::string_view path) {
+        std::vector<std::uint8_t> bytes(path.begin(), path.end());
+        bytes.push_back(0U);
+        core.memory.write_bytes(guest_path, bytes);
+        core.state.cia = import;
+        core.state.lr = return_address;
+        core.state.gpr[3] = client_address;
+        core.state.gpr[4] = command_block;
+        core.state.gpr[5] = guest_path;
+        core.state.gpr[6] = guest_stat;
+        core.state.gpr[7] = 0x88U;
+    };
+
+    write_path("/vol/content/Cafe/Common/test.gsh");
+    const auto gprs_before = core.state.gpr;
+    const auto fpr_before = core.state.fpr;
+    const auto ps1_before = core.state.fpr_ps1;
+    const std::uint32_t cr_before = core.state.cr;
+    const std::uint32_t xer_before = core.state.xer;
+    const std::uint32_t ctr_before = core.state.ctr;
+    const std::uint32_t fpscr_before = core.state.fpscr;
+    const auto found = core.run(1U);
+    assert(found.reason == StopReason::instruction_limit);
+    assert(found.steps == 1U);
+    assert(core.state.cia == return_address);
+    assert(core.state.gpr[3] == 0U);
+    for (std::size_t reg = 0U; reg < core.state.gpr.size(); ++reg)
+    {
+        if (reg != 3U)
+        {
+            assert(core.state.gpr[reg] == gprs_before[reg]);
+        }
+    }
+    assert(core.state.fpr == fpr_before);
+    assert(core.state.fpr_ps1 == ps1_before);
+    assert(core.state.cr == cr_before);
+    assert(core.state.xer == xer_before);
+    assert(core.state.ctr == ctr_before);
+    assert(core.state.fpscr == fpscr_before);
+    assert(core.state.lr == return_address);
+    assert(core.memory.read32_be(command_body + fs_status_offset) == 0x0D900A24U);
+    assert(core.memory.read32_be(command_body + async_result_status_offset) == 0U);
+    assert(core.memory.read32_be(guest_stat) == 0x01000000U);
+    assert(core.memory.read32_be(guest_stat + 0x10U) == file_contents.size());
+    assert(core.memory.read32_be(guest_stat + 0x14U) == 0U);
+    assert(core.memory.read32_be(guest_stat + 0x08U) == 0U);
+    assert(core.memory.read32_be(guest_stat + 0x0CU) == 0U);
+    assert(core.memory.read64_be(guest_stat + 0x18U) == 0U);
+    assert(core.memory.read32_be(guest_stat + 0x20U) == 0U);
+    assert(core.memory.read64_be(guest_stat + 0x24U) == 0U);
+    assert(core.memory.read64_be(guest_stat + 0x2CU) == 0U);
+    for (std::uint32_t offset = 0x34U; offset < stat_size; ++offset)
+    {
+        assert(core.memory.read8(guest_stat + offset) == 0U);
+    }
+
+    // Directory queries succeed with the directory flag and no fabricated size.
+    write_path("/vol/content/Cafe/Common");
+    assert(core.run(1U).reason == StopReason::instruction_limit);
+    assert(core.state.gpr[3] == 0U);
+    assert(core.memory.read32_be(guest_stat) == 0x80000000U);
+    assert(core.memory.read32_be(guest_stat + 0x10U) == 0U);
+
+    // Missing regional assets report the real not-found status and leave the
+    // caller's output FSStat untouched; no region-to-Common alias is invented.
+    core.memory.fill_bytes(guest_stat, stat_size, 0x5AU);
+    write_path("/vol/content/Cafe/JP/primitive_renderer/primitive_renderer_cafe.gsh");
+    const auto missing = core.run(1U);
+    assert(missing.reason == StopReason::instruction_limit);
+    assert(core.state.gpr[3] == 0xFFFFFFFAU); // FS_STATUS_NOT_FOUND (-6)
+    assert(core.memory.read32_be(command_body + fs_status_offset) == 0x0D900A24U);
+    assert(core.memory.read32_be(command_body + async_result_status_offset) ==
+           0xFFFFFFFAU);
+    for (std::uint32_t offset = 0U; offset < stat_size; ++offset)
+    {
+        assert(core.memory.read8(guest_stat + offset) == 0x5AU);
+    }
+
+    // Reject traversal outside /vol/content even if the target exists.
+    write_path("/vol/content/../outside");
+    assert(core.run(1U).reason == StopReason::instruction_limit);
+    assert(core.state.gpr[3] == 0xFFFFFFFAU);
+
+    // An unset content mount reports media-not-ready instead of claiming a file
+    // exists. The guest stat buffer remains untouched.
+    core.fs_content_root.clear();
+    core.memory.fill_bytes(guest_stat, stat_size, 0xC3U);
+    write_path("/vol/content/Cafe/Common/test.gsh");
+    assert(core.run(1U).reason == StopReason::instruction_limit);
+    assert(core.state.gpr[3] == 0xFFFFFFF1U); // FS_STATUS_MEDIA_NOT_READY (-15)
+    assert(core.memory.read8(guest_stat) == 0xC3U);
+
+    std::error_code cleanup_error;
+    std::filesystem::remove_all(content_root, cleanup_error);
+    assert(!cleanup_error);
 }
 
 void proc_ui_init_hle_tests()
@@ -25352,6 +25504,7 @@ int main(int argc, char* argv[])
     nn_save_init_hle_tests();
     fs_init_hle_tests();
     fs_init_cmd_block_hle_tests();
+    fs_get_stat_hle_tests();
     fs_add_client_hle_tests();
     fs_set_state_change_notification_hle_tests();
     os_get_system_time_hle_tests();
