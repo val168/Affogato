@@ -11766,6 +11766,213 @@ void proc_ui_init_hle_tests()
     assert(other.proc_ui_in_foreground);
 }
 
+void proc_ui_register_callback_hle_tests()
+{
+    constexpr std::uint32_t return_address = 0x02740124U;
+    EspressoCore core(0x4000U);
+    register_coreinit_hle(core.hle);
+    const std::uint32_t register_import = core.hle.bind_import(
+        "proc_ui", "ProcUIRegisterCallback");
+    const std::uint32_t clear_import = core.hle.bind_import(
+        "proc_ui", "ProcUIClearCallbacks");
+
+    core.state.gpr[3] = 5U; // PROCUI_CALLBACK_HOME_BUTTON_DENIED
+    core.state.gpr[4] = 0x02035D84U;
+    core.state.gpr[5] = 0U;
+    core.state.gpr[6] = 1U;
+    core.state.gpr[7] = 0xAABBCCDDU;
+    core.state.lr = return_address;
+    core.state.cia = register_import;
+    assert(core.step() == StepResult::executed);
+    assert(core.state.cia == return_address);
+    assert(core.state.gpr[3] == 5U); // void ABI leaves argument registers intact.
+    assert(core.state.gpr[4] == 0x02035D84U);
+    assert(core.state.gpr[5] == 0U);
+    assert(core.state.gpr[6] == 1U);
+    assert(core.state.gpr[7] == 0xAABBCCDDU);
+    assert(core.proc_ui_callbacks.size() == 1U);
+    assert(core.proc_ui_callbacks[0].type == 5U);
+    assert(core.proc_ui_callbacks[0].callback == 0x02035D84U);
+    assert(core.proc_ui_callbacks[0].parameter == 0U);
+    assert(core.proc_ui_callbacks[0].priority == 1U);
+
+    // Multiple registrations are retained in order, with priority preserved;
+    // callback execution is intentionally deferred until event dispatch exists.
+    core.state.gpr[3] = 1U;
+    core.state.gpr[4] = 0x02001000U;
+    core.state.gpr[5] = 0x12345678U;
+    core.state.gpr[6] = 100U;
+    core.state.lr = return_address + 4U;
+    core.state.cia = register_import;
+    assert(core.step() == StepResult::executed);
+    assert(core.proc_ui_callbacks.size() == 2U);
+    assert(core.proc_ui_callbacks[1].type == 1U);
+    assert(core.proc_ui_callbacks[1].callback == 0x02001000U);
+    assert(core.proc_ui_callbacks[1].parameter == 0x12345678U);
+    assert(core.proc_ui_callbacks[1].priority == 100U);
+
+    core.state.lr = return_address + 8U;
+    core.state.cia = clear_import;
+    assert(core.step() == StepResult::executed);
+    assert(core.state.cia == return_address + 8U);
+    assert(core.proc_ui_callbacks.empty());
+}
+
+void im_dim_state_hle_tests()
+{
+    constexpr std::uint32_t output = 0x100U;
+    constexpr std::uint32_t return_address = 0x02740124U;
+    EspressoCore core(0x1000U);
+    register_coreinit_hle(core.hle);
+    const std::uint32_t query = core.hle.bind_import(
+        "coreinit", "IMIsDimEnabled");
+    const std::uint32_t enable = core.hle.bind_import(
+        "coreinit", "IMEnableDim");
+    const std::uint32_t disable = core.hle.bind_import(
+        "coreinit", "IMDisableDim");
+
+    const auto invoke = [&core, return_address](std::uint32_t import) {
+        core.state.lr = return_address;
+        core.state.cia = import;
+        assert(core.run(1U).reason == StopReason::instruction_limit);
+        assert(core.state.cia == return_address);
+        assert(core.state.gpr[3] == 0U); // IM_ERROR_NONE
+    };
+
+    assert(core.im_dim_enabled); // Cafe/Cemu default.
+    core.state.gpr[3] = output;
+    invoke(query);
+    assert(core.memory.read32_be(output) == 1U);
+
+    invoke(disable);
+    assert(!core.im_dim_enabled);
+    core.state.gpr[3] = output;
+    invoke(query);
+    assert(core.memory.read32_be(output) == 0U);
+
+    invoke(enable);
+    assert(core.im_dim_enabled);
+    core.state.gpr[3] = output;
+    invoke(query);
+    assert(core.memory.read32_be(output) == 1U);
+}
+
+void home_button_menu_state_hle_tests()
+{
+    constexpr std::uint32_t return_address = 0x02740124U;
+    EspressoCore core(0x1000U);
+    register_coreinit_hle(core.hle);
+    const std::uint32_t set_import = core.hle.bind_import(
+        "coreinit", "OSEnableHomeButtonMenu");
+    const std::uint32_t get_import = core.hle.bind_import(
+        "coreinit", "OSIsHomeButtonMenuEnabled");
+
+    const auto invoke = [&core, return_address](std::uint32_t import) {
+        core.state.lr = return_address;
+        core.state.cia = import;
+        assert(core.run(1U).reason == StopReason::instruction_limit);
+        assert(core.state.cia == return_address);
+    };
+
+    assert(core.home_button_menu_enabled);
+    core.state.gpr[3] = 0U;
+    invoke(set_import);
+    assert(!core.home_button_menu_enabled);
+    invoke(get_import);
+    assert(core.state.gpr[3] == 0U);
+
+    core.state.gpr[3] = 1U;
+    invoke(set_import);
+    assert(core.home_button_menu_enabled);
+    invoke(get_import);
+    assert(core.state.gpr[3] == 1U);
+}
+
+void wpad_enable_urcc_hle_tests()
+{
+    constexpr std::uint32_t return_address = 0x02740124U;
+    EspressoCore core(0x1000U);
+    register_coreinit_hle(core.hle);
+    const std::uint32_t import = core.hle.bind_import(
+        "padscore", "WPADEnableURCC");
+    const std::uint32_t wii_remote_import = core.hle.bind_import(
+        "padscore", "WPADEnableWiiRemote");
+    assert(!core.wpad_urcc_enabled);
+
+    for (const std::uint32_t enabled : {1U, 0U})
+    {
+        core.state.gpr[3] = enabled;
+        core.state.lr = return_address;
+        core.state.cia = import;
+        assert(core.run(1U).reason == StopReason::instruction_limit);
+        assert(core.state.cia == return_address);
+        assert(core.state.gpr[3] == enabled); // void API
+        assert(core.wpad_urcc_enabled == (enabled != 0U));
+
+        core.state.gpr[3] = enabled;
+        core.state.lr = return_address;
+        core.state.cia = wii_remote_import;
+        assert(core.run(1U).reason == StopReason::instruction_limit);
+        assert(core.state.cia == return_address);
+        assert(core.state.gpr[3] == enabled); // void API
+        assert(core.wpad_wii_remote_enabled == (enabled != 0U));
+    }
+}
+
+void kpad_init_ex_hle_tests()
+{
+    EspressoCore core(0x8000U);
+    register_coreinit_hle(core.hle);
+    const std::uint32_t import = core.hle.bind_import("padscore", "KPADInitEx");
+    const std::uint32_t work_size_import = core.hle.bind_import(
+        "padscore", "KPADGetMplsWorkSize");
+    const std::uint32_t set_workarea_import = core.hle.bind_import(
+        "padscore", "KPADSetMplsWorkarea");
+    core.state.cia = work_size_import;
+    core.state.lr = 0x02740120U;
+    core.state.gpr[3] = 0x55555555U;
+    assert(core.run(1U).reason == StopReason::instruction_limit);
+    assert(core.state.cia == 0x02740120U);
+    assert(core.state.gpr[3] == 0x5FE0U);
+
+    core.state.cia = set_workarea_import;
+    core.state.lr = 0x02740122U;
+    core.state.gpr[3] = 0x400U;
+    core.memory.fill_bytes(0x400U, 0x5FE0U, 0xA5U);
+    assert(core.run(1U).reason == StopReason::instruction_limit);
+    assert(core.state.cia == 0x02740122U);
+    assert(core.state.gpr[3] == 0x400U);
+    assert(core.kpad_mpls_workarea == 0x400U);
+    assert(core.memory.read8(0x400U) == 0xA5U);
+    assert(core.memory.read8(0x63DFU) == 0xA5U);
+
+    core.state.cia = import;
+    core.state.lr = 0x02740124U;
+    core.state.gpr[3] = 0x100U;
+    core.state.gpr[4] = 4U;
+    core.state.gpr[5] = 0x55555555U;
+    core.memory.fill_bytes(0x100U, 4U * 0x44U, 0xA5U);
+    assert(core.run(1U).reason == StopReason::instruction_limit);
+    assert(core.state.cia == 0x02740124U);
+    assert(core.state.gpr[3] == 0x100U);
+    assert(core.state.gpr[4] == 4U);
+    assert(core.state.gpr[5] == 0x55555555U);
+    assert(core.kpad_initialized);
+    assert(core.kpad_unified_status_buffer == 0x100U);
+    assert(core.kpad_unified_status_count == 4U);
+    assert(core.memory.read8(0x100U) == 0xA5U);
+    assert(core.memory.read8(0x1FFU) == 0xA5U);
+
+    core.state.cia = import;
+    core.state.lr = 0x02740128U;
+    core.state.gpr[3] = 0U;
+    core.state.gpr[4] = 0U;
+    assert(core.run(1U).reason == StopReason::instruction_limit);
+    assert(core.kpad_initialized);
+    assert(core.kpad_unified_status_buffer == 0U);
+    assert(core.kpad_unified_status_count == 0U);
+}
+
 void os_create_thread_hle_tests()
 {
     constexpr std::uint32_t thread = 0x1000U;
@@ -12136,6 +12343,116 @@ void os_resume_thread_hle_tests()
     assert(core.state.cia == return_address + 4U);
     assert(core.state.gpr[3] == 0U);
     assert(core.memory.read32_be(thread + suspend_count_offset) == 0U);
+}
+
+void guest_thread_cooperative_context_switch_tests()
+{
+    constexpr std::uint32_t worker = 0x2000U;
+    constexpr std::uint32_t worker_stack_bottom = 0x4000U;
+    constexpr std::uint32_t worker_stack_top = 0x5000U;
+    constexpr std::uint32_t worker_entry = 0x600U;
+    constexpr std::uint32_t worker_argument = 0x12345678U;
+    constexpr std::uint32_t after_default_sleep = 0x710U;
+    constexpr std::uint32_t after_worker_sleep = 0x820U;
+    constexpr std::uint32_t sleep_ticks = 100U;
+
+    EspressoCore core(0x10000U);
+    register_coreinit_hle(core.hle);
+    core.configure_guest_heap(0x1000U, 0x1800U);
+    const std::uint32_t default_thread = initialize_default_guest_thread(
+        core, 0x9000U, 0x8000U);
+    const std::uint32_t create_import = core.hle.bind_import(
+        "coreinit", "OSCreateThread");
+    const std::uint32_t resume_import = core.hle.bind_import(
+        "coreinit", "OSResumeThread");
+    const std::uint32_t sleep_import = core.hle.bind_import(
+        "coreinit", "OSSleepTicks");
+
+    core.state.cia = create_import;
+    core.state.lr = 0x500U;
+    core.state.gpr[3] = worker;
+    core.state.gpr[4] = worker_entry;
+    core.state.gpr[5] = worker_argument;
+    core.state.gpr[6] = 0xCAFEBABEU;
+    core.state.gpr[7] = worker_stack_top;
+    core.state.gpr[8] = worker_stack_top - worker_stack_bottom;
+    core.state.gpr[9] = 16U;
+    assert(core.run(1U).reason == StopReason::instruction_limit);
+    assert(core.state.cia == 0x500U);
+    assert(core.current_thread_address == default_thread);
+
+    core.state.cia = resume_import;
+    core.state.lr = 0x510U;
+    core.state.gpr[3] = worker;
+    assert(core.run(1U).reason == StopReason::instruction_limit);
+    assert(core.state.cia == 0x510U);
+    assert(core.state.gpr[3] == 1U);
+    assert(core.memory.read32_be(worker + 0x328U) == 0U);
+    // An affinity mask of zero is unpinned and may run on this single lane.
+    core.memory.write8(worker + 0x325U, 0U);
+
+    for (std::uint32_t reg = 0U; reg < core.state.gpr.size(); ++reg)
+    {
+        core.state.gpr[reg] = 0xA1000000U + reg * 0x101U;
+    }
+    for (std::uint32_t reg = 0U; reg < core.state.fpr.size(); ++reg)
+    {
+        core.state.fpr[reg] = 0x1111000000000000ULL + reg;
+        core.state.fpr_ps1[reg] = 0x2222000000000000ULL + reg;
+    }
+    core.state.cr = 0x12345678U;
+    core.state.xer = 0x87654321U;
+    core.state.ctr = 0xCAFEBABEU;
+    core.state.fpscr = 0x5A5AA55AU;
+    core.state.gpr[3] = 0U;
+    core.state.gpr[4] = sleep_ticks;
+    core.state.lr = after_default_sleep;
+    core.state.cia = sleep_import;
+    const auto default_gprs = core.state.gpr;
+    const auto default_fprs = core.state.fpr;
+    const auto default_ps1 = core.state.fpr_ps1;
+    const std::uint32_t default_cr = core.state.cr;
+    const std::uint32_t default_xer = core.state.xer;
+    const std::uint32_t default_ctr = core.state.ctr;
+    const std::uint32_t default_fpscr = core.state.fpscr;
+
+    assert(core.run(1U).reason == StopReason::instruction_limit);
+    assert(core.current_thread_address == worker);
+    assert(core.state.cia == worker_entry);
+    assert(core.state.gpr[1] == (worker_stack_top - 8U));
+    assert(core.state.gpr[3] == worker_argument);
+    assert(core.memory.read32_be(default_thread + 0x98U) ==
+           after_default_sleep);
+    assert(core.memory.read8(default_thread + 0x324U) == 4U); // WAITING
+
+    // Mutate the worker state, then sleep it. The default thread must resume
+    // from its saved return address with every architectural register restored.
+    core.state.gpr[12] = 0xDEADBEEFU;
+    core.state.fpr[7] = 0x3FF123456789ABCDULL;
+    core.state.fpr_ps1[7] = 0x400FEDCBA9876543ULL;
+    core.state.cr = 0xAABBCCDDU;
+    core.state.xer = 0x11223344U;
+    core.state.ctr = 0x55667788U;
+    core.state.fpscr = 0x99AABBCCU;
+    core.state.gpr[3] = 0U;
+    core.state.gpr[4] = sleep_ticks;
+    core.state.lr = after_worker_sleep;
+    core.state.cia = sleep_import;
+
+    assert(core.run(1U).reason == StopReason::instruction_limit);
+    assert(core.current_thread_address == default_thread);
+    assert(core.state.cia == after_default_sleep);
+    assert(core.state.gpr == default_gprs);
+    assert(core.state.fpr == default_fprs);
+    assert(core.state.fpr_ps1 == default_ps1);
+    assert(core.state.cr == default_cr);
+    assert(core.state.xer == default_xer);
+    assert(core.state.ctr == default_ctr);
+    assert(core.state.fpscr == default_fpscr);
+    assert(core.memory.read8(default_thread + 0x324U) == 2U); // RUNNING
+    assert(core.memory.read8(worker + 0x324U) == 1U); // READY
+    assert(core.memory.read32_be(worker + 0x98U) == after_worker_sleep);
+    assert(core.guest_scheduler_ticks == sleep_ticks);
 }
 
 void nn_save_init_hle_tests()
@@ -13907,6 +14224,77 @@ void os_send_message_hle_tests()
     core.memory.read_bytes(messages, one_slot_after);
     assert(one_slot_after == empty_ring_before);
 
+}
+
+void os_receive_message_hle_tests()
+{
+    constexpr std::uint32_t queue = 0x1000U;
+    constexpr std::uint32_t messages = 0x2000U;
+    constexpr std::uint32_t source = 0x3000U;
+    constexpr std::uint32_t destination = 0x3100U;
+    constexpr std::uint32_t return_address = 0x02760C1CU;
+    constexpr std::uint32_t message_size = 0x10U;
+
+    EspressoCore core(0x10000U);
+    register_coreinit_hle(core.hle);
+    const std::uint32_t initialize = core.hle.bind_import(
+        "coreinit", "OSInitMessageQueue");
+    const std::uint32_t send = core.hle.bind_import(
+        "coreinit", "OSSendMessage");
+    const std::uint32_t receive = core.hle.bind_import(
+        "coreinit", "OSReceiveMessage");
+
+    core.state.cia = initialize;
+    core.state.lr = return_address;
+    core.state.gpr[3] = queue;
+    core.state.gpr[4] = messages;
+    core.state.gpr[5] = 2U;
+    assert(core.step() == StepResult::executed);
+
+    for (std::uint32_t offset = 0U; offset < message_size; offset += 4U)
+    {
+        core.memory.write32_be(source + offset, 0xAABB0000U + offset);
+    }
+    core.state.cia = send;
+    core.state.lr = return_address;
+    core.state.gpr[3] = queue;
+    core.state.gpr[4] = source;
+    core.state.gpr[5] = 0U;
+    assert(core.run(1U).reason == StopReason::instruction_limit);
+    assert(core.state.gpr[3] == 1U);
+    assert(core.memory.read32_be(queue + 0x38U) == 1U);
+
+    core.memory.fill_bytes(destination, message_size, 0xCCU);
+    core.state.cia = receive;
+    core.state.lr = return_address;
+    core.state.gpr[3] = queue;
+    core.state.gpr[4] = destination;
+    core.state.gpr[5] = 1U;
+    const RunResult received = core.run(1U);
+    assert(received.reason == StopReason::instruction_limit);
+    assert(core.state.cia == return_address);
+    assert(core.state.gpr[3] == 1U);
+    for (std::uint32_t offset = 0U; offset < message_size; offset += 4U)
+    {
+        assert(core.memory.read32_be(destination + offset) == 0xAABB0000U + offset);
+    }
+    assert(core.memory.read32_be(queue + 0x34U) == 1U);
+    assert(core.memory.read32_be(queue + 0x38U) == 0U);
+
+    core.memory.fill_bytes(destination, message_size, 0x5AU);
+    core.state.cia = receive;
+    core.state.lr = return_address;
+    core.state.gpr[3] = queue;
+    core.state.gpr[4] = destination;
+    core.state.gpr[5] = 0U;
+    assert(core.run(1U).reason == StopReason::instruction_limit);
+    assert(core.state.gpr[3] == 0U);
+    for (std::uint32_t offset = 0U; offset < message_size; ++offset)
+    {
+        assert(core.memory.read8(destination + offset) == 0x5AU);
+    }
+    assert(core.memory.read32_be(queue + 0x34U) == 1U);
+    assert(core.memory.read32_be(queue + 0x38U) == 0U);
 }
 
 void mem_get_base_heap_handle_hle_tests()
@@ -24732,14 +25120,21 @@ int main(int argc, char* argv[])
     hle_dispatch_tests();
     nn_olv_hle_tests();
     proc_ui_init_hle_tests();
+    proc_ui_register_callback_hle_tests();
+    im_dim_state_hle_tests();
+    home_button_menu_state_hle_tests();
+    wpad_enable_urcc_hle_tests();
+    kpad_init_ex_hle_tests();
     os_create_thread_hle_tests();
     os_set_thread_name_hle_tests();
     os_set_thread_affinity_hle_tests();
     os_resume_thread_hle_tests();
+    guest_thread_cooperative_context_switch_tests();
     guest_mutex_tests();
     memset_hle_tests();
     memcpy_hle_tests();
     os_block_move_hle_tests();
+    os_block_set_hle_tests();
     os_get_system_info_hle_tests();
     nn_save_init_hle_tests();
     fs_init_hle_tests();
@@ -24751,6 +25146,7 @@ int main(int argc, char* argv[])
     os_get_thread_priority_hle_tests();
     os_init_message_queue_hle_tests();
     os_send_message_hle_tests();
+    os_receive_message_hle_tests();
     mem_get_base_heap_handle_hle_tests();
     mem_get_allocatable_size_for_frm_heap_ex_hle_tests();
     mem_alloc_from_frm_heap_ex_hle_tests();

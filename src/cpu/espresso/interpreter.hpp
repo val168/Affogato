@@ -226,6 +226,21 @@ struct FsClientRegistration
     std::uint32_t synthetic_handle{};
 };
 
+struct GuestThreadRuntimeState
+{
+    std::uint32_t address{};
+    std::uint64_t wake_tick{};
+    bool sleeping{};
+};
+
+struct ProcUiCallbackRegistration
+{
+    std::uint32_t type{};
+    std::uint32_t callback{};
+    std::uint32_t parameter{};
+    std::uint32_t priority{};
+};
+
 class EspressoCore
 {
 public:
@@ -240,6 +255,9 @@ public:
         timebase_origin_ = std::chrono::steady_clock::now();
         current_thread_address = 0;
         os_sleep_ticks_offset = 0;
+        guest_scheduler_ticks = 0U;
+        guest_thread_switches = 0U;
+        guest_threads.clear();
         fs_initialized = false;
         nn_save_initialized = false;
         proc_ui_initialized = false;
@@ -250,6 +268,15 @@ public:
         proc_ui_in_shutdown = false;
         proc_ui_status = 0U;
         proc_ui_draw_done_release = false;
+        proc_ui_callbacks.clear();
+        im_dim_enabled = true;
+        home_button_menu_enabled = true;
+        wpad_urcc_enabled = false;
+        wpad_wii_remote_enabled = false;
+        kpad_initialized = false;
+        kpad_unified_status_buffer = 0U;
+        kpad_unified_status_count = 0U;
+        kpad_mpls_workarea = 0U;
         gx2 = {};
         fs_clients.clear();
         next_fs_client_handle = 1U;
@@ -302,6 +329,9 @@ public:
     HleDispatcher hle;
     std::uint32_t current_thread_address{};
     std::uint64_t os_sleep_ticks_offset{};
+    std::uint64_t guest_scheduler_ticks{};
+    std::uint64_t guest_thread_switches{};
+    std::vector<GuestThreadRuntimeState> guest_threads;
     bool fs_initialized{};
     bool nn_save_initialized{};
     bool proc_ui_initialized{};
@@ -312,6 +342,15 @@ public:
     bool proc_ui_in_shutdown{};
     std::uint32_t proc_ui_status{};
     bool proc_ui_draw_done_release{};
+    std::vector<ProcUiCallbackRegistration> proc_ui_callbacks;
+    bool im_dim_enabled{true};
+    bool home_button_menu_enabled{true};
+    bool wpad_urcc_enabled{};
+    bool wpad_wii_remote_enabled{};
+    bool kpad_initialized{};
+    std::uint32_t kpad_unified_status_buffer{};
+    std::uint32_t kpad_unified_status_count{};
+    std::uint32_t kpad_mpls_workarea{};
     Gx2RuntimeState gx2{};
     std::vector<FsClientRegistration> fs_clients;
     std::uint32_t next_fs_client_handle{1U};

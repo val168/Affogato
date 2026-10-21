@@ -50,13 +50,21 @@ constexpr std::uint32_t os_thread_ready = 1U;
 constexpr std::uint32_t os_thread_type_application = 2U;
 constexpr std::uint32_t os_thread_id_unassigned = 0x8000U;
 constexpr std::uint32_t os_context_gpr_offset = 0x08U;
+constexpr std::uint32_t os_context_cr_offset = 0x88U;
 constexpr std::uint32_t os_context_lr_offset = 0x8CU;
+constexpr std::uint32_t os_context_ctr_offset = 0x90U;
+constexpr std::uint32_t os_context_xer_offset = 0x94U;
 constexpr std::uint32_t os_context_srr0_offset = 0x98U;
 constexpr std::uint32_t os_context_srr1_offset = 0x9CU;
 constexpr std::uint32_t os_context_fpscr_offset = 0xB4U;
+constexpr std::uint32_t os_context_fpr_offset = 0xB8U;
 constexpr std::uint32_t os_context_gqr_offset = 0x1BCU;
 constexpr std::uint32_t os_context_upir_offset = 0x1DCU;
+constexpr std::uint32_t os_context_psf_offset = 0x1E0U;
 constexpr std::uint32_t os_context_affinity_offset = 0x304U;
+constexpr std::uint32_t os_context_size = 0x320U;
+constexpr std::uint8_t os_thread_running = 1U << 1U;
+constexpr std::uint8_t os_thread_waiting = 1U << 2U;
 constexpr std::int32_t os_thread_default_app_priority = 16;
 constexpr std::int32_t os_thread_app_priority_base = 64;
 constexpr std::int32_t os_thread_default_internal_priority =
@@ -69,6 +77,8 @@ constexpr std::uint32_t os_message_queue_messages_offset = 0x2CU;
 constexpr std::uint32_t os_message_queue_capacity_offset = 0x30U;
 constexpr std::uint32_t os_message_queue_first_offset = 0x34U;
 constexpr std::uint32_t os_message_queue_used_offset = 0x38U;
+constexpr std::uint32_t kpad_unified_wpad_status_size = 0x44U;
+constexpr std::uint32_t kpad_mpls_work_size = 0x5FE0U;
 constexpr std::uint32_t os_message_size = 0x10U;
 constexpr std::uint32_t os_message_flag_blocking = 1U << 0U;
 constexpr std::uint32_t os_message_flag_high_priority = 1U << 1U;
@@ -268,6 +278,94 @@ void initialize_guest_message_queue(
                                static_cast<std::uint32_t>(slot_index));
     }
     core.memory.write32_be(queue + os_message_queue_used_offset, used + 1U);
+    return true;
+}
+
+[[nodiscard]] bool receive_guest_message(
+    EspressoCore& core,
+    std::uint32_t queue,
+    std::uint32_t destination,
+    std::uint32_t flags)
+{
+    constexpr std::uint64_t guest_address_space_end = std::uint64_t{1} << 32U;
+    if (queue == 0U)
+    {
+        throw HleExecutionError("OSReceiveMessage received null OSMessageQueue pointer");
+    }
+    if (static_cast<std::uint64_t>(queue) + os_message_queue_size >
+        guest_address_space_end)
+    {
+        throw HleExecutionError("OSReceiveMessage OSMessageQueue address wraps guest address space");
+    }
+
+    std::array<std::uint8_t, os_message_queue_size> queue_snapshot{};
+    try
+    {
+        core.memory.read_bytes(queue, queue_snapshot);
+        core.memory.validate_write_range(queue, os_message_queue_size);
+    }
+    catch (const GuestMemoryFault&)
+    {
+        throw HleExecutionError("OSReceiveMessage OSMessageQueue is outside mapped guest memory");
+    }
+    const auto queue_u32 = [&queue_snapshot](std::uint32_t offset) {
+        return (static_cast<std::uint32_t>(queue_snapshot[offset]) << 24U) |
+            (static_cast<std::uint32_t>(queue_snapshot[offset + 1U]) << 16U) |
+            (static_cast<std::uint32_t>(queue_snapshot[offset + 2U]) << 8U) |
+            static_cast<std::uint32_t>(queue_snapshot[offset + 3U]);
+    };
+
+    const std::uint32_t messages = queue_u32(os_message_queue_messages_offset);
+    const std::uint32_t capacity = queue_u32(os_message_queue_capacity_offset);
+    const std::uint32_t first = queue_u32(os_message_queue_first_offset);
+    const std::uint32_t used = queue_u32(os_message_queue_used_offset);
+    if (capacity != 0U && first >= capacity)
+    {
+        throw HleExecutionError(
+            "OSReceiveMessage encountered an invalid message-queue first index");
+    }
+    if (used > capacity)
+    {
+        throw HleExecutionError(
+            "OSReceiveMessage encountered a message-queue used count above capacity");
+    }
+    if (used == 0U)
+    {
+        if ((flags & os_message_flag_blocking) != 0U)
+        {
+            throw HleExecutionError(
+                "OSReceiveMessage would block on an empty queue; receiver scheduling is not implemented");
+        }
+        return false;
+    }
+    if (destination == 0U)
+    {
+        throw HleExecutionError("OSReceiveMessage received null OSMessage output pointer");
+    }
+
+    const std::uint64_t slot_address = static_cast<std::uint64_t>(messages) +
+        static_cast<std::uint64_t>(first) * os_message_size;
+    if (slot_address + os_message_size > guest_address_space_end)
+    {
+        throw HleExecutionError("OSReceiveMessage message slot wraps guest address space");
+    }
+    std::array<std::uint8_t, os_message_size> message{};
+    try
+    {
+        core.memory.read_bytes(static_cast<std::uint32_t>(slot_address), message);
+        core.memory.validate_write_range(destination, message.size());
+    }
+    catch (const GuestMemoryFault&)
+    {
+        throw HleExecutionError(
+            "OSReceiveMessage message slot or output buffer is outside mapped guest memory");
+    }
+
+    // Read and validate both sides before committing output or ring metadata.
+    core.memory.write_bytes(destination, message);
+    core.memory.write32_be(
+        queue + os_message_queue_first_offset, (first + 1U) % capacity);
+    core.memory.write32_be(queue + os_message_queue_used_offset, used - 1U);
     return true;
 }
 
@@ -674,6 +772,226 @@ void set_u64_return(CpuState& state, std::uint64_t value) noexcept
     state.gpr[4] = static_cast<std::uint32_t>(value);
 }
 
+GuestThreadRuntimeState& ensure_guest_thread(EspressoCore& core, std::uint32_t address)
+{
+    const auto found = std::find_if(
+        core.guest_threads.begin(), core.guest_threads.end(),
+        [address](const GuestThreadRuntimeState& thread) {
+            return thread.address == address;
+        });
+    if (found != core.guest_threads.end())
+    {
+        return *found;
+    }
+    core.guest_threads.push_back({address, 0U, false});
+    return core.guest_threads.back();
+}
+
+void save_guest_context(
+    EspressoCore& core,
+    std::uint32_t thread,
+    std::uint32_t resume_cia)
+{
+    core.memory.validate_write_range(thread, os_context_size);
+    for (std::uint32_t reg = 0U; reg < core.state.gpr.size(); ++reg)
+    {
+        core.memory.write32_be(
+            thread + os_context_gpr_offset + reg * sizeof(std::uint32_t),
+            core.state.gpr[reg]);
+    }
+    core.memory.write32_be(thread + os_context_cr_offset, core.state.cr);
+    core.memory.write32_be(thread + os_context_lr_offset, core.state.lr);
+    core.memory.write32_be(thread + os_context_ctr_offset, core.state.ctr);
+    core.memory.write32_be(thread + os_context_xer_offset, core.state.xer);
+    core.memory.write32_be(thread + os_context_srr0_offset, resume_cia);
+    core.memory.write32_be(thread + os_context_fpscr_offset, core.state.fpscr);
+    for (std::uint32_t reg = 0U; reg < core.state.fpr.size(); ++reg)
+    {
+        core.memory.write64_be(
+            thread + os_context_fpr_offset + reg * sizeof(std::uint64_t),
+            core.state.fpr[reg]);
+        core.memory.write64_be(
+            thread + os_context_psf_offset + reg * sizeof(std::uint64_t),
+            core.state.fpr_ps1[reg]);
+    }
+}
+
+void load_guest_context(EspressoCore& core, std::uint32_t thread)
+{
+    std::array<std::uint8_t, os_context_size> context{};
+    core.memory.read_bytes(thread, context);
+    const auto read32 = [&context](std::uint32_t offset) {
+        return (static_cast<std::uint32_t>(context[offset]) << 24U) |
+            (static_cast<std::uint32_t>(context[offset + 1U]) << 16U) |
+            (static_cast<std::uint32_t>(context[offset + 2U]) << 8U) |
+            static_cast<std::uint32_t>(context[offset + 3U]);
+    };
+    const auto read64 = [&read32](std::uint32_t offset) {
+        return (static_cast<std::uint64_t>(read32(offset)) << 32U) |
+            read32(offset + sizeof(std::uint32_t));
+    };
+    for (std::uint32_t reg = 0U; reg < core.state.gpr.size(); ++reg)
+    {
+        core.state.gpr[reg] = read32(
+            os_context_gpr_offset + reg * sizeof(std::uint32_t));
+    }
+    core.state.cr = read32(os_context_cr_offset);
+    core.state.lr = read32(os_context_lr_offset);
+    core.state.ctr = read32(os_context_ctr_offset);
+    core.state.xer = read32(os_context_xer_offset);
+    core.state.cia = read32(os_context_srr0_offset);
+    core.state.fpscr = read32(os_context_fpscr_offset);
+    for (std::uint32_t reg = 0U; reg < core.state.fpr.size(); ++reg)
+    {
+        core.state.fpr[reg] = read64(
+            os_context_fpr_offset + reg * sizeof(std::uint64_t));
+        core.state.fpr_ps1[reg] = read64(
+            os_context_psf_offset + reg * sizeof(std::uint64_t));
+    }
+}
+
+bool switch_guest_thread(EspressoCore& core, bool block_current, std::uint64_t sleep_ticks)
+{
+    const std::uint32_t current = core.current_thread_address;
+    if (current == 0U)
+    {
+        return false;
+    }
+    const auto current_entry = std::find_if(
+        core.guest_threads.begin(), core.guest_threads.end(),
+        [current](const GuestThreadRuntimeState& thread) {
+            return thread.address == current;
+        });
+    // Direct HLE unit tests and partially initialized clients may set a
+    // current-thread pointer without an OSContext. Do not touch such memory.
+    if (current_entry == core.guest_threads.end())
+    {
+        return false;
+    }
+    auto& current_runtime = *current_entry;
+    const std::uint32_t current_priority = core.memory.read32_be(
+        current + os_thread_priority_offset);
+
+    if (block_current)
+    {
+        core.memory.write8(current + os_thread_state_offset, os_thread_waiting);
+        current_runtime.sleeping = true;
+        current_runtime.wake_tick = sleep_ticks >
+                std::numeric_limits<std::uint64_t>::max() - core.guest_scheduler_ticks
+            ? std::numeric_limits<std::uint64_t>::max()
+            : core.guest_scheduler_ticks + sleep_ticks;
+    }
+    else
+    {
+        core.memory.write8(current + os_thread_state_offset, os_thread_ready);
+        current_runtime.sleeping = false;
+    }
+
+    const auto wake_due_threads = [&core]() {
+        for (auto& thread : core.guest_threads)
+        {
+            if (thread.sleeping && thread.wake_tick <= core.guest_scheduler_ticks)
+            {
+                thread.sleeping = false;
+                core.memory.write8(
+                    thread.address + os_thread_state_offset, os_thread_ready);
+            }
+        }
+    };
+    wake_due_threads();
+
+    const auto select_ready_thread = [&]() -> std::uint32_t {
+        std::uint32_t selected = 0U;
+        std::uint32_t selected_priority = std::numeric_limits<std::uint32_t>::max();
+        bool after_current = false;
+        for (std::size_t pass = 0U; pass < 2U; ++pass)
+        {
+            after_current = pass != 0U;
+            for (const auto& thread : core.guest_threads)
+            {
+                if (after_current && thread.address == current)
+                {
+                    after_current = false;
+                    continue;
+                }
+                if (thread.address == current || thread.sleeping)
+                {
+                    continue;
+                }
+                const std::uint8_t state = core.memory.read8(
+                    thread.address + os_thread_state_offset);
+                const std::uint32_t suspended = core.memory.read32_be(
+                    thread.address + os_thread_suspend_count_offset);
+                const std::uint8_t affinity = core.memory.read8(
+                    thread.address + os_thread_attributes_offset);
+                // Affinity zero is Cafe's unpinned/any-core setting. A
+                // nonzero mask must include the currently emulated core.
+                if ((state & os_thread_ready) == 0U || suspended != 0U ||
+                    (affinity != 0U &&
+                     (affinity & (1U << current_core_index)) == 0U))
+                {
+                    continue;
+                }
+                const std::uint32_t priority = core.memory.read32_be(
+                    thread.address + os_thread_priority_offset);
+                if (priority < selected_priority)
+                {
+                    selected = thread.address;
+                    selected_priority = priority;
+                }
+            }
+            if (selected != 0U)
+            {
+                break;
+            }
+        }
+        if (selected != 0U && !block_current && selected_priority > current_priority)
+        {
+            return 0U;
+        }
+        return selected;
+    };
+
+    std::uint32_t next = select_ready_thread();
+    if (next == 0U && block_current)
+    {
+        std::uint64_t next_wake = std::numeric_limits<std::uint64_t>::max();
+        for (const auto& thread : core.guest_threads)
+        {
+            if (thread.sleeping)
+            {
+                next_wake = std::min(next_wake, thread.wake_tick);
+            }
+        }
+        if (next_wake != std::numeric_limits<std::uint64_t>::max())
+        {
+            core.guest_scheduler_ticks = std::max(core.guest_scheduler_ticks, next_wake);
+            wake_due_threads();
+            next = select_ready_thread();
+        }
+    }
+    if (next == 0U)
+    {
+        if (block_current)
+        {
+            current_runtime.sleeping = false;
+            core.memory.write8(current + os_thread_state_offset, os_thread_running);
+        }
+        else
+        {
+            core.memory.write8(current + os_thread_state_offset, os_thread_running);
+        }
+        return false;
+    }
+
+    save_guest_context(core, current, core.state.lr);
+    core.memory.write8(next + os_thread_state_offset, os_thread_running);
+    load_guest_context(core, next);
+    core.current_thread_address = next;
+    ++core.guest_thread_switches;
+    return true;
+}
+
 } // namespace
 
 std::uint32_t initialize_default_guest_thread(
@@ -724,6 +1042,7 @@ std::uint32_t initialize_default_guest_thread(
     core.memory.write32_be(address + thread_stack_end_offset, stack_end);
     core.memory.write32_be(address + os_thread_type_offset, thread_type_application);
     core.current_thread_address = address;
+    ensure_guest_thread(core, address);
     return address;
 }
 
@@ -900,6 +1219,127 @@ void register_coreinit_hle(HleDispatcher& dispatcher)
         });
 
     dispatcher.register_function(
+        "proc_ui",
+        "ProcUIRegisterCallback",
+        [](EspressoCore& core) {
+            // This API registers an event callback; it does not invoke it.
+            // Keep the guest pointer/parameter/priority for a future ProcUI
+            // event dispatcher rather than fabricating an event here.
+            core.proc_ui_callbacks.push_back({
+                core.state.gpr[3],
+                core.state.gpr[4],
+                core.state.gpr[5],
+                core.state.gpr[6]});
+        });
+
+    dispatcher.register_function(
+        "proc_ui",
+        "ProcUIClearCallbacks",
+        [](EspressoCore& core) {
+            core.proc_ui_callbacks.clear();
+        });
+
+    dispatcher.register_function(
+        "coreinit",
+        "IMIsDimEnabled",
+        [](EspressoCore& core) {
+            core.memory.write32_be(
+                core.state.gpr[3], core.im_dim_enabled ? 1U : 0U);
+            core.state.gpr[3] = 0U; // IM_ERROR_NONE
+        });
+
+    dispatcher.register_function(
+        "coreinit",
+        "IMEnableDim",
+        [](EspressoCore& core) {
+            core.im_dim_enabled = true;
+            core.state.gpr[3] = 0U; // IM_ERROR_NONE
+        });
+
+    dispatcher.register_function(
+        "coreinit",
+        "IMDisableDim",
+        [](EspressoCore& core) {
+            core.im_dim_enabled = false;
+            core.state.gpr[3] = 0U; // IM_ERROR_NONE
+        });
+
+    dispatcher.register_function(
+        "coreinit",
+        "OSEnableHomeButtonMenu",
+        [](EspressoCore& core) {
+            core.home_button_menu_enabled = core.state.gpr[3] != 0U;
+        });
+
+    dispatcher.register_function(
+        "coreinit",
+        "OSIsHomeButtonMenuEnabled",
+        [](EspressoCore& core) {
+            core.state.gpr[3] = core.home_button_menu_enabled ? 1U : 0U;
+        });
+
+    dispatcher.register_function(
+        "padscore",
+        "WPADEnableURCC",
+        [](EspressoCore& core) {
+            // Preserve the requested controller-connect policy. Controller
+            // discovery/delivery is handled by the future padscore layer.
+            core.wpad_urcc_enabled = core.state.gpr[3] != 0U;
+        });
+
+    dispatcher.register_function(
+        "padscore",
+        "WPADEnableWiiRemote",
+        [](EspressoCore& core) {
+            core.wpad_wii_remote_enabled = core.state.gpr[3] != 0U;
+        });
+    dispatcher.register_function(
+        "padscore",
+        "KPADInitEx",
+        [](EspressoCore& core) {
+            const std::uint32_t buffer = core.state.gpr[3];
+            const std::uint32_t count = core.state.gpr[4];
+            const std::uint64_t buffer_size =
+                static_cast<std::uint64_t>(count) * kpad_unified_wpad_status_size;
+            if (count != 0U)
+            {
+                if (buffer == 0U ||
+                    static_cast<std::uint64_t>(buffer) + buffer_size >
+                        (std::uint64_t{1} << 32U))
+                {
+                    throw HleExecutionError(
+                        "padscore::KPADInitEx received an invalid external status buffer");
+                }
+                core.memory.validate_write_range(
+                    buffer, static_cast<std::size_t>(buffer_size));
+            }
+
+            // Keep the application's optional unified-status ring buffer for
+            // subsequent KPAD APIs. Controller sampling remains a separate
+            // input-backend feature; initialization does not fabricate samples.
+            core.kpad_initialized = true;
+            core.kpad_unified_status_buffer = buffer;
+            core.kpad_unified_status_count = count;
+        });
+    dispatcher.register_function(
+        "padscore",
+        "KPADGetMplsWorkSize",
+        [](EspressoCore& core) {
+            core.state.gpr[3] = kpad_mpls_work_size;
+        });
+    dispatcher.register_function(
+        "padscore",
+        "KPADSetMplsWorkarea",
+        [](EspressoCore& core) {
+            const std::uint32_t workarea = core.state.gpr[3];
+            if (workarea != 0U)
+            {
+                core.memory.validate_write_range(workarea, kpad_mpls_work_size);
+            }
+            core.kpad_mpls_workarea = workarea;
+        });
+
+    dispatcher.register_function(
         "coreinit",
         "OSCreateThread",
         [](EspressoCore& core) {
@@ -1011,6 +1451,7 @@ void register_coreinit_hle(HleDispatcher& dispatcher)
             core.memory.write32_be(thread + os_thread_entry_point_offset, entry);
             core.memory.write32_be(thread + os_thread_type_offset,
                                    os_thread_type_application);
+            ensure_guest_thread(core, thread);
             core.memory.write32_be(aligned_stack_top - 4U, 0U);
             core.memory.write32_be(aligned_stack_top - 8U, 0U);
             core.memory.write32_be(stack_bottom, 0xDEADBABEU);
@@ -1186,6 +1627,15 @@ void register_coreinit_hle(HleDispatcher& dispatcher)
                         ? std::numeric_limits<std::uint64_t>::max()
                         : core.os_sleep_ticks_offset + positive_ticks;
             }
+            (void)switch_guest_thread(
+                core, ticks > 0, ticks > 0 ? static_cast<std::uint64_t>(ticks) : 0U);
+        });
+
+    dispatcher.register_function(
+        "coreinit",
+        "OSYieldThread",
+        [](EspressoCore& core) {
+            (void)switch_guest_thread(core, false, 0U);
         });
     dispatcher.register_function(
         "coreinit",
@@ -1896,6 +2346,14 @@ void register_coreinit_hle(HleDispatcher& dispatcher)
                 core.state.gpr[4],
                 core.state.gpr[5]);
             core.state.gpr[3] = sent ? 1U : 0U;
+        });
+    dispatcher.register_function(
+        "coreinit",
+        "OSReceiveMessage",
+        [](EspressoCore& core) {
+            const bool received = receive_guest_message(
+                core, core.state.gpr[3], core.state.gpr[4], core.state.gpr[5]);
+            core.state.gpr[3] = received ? 1U : 0U;
         });
     dispatcher.register_function(
         "coreinit",

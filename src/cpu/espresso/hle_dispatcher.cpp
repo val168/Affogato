@@ -144,8 +144,14 @@ HleDispatchResult HleDispatcher::dispatch(EspressoCore& core, std::uint32_t addr
     }
 
     const std::uint32_t return_address = core.state.lr;
+    const std::uint32_t previous_thread = core.current_thread_address;
     binding.handler(core);
-    core.state.cia = return_address;
+    // A cooperative Cafe scheduler may have installed another guest thread's
+    // saved context (including its CIA) while servicing this HLE call.
+    if (core.current_thread_address == previous_thread)
+    {
+        core.state.cia = return_address;
+    }
     last_unimplemented_call_.clear();
     return HleDispatchResult::executed;
 }

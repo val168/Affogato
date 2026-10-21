@@ -442,10 +442,69 @@ int run_rpx_diagnostic(int argc, char* argv[])
     std::cout << format_result(result)
               << "\nGPR4: " << emulator.core().state.gpr[4]
               << "\nGPR5: " << emulator.core().state.gpr[5]
+              << "\nCR: 0x" << std::hex << std::uppercase
+              << emulator.core().state.cr
+              << " LR: 0x" << emulator.core().state.lr
+              << " CTR: 0x" << emulator.core().state.ctr
+              << " XER: 0x" << emulator.core().state.xer << std::dec
               << "\nPhase timings: file read " << read_time.count()
               << " ms; RPX load " << load_time.count()
               << " ms; guest execution " << execution_time.count() << " ms.\n"
-              << "HLE calls observed:\n";
+              << "Guest thread switches: " << emulator.core().guest_thread_switches
+              << "; current thread: 0x" << std::hex << std::uppercase
+              << emulator.core().current_thread_address << std::dec << '\n'
+              << "Guest threads:\n";
+    std::cout << "GPRs:";
+    for (std::size_t reg = 0U; reg < emulator.core().state.gpr.size(); ++reg)
+    {
+        if ((reg % 4U) == 0U)
+        {
+            std::cout << '\n';
+        }
+        std::cout << "  r" << reg << "=0x" << std::hex << std::uppercase
+                  << emulator.core().state.gpr[reg] << std::dec;
+    }
+    std::cout << '\n';
+    if (result.execution.hle_call == "coreinit::OSReceiveMessage")
+    {
+        const std::uint32_t queue = emulator.core().state.gpr[3];
+        std::cout << "OSReceiveMessage args: queue=0x" << std::hex << std::uppercase
+                  << queue << " output=0x" << emulator.core().state.gpr[4]
+                  << " flags=0x" << emulator.core().state.gpr[5] << std::dec;
+        try
+        {
+            std::cout << " messages=0x" << std::hex << std::uppercase
+                      << emulator.core().memory.read32_be(queue + 0x2CU)
+                      << " capacity=" << std::dec
+                      << emulator.core().memory.read32_be(queue + 0x30U)
+                      << " first="
+                      << emulator.core().memory.read32_be(queue + 0x34U)
+                      << " used="
+                      << emulator.core().memory.read32_be(queue + 0x38U);
+        }
+        catch (const std::exception& error)
+        {
+            std::cout << " queue-state-error=" << error.what();
+        }
+        std::cout << '\n';
+    }
+    for (const auto& thread : emulator.core().guest_threads)
+    {
+        std::cout << "  0x" << std::hex << std::uppercase << thread.address
+                  << " state=0x" << static_cast<unsigned>(emulator.core().memory.read8(
+                         thread.address + 0x324U))
+                  << " suspend=" << std::dec << emulator.core().memory.read32_be(
+                         thread.address + 0x328U)
+                  << " priority=" << emulator.core().memory.read32_be(
+                         thread.address + 0x32CU)
+                  << " affinity=0x" << std::hex << static_cast<unsigned>(
+                         emulator.core().memory.read8(thread.address + 0x325U))
+                  << " entry=0x" << emulator.core().memory.read32_be(
+                         thread.address + 0x39CU)
+                  << " wake=" << std::dec << thread.wake_tick
+                  << " sleeping=" << (thread.sleeping ? "yes" : "no") << '\n';
+    }
+    std::cout << "HLE calls observed:\n";
     for (const auto& statistic : result.hle_call_statistics)
     {
         std::cout << "  " << statistic.name << ": " << statistic.calls << '\n';
