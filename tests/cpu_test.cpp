@@ -15508,6 +15508,52 @@ void gx2_init_hle_tests()
     assert(emulator.core().gx2.command_buffer_pool_size == 0x00400000U);
 }
 
+void gx2_clear_color_hle_tests()
+{
+    constexpr std::uint32_t return_address = 0x02750600U;
+    constexpr std::uint32_t color_buffer = 0x10203040U;
+    EspressoCore core(0x20000U);
+    register_gx2_hle(core.hle);
+    core.gx2.initialized = true;
+    const std::uint32_t import = core.hle.bind_import("gx2", "GX2ClearColor");
+    core.state.gpr[3] = color_buffer;
+    core.state.gpr[4] = 0x44444444U;
+    core.state.cr = 0x12345678U;
+    core.state.xer = 0xA00000A5U;
+    core.state.ctr = 0xCAFEBABEU;
+    constexpr std::array<double, 4U> expected{
+        0.25, 0.5, 0.75, 1.0};
+    for (std::size_t index = 0U; index < expected.size(); ++index)
+    {
+        core.state.fpr[index + 1U] = std::bit_cast<std::uint64_t>(expected[index]);
+    }
+    const auto gprs_before = core.state.gpr;
+    const auto cr_before = core.state.cr;
+    const auto xer_before = core.state.xer;
+    const auto ctr_before = core.state.ctr;
+    core.state.lr = return_address;
+    core.state.cia = import;
+
+    const RunResult result = core.run(1U);
+    assert(result.reason == StopReason::instruction_limit);
+    assert(result.steps == 1U);
+    assert(result.cia == return_address);
+    assert(core.gx2.clear_color_sequence == 1U);
+    assert(core.gx2.latest_clear_color.has_value());
+    assert(core.gx2.latest_clear_color->color_buffer == color_buffer);
+    assert(core.gx2.latest_clear_color->rgba ==
+        (std::array<float, 4U>{0.25F, 0.5F, 0.75F, 1.0F}));
+    assert(core.state.gpr == gprs_before);
+    assert(core.state.cr == cr_before);
+    assert(core.state.xer == xer_before);
+    assert(core.state.ctr == ctr_before);
+
+    core.state.cia = import;
+    core.state.lr = return_address;
+    assert(core.run(1U).reason == StopReason::instruction_limit);
+    assert(core.gx2.clear_color_sequence == 2U);
+}
+
 void gx2_set_depth_stencil_control_hle_tests()
 {
     constexpr std::uint32_t return_address = 0x027507BCU;
@@ -24599,6 +24645,7 @@ int main(int argc, char* argv[])
     mem_get_allocatable_size_for_frm_heap_ex_hle_tests();
     mem_alloc_from_frm_heap_ex_hle_tests();
     gx2_init_hle_tests();
+    gx2_clear_color_hle_tests();
     gx2_set_depth_stencil_control_hle_tests();
     gx2_set_stencil_mask_hle_tests();
     gx2_set_polygon_control_hle_tests();

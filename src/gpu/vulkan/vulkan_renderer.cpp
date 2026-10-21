@@ -163,6 +163,12 @@ bool VulkanRenderer::should_close() const noexcept
     return window_ == nullptr || glfwWindowShouldClose(window_) == GLFW_TRUE;
 }
 
+void VulkanRenderer::set_guest_clear_color(
+    const std::array<float, 4U>& rgba) noexcept
+{
+    guest_clear_color_ = rgba;
+}
+
 VulkanRenderer::QueueFamilies VulkanRenderer::find_queue_families(VkPhysicalDevice device) const
 {
     std::uint32_t count = 0U;
@@ -629,7 +635,8 @@ void VulkanRenderer::render_frame()
     check(vkBeginCommandBuffer(command_buffer, &begin_info), "vkBeginCommandBuffer");
 
     VkClearValue clear{};
-    clear.color = {{0.025F, 0.055F, 0.09F, 1.0F}};
+    std::copy(guest_clear_color_.begin(), guest_clear_color_.end(),
+        clear.color.float32);
     VkRenderPassBeginInfo render_info = make_info<VkRenderPassBeginInfo>(
         VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO);
     render_info.renderPass = render_pass_;

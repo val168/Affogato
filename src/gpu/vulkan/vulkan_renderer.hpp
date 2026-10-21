@@ -23,6 +23,7 @@ public:
 
     void poll_events();
     void render_frame();
+    void set_guest_clear_color(const std::array<float, 4U>& rgba) noexcept;
 
     [[nodiscard]] bool should_close() const noexcept;
     [[nodiscard]] const std::string& device_name() const noexcept
@@ -81,6 +82,7 @@ private:
     std::array<VkFence, frames_in_flight> in_flight_{};
     std::vector<VkFence> images_in_flight_;
     std::size_t current_frame_{};
+    std::array<float, 4U> guest_clear_color_{0.025F, 0.055F, 0.09F, 1.0F};
     std::string device_name_;
 };
 

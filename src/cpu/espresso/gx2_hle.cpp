@@ -1076,6 +1076,30 @@ void register_gx2_hle(HleDispatcher& dispatcher)
             // flip scheduling, and host presentation remain deferred.
             core.gx2.swap_interval = interval;
         });
+
+    dispatcher.register_function(
+        "gx2",
+        "GX2ClearColor",
+        [](EspressoCore& core) {
+            if (!core.gx2.initialized)
+            {
+                throw HleExecutionError(
+                    "gx2::GX2ClearColor: GX2 has not been initialized");
+            }
+
+            // WUT's ABI places these float arguments in FPR1-FPR4. The HLE
+            // records the guest operation; the frontend forwards the latest
+            // clear request to its Vulkan presentation thread.
+            Gx2ClearColorRequest request{};
+            request.color_buffer = core.state.gpr[3];
+            for (std::size_t index = 0U; index < request.rgba.size(); ++index)
+            {
+                const double value = std::bit_cast<double>(core.state.fpr[index + 1U]);
+                request.rgba[index] = static_cast<float>(value);
+            }
+            core.gx2.latest_clear_color = request;
+            ++core.gx2.clear_color_sequence;
+        });
 }
 
 } // namespace affogato::cpu::espresso

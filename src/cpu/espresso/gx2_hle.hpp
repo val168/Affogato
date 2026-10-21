@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstdint>
+#include <optional>
 #include <vector>
 
 namespace affogato::cpu::espresso
@@ -21,6 +22,14 @@ struct Gx2Command
     std::uint32_t value{};
 
     bool operator==(const Gx2Command&) const = default;
+};
+
+struct Gx2ClearColorRequest
+{
+    std::uint32_t color_buffer{};
+    std::array<float, 4U> rgba{};
+
+    bool operator==(const Gx2ClearColorRequest&) const = default;
 };
 
 struct Gx2RuntimeState
@@ -80,6 +89,8 @@ struct Gx2RuntimeState
     std::array<std::uint32_t, 8U> cb_blend_control{};
     std::array<bool, 4U> cb_blend_constant_valid{};
     std::array<std::uint32_t, 4U> cb_blend_constant{};
+    std::uint64_t clear_color_sequence{};
+    std::optional<Gx2ClearColorRequest> latest_clear_color;
     bool sx_alpha_test_control_valid{};
     std::uint32_t sx_alpha_test_control{};
     bool sx_alpha_ref_valid{};

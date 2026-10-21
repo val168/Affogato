@@ -337,6 +337,8 @@ struct WorkerResult
 {
     std::mutex mutex;
     std::string message;
+    std::optional<affogato::cpu::espresso::Gx2ClearColorRequest> latest_guest_clear;
+    std::uint64_t guest_clear_sequence{};
     std::atomic_bool running{};
 };
 
@@ -393,6 +395,7 @@ void launch_game(
             constexpr std::size_t rpx_instruction_limit = 5'000'000'000ULL;
             constexpr std::size_t progress_chunk_size = 1'000'000U;
             std::size_t total_steps = 0;
+            std::uint64_t observed_clear_sequence = 0U;
             auto guest_run_start = std::chrono::steady_clock::now();
             affogato::EmulatorRunResult run_result{};
             {
@@ -408,6 +411,15 @@ void launch_game(
                 run_result = emulator.run(chunk_size, execution_mode);
                 total_steps += run_result.execution.steps;
                 run_result.execution.steps = total_steps;
+                const auto& gx2 = emulator.core().gx2;
+                if (gx2.clear_color_sequence != observed_clear_sequence &&
+                    gx2.latest_clear_color.has_value())
+                {
+                    observed_clear_sequence = gx2.clear_color_sequence;
+                    std::lock_guard lock(worker.mutex);
+                    worker.latest_guest_clear = gx2.latest_clear_color;
+                    ++worker.guest_clear_sequence;
+                }
                 if (run_result.execution.reason !=
                     affogato::cpu::espresso::StopReason::instruction_limit)
                 {
@@ -608,6 +620,7 @@ int run_frontend()
     bool grid_view = false;
     bool use_recompiler = false;
     bool done = false;
+    std::uint64_t shown_guest_clear_sequence = 0U;
     while (!done)
     {
         if (vulkan_output)
@@ -814,6 +827,18 @@ int run_frontend()
         if (vulkan_output)
         {
             current_stage = "presenting Vulkan output";
+            std::optional<affogato::cpu::espresso::Gx2ClearColorRequest> guest_clear;
+            std::uint64_t guest_clear_sequence = 0U;
+            {
+                std::lock_guard lock(worker.mutex);
+                guest_clear = worker.latest_guest_clear;
+                guest_clear_sequence = worker.guest_clear_sequence;
+            }
+            if (guest_clear && guest_clear_sequence != shown_guest_clear_sequence)
+            {
+                vulkan_output->set_guest_clear_color(guest_clear->rgba);
+                shown_guest_clear_sequence = guest_clear_sequence;
+            }
             vulkan_output->render_frame();
         }
     }
