@@ -4,11 +4,13 @@
 #include "cpu/espresso/hle_dispatcher.hpp"
 #include "cpu/espresso/interpreter.hpp"
 
+#include <algorithm>
 #include <bit>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <string>
+#include <utility>
 
 namespace affogato::cpu::espresso
 {
@@ -51,6 +53,8 @@ constexpr std::uint32_t gx2_context_profiling_offset = 0x9800U;
 constexpr std::uint32_t gx2_context_display_list_size_offset = 0x9804U;
 constexpr std::uint32_t gx2_context_display_list_offset = 0x9E00U;
 constexpr std::uint32_t gx2_context_display_list_capacity = 0x300U;
+constexpr std::uint32_t gx2_color_buffer_size = 0x9CU;
+constexpr std::uint32_t gx2_render_target_count = 8U;
 static_assert(gx2_context_shadow_state_size == gx2_context_profiling_offset);
 static_assert(gx2_context_display_list_offset +
                   gx2_context_display_list_capacity ==
@@ -97,6 +101,59 @@ void validate_scan_surface_format(
             std::string("gx2::") + api_name + ": unsupported surface format " +
             std::to_string(surface_format));
     }
+}
+
+Gx2ColorBufferState read_color_buffer(
+    EspressoCore& core,
+    std::uint32_t address)
+{
+    if (address == 0U || (address & 3U) != 0U)
+    {
+        throw HleExecutionError(
+            "gx2::GX2SetColorBuffer: color buffer pointer is null or misaligned");
+    }
+    if (static_cast<std::uint64_t>(address) + gx2_color_buffer_size >
+        guest_address_space_end)
+    {
+        throw HleExecutionError(
+            "gx2::GX2SetColorBuffer: color buffer range wraps guest address space");
+    }
+
+    std::array<std::uint32_t, gx2_color_buffer_size / sizeof(std::uint32_t)> words{};
+    for (std::size_t index = 0U; index < words.size(); ++index)
+    {
+        words[index] = core.memory.read32_be(
+            address + static_cast<std::uint32_t>(index * sizeof(std::uint32_t)));
+    }
+
+    Gx2ColorBufferState result{};
+    result.guest_address = address;
+    result.dimension = words[0];
+    result.width = words[1];
+    result.height = words[2];
+    result.depth = words[3];
+    result.mip_levels = words[4];
+    result.format = words[5];
+    result.aa_mode = words[6];
+    result.use = words[7];
+    result.image_size = words[8];
+    result.image_address = words[9];
+    result.mipmap_size = words[10];
+    result.mipmap_address = words[11];
+    result.tile_mode = words[12];
+    result.swizzle = words[13];
+    result.alignment = words[14];
+    result.pitch = words[15];
+    std::copy_n(words.begin() + 16, result.mip_level_offsets.size(),
+        result.mip_level_offsets.begin());
+    result.view_mip = words[29];
+    result.view_first_slice = words[30];
+    result.view_num_slices = words[31];
+    result.aa_buffer_address = words[32];
+    result.aa_size = words[33];
+    std::copy_n(words.begin() + 34, result.registers.size(),
+        result.registers.begin());
+    return result;
 }
 
 std::uint32_t get_scan_buffer_count(
@@ -1075,6 +1132,37 @@ void register_gx2_hle(HleDispatcher& dispatcher)
             // Retain the raw uint32 request (Decaf semantics). VSync waits,
             // flip scheduling, and host presentation remain deferred.
             core.gx2.swap_interval = interval;
+        });
+
+    dispatcher.register_function(
+        "gx2",
+        "GX2SetColorBuffer",
+        [](EspressoCore& core) {
+            if (!core.gx2.initialized)
+            {
+                throw HleExecutionError(
+                    "gx2::GX2SetColorBuffer: GX2 has not been initialized");
+            }
+
+            const std::uint32_t color_buffer = core.state.gpr[3];
+            const std::uint32_t target = core.state.gpr[4];
+            if (target >= gx2_render_target_count)
+            {
+                throw HleExecutionError(
+                    "gx2::GX2SetColorBuffer: invalid render-target index " +
+                    std::to_string(target));
+            }
+
+            // Read the complete WUT GX2ColorBuffer (0x9C bytes) into a local
+            // value before changing bound state, so guest-memory faults leave
+            // the previous target binding intact.
+            std::optional<Gx2ColorBufferState> descriptor;
+            if (color_buffer != 0U)
+            {
+                descriptor = read_color_buffer(core, color_buffer);
+            }
+            core.gx2.color_buffer_descriptors[target] = std::move(descriptor);
+            core.gx2.bound_color_buffers[target] = color_buffer;
         });
 
     dispatcher.register_function(

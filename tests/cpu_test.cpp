@@ -15554,6 +15554,68 @@ void gx2_clear_color_hle_tests()
     assert(core.gx2.clear_color_sequence == 2U);
 }
 
+void gx2_set_color_buffer_hle_tests()
+{
+    constexpr std::uint32_t return_address = 0x02750610U;
+    constexpr std::uint32_t descriptor_address = 0x5000U;
+    constexpr std::uint32_t target = 3U;
+    EspressoCore core(0x20000U);
+    register_gx2_hle(core.hle);
+    core.gx2.initialized = true;
+    const std::uint32_t import = core.hle.bind_import("gx2", "GX2SetColorBuffer");
+    std::array<std::uint32_t, 39U> descriptor_words{};
+    for (std::size_t index = 0U; index < descriptor_words.size(); ++index)
+    {
+        descriptor_words[index] = 0xA0000000U + static_cast<std::uint32_t>(index * 0x101U);
+        core.memory.write32_be(
+            descriptor_address + static_cast<std::uint32_t>(index * 4U),
+            descriptor_words[index]);
+    }
+
+    const auto invoke = [&](std::uint32_t buffer, std::uint32_t render_target) {
+        core.state.gpr[3] = buffer;
+        core.state.gpr[4] = render_target;
+        core.state.lr = return_address;
+        core.state.cia = import;
+        return core.run(1U);
+    };
+    assert(invoke(descriptor_address, target).reason == StopReason::instruction_limit);
+    assert(core.gx2.bound_color_buffers[target] == descriptor_address);
+    assert(core.gx2.color_buffer_descriptors[target].has_value());
+    const Gx2ColorBufferState& state = *core.gx2.color_buffer_descriptors[target];
+    assert(state.guest_address == descriptor_address);
+    assert(state.dimension == descriptor_words[0]);
+    assert(state.width == descriptor_words[1]);
+    assert(state.height == descriptor_words[2]);
+    assert(state.format == descriptor_words[5]);
+    assert(state.image_address == descriptor_words[9]);
+    assert(state.pitch == descriptor_words[15]);
+    assert(state.mip_level_offsets.front() == descriptor_words[16]);
+    assert(state.mip_level_offsets.back() == descriptor_words[28]);
+    assert(state.view_mip == descriptor_words[29]);
+    assert(state.aa_buffer_address == descriptor_words[32]);
+    assert(state.registers.back() == descriptor_words[38]);
+    assert(core.gx2.bound_color_buffers[0] == 0U);
+    assert(!core.gx2.color_buffer_descriptors[0].has_value());
+
+    const RunResult truncated_descriptor = invoke(0x1FF80U, target);
+    assert(truncated_descriptor.reason == StopReason::memory_fault);
+    assert(core.gx2.bound_color_buffers[target] == descriptor_address);
+    assert(core.gx2.color_buffer_descriptors[target] == state);
+
+    constexpr std::uint32_t second_descriptor = 0x6000U;
+    assert(invoke(second_descriptor, 7U).reason == StopReason::instruction_limit);
+    assert(core.gx2.bound_color_buffers[7] == second_descriptor);
+    assert(core.gx2.color_buffer_descriptors[7].has_value());
+    assert(core.gx2.color_buffer_descriptors[7]->width == 0U);
+    assert(core.gx2.bound_color_buffers[target] == descriptor_address);
+
+    assert(invoke(0U, target).reason == StopReason::instruction_limit);
+    assert(core.gx2.bound_color_buffers[target] == 0U);
+    assert(!core.gx2.color_buffer_descriptors[target].has_value());
+    assert(core.gx2.bound_color_buffers[7] == second_descriptor);
+}
+
 void gx2_set_depth_stencil_control_hle_tests()
 {
     constexpr std::uint32_t return_address = 0x027507BCU;
@@ -24646,6 +24708,7 @@ int main(int argc, char* argv[])
     mem_alloc_from_frm_heap_ex_hle_tests();
     gx2_init_hle_tests();
     gx2_clear_color_hle_tests();
+    gx2_set_color_buffer_hle_tests();
     gx2_set_depth_stencil_control_hle_tests();
     gx2_set_stencil_mask_hle_tests();
     gx2_set_polygon_control_hle_tests();

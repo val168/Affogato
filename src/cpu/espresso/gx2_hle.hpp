@@ -32,6 +32,36 @@ struct Gx2ClearColorRequest
     bool operator==(const Gx2ClearColorRequest&) const = default;
 };
 
+struct Gx2ColorBufferState
+{
+    std::uint32_t guest_address{};
+    std::uint32_t dimension{};
+    std::uint32_t width{};
+    std::uint32_t height{};
+    std::uint32_t depth{};
+    std::uint32_t mip_levels{};
+    std::uint32_t format{};
+    std::uint32_t aa_mode{};
+    std::uint32_t use{};
+    std::uint32_t image_size{};
+    std::uint32_t image_address{};
+    std::uint32_t mipmap_size{};
+    std::uint32_t mipmap_address{};
+    std::uint32_t tile_mode{};
+    std::uint32_t swizzle{};
+    std::uint32_t alignment{};
+    std::uint32_t pitch{};
+    std::array<std::uint32_t, 13U> mip_level_offsets{};
+    std::uint32_t view_mip{};
+    std::uint32_t view_first_slice{};
+    std::uint32_t view_num_slices{};
+    std::uint32_t aa_buffer_address{};
+    std::uint32_t aa_size{};
+    std::array<std::uint32_t, 5U> registers{};
+
+    bool operator==(const Gx2ColorBufferState&) const = default;
+};
+
 struct Gx2RuntimeState
 {
     bool initialized{};
@@ -89,6 +119,8 @@ struct Gx2RuntimeState
     std::array<std::uint32_t, 8U> cb_blend_control{};
     std::array<bool, 4U> cb_blend_constant_valid{};
     std::array<std::uint32_t, 4U> cb_blend_constant{};
+    std::array<std::optional<Gx2ColorBufferState>, 8U> color_buffer_descriptors{};
+    std::array<std::uint32_t, 8U> bound_color_buffers{};
     std::uint64_t clear_color_sequence{};
     std::optional<Gx2ClearColorRequest> latest_clear_color;
     bool sx_alpha_test_control_valid{};
