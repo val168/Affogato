@@ -9,6 +9,7 @@
 #include <bit>
 #include <chrono>
 #include <filesystem>
+#include <fstream>
 #include <limits>
 #include <optional>
 #include <set>
@@ -2508,6 +2509,158 @@ void register_coreinit_hle(HleDispatcher& dispatcher)
                 command_body + fs_cmd_block_async_result_status_offset,
                 status);
             core.state.gpr[3] = status;
+        });
+    dispatcher.register_function(
+        "coreinit",
+        "FSReadFile",
+        [](EspressoCore& core) {
+            const std::uint32_t client = core.state.gpr[3];
+            const std::uint32_t command_block = core.state.gpr[4];
+            const std::uint32_t guest_buffer = core.state.gpr[5];
+            const std::uint32_t element_size = core.state.gpr[6];
+            const std::uint32_t element_count = core.state.gpr[7];
+            const std::uint32_t handle = core.state.gpr[8];
+            const std::uint32_t flags = core.state.gpr[9];
+            if (!core.fs_initialized || client == 0U || command_block == 0U ||
+                handle == 0U)
+            {
+                core.state.gpr[3] = fs_status_fatal_error;
+                return;
+            }
+
+            const auto registration = std::find_if(
+                core.fs_clients.begin(), core.fs_clients.end(),
+                [client](const FsClientRegistration& candidate) {
+                    return candidate.client_address == client;
+                });
+            if (registration == core.fs_clients.end())
+            {
+                core.state.gpr[3] = fs_status_fatal_error;
+                return;
+            }
+            const auto open_file = std::find_if(
+                core.fs_open_files.begin(), core.fs_open_files.end(),
+                [client, handle](const FsOpenFileState& candidate) {
+                    return candidate.handle == handle &&
+                           candidate.client_address == client;
+                });
+            if (open_file == core.fs_open_files.end())
+            {
+                core.state.gpr[3] = fs_status_not_found;
+                return;
+            }
+
+            constexpr std::uint64_t guest_address_space_end =
+                std::uint64_t{1} << 32U;
+            const std::uint64_t command_body_address =
+                (static_cast<std::uint64_t>(command_block) +
+                 fs_cmd_block_body_alignment_mask) &
+                ~static_cast<std::uint64_t>(fs_cmd_block_body_alignment_mask);
+            if (command_body_address + fs_cmd_block_async_result_status_offset +
+                    sizeof(std::uint32_t) > guest_address_space_end)
+            {
+                core.state.gpr[3] = fs_status_fatal_error;
+                return;
+            }
+            const std::uint32_t command_body =
+                static_cast<std::uint32_t>(command_body_address);
+            const std::uint32_t command_status = core.memory.read32_be(
+                command_body + fs_cmd_block_status_offset);
+            if (command_status != fs_cmd_block_initialized_status &&
+                command_status != fs_cmd_block_available_status)
+            {
+                core.state.gpr[3] = fs_status_fatal_error;
+                return;
+            }
+            core.memory.validate_write_range(
+                command_body + fs_cmd_block_status_offset,
+                sizeof(std::uint32_t));
+            core.memory.validate_write_range(
+                command_body + fs_cmd_block_async_result_status_offset,
+                sizeof(std::uint32_t));
+
+            const std::uint64_t requested_bytes =
+                static_cast<std::uint64_t>(element_size) * element_count;
+            std::uint32_t result = fs_status_fatal_error;
+            if (flags != 0U)
+            {
+                result = fs_status_access_error;
+            }
+            else if (requested_bytes >= (std::uint64_t{1} << 31U))
+            {
+                result = fs_status_fatal_error;
+            }
+            else if (requested_bytes == 0U)
+            {
+                result = 0U;
+            }
+            else if (guest_buffer == 0U || (guest_buffer & 0x3FU) != 0U)
+            {
+                result = fs_status_fatal_error;
+            }
+            else
+            {
+                const auto requested_size =
+                    static_cast<std::uint32_t>(requested_bytes);
+                core.memory.validate_write_range(guest_buffer, requested_size);
+
+                std::error_code error;
+                const std::uintmax_t host_file_size =
+                    std::filesystem::file_size(open_file->host_path, error);
+                if (error)
+                {
+                    result = error == std::errc::permission_denied
+                        ? fs_status_permission_error
+                        : fs_status_not_found;
+                }
+                else if (open_file->position >= host_file_size)
+                {
+                    result = 0xFFFFFFFEU; // FS_STATUS_END (-2)
+                }
+                else
+                {
+                    const std::uint64_t available = host_file_size -
+                        open_file->position;
+                    const std::size_t transfer_size = static_cast<std::size_t>(
+                        std::min<std::uint64_t>(requested_bytes, available));
+                    std::vector<std::uint8_t> bytes(transfer_size);
+                    std::ifstream file(open_file->host_path, std::ios::binary);
+                    if (!file)
+                    {
+                        result = fs_status_access_error;
+                    }
+                    else
+                    {
+                        file.seekg(
+                            static_cast<std::streamoff>(open_file->position),
+                            std::ios::beg);
+                        file.read(
+                            reinterpret_cast<char*>(bytes.data()),
+                            static_cast<std::streamsize>(bytes.size()));
+                        const std::streamsize bytes_read = file.gcount();
+                        if (bytes_read < 0 ||
+                            static_cast<std::size_t>(bytes_read) != bytes.size())
+                        {
+                            result = fs_status_access_error;
+                        }
+                        else
+                        {
+                            core.memory.write_bytes(guest_buffer, bytes);
+                            open_file->position += bytes.size();
+                            result = static_cast<std::uint32_t>(
+                                bytes.size() / element_size);
+                        }
+                    }
+                }
+            }
+
+            core.memory.write32_be(
+                command_body + fs_cmd_block_status_offset,
+                fs_cmd_block_available_status);
+            core.memory.write32_be(
+                command_body + fs_cmd_block_async_result_status_offset,
+                result);
+            core.state.gpr[3] = result;
         });
     dispatcher.register_function(
         "coreinit",

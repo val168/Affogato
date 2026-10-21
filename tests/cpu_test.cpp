@@ -11929,6 +11929,7 @@ void fs_open_file_hle_tests()
     constexpr std::uint32_t guest_mode = 0x6100U;
     constexpr std::uint32_t guest_handle = 0x6400U;
     constexpr std::uint32_t guest_stat = 0x6800U;
+    constexpr std::uint32_t guest_read_buffer = 0x6C00U;
     constexpr std::uint32_t fs_status_offset = 0x93CU;
     constexpr std::uint32_t async_result_status_offset = 0x990U;
 
@@ -11938,11 +11939,13 @@ void fs_open_file_hle_tests()
         std::filesystem::temp_directory_path() /
         ("affogato_fsopenfile_" + unique_suffix);
     std::filesystem::create_directories(content_root / "Cafe" / "Common");
+    constexpr std::string_view file_contents = "shader-cache-data";
     {
         std::ofstream file(content_root / "Cafe" / "Common" / "test.gsh",
                            std::ios::binary);
         assert(file.good());
-        file << "shader-cache-data";
+        file.write(file_contents.data(),
+                   static_cast<std::streamsize>(file_contents.size()));
         assert(file.good());
     }
 
@@ -11951,6 +11954,8 @@ void fs_open_file_hle_tests()
     const std::uint32_t import = core.hle.bind_import("coreinit", "FSOpenFile");
     const std::uint32_t stat_import =
         core.hle.bind_import("coreinit", "FSGetStatFile");
+    const std::uint32_t read_import =
+        core.hle.bind_import("coreinit", "FSReadFile");
     core.fs_initialized = true;
     core.fs_content_root = content_root;
     core.fs_clients.push_back({client_address, 0x2040U, 1U});
@@ -12025,13 +12030,60 @@ void fs_open_file_hle_tests()
     assert(core.state.gpr[3] == 0U);
     assert(core.memory.read32_be(guest_stat) == 0x01000000U);
     assert(core.memory.read32_be(guest_stat + 0x10U) ==
-           static_cast<std::uint32_t>(std::string_view("shader-cache-data").size()));
+           static_cast<std::uint32_t>(file_contents.size()));
     assert(core.memory.read32_be(guest_stat + 0x14U) == 0U);
     assert(core.memory.read64_be(guest_stat + 0x18U) == 0U);
     for (std::uint32_t offset = 0x24U; offset < 0x64U; ++offset)
     {
         assert(core.memory.read8(guest_stat + offset) == 0U);
     }
+
+    const auto read_file = [&](const std::uint32_t buffer,
+                               const std::uint32_t size,
+                               const std::uint32_t count,
+                               const std::uint32_t flags = 0U) {
+        core.state.cia = read_import;
+        core.state.lr = return_address;
+        core.state.gpr[3] = client_address;
+        core.state.gpr[4] = command_block;
+        core.state.gpr[5] = buffer;
+        core.state.gpr[6] = size;
+        core.state.gpr[7] = count;
+        core.state.gpr[8] = core.memory.read32_be(guest_handle);
+        core.state.gpr[9] = flags;
+        core.state.gpr[10] = 0xFFFFFFFFU;
+        return core.run(1U);
+    };
+    const auto first_read = read_file(guest_read_buffer, 1U, 5U);
+    assert(first_read.reason == StopReason::instruction_limit);
+    assert(core.state.gpr[3] == 5U);
+    assert(core.fs_open_files[0].position == 5U);
+    for (std::uint32_t offset = 0U; offset < 5U; ++offset)
+    {
+        assert(core.memory.read8(guest_read_buffer + offset) ==
+               static_cast<std::uint8_t>(file_contents[offset]));
+    }
+
+    const auto second_read = read_file(guest_read_buffer, 1U, 32U);
+    assert(second_read.reason == StopReason::instruction_limit);
+    assert(core.state.gpr[3] == file_contents.size() - 5U);
+    assert(core.fs_open_files[0].position == file_contents.size());
+    for (std::size_t offset = 5U; offset < file_contents.size(); ++offset)
+    {
+        assert(core.memory.read8(guest_read_buffer +
+                                 static_cast<std::uint32_t>(offset - 5U)) ==
+               static_cast<std::uint8_t>(file_contents[offset]));
+    }
+
+    const auto eof_read = read_file(guest_read_buffer, 1U, 1U);
+    assert(eof_read.reason == StopReason::instruction_limit);
+    assert(core.state.gpr[3] == 0xFFFFFFFEU); // FS_STATUS_END (-2)
+    assert(core.fs_open_files[0].position == file_contents.size());
+
+    const auto unaligned_read = read_file(guest_read_buffer + 1U, 1U, 1U);
+    assert(unaligned_read.reason == StopReason::instruction_limit);
+    assert(core.state.gpr[3] == 0xFFFFFC00U); // invalid buffer alignment
+    assert(core.fs_open_files[0].position == file_contents.size());
 
     // Content is mounted read-only; a write mode is refused without creating
     // a handle or overwriting the caller's output parameter.
