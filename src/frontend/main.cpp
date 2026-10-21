@@ -18,6 +18,7 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -331,6 +332,125 @@ std::string format_progress(
         affogato::cpu::espresso::format_instruction_history(result.execution);
     if (!history.empty()) text << "\nRecent instruction trace:\n" << history;
     return text.str();
+}
+
+int run_rpx_diagnostic(int argc, char* argv[])
+{
+    if (argc < 3)
+    {
+        std::cerr << "Usage: AffogatoFrontend.exe --run-rpx <file.rpx> "
+                     "[--recompiler] [--limit <instructions>]\n";
+        return 2;
+    }
+
+    affogato::ExecutionMode mode = affogato::ExecutionMode::interpreter;
+    std::size_t instruction_limit = 5'000'000'000ULL;
+    for (int index = 3; index < argc; ++index)
+    {
+        const std::string_view argument(argv[index]);
+        if (argument == "--recompiler")
+        {
+            mode = affogato::ExecutionMode::recompiler;
+        }
+        else if (argument == "--limit" && index + 1 < argc)
+        {
+            const unsigned long long parsed = std::stoull(argv[++index]);
+            if (parsed == 0ULL || parsed > std::numeric_limits<std::size_t>::max())
+            {
+                throw std::invalid_argument("--limit must be in [1, SIZE_MAX]");
+            }
+            instruction_limit = static_cast<std::size_t>(parsed);
+        }
+        else
+        {
+            throw std::invalid_argument("Unknown or incomplete RPX diagnostic option: " +
+                std::string(argument));
+        }
+    }
+
+    const fs::path path = path_from_utf8(argv[2]);
+    const auto read_start = std::chrono::steady_clock::now();
+    std::ifstream input(path, std::ios::binary | std::ios::ate);
+    if (!input)
+    {
+        throw std::runtime_error("Could not open RPX file: " + path_utf8(path));
+    }
+    const auto length = input.tellg();
+    if (length < 0)
+    {
+        throw std::runtime_error("Could not determine RPX file size");
+    }
+    std::vector<std::uint8_t> bytes(static_cast<std::size_t>(length));
+    input.seekg(0);
+    if (!bytes.empty() && !input.read(
+            reinterpret_cast<char*>(bytes.data()),
+            static_cast<std::streamsize>(bytes.size())))
+    {
+        throw std::runtime_error("Could not read the complete RPX file");
+    }
+    const auto read_end = std::chrono::steady_clock::now();
+    const auto read_time = std::chrono::duration_cast<std::chrono::milliseconds>(
+        read_end - read_start);
+
+    affogato::Emulator emulator;
+    const auto load_start = std::chrono::steady_clock::now();
+    const auto image = emulator.load_rpx(bytes);
+    const auto load_end = std::chrono::steady_clock::now();
+    const auto load_time = std::chrono::duration_cast<std::chrono::milliseconds>(
+        load_end - load_start);
+    const auto execution_start = std::chrono::steady_clock::now();
+
+    std::cout << "Loaded entry point: 0x" << std::hex << std::uppercase
+              << image.entry_point << std::dec
+              << "\nSections loaded: " << image.loaded_sections
+              << "\nExecution mode: " << (mode == affogato::ExecutionMode::recompiler
+                    ? "recompiler" : "interpreter")
+              << "\nInstruction limit: " << instruction_limit << '\n';
+
+    constexpr std::size_t chunk_size = 1'000'000U;
+    constexpr std::size_t progress_interval = 10'000'000U;
+    std::size_t total_steps = 0U;
+    std::size_t next_progress = progress_interval;
+    affogato::EmulatorRunResult result{};
+    while (total_steps < instruction_limit)
+    {
+        const std::size_t current_chunk = std::min(
+            chunk_size, instruction_limit - total_steps);
+        result = emulator.run(current_chunk, mode);
+        total_steps += result.execution.steps;
+        result.execution.steps = total_steps;
+
+        if (total_steps >= next_progress &&
+            result.execution.reason == affogato::cpu::espresso::StopReason::instruction_limit)
+        {
+            std::cout << "Progress: " << total_steps << " instructions; CIA=0x"
+                      << std::hex << std::uppercase << result.execution.cia
+                      << std::dec << "; r3=" << result.gpr3 << '\n';
+            next_progress += progress_interval;
+        }
+        if (result.execution.reason !=
+                affogato::cpu::espresso::StopReason::instruction_limit ||
+            total_steps >= instruction_limit)
+        {
+            break;
+        }
+    }
+
+    const auto execution_end = std::chrono::steady_clock::now();
+    const auto execution_time = std::chrono::duration_cast<std::chrono::milliseconds>(
+        execution_end - execution_start);
+    std::cout << format_result(result)
+              << "\nGPR4: " << emulator.core().state.gpr[4]
+              << "\nGPR5: " << emulator.core().state.gpr[5]
+              << "\nPhase timings: file read " << read_time.count()
+              << " ms; RPX load " << load_time.count()
+              << " ms; guest execution " << execution_time.count() << " ms.\n"
+              << "HLE calls observed:\n";
+    for (const auto& statistic : result.hle_call_statistics)
+    {
+        std::cout << "  " << statistic.name << ": " << statistic.calls << '\n';
+    }
+    return 0;
 }
 
 struct WorkerResult
@@ -856,18 +976,40 @@ int run_frontend()
     return 0;
 }
 
-int main()
+int main(int argc, char* argv[])
 {
+    const bool command_line_mode = argc > 1;
     try
     {
+        if (command_line_mode)
+        {
+            if (std::string_view(argv[1]) == "--run-rpx")
+            {
+                return run_rpx_diagnostic(argc, argv);
+            }
+            std::cerr << "Unknown option: " << argv[1] << '\n'
+                      << "Usage: AffogatoFrontend.exe [--run-rpx <file.rpx> "
+                         "[--recompiler] [--limit <instructions>]]\n";
+            return 2;
+        }
         return run_frontend();
     }
     catch (const std::exception& error)
     {
+        if (command_line_mode)
+        {
+            std::cerr << "RPX diagnostic failed: " << error.what() << '\n';
+            return 1;
+        }
         report_fatal_error(error.what());
     }
     catch (...)
     {
+        if (command_line_mode)
+        {
+            std::cerr << "RPX diagnostic failed with an unknown exception.\n";
+            return 1;
+        }
         report_fatal_error("Unknown non-standard exception.");
     }
     return 1;
