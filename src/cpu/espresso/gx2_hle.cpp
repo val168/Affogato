@@ -1826,6 +1826,37 @@ void register_gx2_hle(HleDispatcher& dispatcher)
 
     dispatcher.register_function(
         "gx2",
+        "GX2InitSamplerBorderType",
+        [](EspressoCore& core) {
+            constexpr const char* api_name = "gx2::GX2InitSamplerBorderType";
+            constexpr std::uint32_t border_type_mask = 0x3U;
+            constexpr std::uint32_t border_type_shift = 22U;
+
+            const std::uint32_t sampler_address = core.state.gpr[3];
+            const std::uint32_t border_type = core.state.gpr[4];
+            if (sampler_address == 0U || (sampler_address & 3U) != 0U)
+            {
+                throw HleExecutionError(
+                    std::string(api_name) + ": sampler pointer is null or misaligned");
+            }
+            if (border_type > border_type_mask)
+            {
+                throw HleExecutionError(
+                    std::string(api_name) + ": invalid border color type");
+            }
+
+            core.memory.validate_write_range(sampler_address, gx2_sampler_size);
+            const std::uint32_t word0 = core.memory.read32_be(sampler_address);
+            constexpr std::uint32_t border_type_field_mask =
+                border_type_mask << border_type_shift;
+            const std::uint32_t new_word0 =
+                (word0 & ~border_type_field_mask) |
+                (border_type << border_type_shift);
+            core.memory.write32_be(sampler_address, new_word0);
+        });
+
+    dispatcher.register_function(
+        "gx2",
         "GX2Init",
         [](EspressoCore& core) {
             // Cemu treats repeated GX2Init calls as successful no-ops. Check
