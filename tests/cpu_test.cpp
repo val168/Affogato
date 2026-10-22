@@ -21421,7 +21421,9 @@ void gx2_set_vertex_and_geometry_texture_hle_tests()
         "gx2", "GX2SetVertexTexture");
     const std::uint32_t geometry_import = core.hle.bind_import(
         "gx2", "GX2SetGeometryTexture");
-    assert(vertex_import != 0U && geometry_import != 0U);
+    const std::uint32_t compute_import = core.hle.bind_import(
+        "gx2", "GX2SetComputeTexture");
+    assert(vertex_import != 0U && geometry_import != 0U && compute_import != 0U);
 
     for (std::uint32_t offset = 0U; offset < 0x9CU; offset += 4U)
         core.memory.write32_be(texture_address + offset, 0U);
@@ -21449,6 +21451,13 @@ void gx2_set_vertex_and_geometry_texture_hle_tests()
     assert(!core.gx2.pixel_textures[2U].has_value());
     assert(core.gx2.pending_commands.size() == 14U);
     assert(core.gx2.pending_commands[7U].register_address == 0x0003A4F8U);
+
+    core.state.gpr[4] = 3U;
+    core.state.cia = compute_import;
+    assert(core.run(1U).reason == StopReason::instruction_limit);
+    assert(core.gx2.vertex_textures[3U].has_value());
+    assert(core.gx2.pending_commands.size() == 21U);
+    assert(core.gx2.pending_commands[14U].register_address == 0x000391D4U);
 }
 
 void gx2_set_pixel_sampler_hle_tests()
@@ -21507,7 +21516,9 @@ void gx2_set_pixel_sampler_hle_tests()
         "gx2", "GX2SetVertexSampler");
     const std::uint32_t geometry_import = core.hle.bind_import(
         "gx2", "GX2SetGeometrySampler");
-    assert(vertex_import != 0U && geometry_import != 0U);
+    const std::uint32_t compute_import = core.hle.bind_import(
+        "gx2", "GX2SetComputeSampler");
+    assert(vertex_import != 0U && geometry_import != 0U && compute_import != 0U);
     core.state.gpr[4] = 1U;
     core.state.cia = vertex_import;
     assert(core.run(1U).reason == StopReason::instruction_limit);
@@ -21520,6 +21531,13 @@ void gx2_set_pixel_sampler_hle_tests()
     assert(core.gx2.geometry_samplers[2U].has_value());
     assert(core.gx2.pending_commands[9U].register_address == 0x0003C1C8U);
     assert(core.gx2.pending_commands.size() == 12U);
+
+    core.state.gpr[4] = 3U;
+    core.state.cia = compute_import;
+    assert(core.run(1U).reason == StopReason::instruction_limit);
+    assert(core.gx2.vertex_samplers[3U].has_value());
+    assert(core.gx2.pending_commands[12U].register_address == 0x0003C0FCU);
+    assert(core.gx2.pending_commands.size() == 15U);
 }
 
 void gx2_set_tv_buffer_hle_tests()

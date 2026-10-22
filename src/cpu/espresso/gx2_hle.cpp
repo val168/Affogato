@@ -2504,6 +2504,20 @@ void register_gx2_hle(HleDispatcher& dispatcher)
 
     dispatcher.register_function(
         "gx2",
+        "GX2SetComputeTexture",
+        [](EspressoCore& core) {
+            // Cafe's compute texture path shares the vertex-stage Latte bank.
+            set_gx2_texture(
+                core,
+                core.state.gpr[3],
+                core.state.gpr[4],
+                "gx2::GX2SetComputeTexture",
+                gx2_vertex_texture_register_base,
+                core.gx2.vertex_textures);
+        });
+
+    dispatcher.register_function(
+        "gx2",
         "GX2SetGeometryTexture",
         [](EspressoCore& core) {
             set_gx2_texture(
@@ -2537,6 +2551,20 @@ void register_gx2_hle(HleDispatcher& dispatcher)
                 core.state.gpr[3],
                 core.state.gpr[4],
                 "gx2::GX2SetVertexSampler",
+                gx2_vertex_sampler_register_base,
+                core.gx2.vertex_samplers);
+        });
+
+    dispatcher.register_function(
+        "gx2",
+        "GX2SetComputeSampler",
+        [](EspressoCore& core) {
+            // Cafe's compute sampler path shares the vertex-stage sampler bank.
+            set_gx2_sampler(
+                core,
+                core.state.gpr[3],
+                core.state.gpr[4],
+                "gx2::GX2SetComputeSampler",
                 gx2_vertex_sampler_register_base,
                 core.gx2.vertex_samplers);
         });

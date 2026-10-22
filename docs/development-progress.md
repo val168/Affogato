@@ -12,7 +12,8 @@
 - Resolved: texture register initialization and sampler descriptor initialization.
 - Implemented: pixel texture binding, including Latte resource-word construction and a logical shader-resource command stream (`31c2058`).
 - Implemented: shared binding logic for vertex and geometry texture stages, with stage-specific register bases and independent binding state (`c89a6d5`).
-- Implemented this iteration: three-word sampler binding for pixel, vertex, and geometry stages, with independent per-unit state.
+- Implemented: three-word sampler binding for pixel, vertex, and geometry stages, with independent per-unit state (`40b1425`).
+- Implemented this iteration: compute texture and sampler APIs route to the vertex resource banks, matching Cafe's GX2 behavior.
 - Actual guest rendering/presentation is not yet confirmed; command submission, shader execution, and framebuffer presentation remain incomplete.
 
 ## Completed commits
@@ -20,11 +21,12 @@
 - `90ab0b0` - `gx2: implement sampler border type`
 - `31c2058` - `gx2: implement pixel texture binding`
 - `c89a6d5` - `gx2: add vertex and geometry texture binding`
+- `40b1425` - `gx2: implement shader sampler binding`
 
 ## Current test status
 
 - Debug build: `build/debug-win-native`, Ninja; build is current.
-- CTest after texture and sampler binding: 2/2 passed.
+- CTest after texture, sampler, and compute-stage binding: 2/2 passed.
 
 ## Prioritized queue
 
