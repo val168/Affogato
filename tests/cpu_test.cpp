@@ -17072,12 +17072,12 @@ void gx2_init_sampler_hle_tests()
     assert(core.state.fpscr == fpscr_before);
     assert(core.state.cia == return_address);
 
-    // All three address axes use CLAMP and both XY filters use LINEAR.
-    assert(core.memory.read32_be(sampler_address + 0x00U) == 0x00000092U);
+    // Clamp, XY, Z and mip filters, plus the array override, are in word 0.
+    assert(core.memory.read32_be(sampler_address + 0x00U) == 0x02029292U);
     // MAX_LOD is the maximum representable u4.6 value (15 + 63/64).
     assert(core.memory.read32_be(sampler_address + 0x04U) == 0x000FFC00U);
     // SQ_TEX_SAMPLER_WORD2.TYPE marks a valid sampler descriptor.
-    assert(core.memory.read32_be(sampler_address + 0x08U) == 0x80500000U);
+    assert(core.memory.read32_be(sampler_address + 0x08U) == 0x80000000U);
 
     const std::array<std::uint32_t, 3U> sampler_before{
         core.memory.read32_be(sampler_address),
@@ -17208,8 +17208,8 @@ void gx2_init_sampler_xy_filter_hle_tests()
     core.memory.write32_be(sampler_address + 0x04U, initial_word1);
     core.memory.write32_be(sampler_address + 0x08U, initial_word2);
     core.state.gpr[3] = sampler_address;
-    core.state.gpr[4] = 2U;
-    core.state.gpr[5] = 1U;
+    core.state.gpr[4] = 1U;
+    core.state.gpr[5] = 0U;
     core.state.gpr[6] = 4U;
     core.state.cr = 0x456789ABU;
     core.state.xer = 0xA5A55A5AU;
@@ -17223,16 +17223,15 @@ void gx2_init_sampler_xy_filter_hle_tests()
     const std::uint32_t ctr_before = core.state.ctr;
     const std::uint32_t fpscr_before = core.state.fpscr;
 
-    assert(invoke(2U, 1U, 4U).reason == StopReason::instruction_limit);
-    constexpr std::uint32_t max_aniso_mask = 0x7U << 9U;
-    constexpr std::uint32_t xy_filter_mask = (0x3U << 20U) | (0x3U << 22U);
+    assert(invoke(1U, 0U, 4U).reason == StopReason::instruction_limit);
+    constexpr std::uint32_t max_aniso_mask = 0x7U << 19U;
+    constexpr std::uint32_t xy_filter_mask = (0x7U << 9U) | (0x7U << 12U);
     const std::uint32_t expected_word0 =
-        (initial_word0 & ~max_aniso_mask) | (4U << 9U);
-    const std::uint32_t expected_word2 =
-        (initial_word2 & ~xy_filter_mask) | (2U << 20U) | (1U << 22U);
+        (initial_word0 & ~(max_aniso_mask | xy_filter_mask)) |
+        (4U << 19U) | (3U << 9U) | (2U << 12U);
     assert(core.memory.read32_be(sampler_address + 0x00U) == expected_word0);
     assert(core.memory.read32_be(sampler_address + 0x04U) == initial_word1);
-    assert(core.memory.read32_be(sampler_address + 0x08U) == expected_word2);
+    assert(core.memory.read32_be(sampler_address + 0x08U) == initial_word2);
     assert(core.state.gpr == gprs_before);
     assert(core.state.fpr == fprs_before);
     assert(core.state.fpr_ps1 == ps1_before);
@@ -17249,6 +17248,7 @@ void gx2_init_sampler_xy_filter_hle_tests()
     assert(invoke(3U, 0U, 0U).reason == StopReason::hle_error);
     assert(invoke(0U, 3U, 0U).reason == StopReason::hle_error);
     assert(invoke(0U, 0U, 5U).reason == StopReason::hle_error);
+    assert(invoke(2U, 0U, 1U).reason == StopReason::hle_error);
     for (std::size_t index = 0U; index < sampler_before.size(); ++index)
     {
         assert(core.memory.read32_be(
@@ -17299,12 +17299,12 @@ void gx2_init_sampler_zm_filter_hle_tests()
     const std::uint32_t fpscr_before = core.state.fpscr;
 
     assert(invoke(2U, 1U).reason == StopReason::instruction_limit);
-    constexpr std::uint32_t fields_mask = (0x7U << 24U) | (0x3U << 27U);
-    const std::uint32_t expected_word2 =
-        (initial_word2 & ~fields_mask) | (2U << 24U) | (1U << 27U);
-    assert(core.memory.read32_be(sampler_address + 0x00U) == initial_word0);
+    constexpr std::uint32_t fields_mask = (0x3U << 15U) | (0x3U << 17U);
+    const std::uint32_t expected_word0 =
+        (initial_word0 & ~fields_mask) | (2U << 15U) | (1U << 17U);
+    assert(core.memory.read32_be(sampler_address + 0x00U) == expected_word0);
     assert(core.memory.read32_be(sampler_address + 0x04U) == initial_word1);
-    assert(core.memory.read32_be(sampler_address + 0x08U) == expected_word2);
+    assert(core.memory.read32_be(sampler_address + 0x08U) == initial_word2);
     assert(core.state.gpr == gprs_before);
     assert(core.state.fpr == fprs_before);
     assert(core.state.fpr_ps1 == ps1_before);

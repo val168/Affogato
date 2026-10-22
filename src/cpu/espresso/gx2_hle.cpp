@@ -1561,19 +1561,18 @@ void register_gx2_hle(HleDispatcher& dispatcher)
 
             core.memory.validate_write_range(sampler_address, gx2_sampler_size);
 
-            // GX2Sampler stores the three Latte SQ_TEX_SAMPLER words in guest
-            // big-endian order. GX2InitSampler applies the same clamp/filter
-            // setting on all axes, uses the maximum default LOD, and marks
-            // the final word as a valid texture-sampler descriptor.
+            // GX2Sampler stores three Latte SQ_TEX_SAMPLER words in guest
+            // big-endian order. XY/Z/mip filtering is encoded in word 0;
+            // word 1 carries the maximum default LOD and word 2 marks the
+            // descriptor as a valid sampler.
             const std::uint32_t clamp_fields =
                 clamp_mode | (clamp_mode << 3U) | (clamp_mode << 6U);
             const std::uint32_t filter_fields =
-                (filter_mode << 20U) | (filter_mode << 22U);
-            core.memory.write32_be(sampler_address + 0x00U, clamp_fields);
+                (filter_mode << 9U) | (filter_mode << 12U) |
+                (1U << 15U) | (1U << 17U) | (1U << 25U);
+            core.memory.write32_be(sampler_address + 0x00U, clamp_fields | filter_fields);
             core.memory.write32_be(sampler_address + 0x04U, 0x000FFC00U);
-            core.memory.write32_be(
-                sampler_address + 0x08U,
-                0x80000000U | filter_fields);
+            core.memory.write32_be(sampler_address + 0x08U, 0x80000000U);
         });
 
     dispatcher.register_function(
@@ -1629,11 +1628,11 @@ void register_gx2_hle(HleDispatcher& dispatcher)
             constexpr const char* api_name = "gx2::GX2InitSamplerXYFilter";
             constexpr std::uint32_t max_aniso_max = 4U;
             constexpr std::uint32_t xy_filter_max = 2U;
-            constexpr std::uint32_t max_aniso_shift = 9U;
-            constexpr std::uint32_t mag_filter_shift = 20U;
-            constexpr std::uint32_t min_filter_shift = 22U;
+            constexpr std::uint32_t max_aniso_shift = 19U;
+            constexpr std::uint32_t mag_filter_shift = 9U;
+            constexpr std::uint32_t min_filter_shift = 12U;
             constexpr std::uint32_t field_mask = 0x7U;
-            constexpr std::uint32_t xy_filter_mask = 0x3U;
+            constexpr std::uint32_t xy_filter_mask = 0x7U;
 
             const std::uint32_t sampler_address = core.state.gpr[3];
             const std::uint32_t filter_mag = core.state.gpr[4];
@@ -1655,6 +1654,12 @@ void register_gx2_hle(HleDispatcher& dispatcher)
                 throw HleExecutionError(
                     std::string(api_name) + ": invalid anisotropy ratio");
             }
+            if (max_aniso != 0U && (filter_mag == 2U || filter_min == 2U))
+            {
+                throw HleExecutionError(
+                    std::string(api_name) +
+                    ": bicubic filtering cannot be combined with anisotropy");
+            }
 
             // The descriptor is three BE register words. Validate the entire
             // object before changing either word, then preserve every field
@@ -1662,20 +1667,20 @@ void register_gx2_hle(HleDispatcher& dispatcher)
             core.memory.validate_write_range(sampler_address, gx2_sampler_size);
             const std::uint32_t word0 =
                 core.memory.read32_be(sampler_address + 0x00U);
-            const std::uint32_t word2 =
-                core.memory.read32_be(sampler_address + 0x08U);
             const std::uint32_t max_aniso_mask = field_mask << max_aniso_shift;
             const std::uint32_t xy_filter_fields_mask =
                 (xy_filter_mask << mag_filter_shift) |
                 (xy_filter_mask << min_filter_shift);
+            const std::uint32_t encoded_mag_filter =
+                max_aniso == 0U ? filter_mag : (filter_mag == 0U ? 2U : 3U);
+            const std::uint32_t encoded_min_filter =
+                max_aniso == 0U ? filter_min : (filter_min == 0U ? 2U : 3U);
             const std::uint32_t new_word0 =
-                (word0 & ~max_aniso_mask) | (max_aniso << max_aniso_shift);
-            const std::uint32_t new_word2 =
-                (word2 & ~xy_filter_fields_mask) |
-                (filter_mag << mag_filter_shift) |
-                (filter_min << min_filter_shift);
+                (word0 & ~(max_aniso_mask | xy_filter_fields_mask)) |
+                (max_aniso << max_aniso_shift) |
+                (encoded_mag_filter << mag_filter_shift) |
+                (encoded_min_filter << min_filter_shift);
             core.memory.write32_be(sampler_address + 0x00U, new_word0);
-            core.memory.write32_be(sampler_address + 0x08U, new_word2);
         });
 
     dispatcher.register_function(
@@ -1685,10 +1690,9 @@ void register_gx2_hle(HleDispatcher& dispatcher)
             constexpr const char* api_name = "gx2::GX2InitSamplerZMFilter";
             constexpr std::uint32_t z_filter_max = 2U;
             constexpr std::uint32_t mip_filter_max = 2U;
-            constexpr std::uint32_t z_filter_shift = 24U;
-            constexpr std::uint32_t mip_filter_shift = 27U;
-            constexpr std::uint32_t z_filter_mask = 0x7U;
-            constexpr std::uint32_t mip_filter_mask = 0x3U;
+            constexpr std::uint32_t z_filter_shift = 15U;
+            constexpr std::uint32_t mip_filter_shift = 17U;
+            constexpr std::uint32_t filter_mask = 0x3U;
 
             const std::uint32_t sampler_address = core.state.gpr[3];
             const std::uint32_t filter_z = core.state.gpr[4];
@@ -1711,16 +1715,15 @@ void register_gx2_hle(HleDispatcher& dispatcher)
             }
 
             core.memory.validate_write_range(sampler_address, gx2_sampler_size);
-            const std::uint32_t word2 =
-                core.memory.read32_be(sampler_address + 0x08U);
+            const std::uint32_t word0 = core.memory.read32_be(sampler_address);
             constexpr std::uint32_t fields_mask =
-                (z_filter_mask << z_filter_shift) |
-                (mip_filter_mask << mip_filter_shift);
-            const std::uint32_t new_word2 =
-                (word2 & ~fields_mask) |
+                (filter_mask << z_filter_shift) |
+                (filter_mask << mip_filter_shift);
+            const std::uint32_t new_word0 =
+                (word0 & ~fields_mask) |
                 (filter_z << z_filter_shift) |
                 (filter_mip << mip_filter_shift);
-            core.memory.write32_be(sampler_address + 0x08U, new_word2);
+            core.memory.write32_be(sampler_address, new_word0);
         });
 
     dispatcher.register_function(
