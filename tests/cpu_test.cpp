@@ -825,6 +825,12 @@ void decoder_tests()
            ps_madd.fp_source_b == 2U && ps_madd.fp_source_c == 3U);
     assert(((0x102310FAU >> 1U) & 0x1FU) == 29U);
     assert(decode(0x102310FBU).opcode == Opcode::unsupported);
+    const DecodedInstruction ps_sum0 = decode(0x10211094U);
+    assert(ps_sum0.opcode == Opcode::paired_single_sum0);
+    assert(ps_sum0.fp_register == 1U && ps_sum0.fp_source_a == 1U &&
+           ps_sum0.fp_source_b == 2U && ps_sum0.fp_source_c == 2U);
+    assert(((0x10211094U >> 1U) & 0x1FU) == 10U);
+    assert(decode(0x10211095U).opcode == Opcode::unsupported);
 
     const DecodedInstruction mflr = decode(0x7C0802A6U); // mflr r0
     assert(mflr.opcode == Opcode::move_from_link_register);
@@ -26179,6 +26185,61 @@ void paired_single_multiply_add_tests()
     assert(flush.state.fpr_ps1[4] == double_bits(-0.0));
 }
 
+void paired_single_sum0_tests()
+{
+    const auto encode_ps_sum0 = [](std::uint8_t destination, std::uint8_t source_a,
+                                   std::uint8_t source_b, std::uint8_t source_c,
+                                   bool record = false) {
+        return 0x10000000U |
+            (static_cast<std::uint32_t>(destination) << 21U) |
+            (static_cast<std::uint32_t>(source_a) << 16U) |
+            (static_cast<std::uint32_t>(source_b) << 11U) |
+            (static_cast<std::uint32_t>(source_c) << 6U) |
+            (10U << 1U) | static_cast<std::uint32_t>(record);
+    };
+    const auto double_bits = [](double value) { return std::bit_cast<std::uint64_t>(value); };
+    constexpr std::uint32_t exact_encoding = 0x10211094U;
+    assert(encode_ps_sum0(1U, 1U, 2U, 2U) == exact_encoding);
+    const auto decoded = decode(exact_encoding);
+    assert(decoded.opcode == Opcode::paired_single_sum0);
+    assert(decoded.fp_register == 1U && decoded.fp_source_a == 1U &&
+           decoded.fp_source_b == 2U && decoded.fp_source_c == 2U);
+    assert(decode(exact_encoding | 1U).opcode == Opcode::unsupported);
+
+    EspressoCore core(4U);
+    core.state.fpr[1] = double_bits(1.25);
+    core.state.fpr_ps1[1] = double_bits(8.0);
+    core.state.fpr[2] = double_bits(3.0);
+    core.state.fpr_ps1[2] = double_bits(2.5);
+    core.state.fpr[3] = double_bits(4.0);
+    core.state.fpr_ps1[3] = double_bits(-7.25);
+    core.state.fpscr = 0xA5A55A5AU;
+    core.state.cr = 0x12345678U;
+    core.state.xer = 0xA00000A5U;
+    core.memory.write32_be(0U, encode_ps_sum0(8U, 1U, 2U, 3U));
+    assert(core.step() == StepResult::executed);
+    assert(core.state.fpr[8] == double_bits(3.75)); // A.PS0 + B.PS1
+    assert(core.state.fpr_ps1[8] == double_bits(-7.25)); // C.PS1
+    assert(core.state.fpscr == 0xA5A55A5AU);
+    assert(core.state.cr == 0x12345678U && core.state.xer == 0xA00000A5U);
+    const auto history_result = core.run(0U);
+    const auto& history = history_result.instruction_history.front();
+    assert(history.opcode_name == "ps_sum0" && history.paired_fp_sum0);
+    assert(history.paired_fp_source_a_ps0 == double_bits(1.25));
+    assert(history.paired_fp_source_b_ps1 == double_bits(2.5));
+    assert(history.paired_fp_source_c_ps1 == double_bits(-7.25));
+    assert(format_instruction_history(history_result).find("ps_sum0") != std::string::npos);
+
+    // Destination aliases A, B, and C; every old source lane contributes.
+    EspressoCore alias(4U);
+    alias.state.fpr[5] = double_bits(1.5);
+    alias.state.fpr_ps1[5] = double_bits(6.5);
+    alias.memory.write32_be(0U, encode_ps_sum0(5U, 5U, 5U, 5U));
+    assert(alias.step() == StepResult::executed);
+    assert(alias.state.fpr[5] == double_bits(8.0));
+    assert(alias.state.fpr_ps1[5] == double_bits(6.5));
+}
+
 void paired_single_multiply_scalar0_tests()
 {
     const auto encode_ps_muls0 = [](std::uint8_t destination, std::uint8_t source_a,
@@ -27051,6 +27112,7 @@ int main(int argc, char* argv[])
     paired_single_select_tests();
     paired_single_multiply_tests();
     paired_single_multiply_add_tests();
+    paired_single_sum0_tests();
     paired_single_multiply_scalar0_tests();
     paired_single_move_register_tests();
     paired_single_negate_tests();
