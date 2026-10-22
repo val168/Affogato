@@ -99,6 +99,7 @@ struct InstructionHistoryEntry
     bool has_paired_fp_state{};
     bool paired_fp_unary{};
     bool paired_fp_scalar_multiply{};
+    bool paired_fp_scalar_source_ps1{};
     bool paired_fp_vector_multiply{};
     bool paired_fp_multiply_add{};
     bool paired_fp_multiply_subtract{};

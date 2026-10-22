@@ -749,6 +749,7 @@ void set_xer_carry(CpuState& state, bool carry) noexcept
     case Opcode::paired_single_multiply_add: return "ps_madd";
     case Opcode::paired_single_multiply_subtract: return "ps_msub";
     case Opcode::paired_single_multiply_scalar0: return "ps_muls0";
+    case Opcode::paired_single_multiply_scalar1: return "ps_muls1";
     case Opcode::paired_single_sum0: return "ps_sum0";
     case Opcode::paired_single_move_register: return "ps_mr";
     case Opcode::paired_single_negate: return "ps_neg";
@@ -912,10 +913,15 @@ void add_history_source(
         return entry;
     }
     if (opcode == Opcode::paired_single_multiply ||
-        opcode == Opcode::paired_single_multiply_scalar0)
+        opcode == Opcode::paired_single_multiply_scalar0 ||
+        opcode == Opcode::paired_single_multiply_scalar1)
     {
         entry.has_paired_fp_state = true;
-        entry.paired_fp_scalar_multiply = opcode == Opcode::paired_single_multiply_scalar0;
+        entry.paired_fp_scalar_multiply =
+            opcode == Opcode::paired_single_multiply_scalar0 ||
+            opcode == Opcode::paired_single_multiply_scalar1;
+        entry.paired_fp_scalar_source_ps1 =
+            opcode == Opcode::paired_single_multiply_scalar1;
         entry.paired_fp_vector_multiply = opcode == Opcode::paired_single_multiply;
         entry.paired_fp_destination_register = instruction.fp_register;
         entry.paired_fp_source_a_register = instruction.fp_source_a;
@@ -2125,8 +2131,11 @@ std::string format_instruction_history(const RunResult& result)
                                     entry.paired_fp_source_a_ps1);
                 text << " fC=f" << std::dec
                      << static_cast<unsigned>(entry.paired_fp_source_b_register)
-                     << ".ps0=0x" << std::hex << std::setw(16)
-                     << entry.paired_fp_source_b_ps0;
+                     << ".ps" << (entry.paired_fp_scalar_source_ps1 ? '1' : '0')
+                     << "=0x" << std::hex << std::setw(16)
+                     << (entry.paired_fp_scalar_source_ps1
+                             ? entry.paired_fp_source_b_ps1
+                             : entry.paired_fp_source_b_ps0);
             }
             else if (entry.paired_fp_unary)
             {
@@ -5949,6 +5958,7 @@ StepResult EspressoCore::step()
 
     case Opcode::paired_single_multiply:
     case Opcode::paired_single_multiply_scalar0:
+    case Opcode::paired_single_multiply_scalar1:
     {
         const std::uint64_t a_ps0_raw = state.fpr[instruction.fp_source_a];
         const std::uint64_t a_ps1_raw = state.fpr_ps1[instruction.fp_source_a];
@@ -5956,8 +5966,12 @@ StepResult EspressoCore::step()
         const std::uint64_t c_ps1_raw = state.fpr_ps1[instruction.fp_source_c];
         const double a_ps0 = std::bit_cast<double>(a_ps0_raw);
         const double a_ps1 = std::bit_cast<double>(a_ps1_raw);
-        const double c_ps0 = std::bit_cast<double>(round_multiply_operand_25bit(c_ps0_raw));
-        const bool scalar = instruction.opcode == Opcode::paired_single_multiply_scalar0;
+        const bool scalar0 = instruction.opcode == Opcode::paired_single_multiply_scalar0;
+        const bool scalar1 = instruction.opcode == Opcode::paired_single_multiply_scalar1;
+        const bool scalar = scalar0 || scalar1;
+        const std::uint64_t scalar_c_raw = scalar1 ? c_ps1_raw : c_ps0_raw;
+        const double c_ps0 = std::bit_cast<double>(round_multiply_operand_25bit(
+            scalar ? scalar_c_raw : c_ps0_raw));
         const double c_ps1 = scalar
             ? c_ps0
             : std::bit_cast<double>(round_multiply_operand_25bit(c_ps1_raw));
