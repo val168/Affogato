@@ -744,6 +744,7 @@ void set_xer_carry(CpuState& state, bool carry) noexcept
     case Opcode::paired_single_merge10: return "ps_merge10";
     case Opcode::paired_single_merge11: return "ps_merge11";
     case Opcode::paired_single_add: return "ps_add";
+    case Opcode::paired_single_subtract: return "ps_sub";
     case Opcode::paired_single_multiply: return "ps_mul";
     case Opcode::paired_single_multiply_add: return "ps_madd";
     case Opcode::paired_single_multiply_scalar0: return "ps_muls0";
@@ -887,6 +888,7 @@ void add_history_source(
         opcode == Opcode::paired_single_merge10 ||
         opcode == Opcode::paired_single_merge11 ||
         opcode == Opcode::paired_single_add ||
+        opcode == Opcode::paired_single_subtract ||
         opcode == Opcode::paired_single_move_register ||
         opcode == Opcode::paired_single_negate ||
         opcode == Opcode::paired_single_absolute_value ||
@@ -5918,6 +5920,21 @@ StepResult EspressoCore::step()
         const double b_ps1 = std::bit_cast<double>(state.fpr_ps1[instruction.fp_source_b]);
         const float result_ps0 = static_cast<float>(a_ps0 + b_ps0);
         const float result_ps1 = static_cast<float>(a_ps1 + b_ps1);
+        state.fpr[instruction.fp_register] =
+            std::bit_cast<std::uint64_t>(static_cast<double>(result_ps0));
+        state.fpr_ps1[instruction.fp_register] =
+            std::bit_cast<std::uint64_t>(static_cast<double>(result_ps1));
+        break;
+    }
+
+    case Opcode::paired_single_subtract:
+    {
+        const double a_ps0 = std::bit_cast<double>(state.fpr[instruction.fp_source_a]);
+        const double a_ps1 = std::bit_cast<double>(state.fpr_ps1[instruction.fp_source_a]);
+        const double b_ps0 = std::bit_cast<double>(state.fpr[instruction.fp_source_b]);
+        const double b_ps1 = std::bit_cast<double>(state.fpr_ps1[instruction.fp_source_b]);
+        const float result_ps0 = static_cast<float>(a_ps0 - b_ps0);
+        const float result_ps1 = static_cast<float>(a_ps1 - b_ps1);
         state.fpr[instruction.fp_register] =
             std::bit_cast<std::uint64_t>(static_cast<double>(result_ps0));
         state.fpr_ps1[instruction.fp_register] =
