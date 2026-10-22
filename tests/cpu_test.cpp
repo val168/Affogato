@@ -21540,6 +21540,91 @@ void gx2_set_pixel_sampler_hle_tests()
     assert(core.gx2.pending_commands.size() == 15U);
 }
 
+void gx2_set_sampler_border_color_hle_tests()
+{
+    constexpr std::uint32_t unit = 5U;
+    constexpr std::uint32_t last_unit = 11U;
+    constexpr std::array<double, 4U> float_arguments{
+        -0.5, 1.0, 0.125, 1.75};
+    constexpr std::array<std::uint32_t, 4U> expected_color{
+        0xBF000000U, 0x3F800000U, 0x3E000000U, 0x3FE00000U};
+
+    EspressoCore core(0x10000U);
+    register_gx2_hle(core.hle);
+    core.gx2.initialized = true;
+
+    struct StageApi
+    {
+        const char* name;
+        std::uint32_t register_base;
+        std::array<std::optional<std::array<std::uint32_t, 4U>>, 12U>* state;
+    };
+    const std::array<StageApi, 4U> apis{{
+        {"GX2SetPixelSamplerBorderColor", 0x0000A400U,
+         &core.gx2.pixel_sampler_border_colors},
+        {"GX2SetVertexSamplerBorderColor", 0x0000A600U,
+         &core.gx2.vertex_sampler_border_colors},
+        {"GX2SetComputeSamplerBorderColor", 0x0000A600U,
+         &core.gx2.vertex_sampler_border_colors},
+        {"GX2SetGeometrySamplerBorderColor", 0x0000A800U,
+         &core.gx2.geometry_sampler_border_colors},
+    }};
+
+    for (const StageApi& api : apis)
+    {
+        const std::uint32_t import = core.hle.bind_import("gx2", api.name);
+        assert(import != 0U);
+        core.state.gpr[3] = unit;
+        for (std::size_t channel = 0U; channel < float_arguments.size(); ++channel)
+        {
+            core.state.fpr[channel + 1U] =
+                std::bit_cast<std::uint64_t>(float_arguments[channel]);
+        }
+        const auto gprs_before = core.state.gpr;
+        const auto fprs_before = core.state.fpr;
+        const std::size_t command_start = core.gx2.pending_commands.size();
+        core.state.cia = import;
+        const auto result = core.run(1U);
+        assert(result.reason == StopReason::instruction_limit);
+        assert(core.state.gpr == gprs_before);
+        assert(core.state.fpr == fprs_before);
+        assert((*api.state)[unit] == expected_color);
+        assert(core.gx2.pending_commands.size() == command_start + 4U);
+
+        const std::uint32_t first_register =
+            api.register_base + unit * 4U * sizeof(std::uint32_t);
+        for (std::size_t channel = 0U; channel < expected_color.size(); ++channel)
+        {
+            const Gx2Command& command =
+                core.gx2.pending_commands[command_start + channel];
+            assert(command.type == Gx2CommandType::set_context_register);
+            assert(command.register_address == first_register + channel * 4U);
+            assert(command.value == expected_color[channel]);
+        }
+    }
+
+    // Border color registers expose twelve samplers per stage; validate the
+    // upper boundary as well as rejection without partial command emission.
+    const std::uint32_t pixel_import = core.hle.bind_import(
+        "gx2", "GX2SetPixelSamplerBorderColor");
+    core.state.gpr[3] = last_unit;
+    core.state.cia = pixel_import;
+    assert(core.run(1U).reason == StopReason::instruction_limit);
+    assert(core.gx2.pixel_sampler_border_colors[last_unit] == expected_color);
+    const std::size_t command_count = core.gx2.pending_commands.size();
+    core.state.gpr[3] = 12U;
+    core.state.cia = pixel_import;
+    assert(core.run(1U).reason == StopReason::hle_error);
+    assert(core.gx2.pending_commands.size() == command_count);
+
+    EspressoCore uninitialized(0x10000U);
+    register_gx2_hle(uninitialized.hle);
+    uninitialized.state.gpr[3] = unit;
+    uninitialized.state.cia = uninitialized.hle.bind_import(
+        "gx2", "GX2SetPixelSamplerBorderColor");
+    assert(uninitialized.run(1U).reason == StopReason::hle_error);
+}
+
 void gx2_set_tv_buffer_hle_tests()
 {
     constexpr std::uint32_t buffer_address = 0x0A001000U;
@@ -29280,6 +29365,7 @@ int main(int argc, char* argv[])
     gx2_set_pixel_texture_hle_tests();
     gx2_set_vertex_and_geometry_texture_hle_tests();
     gx2_set_pixel_sampler_hle_tests();
+    gx2_set_sampler_border_color_hle_tests();
     gx2_calc_tv_size_hle_tests();
     gx2_set_tv_buffer_hle_tests();
     gx2_set_tv_scale_hle_tests();

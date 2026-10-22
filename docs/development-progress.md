@@ -14,6 +14,7 @@
 - Implemented: shared binding logic for vertex and geometry texture stages, with stage-specific register bases and independent binding state (`c89a6d5`).
 - Implemented: three-word sampler binding for pixel, vertex, and geometry stages, with independent per-unit state (`40b1425`).
 - Implemented this iteration: compute texture and sampler APIs route to the vertex resource banks, matching Cafe's GX2 behavior.
+- Implemented sampler border-color state for pixel, vertex, geometry, and compute (compute shares the vertex bank), recording the four FPR float arguments as Latte config-register writes. Register bases and twelve-entry stage banks were checked against Cemu's Latte register definitions.
 - Actual guest rendering/presentation is not yet confirmed; command submission, shader execution, and framebuffer presentation remain incomplete.
 
 ## Completed commits
@@ -22,15 +23,17 @@
 - `31c2058` - `gx2: implement pixel texture binding`
 - `c89a6d5` - `gx2: add vertex and geometry texture binding`
 - `40b1425` - `gx2: implement shader sampler binding`
+- `41cd53c` - `gx2: bind compute textures and samplers`
 
 ## Current test status
 
 - Debug build: `build/debug-win-native`, Ninja; build is current.
-- CTest after texture, sampler, and compute-stage binding: 2/2 passed.
+- CTest after compute binding and sampler border-color state: 2/2 passed.
+- Latest WWHD diagnostic after sampler border-color changes: 6,080,538 instructions; stop remains at CIA 0 with null `bcctr` target (`CTR=0`); no regression from the prior checkpoint.
 
 ## Prioritized queue
 
 1. Trace the null `bcctr` target to its owner and determine whether initialization, runtime state, or a guest-side condition left the callback unset; do not fabricate a callback.
-2. Connect recorded resource/sampler state to command processing and renderer consumption.
+2. Connect recorded resource/sampler and config state to command processing and renderer consumption.
 3. Audit shader, draw submission, and scan-buffer presentation paths against real guest execution before claiming rendered output.
 4. Run a current Cemu-vs-Affogato CPU coverage comparison if the null guest call remains the only runtime stop.

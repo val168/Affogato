@@ -98,6 +98,10 @@ constexpr std::uint32_t gx2_texture_register_count = 7U;
 constexpr std::uint32_t gx2_texture_unit_count = 16U;
 constexpr std::uint32_t gx2_sampler_register_count = 3U;
 constexpr std::uint32_t gx2_sampler_unit_count = 16U;
+constexpr std::uint32_t gx2_sampler_border_color_unit_count = 12U;
+constexpr std::uint32_t gx2_pixel_sampler_border_register_base = 0x0000A400U;
+constexpr std::uint32_t gx2_vertex_sampler_border_register_base = 0x0000A600U;
+constexpr std::uint32_t gx2_geometry_sampler_border_register_base = 0x0000A800U;
 constexpr std::uint32_t latte_pipe_interleave_bytes = 256U;
 constexpr std::uint32_t latte_pipe_count = 2U;
 constexpr std::uint32_t latte_bank_count = 4U;
@@ -1167,6 +1171,44 @@ void set_gx2_sampler(
             binding.registers[index]});
     }
     bindings[unit] = binding;
+}
+
+void set_gx2_sampler_border_color(
+    EspressoCore& core,
+    std::uint32_t unit,
+    const char* api_name,
+    std::uint32_t register_base,
+    std::array<std::optional<std::array<std::uint32_t, 4U>>,
+               gx2_sampler_border_color_unit_count>& border_colors)
+{
+    if (!core.gx2.initialized)
+    {
+        throw HleExecutionError(
+            std::string(api_name) + ": GX2 has not been initialized");
+    }
+    if (unit >= gx2_sampler_border_color_unit_count)
+    {
+        throw HleExecutionError(
+            std::string(api_name) + ": sampler border-color unit is out of range");
+    }
+
+    const std::array<std::uint32_t, 4U> color{
+        fpr_float_argument_bits(core, 1U),
+        fpr_float_argument_bits(core, 2U),
+        fpr_float_argument_bits(core, 3U),
+        fpr_float_argument_bits(core, 4U),
+    };
+    const std::uint32_t first_register = register_base + unit * 4U * 4U;
+    auto& commands = core.gx2.pending_commands;
+    commands.reserve(commands.size() + color.size());
+    for (std::size_t channel = 0U; channel < color.size(); ++channel)
+    {
+        commands.push_back({
+            Gx2CommandType::set_context_register,
+            first_register + static_cast<std::uint32_t>(channel * 4U),
+            color[channel]});
+    }
+    border_colors[unit] = color;
 }
 
 std::uint32_t pack_stencil_ref_mask(
@@ -2580,6 +2622,55 @@ void register_gx2_hle(HleDispatcher& dispatcher)
                 "gx2::GX2SetGeometrySampler",
                 gx2_geometry_sampler_register_base,
                 core.gx2.geometry_samplers);
+        });
+
+    dispatcher.register_function(
+        "gx2",
+        "GX2SetPixelSamplerBorderColor",
+        [](EspressoCore& core) {
+            set_gx2_sampler_border_color(
+                core,
+                core.state.gpr[3],
+                "gx2::GX2SetPixelSamplerBorderColor",
+                gx2_pixel_sampler_border_register_base,
+                core.gx2.pixel_sampler_border_colors);
+        });
+
+    dispatcher.register_function(
+        "gx2",
+        "GX2SetVertexSamplerBorderColor",
+        [](EspressoCore& core) {
+            set_gx2_sampler_border_color(
+                core,
+                core.state.gpr[3],
+                "gx2::GX2SetVertexSamplerBorderColor",
+                gx2_vertex_sampler_border_register_base,
+                core.gx2.vertex_sampler_border_colors);
+        });
+
+    dispatcher.register_function(
+        "gx2",
+        "GX2SetComputeSamplerBorderColor",
+        [](EspressoCore& core) {
+            // Compute samplers use the vertex-stage Latte border-color bank.
+            set_gx2_sampler_border_color(
+                core,
+                core.state.gpr[3],
+                "gx2::GX2SetComputeSamplerBorderColor",
+                gx2_vertex_sampler_border_register_base,
+                core.gx2.vertex_sampler_border_colors);
+        });
+
+    dispatcher.register_function(
+        "gx2",
+        "GX2SetGeometrySamplerBorderColor",
+        [](EspressoCore& core) {
+            set_gx2_sampler_border_color(
+                core,
+                core.state.gpr[3],
+                "gx2::GX2SetGeometrySamplerBorderColor",
+                gx2_geometry_sampler_border_register_base,
+                core.gx2.geometry_sampler_border_colors);
         });
 
     dispatcher.register_function(
