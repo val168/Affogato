@@ -762,6 +762,7 @@ void set_xer_carry(CpuState& state, bool carry) noexcept
     case Opcode::paired_single_compare_unordered1: return "ps_cmpu1";
     case Opcode::paired_single_compare_ordered0: return "ps_cmpo0";
     case Opcode::paired_single_compare_ordered1: return "ps_cmpo1";
+    case Opcode::paired_single_reciprocal_estimate: return "ps_res";
     case Opcode::paired_single_reciprocal_square_root_estimate: return "ps_rsqrte";
     case Opcode::paired_single_move_register: return "ps_mr";
     case Opcode::paired_single_negate: return "ps_neg";
@@ -901,6 +902,7 @@ void add_history_source(
         opcode == Opcode::paired_single_merge01 ||
         opcode == Opcode::paired_single_merge10 ||
         opcode == Opcode::paired_single_merge11 ||
+        opcode == Opcode::paired_single_reciprocal_estimate ||
         opcode == Opcode::paired_single_reciprocal_square_root_estimate ||
         opcode == Opcode::paired_single_add ||
         opcode == Opcode::paired_single_subtract ||
@@ -912,6 +914,7 @@ void add_history_source(
     {
         entry.has_paired_fp_state = true;
         entry.paired_fp_unary = opcode == Opcode::paired_single_move_register ||
+            opcode == Opcode::paired_single_reciprocal_estimate ||
             opcode == Opcode::paired_single_reciprocal_square_root_estimate ||
             opcode == Opcode::paired_single_negate ||
             opcode == Opcode::paired_single_absolute_value ||
@@ -6028,6 +6031,20 @@ StepResult EspressoCore::step()
         const auto estimate = [](std::uint64_t raw) {
             const double source = std::bit_cast<double>(raw);
             const float result = static_cast<float>(1.0 / std::sqrt(source));
+            return std::bit_cast<std::uint64_t>(static_cast<double>(result));
+        };
+        state.fpr[instruction.fp_register] = estimate(source_ps0);
+        state.fpr_ps1[instruction.fp_register] = estimate(source_ps1);
+        break;
+    }
+
+    case Opcode::paired_single_reciprocal_estimate:
+    {
+        const std::uint64_t source_ps0 = state.fpr[instruction.fp_source_b];
+        const std::uint64_t source_ps1 = state.fpr_ps1[instruction.fp_source_b];
+        const auto estimate = [](std::uint64_t raw) {
+            const double source = std::bit_cast<double>(raw);
+            const float result = static_cast<float>(1.0 / source);
             return std::bit_cast<std::uint64_t>(static_cast<double>(result));
         };
         state.fpr[instruction.fp_register] = estimate(source_ps0);
