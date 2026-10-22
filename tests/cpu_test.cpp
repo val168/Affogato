@@ -17402,6 +17402,71 @@ void gx2_init_sampler_lod_hle_tests()
     assert(core.memory.read32_be(sampler_address + 0x04U) == word1_before_invalid);
 }
 
+void gx2_init_sampler_depth_compare_hle_tests()
+{
+    constexpr std::uint32_t return_address = 0x02750A60U;
+    constexpr std::uint32_t sampler_address = 0x100U;
+
+    EspressoCore core(0x1000U);
+    register_gx2_hle(core.hle);
+    const std::uint32_t import = core.hle.bind_import(
+        "gx2", "GX2InitSamplerDepthCompare");
+    assert(import != 0U);
+
+    const auto invoke = [&](std::uint32_t compare_function) {
+        core.state.gpr[3] = sampler_address;
+        core.state.gpr[4] = compare_function;
+        core.state.cia = import;
+        core.state.lr = return_address;
+        return core.run(1U);
+    };
+
+    constexpr std::uint32_t initial_word0 = 0xA5A5F1A5U;
+    constexpr std::uint32_t initial_word1 = 0x12345678U;
+    constexpr std::uint32_t initial_word2 = 0x87654321U;
+    core.memory.write32_be(sampler_address, initial_word0);
+    core.memory.write32_be(sampler_address + 0x04U, initial_word1);
+    core.memory.write32_be(sampler_address + 0x08U, initial_word2);
+    core.state.gpr.fill(0xA4000000U);
+    core.state.gpr[3] = sampler_address;
+    core.state.gpr[4] = 3U;
+    core.state.cr = 0x456789ABU;
+    core.state.xer = 0xA5A55A5AU;
+    core.state.ctr = 0x87654321U;
+    core.state.fpscr = 0x5AA5A55AU;
+    const auto gprs_before = core.state.gpr;
+    const auto fprs_before = core.state.fpr;
+    const auto ps1_before = core.state.fpr_ps1;
+    const std::uint32_t cr_before = core.state.cr;
+    const std::uint32_t xer_before = core.state.xer;
+    const std::uint32_t ctr_before = core.state.ctr;
+    const std::uint32_t fpscr_before = core.state.fpscr;
+
+    assert(invoke(3U).reason == StopReason::instruction_limit);
+    constexpr std::uint32_t depth_compare_field_mask = 0x7U << 26U;
+    assert(core.memory.read32_be(sampler_address) ==
+           ((initial_word0 & ~depth_compare_field_mask) | (3U << 26U)));
+    assert(core.memory.read32_be(sampler_address + 0x04U) == initial_word1);
+    assert(core.memory.read32_be(sampler_address + 0x08U) == initial_word2);
+    assert(core.state.gpr == gprs_before);
+    assert(core.state.fpr == fprs_before);
+    assert(core.state.fpr_ps1 == ps1_before);
+    assert(core.state.cr == cr_before);
+    assert(core.state.xer == xer_before);
+    assert(core.state.ctr == ctr_before);
+    assert(core.state.fpscr == fpscr_before);
+    assert(core.state.cia == return_address);
+
+    const std::array<std::uint32_t, 3U> sampler_before{
+        core.memory.read32_be(sampler_address),
+        core.memory.read32_be(sampler_address + 4U),
+        core.memory.read32_be(sampler_address + 8U)};
+    assert(invoke(8U).reason == StopReason::hle_error);
+    assert(core.memory.read32_be(sampler_address) == sampler_before[0]);
+    assert(core.memory.read32_be(sampler_address + 0x04U) == sampler_before[1]);
+    assert(core.memory.read32_be(sampler_address + 0x08U) == sampler_before[2]);
+}
+
 void gx2_init_hle_tests()
 {
     constexpr std::uint32_t return_address = 0x0274BD9CU;
@@ -28914,6 +28979,7 @@ int main(int argc, char* argv[])
     gx2_init_sampler_xy_filter_hle_tests();
     gx2_init_sampler_zm_filter_hle_tests();
     gx2_init_sampler_lod_hle_tests();
+    gx2_init_sampler_depth_compare_hle_tests();
     gx2_init_hle_tests();
     gx2_clear_color_hle_tests();
     gx2_set_color_buffer_hle_tests();

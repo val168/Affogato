@@ -1795,6 +1795,37 @@ void register_gx2_hle(HleDispatcher& dispatcher)
 
     dispatcher.register_function(
         "gx2",
+        "GX2InitSamplerDepthCompare",
+        [](EspressoCore& core) {
+            constexpr const char* api_name = "gx2::GX2InitSamplerDepthCompare";
+            constexpr std::uint32_t depth_compare_mask = 0x7U;
+            constexpr std::uint32_t depth_compare_shift = 26U;
+
+            const std::uint32_t sampler_address = core.state.gpr[3];
+            const std::uint32_t depth_compare = core.state.gpr[4];
+            if (sampler_address == 0U || (sampler_address & 3U) != 0U)
+            {
+                throw HleExecutionError(
+                    std::string(api_name) + ": sampler pointer is null or misaligned");
+            }
+            if (depth_compare > depth_compare_mask)
+            {
+                throw HleExecutionError(
+                    std::string(api_name) + ": invalid depth compare function");
+            }
+
+            core.memory.validate_write_range(sampler_address, gx2_sampler_size);
+            const std::uint32_t word0 = core.memory.read32_be(sampler_address);
+            constexpr std::uint32_t depth_compare_field_mask =
+                depth_compare_mask << depth_compare_shift;
+            const std::uint32_t new_word0 =
+                (word0 & ~depth_compare_field_mask) |
+                (depth_compare << depth_compare_shift);
+            core.memory.write32_be(sampler_address, new_word0);
+        });
+
+    dispatcher.register_function(
+        "gx2",
         "GX2Init",
         [](EspressoCore& core) {
             // Cemu treats repeated GX2Init calls as successful no-ops. Check
