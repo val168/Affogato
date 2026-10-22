@@ -16336,6 +16336,54 @@ void gx2_calc_geometry_shader_input_ring_buffer_size_hle_tests()
            "coreinit::GX2CalcGeometryShaderInputRingBufferSize");
 }
 
+void gx2_calc_geometry_shader_output_ring_buffer_size_hle_tests()
+{
+    constexpr std::uint32_t return_address = 0x027508B4U;
+    EspressoCore core(0x1000U);
+    register_gx2_hle(core.hle);
+    const std::uint32_t import = core.hle.bind_import(
+        "gx2", "GX2CalcGeometryShaderOutputRingBufferSize");
+    assert(import != 0U);
+
+    core.state.gpr.fill(0xA5000000U);
+    core.state.cr = 0x23456789U;
+    core.state.xer = 0x76543210U;
+    core.state.ctr = 0xDEADBEEFU;
+    core.state.fpscr = 0x5AA5A55AU;
+    const auto gprs_before = core.state.gpr;
+    const std::uint32_t cr_before = core.state.cr;
+    const std::uint32_t xer_before = core.state.xer;
+    const std::uint32_t ctr_before = core.state.ctr;
+    const std::uint32_t fpscr_before = core.state.fpscr;
+
+    constexpr std::array<std::pair<std::uint32_t, std::uint32_t>, 4U> cases{{
+        {0U, 0U},
+        {1U, 0x4000U},
+        {0x12345U, 0x48D14000U},
+        {0xFFFFFFFFU, 0xFFFFC000U},
+    }};
+    for (const auto& [input, expected] : cases)
+    {
+        core.state.gpr[3] = input;
+        core.state.cia = import;
+        core.state.lr = return_address;
+        const RunResult result = core.run(1U);
+        assert(result.reason == StopReason::instruction_limit);
+        assert(result.steps == 1U);
+        assert(core.state.gpr[3] == expected);
+        for (std::size_t index = 4U; index < core.state.gpr.size(); ++index)
+        {
+            assert(core.state.gpr[index] == gprs_before[index]);
+        }
+        assert(core.state.cia == return_address);
+        assert(core.state.lr == return_address);
+        assert(core.state.cr == cr_before);
+        assert(core.state.xer == xer_before);
+        assert(core.state.ctr == ctr_before);
+        assert(core.state.fpscr == fpscr_before);
+    }
+}
+
 void gx2_calc_fetch_shader_size_ex_hle_tests()
 {
     constexpr std::uint32_t return_address = 0x027508B4U;
@@ -19787,6 +19835,100 @@ void gx2_setup_context_state_ex_hle_tests()
     assert(!core.gx2.context_state_profiling_enabled);
     assert(!core.gx2.context_state_shadow_display_list_requested);
     assert(core.gx2.pending_commands.empty());
+}
+
+void gx2_get_context_state_display_list_hle_tests()
+{
+    constexpr std::uint32_t context_state = 0x5000U;
+    constexpr std::uint32_t context_size = 0xA100U;
+    constexpr std::uint32_t display_list_offset = 0x9E00U;
+    constexpr std::uint32_t display_list_size_offset = 0x9804U;
+    constexpr std::uint32_t display_list_output = 0x100U;
+    constexpr std::uint32_t size_output = 0x104U;
+    constexpr std::uint32_t return_address = 0x0274BE78U;
+
+    EspressoCore core(0x20000U);
+    register_gx2_hle(core.hle);
+    const std::uint32_t import = core.hle.bind_import(
+        "gx2", "GX2GetContextStateDisplayList");
+    assert(import != 0U);
+    core.memory.fill_bytes(context_state, context_size, 0U);
+    core.memory.write32_be(
+        context_state + display_list_size_offset, 0x00000180U);
+    core.memory.write32_be(display_list_output, 0xDEADBEEFU);
+    core.memory.write32_be(size_output, 0x12345678U);
+
+    core.state.gpr.fill(0xD4000000U);
+    core.state.gpr[3] = context_state;
+    core.state.gpr[4] = display_list_output;
+    core.state.gpr[5] = size_output;
+    core.state.cr = 0x12345678U;
+    core.state.xer = 0xA5A55A5AU;
+    core.state.ctr = 0x87654321U;
+    core.state.fpscr = 0x5A5AA55AU;
+    const auto gprs_before = core.state.gpr;
+    const auto fprs_before = core.state.fpr;
+    const auto ps1_before = core.state.fpr_ps1;
+    const std::uint32_t cr_before = core.state.cr;
+    const std::uint32_t xer_before = core.state.xer;
+    const std::uint32_t ctr_before = core.state.ctr;
+    const std::uint32_t fpscr_before = core.state.fpscr;
+
+    const auto invoke = [&](std::uint32_t state_address,
+                            std::uint32_t out_list,
+                            std::uint32_t out_length) {
+        core.state.gpr[3] = state_address;
+        core.state.gpr[4] = out_list;
+        core.state.gpr[5] = out_length;
+        core.state.cia = import;
+        core.state.lr = return_address;
+        return core.run(1U);
+    };
+
+    RunResult result = invoke(context_state, display_list_output, size_output);
+    assert(result.reason == StopReason::instruction_limit && result.steps == 1U);
+    assert(core.memory.read32_be(display_list_output) ==
+           context_state + display_list_offset);
+    assert(core.memory.read32_be(size_output) == 0x180U);
+    assert(core.state.gpr == gprs_before);
+    assert(core.state.cia == return_address && core.state.lr == return_address);
+    assert(core.state.cr == cr_before && core.state.xer == xer_before);
+    assert(core.state.ctr == ctr_before && core.state.fpscr == fpscr_before);
+    assert(core.state.fpr == fprs_before && core.state.fpr_ps1 == ps1_before);
+
+    // Setup's modeled no-generated-PM4 state is returned faithfully as a
+    // valid embedded buffer pointer paired with its zero guest-stored size.
+    core.memory.write32_be(
+        context_state + display_list_size_offset, 0U);
+    result = invoke(context_state, display_list_output, size_output);
+    assert(result.reason == StopReason::instruction_limit);
+    assert(core.memory.read32_be(display_list_output) ==
+           context_state + display_list_offset);
+    assert(core.memory.read32_be(size_output) == 0U);
+
+    core.memory.write32_be(display_list_output, 0xDEADBEEFU);
+    core.memory.write32_be(size_output, 0x12345678U);
+    result = invoke(0U, display_list_output, size_output);
+    assert(result.reason == StopReason::hle_error);
+    assert(core.memory.read32_be(display_list_output) == 0xDEADBEEFU);
+    assert(core.memory.read32_be(size_output) == 0x12345678U);
+    result = invoke(0xFFFFF000U, display_list_output, size_output);
+    assert(result.reason == StopReason::hle_error);
+    assert(core.memory.read32_be(display_list_output) == 0xDEADBEEFU);
+    assert(core.memory.read32_be(size_output) == 0x12345678U);
+    result = invoke(context_state, 0U, size_output);
+    assert(result.reason == StopReason::hle_error);
+    assert(core.memory.read32_be(display_list_output) == 0xDEADBEEFU);
+    assert(core.memory.read32_be(size_output) == 0x12345678U);
+
+    const std::uint32_t wrong_library = core.hle.bind_import(
+        "coreinit", "GX2GetContextStateDisplayList");
+    result = invoke(context_state, display_list_output, size_output);
+    assert(result.reason == StopReason::instruction_limit);
+    core.state.cia = wrong_library;
+    result = core.run(1U);
+    assert(result.reason == StopReason::unimplemented_hle_call);
+    assert(result.hle_call == "coreinit::GX2GetContextStateDisplayList");
 }
 
 void gx2_calc_tv_size_hle_tests()
@@ -26222,6 +26364,7 @@ int main(int argc, char* argv[])
     gx2_temp_get_gpu_version_hle_tests();
     gx2_invalidate_hle_tests();
     gx2_calc_geometry_shader_input_ring_buffer_size_hle_tests();
+    gx2_calc_geometry_shader_output_ring_buffer_size_hle_tests();
     gx2_calc_fetch_shader_size_ex_hle_tests();
     gx2_init_fetch_shader_ex_hle_tests();
     gx2_init_sampler_hle_tests();
@@ -26238,6 +26381,7 @@ int main(int argc, char* argv[])
     gx2_set_target_channel_masks_hle_tests();
     gx2_set_alpha_to_mask_hle_tests();
     gx2_setup_context_state_ex_hle_tests();
+    gx2_get_context_state_display_list_hle_tests();
     gx2_calc_tv_size_hle_tests();
     gx2_set_tv_buffer_hle_tests();
     gx2_set_tv_scale_hle_tests();

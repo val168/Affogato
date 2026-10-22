@@ -694,6 +694,15 @@ void register_gx2_hle(HleDispatcher& dispatcher)
 
     dispatcher.register_function(
         "gx2",
+        "GX2CalcGeometryShaderOutputRingBufferSize",
+        [](EspressoCore& core) {
+            // The GX2 output-ring calculator uses the same uint32 formula as
+            // its input-ring counterpart.
+            core.state.gpr[3] = core.state.gpr[3] * 4U * 0x1000U;
+        });
+
+    dispatcher.register_function(
+        "gx2",
         "GX2InitFetchShaderEx",
         [](EspressoCore& core) {
             constexpr const char* api_name = "gx2::GX2InitFetchShaderEx";
@@ -1344,6 +1353,47 @@ void register_gx2_hle(HleDispatcher& dispatcher)
             core.gx2.context_state_profiling_enabled = profiling_enabled;
             core.gx2.context_state_shadow_display_list_requested =
                 shadow_display_list_requested;
+        });
+
+    dispatcher.register_function(
+        "gx2",
+        "GX2GetContextStateDisplayList",
+        [](EspressoCore& core) {
+            constexpr const char* api_name = "GX2GetContextStateDisplayList";
+            const std::uint32_t context_state = core.state.gpr[3];
+            const std::uint32_t out_display_list = core.state.gpr[4];
+            const std::uint32_t out_size = core.state.gpr[5];
+
+            if (context_state == 0U)
+            {
+                throw HleExecutionError(
+                    std::string("gx2::") + api_name +
+                    ": context state pointer is null");
+            }
+            const std::uint64_t context_end =
+                static_cast<std::uint64_t>(context_state) +
+                gx2_context_state_size;
+            if (context_end > guest_address_space_end)
+            {
+                throw HleExecutionError(
+                    std::string("gx2::") + api_name +
+                    ": context state range wraps guest address space");
+            }
+
+            // Cemu returns the embedded Cafe load-display-list buffer and its
+            // guest-stored size. Setup currently leaves this size zero because
+            // Affogato does not yet generate authentic GX2/PM4 restore lists.
+            const std::uint32_t display_list =
+                context_state + gx2_context_display_list_offset;
+            const std::uint32_t display_list_size = core.memory.read32_be(
+                context_state + gx2_context_display_list_size_offset);
+
+            validate_gx2_u32_output(
+                core, out_display_list, api_name, "display-list output");
+            validate_gx2_u32_output(
+                core, out_size, api_name, "size output");
+            core.memory.write32_be(out_display_list, display_list);
+            core.memory.write32_be(out_size, display_list_size);
         });
 
     dispatcher.register_function(
