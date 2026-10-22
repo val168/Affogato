@@ -197,6 +197,7 @@ enum class Opcode
     paired_single_sum0,
     paired_single_sum1,
     paired_single_divide,
+    paired_single_compare_unordered0,
     paired_single_move_register,
     paired_single_negate,
     paired_single_absolute_value,

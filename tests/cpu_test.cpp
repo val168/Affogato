@@ -882,6 +882,12 @@ void decoder_tests()
     assert(((0x10A11024U >> 1U) & 0x1FU) == 18U);
     assert(decode(0x10A11025U).opcode == Opcode::unsupported);
     assert(decode(0x10A11064U).opcode == Opcode::unsupported);
+    const DecodedInstruction ps_cmpu0 = decode(0x11011000U);
+    assert(ps_cmpu0.opcode == Opcode::paired_single_compare_unordered0);
+    assert(ps_cmpu0.cr_field == 2U && ps_cmpu0.fp_compare_a == 1U &&
+           ps_cmpu0.fp_compare_b == 2U);
+    assert(decode(0x11011001U).opcode == Opcode::unsupported);
+    assert(decode(0x11411000U).opcode == Opcode::unsupported);
     const DecodedInstruction ps_add = decode(0x1007482AU);
     assert(ps_add.opcode == Opcode::paired_single_add);
     assert(ps_add.fp_register == 0U && ps_add.fp_source_a == 7U &&
@@ -26582,6 +26588,63 @@ void paired_single_divide_tests()
     assert(alias.state.fpr_ps1[5] == double_bits(-3.0));
 }
 
+void paired_single_compare_unordered0_tests()
+{
+    const auto encode_ps_cmpu0 = [](std::uint8_t cr_field, std::uint8_t source_a,
+                                    std::uint8_t source_b, std::uint8_t reserved = 0U,
+                                    bool record = false) {
+        return 0x10000000U |
+            (static_cast<std::uint32_t>(cr_field) << 23U) |
+            (static_cast<std::uint32_t>(reserved) << 21U) |
+            (static_cast<std::uint32_t>(source_a) << 16U) |
+            (static_cast<std::uint32_t>(source_b) << 11U) |
+            static_cast<std::uint32_t>(record);
+    };
+    const auto double_bits = [](double value) { return std::bit_cast<std::uint64_t>(value); };
+    constexpr std::uint32_t exact_encoding = 0x11011000U;
+    assert(encode_ps_cmpu0(2U, 1U, 2U) == exact_encoding);
+    const auto decoded = decode(exact_encoding);
+    assert(decoded.opcode == Opcode::paired_single_compare_unordered0);
+    assert(decoded.cr_field == 2U && decoded.fp_compare_a == 1U &&
+           decoded.fp_compare_b == 2U);
+    assert(decode(encode_ps_cmpu0(2U, 1U, 2U, 0U, true)).opcode == Opcode::unsupported);
+    assert(decode(encode_ps_cmpu0(2U, 1U, 2U, 1U)).opcode == Opcode::unsupported);
+
+    EspressoCore core(4U);
+    core.state.fpr[1] = double_bits(1.0);
+    core.state.fpr[2] = double_bits(2.0);
+    core.state.cr = 0x12345678U;
+    core.state.fpscr = 0x000000A5U;
+    core.state.gpr.fill(0x87654321U);
+    core.state.xer = 0xA00000A5U;
+    core.memory.write32_be(0U, exact_encoding);
+    const auto gprs_before = core.state.gpr;
+    assert(core.step() == StepResult::executed);
+    constexpr std::uint8_t less = 0x8U; // CR.LT
+    assert(((core.state.cr >> ((7U - 2U) * 4U)) & 0xFU) == less);
+    assert(((core.state.fpscr & fpscr::fpcc_mask) >> 12U) == less);
+    assert(core.state.gpr == gprs_before && core.state.xer == 0xA00000A5U);
+    const auto history_result = core.run(0U);
+    const auto& history = history_result.instruction_history.front();
+    assert(history.opcode_name == "ps_cmpu0" && history.has_fp_compare);
+    assert(history.fp_compare_cr_field == 2U && history.fp_compare_result == less);
+
+    EspressoCore equal(4U);
+    equal.state.fpr[1] = double_bits(-0.0);
+    equal.state.fpr[2] = double_bits(0.0);
+    equal.memory.write32_be(0U, exact_encoding);
+    assert(equal.step() == StepResult::executed);
+    assert(((equal.state.cr >> 20U) & 0xFU) == 0x2U); // CR.EQ
+
+    EspressoCore unordered(4U);
+    unordered.state.fpr[1] = 0x7FF8123456789ABCULL;
+    unordered.state.fpr[2] = double_bits(1.0);
+    unordered.memory.write32_be(0U, exact_encoding);
+    assert(unordered.step() == StepResult::executed);
+    assert(((unordered.state.cr >> 20U) & 0xFU) == 0x1U); // CR.FU
+    assert((unordered.state.fpscr & fpscr::vxsnan_mask) == 0U);
+}
+
 void paired_single_add_tests()
 {
     const auto encode_ps_add = [](std::uint8_t destination, std::uint8_t source_a,
@@ -27907,6 +27970,7 @@ int main(int argc, char* argv[])
     paired_single_sum0_tests();
     paired_single_sum1_tests();
     paired_single_divide_tests();
+    paired_single_compare_unordered0_tests();
     paired_single_add_tests();
     paired_single_subtract_tests();
     paired_single_multiply_scalar0_tests();
