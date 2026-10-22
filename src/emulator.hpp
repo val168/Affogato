@@ -1,5 +1,6 @@
 #pragma once
 
+#include "cpu/espresso/gx2_hle.hpp"
 #include "cpu/espresso/interpreter.hpp"
 #include "cpu/espresso/recompiler.hpp"
 #include "cpu/espresso/rpx_loader.hpp"
@@ -27,6 +28,7 @@ struct EmulatorRunResult
     ExecutionMode mode{ExecutionMode::interpreter};
     cpu::espresso::RecompilerStatistics recompiler_statistics{};
     std::vector<cpu::espresso::HleCallStatistic> hle_call_statistics;
+    std::vector<cpu::espresso::Gx2Command> gx2_commands;
 };
 
 class Emulator

@@ -10,6 +10,7 @@
 #include "cpu/espresso/rpx_loader.hpp"
 #include "cpu_state_test.hpp"
 #include "emulator.hpp"
+#include "gpu/gx2_register_state.hpp"
 
 #include <algorithm>
 #include <array>
@@ -21625,6 +21626,40 @@ void gx2_set_sampler_border_color_hle_tests()
     assert(uninitialized.run(1U).reason == StopReason::hle_error);
 }
 
+void gx2_register_state_tests()
+{
+    using affogato::gpu::Gx2RegisterState;
+
+    constexpr std::array<Gx2Command, 4U> commands{{
+        {Gx2CommandType::set_context_register, 0x0000A400U, 0x3F800000U},
+        {Gx2CommandType::set_shader_resource, 0x00038000U, 0x12345678U},
+        {Gx2CommandType::set_shader_sampler, 0x0003C000U, 0xAABBCCDDU},
+        // Later writes to the same Latte register replace the previous value.
+        {Gx2CommandType::set_context_register, 0x0000A400U, 0xBF800000U},
+    }};
+
+    Gx2RuntimeState runtime;
+    runtime.pending_commands.assign(commands.begin(), commands.begin() + 2);
+    const std::vector<Gx2Command> first_batch = take_gx2_commands(runtime);
+    assert(first_batch.size() == 2U);
+    assert(runtime.pending_commands.empty());
+    runtime.pending_commands.push_back(commands[2]);
+    const std::vector<Gx2Command> second_batch = take_gx2_commands(runtime);
+    assert(second_batch.size() == 1U);
+    assert(second_batch.front() == commands[2]);
+    assert(runtime.pending_commands.empty());
+
+    Gx2RegisterState state;
+    assert(state.size() == 0U);
+    assert(!state.read(0x0000A400U).has_value());
+    state.apply(commands);
+    assert(state.size() == 3U);
+    assert(state.read(0x0000A400U) == 0xBF800000U);
+    assert(state.read(0x00038000U) == 0x12345678U);
+    assert(state.read(0x0003C000U) == 0xAABBCCDDU);
+    assert(!state.read(0x0003C004U).has_value());
+}
+
 void gx2_set_tv_buffer_hle_tests()
 {
     constexpr std::uint32_t buffer_address = 0x0A001000U;
@@ -29366,6 +29401,7 @@ int main(int argc, char* argv[])
     gx2_set_vertex_and_geometry_texture_hle_tests();
     gx2_set_pixel_sampler_hle_tests();
     gx2_set_sampler_border_color_hle_tests();
+    gx2_register_state_tests();
     gx2_calc_tv_size_hle_tests();
     gx2_set_tv_buffer_hle_tests();
     gx2_set_tv_scale_hle_tests();

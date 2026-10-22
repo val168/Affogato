@@ -169,6 +169,12 @@ void VulkanRenderer::set_guest_clear_color(
     guest_clear_color_ = rgba;
 }
 
+void VulkanRenderer::consume_guest_commands(
+    std::span<const cpu::espresso::Gx2Command> commands)
+{
+    guest_register_state_.apply(commands);
+}
+
 VulkanRenderer::QueueFamilies VulkanRenderer::find_queue_families(VkPhysicalDevice device) const
 {
     std::uint32_t count = 0U;

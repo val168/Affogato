@@ -172,5 +172,7 @@ struct Gx2RuntimeState
 };
 
 void register_gx2_hle(HleDispatcher& dispatcher);
+[[nodiscard]] std::vector<Gx2Command> take_gx2_commands(
+    Gx2RuntimeState& state);
 
 }

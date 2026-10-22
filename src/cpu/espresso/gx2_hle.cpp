@@ -2877,4 +2877,9 @@ void register_gx2_hle(HleDispatcher& dispatcher)
         });
 }
 
+std::vector<Gx2Command> take_gx2_commands(Gx2RuntimeState& state)
+{
+    return std::exchange(state.pending_commands, std::vector<Gx2Command>{});
+}
+
 } // namespace affogato::cpu::espresso

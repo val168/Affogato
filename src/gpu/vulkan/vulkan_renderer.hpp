@@ -1,11 +1,14 @@
 #pragma once
 
+#include "gpu/gx2_register_state.hpp"
+
 #define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
 
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -24,6 +27,8 @@ public:
     void poll_events();
     void render_frame();
     void set_guest_clear_color(const std::array<float, 4U>& rgba) noexcept;
+    void consume_guest_commands(
+        std::span<const cpu::espresso::Gx2Command> commands);
 
     [[nodiscard]] bool should_close() const noexcept;
     [[nodiscard]] const std::string& device_name() const noexcept
@@ -83,6 +88,7 @@ private:
     std::vector<VkFence> images_in_flight_;
     std::size_t current_frame_{};
     std::array<float, 4U> guest_clear_color_{0.025F, 0.055F, 0.09F, 1.0F};
+    affogato::gpu::Gx2RegisterState guest_register_state_;
     std::string device_name_;
 };
 

@@ -519,6 +519,7 @@ struct WorkerResult
     std::string message;
     std::optional<affogato::cpu::espresso::Gx2ClearColorRequest> latest_guest_clear;
     std::uint64_t guest_clear_sequence{};
+    std::vector<affogato::cpu::espresso::Gx2Command> pending_gx2_commands;
     std::atomic_bool running{};
 };
 
@@ -600,6 +601,14 @@ void launch_game(
                     std::lock_guard lock(worker.mutex);
                     worker.latest_guest_clear = gx2.latest_clear_color;
                     ++worker.guest_clear_sequence;
+                }
+                if (!run_result.gx2_commands.empty())
+                {
+                    std::lock_guard lock(worker.mutex);
+                    worker.pending_gx2_commands.insert(
+                        worker.pending_gx2_commands.end(),
+                        run_result.gx2_commands.begin(),
+                        run_result.gx2_commands.end());
                 }
                 if (run_result.execution.reason !=
                     affogato::cpu::espresso::StopReason::instruction_limit)
@@ -1005,6 +1014,11 @@ int run_frontend()
         ImGui_ImplSDLRenderer3_RenderDrawData(ImGui::GetDrawData(), renderer);
         SDL_RenderPresent(renderer);
 
+        std::vector<affogato::cpu::espresso::Gx2Command> guest_commands;
+        {
+            std::lock_guard lock(worker.mutex);
+            guest_commands.swap(worker.pending_gx2_commands);
+        }
         if (vulkan_output)
         {
             current_stage = "presenting Vulkan output";
@@ -1014,6 +1028,10 @@ int run_frontend()
                 std::lock_guard lock(worker.mutex);
                 guest_clear = worker.latest_guest_clear;
                 guest_clear_sequence = worker.guest_clear_sequence;
+            }
+            if (!guest_commands.empty())
+            {
+                vulkan_output->consume_guest_commands(guest_commands);
             }
             if (guest_clear && guest_clear_sequence != shown_guest_clear_sequence)
             {
