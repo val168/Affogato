@@ -755,6 +755,7 @@ void set_xer_carry(CpuState& state, bool carry) noexcept
     case Opcode::paired_single_multiply_scalar0: return "ps_muls0";
     case Opcode::paired_single_multiply_scalar1: return "ps_muls1";
     case Opcode::paired_single_sum0: return "ps_sum0";
+    case Opcode::paired_single_sum1: return "ps_sum1";
     case Opcode::paired_single_move_register: return "ps_mr";
     case Opcode::paired_single_negate: return "ps_neg";
     case Opcode::paired_single_absolute_value: return "ps_abs";
@@ -967,10 +968,11 @@ void add_history_source(
         entry.paired_fp_source_c_ps1 = state.fpr_ps1[instruction.fp_source_c];
         return entry;
     }
-    if (opcode == Opcode::paired_single_sum0)
+    if (opcode == Opcode::paired_single_sum0 || opcode == Opcode::paired_single_sum1)
     {
         entry.has_paired_fp_state = true;
-        entry.paired_fp_sum0 = true;
+        entry.paired_fp_sum0 = opcode == Opcode::paired_single_sum0;
+        entry.paired_fp_sum1 = opcode == Opcode::paired_single_sum1;
         entry.paired_fp_destination_register = instruction.fp_register;
         entry.paired_fp_source_a_register = instruction.fp_source_a;
         entry.paired_fp_source_b_register = instruction.fp_source_b;
@@ -2123,7 +2125,8 @@ std::string format_instruction_history(const RunResult& result)
                      entry.paired_fp_multiply_add_scalar0 ||
                      entry.paired_fp_multiply_add_scalar1 ||
                      entry.paired_fp_negative_multiply_add ||
-                     entry.paired_fp_negative_multiply_subtract || entry.paired_fp_sum0)
+                     entry.paired_fp_negative_multiply_subtract ||
+                     entry.paired_fp_sum0 || entry.paired_fp_sum1)
             {
                 print_paired_source('A', entry.paired_fp_source_a_register,
                                     entry.paired_fp_source_a_ps0,
@@ -6113,12 +6116,15 @@ StepResult EspressoCore::step()
     }
 
     case Opcode::paired_single_sum0:
+    case Opcode::paired_single_sum1:
     {
         const double a_ps0 = std::bit_cast<double>(state.fpr[instruction.fp_source_a]);
         const double b_ps1 = std::bit_cast<double>(state.fpr_ps1[instruction.fp_source_b]);
+        const double c_ps0 = std::bit_cast<double>(state.fpr[instruction.fp_source_c]);
         const double c_ps1 = std::bit_cast<double>(state.fpr_ps1[instruction.fp_source_c]);
-        const float result_ps0 = static_cast<float>(a_ps0 + b_ps1);
-        const float result_ps1 = static_cast<float>(c_ps1);
+        const bool sum0 = instruction.opcode == Opcode::paired_single_sum0;
+        const float result_ps0 = static_cast<float>(sum0 ? a_ps0 + b_ps1 : c_ps0);
+        const float result_ps1 = static_cast<float>(sum0 ? c_ps1 : a_ps0 + b_ps1);
         state.fpr[instruction.fp_register] =
             std::bit_cast<std::uint64_t>(static_cast<double>(result_ps0));
         state.fpr_ps1[instruction.fp_register] =

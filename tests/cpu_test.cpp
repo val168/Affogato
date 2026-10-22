@@ -869,6 +869,12 @@ void decoder_tests()
            ps_sum0.fp_source_b == 2U && ps_sum0.fp_source_c == 2U);
     assert(((0x10211094U >> 1U) & 0x1FU) == 10U);
     assert(decode(0x10211095U).opcode == Opcode::unsupported);
+    const DecodedInstruction ps_sum1 = decode(0x102110D6U);
+    assert(ps_sum1.opcode == Opcode::paired_single_sum1);
+    assert(ps_sum1.fp_register == 1U && ps_sum1.fp_source_a == 1U &&
+           ps_sum1.fp_source_b == 2U && ps_sum1.fp_source_c == 3U);
+    assert(((0x102110D6U >> 1U) & 0x1FU) == 11U);
+    assert(decode(0x102110D7U).opcode == Opcode::unsupported);
     const DecodedInstruction ps_add = decode(0x1007482AU);
     assert(ps_add.opcode == Opcode::paired_single_add);
     assert(ps_add.fp_register == 0U && ps_add.fp_source_a == 7U &&
@@ -26460,6 +26466,61 @@ void paired_single_sum0_tests()
     assert(alias.state.fpr_ps1[5] == double_bits(6.5));
 }
 
+void paired_single_sum1_tests()
+{
+    const auto encode_ps_sum1 = [](std::uint8_t destination, std::uint8_t source_a,
+                                   std::uint8_t source_b, std::uint8_t source_c,
+                                   bool record = false) {
+        return 0x10000000U |
+            (static_cast<std::uint32_t>(destination) << 21U) |
+            (static_cast<std::uint32_t>(source_a) << 16U) |
+            (static_cast<std::uint32_t>(source_b) << 11U) |
+            (static_cast<std::uint32_t>(source_c) << 6U) |
+            (11U << 1U) | static_cast<std::uint32_t>(record);
+    };
+    const auto double_bits = [](double value) { return std::bit_cast<std::uint64_t>(value); };
+    constexpr std::uint32_t exact_encoding = 0x102110D6U;
+    assert(encode_ps_sum1(1U, 1U, 2U, 3U) == exact_encoding);
+    const auto decoded = decode(exact_encoding);
+    assert(decoded.opcode == Opcode::paired_single_sum1);
+    assert(decoded.fp_register == 1U && decoded.fp_source_a == 1U &&
+           decoded.fp_source_b == 2U && decoded.fp_source_c == 3U);
+    assert(decode(encode_ps_sum1(1U, 2U, 3U, 4U, true)).opcode == Opcode::unsupported);
+
+    EspressoCore core(4U);
+    core.state.fpr[1] = double_bits(2.0);
+    core.state.fpr_ps1[1] = double_bits(-3.0);
+    core.state.fpr[2] = double_bits(4.0);
+    core.state.fpr_ps1[2] = double_bits(5.0);
+    core.state.fpr[3] = double_bits(7.0);
+    core.state.fpr_ps1[3] = double_bits(9.0);
+    core.state.fpscr = 0xDEADBEEFU;
+    core.memory.write32_be(0U, exact_encoding);
+    assert(core.step() == StepResult::executed);
+    assert(core.state.fpr[1] == double_bits(7.0));
+    assert(core.state.fpr_ps1[1] == double_bits(7.0));
+    assert(core.state.fpscr == 0xDEADBEEFU);
+    const auto history_result = core.run(0U);
+    const auto& history = history_result.instruction_history.front();
+    assert(history.opcode_name == "ps_sum1" && history.paired_fp_sum1);
+    assert(history.paired_fp_source_a_ps0 == double_bits(2.0));
+    assert(history.paired_fp_source_b_ps1 == double_bits(5.0));
+    assert(history.paired_fp_source_c_ps0 == double_bits(7.0));
+    assert(history.paired_fp_destination_ps0 == double_bits(7.0));
+
+    EspressoCore alias(4U);
+    alias.state.fpr[1] = double_bits(2.0);
+    alias.state.fpr_ps1[1] = double_bits(3.0);
+    alias.state.fpr[2] = double_bits(4.0);
+    alias.state.fpr_ps1[2] = double_bits(5.0);
+    alias.state.fpr[3] = double_bits(7.0);
+    alias.state.fpr_ps1[3] = double_bits(9.0);
+    alias.memory.write32_be(0U, encode_ps_sum1(3U, 1U, 2U, 3U));
+    assert(alias.step() == StepResult::executed);
+    assert(alias.state.fpr[3] == double_bits(7.0));
+    assert(alias.state.fpr_ps1[3] == double_bits(7.0));
+}
+
 void paired_single_add_tests()
 {
     const auto encode_ps_add = [](std::uint8_t destination, std::uint8_t source_a,
@@ -27783,6 +27844,7 @@ int main(int argc, char* argv[])
     paired_single_multiply_add_tests();
     paired_single_multiply_subtract_tests();
     paired_single_sum0_tests();
+    paired_single_sum1_tests();
     paired_single_add_tests();
     paired_single_subtract_tests();
     paired_single_multiply_scalar0_tests();
