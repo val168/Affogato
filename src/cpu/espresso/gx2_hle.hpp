@@ -131,6 +131,8 @@ struct Gx2RuntimeState
     std::array<std::optional<Gx2ColorBufferState>, 8U> color_buffer_descriptors{};
     std::array<std::uint32_t, 8U> bound_color_buffers{};
     std::array<std::optional<Gx2TextureBinding>, 16U> pixel_textures{};
+    std::array<std::optional<Gx2TextureBinding>, 16U> vertex_textures{};
+    std::array<std::optional<Gx2TextureBinding>, 16U> geometry_textures{};
     std::uint64_t clear_color_sequence{};
     std::optional<Gx2ClearColorRequest> latest_clear_color;
     bool sx_alpha_test_control_valid{};

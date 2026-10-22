@@ -89,6 +89,8 @@ constexpr std::uint32_t gx2_tile_mode_2d_thick = 7U;
 constexpr std::uint32_t gx2_tile_mode_linear_special = 16U;
 constexpr std::uint32_t gx2_texture_regs_offset = 0x88U;
 constexpr std::uint32_t gx2_pixel_texture_register_base = 0x00038000U;
+constexpr std::uint32_t gx2_vertex_texture_register_base = 0x00039180U;
+constexpr std::uint32_t gx2_geometry_texture_register_base = 0x0003A4C0U;
 constexpr std::uint32_t gx2_texture_register_count = 7U;
 constexpr std::uint32_t gx2_texture_unit_count = 16U;
 constexpr std::uint32_t latte_pipe_interleave_bytes = 256U;
@@ -1028,12 +1030,14 @@ void initialize_gx2_texture_registers(
     }
 }
 
-void set_gx2_pixel_texture(
+void set_gx2_texture(
     EspressoCore& core,
     std::uint32_t texture_address,
-    std::uint32_t unit)
+    std::uint32_t unit,
+    const char* api_name,
+    std::uint32_t register_base,
+    std::array<std::optional<Gx2TextureBinding>, gx2_texture_unit_count>& bindings)
 {
-    constexpr const char* api_name = "gx2::GX2SetPixelTexture";
     if (!core.gx2.initialized)
     {
         throw HleExecutionError(
@@ -1097,7 +1101,7 @@ void set_gx2_pixel_texture(
         word6};
 
     const std::uint32_t first_register =
-        gx2_pixel_texture_register_base +
+        register_base +
         unit * gx2_texture_register_count * sizeof(std::uint32_t);
     auto& commands = core.gx2.pending_commands;
     commands.reserve(commands.size() + binding.registers.size());
@@ -1108,7 +1112,7 @@ void set_gx2_pixel_texture(
             first_register + static_cast<std::uint32_t>(index * sizeof(std::uint32_t)),
             binding.registers[index]});
     }
-    core.gx2.pixel_textures[unit] = binding;
+    bindings[unit] = binding;
 }
 
 std::uint32_t pack_stencil_ref_mask(
@@ -2422,7 +2426,39 @@ void register_gx2_hle(HleDispatcher& dispatcher)
         "gx2",
         "GX2SetPixelTexture",
         [](EspressoCore& core) {
-            set_gx2_pixel_texture(core, core.state.gpr[3], core.state.gpr[4]);
+            set_gx2_texture(
+                core,
+                core.state.gpr[3],
+                core.state.gpr[4],
+                "gx2::GX2SetPixelTexture",
+                gx2_pixel_texture_register_base,
+                core.gx2.pixel_textures);
+        });
+
+    dispatcher.register_function(
+        "gx2",
+        "GX2SetVertexTexture",
+        [](EspressoCore& core) {
+            set_gx2_texture(
+                core,
+                core.state.gpr[3],
+                core.state.gpr[4],
+                "gx2::GX2SetVertexTexture",
+                gx2_vertex_texture_register_base,
+                core.gx2.vertex_textures);
+        });
+
+    dispatcher.register_function(
+        "gx2",
+        "GX2SetGeometryTexture",
+        [](EspressoCore& core) {
+            set_gx2_texture(
+                core,
+                core.state.gpr[3],
+                core.state.gpr[4],
+                "gx2::GX2SetGeometryTexture",
+                gx2_geometry_texture_register_base,
+                core.gx2.geometry_textures);
         });
 
     dispatcher.register_function(

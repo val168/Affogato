@@ -10,21 +10,23 @@
 ## Graphics checkpoint
 
 - Resolved: texture register initialization and sampler descriptor initialization.
-- Implemented this iteration: pixel texture binding, including Latte resource-word construction and a logical shader-resource command stream. Focused tests and full CTest pass (2/2).
+- Implemented: pixel texture binding, including Latte resource-word construction and a logical shader-resource command stream (`31c2058`).
+- Implemented this iteration: shared binding logic for vertex and geometry texture stages, with stage-specific register bases and independent binding state.
 - Actual guest rendering/presentation is not yet confirmed; command submission, shader execution, and framebuffer presentation remain incomplete.
 
 ## Completed commits
 
 - `90ab0b0` — `gx2: implement sampler border type`
+- `31c2058` — `gx2: implement pixel texture binding`
 
 ## Current test status
 
 - Debug build: `build/debug-win-native`, Ninja; build is current.
-- CTest after pixel-texture binding: 2/2 passed.
+- CTest after pixel, vertex, and geometry texture binding: 2/2 passed.
 
 ## Prioritized queue
 
-1. Complete and test `GX2SetPixelTexture`; rerun WWHD.
-2. Trace the null `bcctr` target to its owner and determine whether initialization, runtime state, or a guest-side condition left the callback unset; do not fabricate a callback.
-3. Continue the resource-binding path with the next demonstrated GX2 need, then connect recorded resource state to command processing/renderer consumption.
-4. Audit shader, draw submission, and scan-buffer presentation paths against real guest execution before claiming rendered output.
+1. Trace the null `bcctr` target to its owner and determine whether initialization, runtime state, or a guest-side condition left the callback unset; do not fabricate a callback.
+2. Continue resource binding and connect recorded resource state to command processing/renderer consumption.
+3. Audit shader, draw submission, and scan-buffer presentation paths against real guest execution before claiming rendered output.
+4. Run a current Cemu-vs-Affogato CPU coverage comparison if the null guest call remains the only runtime stop.

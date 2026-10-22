@@ -21410,6 +21410,47 @@ void gx2_set_pixel_texture_hle_tests()
     assert(uninitialized.run(1U).reason == StopReason::hle_error);
 }
 
+void gx2_set_vertex_and_geometry_texture_hle_tests()
+{
+    constexpr std::uint32_t texture_address = 0x5000U;
+    constexpr std::uint32_t return_address = 0x02751AC8U;
+    EspressoCore core(0x10000U);
+    register_gx2_hle(core.hle);
+    core.gx2.initialized = true;
+    const std::uint32_t vertex_import = core.hle.bind_import(
+        "gx2", "GX2SetVertexTexture");
+    const std::uint32_t geometry_import = core.hle.bind_import(
+        "gx2", "GX2SetGeometryTexture");
+    assert(vertex_import != 0U && geometry_import != 0U);
+
+    for (std::uint32_t offset = 0U; offset < 0x9CU; offset += 4U)
+        core.memory.write32_be(texture_address + offset, 0U);
+    core.memory.write32_be(texture_address + 0x24U, 0x00001200U);
+    core.memory.write32_be(texture_address + 0x88U, 0xA0U);
+    core.memory.write32_be(texture_address + 0x8CU, 0xA1U);
+    core.memory.write32_be(texture_address + 0x90U, 0xA4U);
+    core.memory.write32_be(texture_address + 0x94U, 0xA5U);
+    core.memory.write32_be(texture_address + 0x98U, 0xA6U);
+    core.state.gpr[3] = texture_address;
+    core.state.lr = return_address;
+
+    core.state.gpr[4] = 1U;
+    core.state.cia = vertex_import;
+    assert(core.run(1U).reason == StopReason::instruction_limit);
+    assert(core.gx2.vertex_textures[1U].has_value());
+    assert(!core.gx2.pixel_textures[1U].has_value());
+    assert(core.gx2.pending_commands.size() == 7U);
+    assert(core.gx2.pending_commands.front().register_address == 0x0003919CU);
+
+    core.state.gpr[4] = 2U;
+    core.state.cia = geometry_import;
+    assert(core.run(1U).reason == StopReason::instruction_limit);
+    assert(core.gx2.geometry_textures[2U].has_value());
+    assert(!core.gx2.pixel_textures[2U].has_value());
+    assert(core.gx2.pending_commands.size() == 14U);
+    assert(core.gx2.pending_commands[7U].register_address == 0x0003A4F8U);
+}
+
 void gx2_set_tv_buffer_hle_tests()
 {
     constexpr std::uint32_t buffer_address = 0x0A001000U;
@@ -29148,6 +29189,7 @@ int main(int argc, char* argv[])
     gx2_calc_surface_size_and_alignment_hle_tests();
     gx2_init_texture_regs_hle_tests();
     gx2_set_pixel_texture_hle_tests();
+    gx2_set_vertex_and_geometry_texture_hle_tests();
     gx2_calc_tv_size_hle_tests();
     gx2_set_tv_buffer_hle_tests();
     gx2_set_tv_scale_hle_tests();
