@@ -825,6 +825,12 @@ void decoder_tests()
            ps_madd.fp_source_b == 2U && ps_madd.fp_source_c == 3U);
     assert(((0x102310FAU >> 1U) & 0x1FU) == 29U);
     assert(decode(0x102310FBU).opcode == Opcode::unsupported);
+    const DecodedInstruction ps_msub = decode(0x10A020F8U);
+    assert(ps_msub.opcode == Opcode::paired_single_multiply_subtract);
+    assert(ps_msub.fp_register == 5U && ps_msub.fp_source_a == 0U &&
+           ps_msub.fp_source_b == 4U && ps_msub.fp_source_c == 3U);
+    assert(((0x10A020F8U >> 1U) & 0x1FU) == 28U);
+    assert(decode(0x10A020F9U).opcode == Opcode::unsupported);
     const DecodedInstruction ps_sum0 = decode(0x10211094U);
     assert(ps_sum0.opcode == Opcode::paired_single_sum0);
     assert(ps_sum0.fp_register == 1U && ps_sum0.fp_source_a == 1U &&
@@ -26293,6 +26299,80 @@ void paired_single_multiply_add_tests()
     assert(flush.state.fpr_ps1[4] == double_bits(-0.0));
 }
 
+void paired_single_multiply_subtract_tests()
+{
+    const auto encode_ps_msub = [](std::uint8_t destination, std::uint8_t source_a,
+                                   std::uint8_t source_b, std::uint8_t source_c,
+                                   bool record = false) {
+        return 0x10000000U |
+            (static_cast<std::uint32_t>(destination) << 21U) |
+            (static_cast<std::uint32_t>(source_a) << 16U) |
+            (static_cast<std::uint32_t>(source_b) << 11U) |
+            (static_cast<std::uint32_t>(source_c) << 6U) |
+            (28U << 1U) | static_cast<std::uint32_t>(record);
+    };
+    const auto double_bits = [](double value) { return std::bit_cast<std::uint64_t>(value); };
+    constexpr std::uint32_t exact_encoding = 0x10A020F8U;
+    assert(encode_ps_msub(5U, 0U, 4U, 3U) == exact_encoding);
+    const auto decoded = decode(exact_encoding);
+    assert(decoded.opcode == Opcode::paired_single_multiply_subtract);
+    assert(decoded.fp_register == 5U && decoded.fp_source_a == 0U &&
+           decoded.fp_source_b == 4U && decoded.fp_source_c == 3U);
+    assert(decode(encode_ps_msub(1U, 2U, 3U, 4U, true)).opcode == Opcode::unsupported);
+
+    EspressoCore core(4U);
+    core.state.fpr[0] = double_bits(2.0);
+    core.state.fpr_ps1[0] = double_bits(-2.0);
+    core.state.fpr[3] = double_bits(3.0);
+    core.state.fpr_ps1[3] = double_bits(4.0);
+    core.state.fpr[4] = double_bits(1.0);
+    core.state.fpr_ps1[4] = double_bits(1.0);
+    core.state.fpscr = 0xDEADBEEFU;
+    core.state.cr = 0x12345678U;
+    core.state.xer = 0xA00000A5U;
+    core.memory.write32_be(0U, exact_encoding);
+    assert(core.step() == StepResult::executed);
+    assert(core.state.fpr[5] == double_bits(5.0));
+    assert(core.state.fpr_ps1[5] == double_bits(-9.0));
+    assert(core.state.fpscr == 0xDEADBEEFU);
+    assert(core.state.cr == 0x12345678U && core.state.xer == 0xA00000A5U);
+    const auto history_result = core.run(0U);
+    const auto& history = history_result.instruction_history.front();
+    assert(history.opcode_name == "ps_msub" && history.has_paired_fp_state);
+    assert(history.paired_fp_multiply_subtract);
+    assert(history.paired_fp_source_a_ps0 == double_bits(2.0));
+    assert(history.paired_fp_source_b_ps0 == double_bits(1.0));
+    assert(history.paired_fp_source_c_ps1 == double_bits(4.0));
+    assert(history.paired_fp_destination_ps0 == double_bits(5.0));
+    assert(format_instruction_history(history_result).find("ps_msub") != std::string::npos);
+
+    // Destination aliases B; all input lanes must be captured before writing.
+    EspressoCore alias(4U);
+    alias.state.fpr[5] = double_bits(2.0);
+    alias.state.fpr_ps1[5] = double_bits(3.0);
+    alias.state.fpr[6] = double_bits(1.0);
+    alias.state.fpr_ps1[6] = double_bits(2.0);
+    alias.state.fpr[7] = double_bits(4.0);
+    alias.state.fpr_ps1[7] = double_bits(5.0);
+    alias.memory.write32_be(0U, encode_ps_msub(6U, 5U, 6U, 7U));
+    assert(alias.step() == StepResult::executed);
+    assert(alias.state.fpr[6] == double_bits(7.0));
+    assert(alias.state.fpr_ps1[6] == double_bits(13.0));
+
+    // C is reduced to Espresso's 25-bit multiply operand precision.
+    EspressoCore rounded(4U);
+    rounded.state.fpr[1] = double_bits(1.0);
+    rounded.state.fpr_ps1[1] = double_bits(1.0);
+    rounded.state.fpr[2] = double_bits(0.0);
+    rounded.state.fpr_ps1[2] = double_bits(0.0);
+    rounded.state.fpr[3] = double_bits(1.0 + std::ldexp(1.0, -26));
+    rounded.state.fpr_ps1[3] = double_bits(1.0);
+    rounded.memory.write32_be(0U, encode_ps_msub(4U, 1U, 2U, 3U));
+    assert(rounded.step() == StepResult::executed);
+    assert(rounded.state.fpr[4] == double_bits(1.0));
+    assert(rounded.state.fpr_ps1[4] == double_bits(1.0));
+}
+
 void paired_single_sum0_tests()
 {
     const auto encode_ps_sum0 = [](std::uint8_t destination, std::uint8_t source_a,
@@ -27325,6 +27405,7 @@ int main(int argc, char* argv[])
     paired_single_select_tests();
     paired_single_multiply_tests();
     paired_single_multiply_add_tests();
+    paired_single_multiply_subtract_tests();
     paired_single_sum0_tests();
     paired_single_add_tests();
     paired_single_subtract_tests();

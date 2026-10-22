@@ -187,6 +187,7 @@ enum class Opcode
     paired_single_subtract,
     paired_single_multiply,
     paired_single_multiply_add,
+    paired_single_multiply_subtract,
     paired_single_multiply_scalar0,
     paired_single_sum0,
     paired_single_move_register,
