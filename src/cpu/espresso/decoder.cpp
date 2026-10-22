@@ -1383,6 +1383,15 @@ DecodedInstruction decode(std::uint32_t raw) noexcept
         instruction.immediate = sign_extend(raw, 12);
         break;
 
+    case 60: // psq_st
+        instruction.opcode = Opcode::paired_single_quantized_store;
+        instruction.fp_register = static_cast<std::uint8_t>(field(raw, 21, 0x1FU));
+        instruction.base = static_cast<std::uint8_t>(field(raw, 16, 0x1FU));
+        instruction.paired_single_w = field(raw, 15, 1U) != 0U;
+        instruction.quantized_register = static_cast<std::uint8_t>(field(raw, 12, 0x7U));
+        instruction.immediate = sign_extend(raw, 12);
+        break;
+
     case 59: // Single-precision A-form arithmetic
     {
         const std::uint32_t extended_opcode = field(raw, 1, 0x1FU);

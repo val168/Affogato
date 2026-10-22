@@ -723,6 +723,11 @@ void decoder_tests()
     const DecodedInstruction psq_lw = decode(0xE0E78000U);
     assert(psq_lw.opcode == Opcode::paired_single_quantized_load);
     assert(psq_lw.paired_single_w);
+    const DecodedInstruction psq_st = decode(0xF1A10010U);
+    assert(psq_st.opcode == Opcode::paired_single_quantized_store);
+    assert(psq_st.fp_register == 13U && psq_st.base == 1U);
+    assert(psq_st.quantized_register == 0U && !psq_st.paired_single_w);
+    assert(psq_st.immediate == 16);
 
     const DecodedInstruction lha = decode(0xA98A0000U); // lha r12, 0(r10)
     assert(lha.opcode == Opcode::load_halfword_algebraic);
@@ -25755,6 +25760,110 @@ void paired_single_quantized_load_tests()
     assert(fault.state.fpr_ps1[7] == 0x5555666677778888ULL);
 }
 
+void paired_single_quantized_store_tests()
+{
+    const auto encode_psq_st = [](
+        std::uint8_t source, std::uint8_t base, std::int16_t displacement,
+        bool single_element, std::uint8_t gqr) {
+        return (60U << 26U) |
+            (static_cast<std::uint32_t>(source) << 21U) |
+            (static_cast<std::uint32_t>(base) << 16U) |
+            (static_cast<std::uint32_t>(single_element) << 15U) |
+            (static_cast<std::uint32_t>(gqr & 0x7U) << 12U) |
+            (static_cast<std::uint16_t>(displacement) & 0x0FFFU);
+    };
+    const auto double_bits = [](double value) { return std::bit_cast<std::uint64_t>(value); };
+
+    constexpr std::uint32_t real_encoding = 0xF1A10010U;
+    const DecodedInstruction decoded = decode(real_encoding);
+    assert(decoded.opcode == Opcode::paired_single_quantized_store);
+    assert(decoded.fp_register == 13U && decoded.base == 1U);
+    assert(decoded.quantized_register == 0U && decoded.immediate == 16);
+    assert(!decoded.paired_single_w);
+
+    // Type 0 stores the raw IEEE binary32 representation of each lane.
+    EspressoCore float_pair(0x100U);
+    float_pair.state.gpr[1] = 0x40U;
+    float_pair.state.fpr[13] = double_bits(1.5);
+    float_pair.state.fpr_ps1[13] = double_bits(-2.25);
+    float_pair.state.cr = 0x12345678U;
+    float_pair.state.xer = 0xA00000A5U;
+    float_pair.state.fpscr = 0xDEADBEEFU;
+    float_pair.memory.write32_be(0U, real_encoding);
+    const auto gprs_before = float_pair.state.gpr;
+    assert(float_pair.step() == StepResult::executed);
+    assert(float_pair.memory.read32_be(0x50U) == std::bit_cast<std::uint32_t>(1.5F));
+    assert(float_pair.memory.read32_be(0x54U) == std::bit_cast<std::uint32_t>(-2.25F));
+    assert(float_pair.state.gpr == gprs_before);
+    assert(float_pair.state.cr == 0x12345678U);
+    assert(float_pair.state.xer == 0xA00000A5U);
+    assert(float_pair.state.fpscr == 0xDEADBEEFU);
+    const RunResult traced = float_pair.run(0U);
+    assert(traced.reason == StopReason::instruction_limit);
+    const std::string trace = format_instruction_history(traced);
+    assert(trace.find("psq_st") != std::string::npos);
+    assert(trace.find("[0x00000050]") != std::string::npos);
+
+    // W=1 stores only PS0; GQR signed scale is applied before truncation.
+    EspressoCore scalar(0x100U);
+    scalar.state.gpr[4] = 0x60U;
+    scalar.state.gqr[2] = (6U << 16U) | (1U << 8U) | 4U; // U8, store scale 1
+    scalar.state.fpr[3] = double_bits(10.75);
+    scalar.state.fpr_ps1[3] = double_bits(200.0);
+    scalar.memory.write32_be(0U, encode_psq_st(3U, 4U, 2, true, 2U));
+    assert(scalar.step() == StepResult::executed);
+    assert(scalar.memory.read8(0x62U) == 21U);
+    assert(scalar.memory.read8(0x63U) == 0U);
+    assert(scalar.state.gpr[4] == 0x60U);
+
+    // Signed 16-bit storage saturates, then writes the two's-complement BE value.
+    EspressoCore signed_words(0x100U);
+    signed_words.state.gpr[5] = 0x70U;
+    signed_words.state.gqr[1] = 7U | (0x3FU << 8U); // S16, scale -1
+    signed_words.state.fpr[6] = double_bits(100000.0);
+    signed_words.state.fpr_ps1[6] = double_bits(-3.5);
+    signed_words.memory.write32_be(0U, encode_psq_st(6U, 5U, 0, false, 1U));
+    assert(signed_words.step() == StepResult::executed);
+    assert(signed_words.memory.read16_be(0x70U) == 0x7FFFU);
+    assert(signed_words.memory.read16_be(0x72U) == 0xFFFFU);
+
+    // Alias-safe addressing/source reads and negative DQ displacement.
+    EspressoCore alias(0x100U);
+    alias.state.gpr[1] = 0x84U;
+    alias.state.fpr[1] = double_bits(3.0);
+    alias.state.fpr_ps1[1] = double_bits(4.0);
+    alias.memory.write32_be(0U, encode_psq_st(1U, 1U, -4, false, 0U));
+    assert(alias.step() == StepResult::executed);
+    assert(alias.memory.read32_be(0x80U) == std::bit_cast<std::uint32_t>(3.0F));
+    assert(alias.memory.read32_be(0x84U) == std::bit_cast<std::uint32_t>(4.0F));
+    assert(alias.state.gpr[1] == 0x84U);
+
+    // A pair store validates its whole range before writing either lane.
+    EspressoCore fault(0x100U);
+    fault.memory.map_region(0x2000U, 4U);
+    fault.state.gpr[7] = 0x2000U;
+    fault.state.fpr[8] = double_bits(9.0);
+    fault.state.fpr_ps1[8] = double_bits(10.0);
+    fault.memory.write32_be(0U, encode_psq_st(8U, 7U, 0, false, 0U));
+    fault.memory.write32_be(0x2000U, 0xAABBCCDDU);
+    const RunResult fault_result = fault.run(1U);
+    assert(fault_result.reason == StopReason::memory_fault);
+    assert(fault_result.detail.find("write 8 byte(s)") != std::string::npos);
+    assert(fault.memory.read32_be(0x2000U) == 0xAABBCCDDU);
+    assert(fault_result.instruction_history.front().opcode_name == "psq_st");
+    assert(fault_result.instruction_history.front().has_effective_address);
+    assert(fault_result.instruction_history.front().effective_address == 0x2000U);
+    assert(!fault_result.instruction_history.front().completed);
+
+    EspressoCore reserved(0x100U);
+    reserved.state.gqr[0] = 2U;
+    reserved.memory.write32_be(0U, encode_psq_st(1U, 0U, 0, true, 0U));
+    const RunResult reserved_result = reserved.run(1U);
+    assert(reserved_result.reason == StopReason::unsupported_instruction);
+    assert(reserved_result.instruction_history.front().opcode_name == "psq_st");
+    assert(!reserved_result.instruction_history.front().completed);
+}
+
 void paired_single_merge00_tests()
 {
     const auto encode_ps_merge00 = [](std::uint8_t destination, std::uint8_t source_a,
@@ -26741,6 +26850,7 @@ int main(int argc, char* argv[])
     floating_point_double_store_tests();
     floating_point_double_update_store_tests();
     paired_single_quantized_load_tests();
+    paired_single_quantized_store_tests();
     paired_single_merge00_tests();
     paired_single_select_tests();
     paired_single_multiply_scalar0_tests();

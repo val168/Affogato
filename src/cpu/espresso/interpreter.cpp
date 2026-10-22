@@ -511,6 +511,7 @@ void set_xer_carry(CpuState& state, bool carry) noexcept
             instruction.opcode == Opcode::load_halfword_zero ||
             instruction.opcode == Opcode::load_halfword_zero_update ||
             instruction.opcode == Opcode::paired_single_quantized_load ||
+            instruction.opcode == Opcode::paired_single_quantized_store ||
             instruction.opcode == Opcode::load_halfword_algebraic ||
             instruction.opcode == Opcode::store_halfword ||
             instruction.opcode == Opcode::store_halfword_update ||
@@ -748,6 +749,7 @@ void set_xer_carry(CpuState& state, bool carry) noexcept
     case Opcode::paired_single_negative_absolute_value: return "ps_nabs";
     case Opcode::paired_single_select: return "ps_sel";
     case Opcode::paired_single_quantized_load: return "psq_l";
+    case Opcode::paired_single_quantized_store: return "psq_st";
     case Opcode::condition_bit_and: return "crand";
     case Opcode::condition_bit_and_complement: return "crandc";
     case Opcode::condition_bit_or: return "cror";
@@ -984,6 +986,27 @@ void add_history_source(
         }
         entry.has_paired_fp_state = true;
         entry.paired_fp_destination_register = instruction.fp_register;
+        return entry;
+    }
+    if (opcode == Opcode::paired_single_quantized_store)
+    {
+        entry.has_effective_address = true;
+        entry.effective_address = effective_address(
+            state, instruction.base, instruction.immediate);
+        if (instruction.base != 0U)
+        {
+            add_history_source(entry, state, instruction.base);
+        }
+        entry.has_paired_fp_state = true;
+        entry.paired_fp_quantized_store = true;
+        entry.paired_fp_destination_register = instruction.fp_register;
+        entry.paired_fp_source_a_register = instruction.fp_register;
+        entry.paired_fp_source_a_ps0 = state.fpr[instruction.fp_register];
+        entry.paired_fp_source_a_ps1 = state.fpr_ps1[instruction.fp_register];
+        entry.paired_fp_store_gqr = instruction.quantized_register;
+        entry.paired_fp_store_type = static_cast<std::uint8_t>(
+            state.gqr[instruction.quantized_register] & 0x7U);
+        entry.paired_fp_store_w = instruction.paired_single_w;
         return entry;
     }
     if (opcode == Opcode::move_condition_register_from_xer)
@@ -1992,7 +2015,32 @@ std::string format_instruction_history(const RunResult& result)
                      << static_cast<unsigned>(reg) << "{ps0=0x" << std::hex
                      << std::setw(16) << ps0 << ",ps1=0x" << std::setw(16) << ps1 << '}';
             };
-            if (entry.paired_fp_scalar_multiply)
+            if (entry.paired_fp_quantized_store)
+            {
+                print_paired_source('S', entry.paired_fp_source_a_register,
+                                    entry.paired_fp_source_a_ps0,
+                                    entry.paired_fp_source_a_ps1);
+                text << " GQR" << std::dec
+                     << static_cast<unsigned>(entry.paired_fp_store_gqr)
+                     << " type=" << static_cast<unsigned>(entry.paired_fp_store_type)
+                     << " W=" << (entry.paired_fp_store_w ? '1' : '0')
+                     << " [0x" << std::hex << std::setw(8) << entry.effective_address << ']';
+                if (entry.completed)
+                {
+                    text << " -> mem=0x" << std::hex << std::setw(8)
+                         << entry.paired_fp_store_value0;
+                    if (!entry.paired_fp_store_w)
+                    {
+                        text << ",0x" << std::setw(8)
+                             << entry.paired_fp_store_value1;
+                    }
+                }
+                else
+                {
+                    text << " (not written)";
+                }
+            }
+            else if (entry.paired_fp_scalar_multiply)
             {
                 print_paired_source('A', entry.paired_fp_source_a_register,
                                     entry.paired_fp_source_a_ps0,
@@ -5581,6 +5629,102 @@ StepResult EspressoCore::step()
                 (load_type == 4U || load_type == 6U ? 1U : 2U)));
         state.fpr[instruction.fp_register] = ps0;
         state.fpr_ps1[instruction.fp_register] = ps1;
+        break;
+    }
+
+    case Opcode::paired_single_quantized_store:
+    {
+        const std::uint32_t base = instruction.base == 0U
+            ? 0U : state.gpr[instruction.base];
+        const std::uint32_t address =
+            base + static_cast<std::uint32_t>(instruction.immediate);
+        const std::uint32_t gqr = state.gqr[instruction.quantized_register];
+        const std::uint32_t store_type = gqr & 0x7U;
+        std::int32_t scale = static_cast<std::int32_t>((gqr >> 8U) & 0x3FU);
+        if ((scale & 0x20) != 0)
+        {
+            scale -= 0x40;
+        }
+
+        if (store_type >= 1U && store_type <= 3U)
+        {
+            pending_history_entry_.completed = false;
+            append_instruction_history(std::move(pending_history_entry_));
+            has_pending_history_entry_ = false;
+            return StepResult::unsupported_instruction;
+        }
+
+        const std::uint64_t ps0_raw = state.fpr[instruction.fp_register];
+        const std::uint64_t ps1_raw = state.fpr_ps1[instruction.fp_register];
+        const float ps0 = static_cast<float>(std::bit_cast<double>(ps0_raw));
+        const float ps1 = static_cast<float>(std::bit_cast<double>(ps1_raw));
+        const auto quantize_lane = [&](float lane) -> std::optional<std::uint32_t> {
+            if (store_type == 0U)
+            {
+                return std::bit_cast<std::uint32_t>(lane);
+            }
+            if (std::isnan(lane))
+            {
+                return std::nullopt;
+            }
+
+            const float scaled = lane * std::ldexp(1.0F, scale);
+            switch (store_type)
+            {
+            case 4U:
+                return static_cast<std::uint32_t>(static_cast<std::uint8_t>(
+                    static_cast<std::uint32_t>(std::clamp(scaled, 0.0F, 255.0F))));
+            case 5U:
+                return static_cast<std::uint32_t>(static_cast<std::uint16_t>(
+                    static_cast<std::uint32_t>(std::clamp(scaled, 0.0F, 65535.0F))));
+            case 6U:
+                return static_cast<std::uint32_t>(static_cast<std::uint8_t>(
+                    static_cast<std::int32_t>(std::clamp(scaled, -128.0F, 127.0F))));
+            case 7U:
+                return static_cast<std::uint32_t>(static_cast<std::uint16_t>(
+                    static_cast<std::int32_t>(std::clamp(scaled, -32768.0F, 32767.0F))));
+            default:
+                return std::nullopt;
+            }
+        };
+
+        const auto value0 = quantize_lane(ps0);
+        const auto value1 = instruction.paired_single_w
+            ? std::optional<std::uint32_t>{0U}
+            : quantize_lane(ps1);
+        if (!value0 || !value1)
+        {
+            // Integer quantization of NaN is implementation-specific here; avoid
+            // invoking undefined host conversions or fabricating guest bytes.
+            pending_history_entry_.completed = false;
+            append_instruction_history(std::move(pending_history_entry_));
+            has_pending_history_entry_ = false;
+            return StepResult::unsupported_instruction;
+        }
+
+        const std::size_t lane_width = store_type == 0U ? 4U
+            : (store_type == 4U || store_type == 6U) ? 1U : 2U;
+        const std::size_t access_width = instruction.paired_single_w
+            ? lane_width : lane_width * 2U;
+        memory.validate_write_range(address, access_width);
+        const auto store_lane = [&](std::uint32_t lane_address, std::uint32_t value) {
+            switch (store_type)
+            {
+            case 0U: memory.write32_be(lane_address, value); break;
+            case 4U:
+            case 6U: memory.write8(lane_address, static_cast<std::uint8_t>(value)); break;
+            case 5U:
+            case 7U: memory.write16_be(lane_address, static_cast<std::uint16_t>(value)); break;
+            default: break;
+            }
+        };
+        store_lane(address, *value0);
+        if (!instruction.paired_single_w)
+        {
+            store_lane(address + static_cast<std::uint32_t>(lane_width), *value1);
+        }
+        pending_history_entry_.paired_fp_store_value0 = *value0;
+        pending_history_entry_.paired_fp_store_value1 = *value1;
         break;
     }
 
