@@ -17093,6 +17093,91 @@ void gx2_init_sampler_hle_tests()
     }
 }
 
+void gx2_init_sampler_clamping_hle_tests()
+{
+    constexpr std::uint32_t return_address = 0x02750A20U;
+    constexpr std::uint32_t sampler_address = 0x100U;
+
+    EspressoCore core(0x1000U);
+    register_gx2_hle(core.hle);
+    const std::uint32_t import = core.hle.bind_import(
+        "gx2", "GX2InitSamplerClamping");
+    assert(import != 0U);
+
+    const auto invoke = [&](std::uint32_t clamp_x,
+                            std::uint32_t clamp_y,
+                            std::uint32_t clamp_z) {
+        core.state.gpr[3] = sampler_address;
+        core.state.gpr[4] = clamp_x;
+        core.state.gpr[5] = clamp_y;
+        core.state.gpr[6] = clamp_z;
+        core.state.cia = import;
+        core.state.lr = return_address;
+        return core.run(1U);
+    };
+
+    constexpr std::uint32_t initial_word0 = 0xA5A5F1A5U;
+    constexpr std::uint32_t initial_word1 = 0x12345678U;
+    constexpr std::uint32_t initial_word2 = 0x87654321U;
+    core.memory.write32_be(sampler_address, initial_word0);
+    core.memory.write32_be(sampler_address + 4U, initial_word1);
+    core.memory.write32_be(sampler_address + 8U, initial_word2);
+    core.state.gpr.fill(0xA4000000U);
+    core.state.gpr[3] = sampler_address;
+    core.state.gpr[4] = 2U;
+    core.state.gpr[5] = 5U;
+    core.state.gpr[6] = 7U;
+    core.state.cr = 0x456789ABU;
+    core.state.xer = 0xA5A55A5AU;
+    core.state.ctr = 0x87654321U;
+    core.state.fpscr = 0x5AA5A55AU;
+    const auto gprs_before = core.state.gpr;
+    const auto fprs_before = core.state.fpr;
+    const auto ps1_before = core.state.fpr_ps1;
+    const std::uint32_t cr_before = core.state.cr;
+    const std::uint32_t xer_before = core.state.xer;
+    const std::uint32_t ctr_before = core.state.ctr;
+    const std::uint32_t fpscr_before = core.state.fpscr;
+
+    assert(invoke(2U, 5U, 7U).reason == StopReason::instruction_limit);
+    constexpr std::uint32_t clamp_fields_mask = 0x1FFU;
+    constexpr std::uint32_t expected_word0 =
+        (initial_word0 & ~clamp_fields_mask) | 2U | (5U << 3U) | (7U << 6U);
+    assert(core.memory.read32_be(sampler_address) == expected_word0);
+    assert(core.memory.read32_be(sampler_address + 4U) == initial_word1);
+    assert(core.memory.read32_be(sampler_address + 8U) == initial_word2);
+    assert(core.state.gpr == gprs_before);
+    assert(core.state.fpr == fprs_before);
+    assert(core.state.fpr_ps1 == ps1_before);
+    assert(core.state.cr == cr_before);
+    assert(core.state.xer == xer_before);
+    assert(core.state.ctr == ctr_before);
+    assert(core.state.fpscr == fpscr_before);
+    assert(core.state.cia == return_address);
+
+    // Each axis is independently replaced, including both enum endpoints.
+    assert(invoke(0U, 0U, 0U).reason == StopReason::instruction_limit);
+    assert(core.memory.read32_be(sampler_address) ==
+           (initial_word0 & ~clamp_fields_mask));
+    assert(invoke(7U, 7U, 7U).reason == StopReason::instruction_limit);
+    assert(core.memory.read32_be(sampler_address) ==
+           ((initial_word0 & ~clamp_fields_mask) | clamp_fields_mask));
+
+    const std::array<std::uint32_t, 3U> sampler_before{
+        core.memory.read32_be(sampler_address),
+        core.memory.read32_be(sampler_address + 4U),
+        core.memory.read32_be(sampler_address + 8U)};
+    assert(invoke(8U, 0U, 0U).reason == StopReason::hle_error);
+    assert(invoke(0U, 8U, 0U).reason == StopReason::hle_error);
+    assert(invoke(0U, 0U, 8U).reason == StopReason::hle_error);
+    for (std::size_t index = 0U; index < sampler_before.size(); ++index)
+    {
+        assert(core.memory.read32_be(
+                   sampler_address + static_cast<std::uint32_t>(index * 4U)) ==
+               sampler_before[index]);
+    }
+}
+
 void gx2_init_hle_tests()
 {
     constexpr std::uint32_t return_address = 0x0274BD9CU;
@@ -28601,6 +28686,7 @@ int main(int argc, char* argv[])
     gx2_calc_fetch_shader_size_ex_hle_tests();
     gx2_init_fetch_shader_ex_hle_tests();
     gx2_init_sampler_hle_tests();
+    gx2_init_sampler_clamping_hle_tests();
     gx2_init_hle_tests();
     gx2_clear_color_hle_tests();
     gx2_set_color_buffer_hle_tests();

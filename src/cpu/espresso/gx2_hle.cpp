@@ -1577,6 +1577,52 @@ void register_gx2_hle(HleDispatcher& dispatcher)
 
     dispatcher.register_function(
         "gx2",
+        "GX2InitSamplerClamping",
+        [](EspressoCore& core) {
+            constexpr const char* api_name = "gx2::GX2InitSamplerClamping";
+            constexpr std::uint32_t clamp_field_mask = 0x7U;
+            constexpr std::uint32_t clamp_x_shift = 0U;
+            constexpr std::uint32_t clamp_y_shift = 3U;
+            constexpr std::uint32_t clamp_z_shift = 6U;
+
+            const std::uint32_t sampler_address = core.state.gpr[3];
+            const std::uint32_t clamp_x = core.state.gpr[4];
+            const std::uint32_t clamp_y = core.state.gpr[5];
+            const std::uint32_t clamp_z = core.state.gpr[6];
+
+            if (sampler_address == 0U || (sampler_address & 3U) != 0U)
+            {
+                throw HleExecutionError(
+                    std::string(api_name) + ": sampler pointer is null or misaligned");
+            }
+            if (clamp_x > clamp_field_mask ||
+                clamp_y > clamp_field_mask ||
+                clamp_z > clamp_field_mask)
+            {
+                throw HleExecutionError(
+                    std::string(api_name) + ": clamp mode is outside the GX2 enum range");
+            }
+
+            // Validate the complete guest structure before reading or changing
+            // it. The API updates only CLAMP_X/Y/Z in sampler word 0, so all
+            // filter, LOD, and descriptor fields must be preserved.
+            core.memory.validate_write_range(sampler_address, gx2_sampler_size);
+            const std::uint32_t old_word0 =
+                core.memory.read32_be(sampler_address);
+            constexpr std::uint32_t clamp_fields_mask =
+                (clamp_field_mask << clamp_x_shift) |
+                (clamp_field_mask << clamp_y_shift) |
+                (clamp_field_mask << clamp_z_shift);
+            const std::uint32_t new_word0 =
+                (old_word0 & ~clamp_fields_mask) |
+                (clamp_x << clamp_x_shift) |
+                (clamp_y << clamp_y_shift) |
+                (clamp_z << clamp_z_shift);
+            core.memory.write32_be(sampler_address, new_word0);
+        });
+
+    dispatcher.register_function(
+        "gx2",
         "GX2Init",
         [](EspressoCore& core) {
             // Cemu treats repeated GX2Init calls as successful no-ops. Check
