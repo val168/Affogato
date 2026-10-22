@@ -58,6 +58,7 @@ public:
     [[nodiscard]] std::uint64_t page_write_generation(
         std::uint32_t address) const noexcept
     {
+        address = resolve_alias_address(address);
         const std::uint32_t page = address / guest_page_size;
         if (page < flat_page_write_generations_.size())
         {
@@ -88,7 +89,50 @@ public:
                 throw std::invalid_argument("guest memory mappings overlap");
             }
         }
+        for (const AliasRegion& alias : aliases_)
+        {
+            if (overlaps(address, size, alias.address, alias.size))
+            {
+                throw std::invalid_argument("guest memory mapping overlaps an alias");
+            }
+        }
         mapped_regions_.push_back({address, std::vector<std::uint8_t>(size)});
+    }
+
+    // Add a guest virtual range backed by the same bytes as an existing flat
+    // memory range. Memory writes and code-page generations stay coherent.
+    void map_alias(std::uint32_t address, std::uint32_t target, std::size_t size)
+    {
+        constexpr std::uint64_t guest_address_space_end = std::uint64_t{1} << 32U;
+        if (size == 0U || size > guest_address_space_end - address ||
+            target > bytes_.size() || size > bytes_.size() - target ||
+            overlaps(address, size, 0U, bytes_.size()) ||
+            (address & (guest_page_size - 1U)) != 0U ||
+            (target & (guest_page_size - 1U)) != 0U ||
+            (size & (guest_page_size - 1U)) != 0U)
+        {
+            throw std::invalid_argument("guest memory alias is empty or out of range");
+        }
+        for (const MappedRegion& region : mapped_regions_)
+        {
+            if (overlaps(address, size, region.address, region.bytes.size()))
+            {
+                throw std::invalid_argument("guest memory alias overlaps a mapped region");
+            }
+        }
+        for (const AliasRegion& alias : aliases_)
+        {
+            if (alias.address == address && alias.target == target && alias.size == size)
+            {
+                return;
+            }
+            if (overlaps(address, size, alias.address, alias.size) ||
+                overlaps(target, size, alias.address, alias.size))
+            {
+                throw std::invalid_argument("guest memory aliases overlap");
+            }
+        }
+        aliases_.push_back({address, target, size});
     }
 
     [[nodiscard]] std::uint8_t read8(std::uint32_t address) const
@@ -417,7 +461,10 @@ private:
             (static_cast<std::uint64_t>(address) + width - 1U) / guest_page_size;
         for (std::uint64_t page = first_page; page <= last_page; ++page)
         {
-            mark_page_written(static_cast<std::uint32_t>(page));
+            const std::uint32_t page_address = static_cast<std::uint32_t>(
+                page * guest_page_size);
+            const std::uint32_t backing_address = resolve_alias_address(page_address);
+            mark_page_written(backing_address / guest_page_size);
         }
     }
 
@@ -426,6 +473,26 @@ private:
         std::uint32_t address{};
         std::vector<std::uint8_t> bytes;
     };
+
+    struct AliasRegion
+    {
+        std::uint32_t address{};
+        std::uint32_t target{};
+        std::size_t size{};
+    };
+
+    [[nodiscard]] std::uint32_t resolve_alias_address(std::uint32_t address) const noexcept
+    {
+        for (const AliasRegion& alias : aliases_)
+        {
+            if (address >= alias.address &&
+                static_cast<std::uint64_t>(address) - alias.address < alias.size)
+            {
+                return alias.target + (address - alias.address);
+            }
+        }
+        return address;
+    }
 
     [[nodiscard]] static bool overlaps(
         std::uint32_t address,
@@ -454,6 +521,14 @@ private:
             if (address < bytes_.size())
             {
                 return;
+            }
+            for (const AliasRegion& alias : aliases_)
+            {
+                if (address >= alias.address &&
+                    static_cast<std::uint64_t>(address) - alias.address <= alias.size)
+                {
+                    return;
+                }
             }
             for (const MappedRegion& region : mapped_regions_)
             {
@@ -491,6 +566,17 @@ private:
 
     [[nodiscard]] std::span<std::uint8_t> storage_from(std::uint32_t address)
     {
+        for (const AliasRegion& alias : aliases_)
+        {
+            if (address >= alias.address &&
+                static_cast<std::uint64_t>(address) - alias.address < alias.size)
+            {
+                const auto offset = static_cast<std::size_t>(address - alias.address);
+                const auto target = static_cast<std::size_t>(alias.target) + offset;
+                return std::span<std::uint8_t>(bytes_).subspan(
+                    target, std::min(alias.size - offset, bytes_.size() - target));
+            }
+        }
         if (address < bytes_.size())
         {
             return std::span<std::uint8_t>(bytes_).subspan(address);
@@ -511,6 +597,17 @@ private:
 
     [[nodiscard]] std::span<const std::uint8_t> storage_from(std::uint32_t address) const
     {
+        for (const AliasRegion& alias : aliases_)
+        {
+            if (address >= alias.address &&
+                static_cast<std::uint64_t>(address) - alias.address < alias.size)
+            {
+                const auto offset = static_cast<std::size_t>(address - alias.address);
+                const auto target = static_cast<std::size_t>(alias.target) + offset;
+                return std::span<const std::uint8_t>(bytes_).subspan(
+                    target, std::min(alias.size - offset, bytes_.size() - target));
+            }
+        }
         if (address < bytes_.size())
         {
             return std::span<const std::uint8_t>(bytes_).subspan(address);
@@ -531,6 +628,7 @@ private:
 
     std::vector<std::uint8_t> bytes_;
     std::vector<MappedRegion> mapped_regions_;
+    std::vector<AliasRegion> aliases_;
     std::vector<std::uint64_t> flat_page_write_generations_;
     std::unordered_map<std::uint32_t, std::uint64_t> sparse_page_write_generations_;
     std::uint64_t write_generation_{};

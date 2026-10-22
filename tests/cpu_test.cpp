@@ -869,6 +869,28 @@ void guest_memory_tests()
     assert(page_versions.page_write_generation(0xC0000000U) == sparse_page_before + 1U);
     assert(page_versions.page_write_generation(0xC0001000U) == 0U);
 
+    GuestMemory alias_memory(0x4000U);
+    alias_memory.map_alias(0xF4000000U, 0x1000U, 0x2000U);
+    const std::uint64_t aliased_code_page_before =
+        alias_memory.page_write_generation(0xF4000100U);
+    alias_memory.write32_be(0xF4000100U, 0x12345678U);
+    assert(alias_memory.read32_be(0x1100U) == 0x12345678U);
+    assert(alias_memory.page_write_generation(0x1100U) ==
+           aliased_code_page_before + 1U);
+    alias_memory.write16_be(0x1104U, 0xABCDU);
+    assert(alias_memory.read16_be(0xF4000104U) == 0xABCDU);
+    alias_memory.write_bytes(0xF4001FFEU,
+        std::array<std::uint8_t, 2U>{0xA5U, 0x5AU});
+    assert(alias_memory.read16_be(0x2FFEU) == 0xA55AU);
+    try
+    {
+        alias_memory.map_region(0xF4000000U, 0x100U);
+        assert(false);
+    }
+    catch (const std::invalid_argument&)
+    {
+    }
+
     memory.map_region(0xC0000000U, 0x20);
     memory.write32_be(0xC0000018U, 0x03F00024U);
     assert(memory.read32_be(0xC0000018U) == 0x03F00024U);
@@ -15061,6 +15083,39 @@ void mem_get_base_heap_handle_hle_tests()
     assert((unaligned_boundary.base_heap_handles[1] & 0xFU) == 0U);
     assert((unaligned_boundary.base_heap_handles[8] & 0xFU) == 0U);
     assert(unaligned_boundary.mem2_heap_region_end == 0x2800U);
+
+    // Cafe base-heap type 0 is the guest-visible MEM1 frame heap. Its high
+    // cached alias must share bytes with the low 32 MiB backing store.
+    constexpr std::uint32_t mem1_alias = 0xF4000000U;
+    EspressoCore mem1_core(0x04000000U);
+    register_coreinit_hle(mem1_core.hle);
+    mem1_core.configure_guest_heap(0x03000000U, 0x03F00000U);
+    assert(initialize_default_guest_heaps(mem1_core));
+    assert(mem1_core.base_heap_handles[0] == mem1_alias);
+    assert(mem1_core.memory.read32_be(mem1_alias) == 0x46524D48U);
+    assert(mem1_core.memory.read32_be(0U) == 0x46524D48U);
+
+    const std::uint32_t get_heap = mem1_core.hle.bind_import(
+        "coreinit", "MEMGetBaseHeapHandle");
+    mem1_core.state.gpr[3] = 0U;
+    mem1_core.state.lr = 0x02005EE8U;
+    mem1_core.state.cia = get_heap;
+    assert(mem1_core.step() == StepResult::executed);
+    assert(mem1_core.state.gpr[3] == mem1_alias);
+
+    const std::uint32_t alloc_from_frame_heap = mem1_core.hle.bind_import(
+        "coreinit", "MEMAllocFromFrmHeapEx");
+    mem1_core.state.gpr[3] = mem1_alias;
+    mem1_core.state.gpr[4] = 0x01FFFF80U;
+    mem1_core.state.gpr[5] = 4U;
+    mem1_core.state.lr = 0x02005EF0U;
+    mem1_core.state.cia = alloc_from_frame_heap;
+    assert(mem1_core.step() == StepResult::executed);
+    assert(mem1_core.state.gpr[3] == mem1_alias + 0x4CU);
+    const std::uint32_t expected_mem1_head =
+        mem1_alias + 0x4CU + 0x01FFFF80U;
+    assert(mem1_core.memory.read32_be(mem1_alias + 0x40U) == expected_mem1_head);
+    assert(mem1_core.memory.read32_be(0x40U) == expected_mem1_head);
 
     // Insufficient allocator room or an unmapped configured range fails
     // transactionally: cursor, bounds, registry, and guest bytes stay intact.

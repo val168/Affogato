@@ -89,7 +89,10 @@ constexpr std::uint32_t os_thread_queue_head_offset = 0x00U;
 constexpr std::uint32_t os_thread_queue_tail_offset = 0x04U;
 constexpr std::uint32_t os_thread_queue_parent_offset = 0x08U;
 constexpr std::uint32_t mem2_base_heap_index = 1U;
+constexpr std::uint32_t mem1_base_heap_index = 0U;
 constexpr std::uint32_t foreground_base_heap_index = 8U;
+constexpr std::uint32_t mem1_alias_base = 0xF4000000U;
+constexpr std::uint32_t mem1_size = 0x02000000U;
 constexpr std::uint32_t mem2_expanded_heap_tag = 0x45585048U; // EXPH
 constexpr std::uint32_t mem2_expanded_heap_header_size = 0x54U;
 constexpr std::uint32_t mem2_expanded_heap_block_header_size = 0x14U;
@@ -1111,7 +1114,8 @@ std::uint32_t initialize_default_guest_thread(
 
 bool initialize_default_guest_heaps(EspressoCore& core)
 {
-    if (core.base_heap_handles[mem2_base_heap_index] != 0U ||
+    if (core.base_heap_handles[mem1_base_heap_index] != 0U ||
+        core.base_heap_handles[mem2_base_heap_index] != 0U ||
         core.base_heap_handles[foreground_base_heap_index] != 0U ||
         core.mem2_heap_region_begin != 0U || core.mem2_heap_region_end != 0U)
     {
@@ -1205,6 +1209,42 @@ bool initialize_default_guest_heaps(EspressoCore& core)
         return false;
     }
 
+    bool mem1_heap_available = core.memory.size() >= mem1_size;
+    if (mem1_heap_available)
+    {
+        try
+        {
+            // Cafe exposes MEM1 through the 0xF4000000 alias while its
+            // physical/linear backing is the low 32 MiB of guest memory.
+            core.memory.map_alias(mem1_alias_base, 0U, mem1_size);
+        }
+        catch (const std::invalid_argument&)
+        {
+            mem1_heap_available = false;
+        }
+    }
+
+    if (mem1_heap_available)
+    {
+        core.memory.zero_fill(mem1_alias_base, foreground_frame_heap_header_size);
+        core.memory.write32_be(mem1_alias_base, foreground_frame_heap_tag);
+        core.memory.write32_be(
+            mem1_alias_base + mem_exp_heap_data_start_offset,
+            mem1_alias_base + foreground_frame_heap_header_size);
+        core.memory.write32_be(
+            mem1_alias_base + mem_exp_heap_data_end_offset,
+            mem1_alias_base + mem1_size);
+        core.memory.write32_be(mem1_alias_base + frame_heap_flags_offset, 0U);
+        core.memory.write32_be(
+            mem1_alias_base + frame_heap_head_offset,
+            mem1_alias_base + foreground_frame_heap_header_size);
+        core.memory.write32_be(
+            mem1_alias_base + frame_heap_tail_offset,
+            mem1_alias_base + mem1_size);
+        core.memory.write32_be(
+            mem1_alias_base + frame_heap_previous_state_offset, 0U);
+    }
+
     core.memory.zero_fill(foreground_handle, foreground_frame_heap_header_size);
     core.memory.write32_be(foreground_handle, foreground_frame_heap_tag);
     core.memory.write32_be(foreground_handle + mem_exp_heap_data_start_offset,
@@ -1249,6 +1289,10 @@ bool initialize_default_guest_heaps(EspressoCore& core)
     core.mem2_heap_region_end = heap_end;
     core.base_heap_handles[mem2_base_heap_index] = handle;
     core.base_heap_handles[foreground_base_heap_index] = foreground_handle;
+    if (mem1_heap_available)
+    {
+        core.base_heap_handles[mem1_base_heap_index] = mem1_alias_base;
+    }
     return true;
 }
 
