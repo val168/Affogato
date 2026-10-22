@@ -760,6 +760,7 @@ void set_xer_carry(CpuState& state, bool carry) noexcept
     case Opcode::paired_single_compare_unordered0: return "ps_cmpu0";
     case Opcode::paired_single_compare_unordered1: return "ps_cmpu1";
     case Opcode::paired_single_compare_ordered0: return "ps_cmpo0";
+    case Opcode::paired_single_compare_ordered1: return "ps_cmpo1";
     case Opcode::paired_single_move_register: return "ps_mr";
     case Opcode::paired_single_negate: return "ps_neg";
     case Opcode::paired_single_absolute_value: return "ps_abs";
@@ -1171,7 +1172,8 @@ void add_history_source(
         opcode == Opcode::floating_compare_ordered ||
         opcode == Opcode::paired_single_compare_unordered0 ||
         opcode == Opcode::paired_single_compare_unordered1 ||
-        opcode == Opcode::paired_single_compare_ordered0)
+        opcode == Opcode::paired_single_compare_ordered0 ||
+        opcode == Opcode::paired_single_compare_ordered1)
     {
         entry.has_fp_compare = true;
         entry.fp_compare_cr_field = instruction.cr_field;
@@ -3426,6 +3428,7 @@ StepResult EspressoCore::step()
     case Opcode::paired_single_compare_unordered0:
     case Opcode::paired_single_compare_unordered1:
     case Opcode::paired_single_compare_ordered0:
+    case Opcode::paired_single_compare_ordered1:
     case Opcode::floating_compare_unordered:
     case Opcode::floating_compare_ordered:
     {
@@ -3449,7 +3452,8 @@ StepResult EspressoCore::step()
 
         set_floating_compare_result(state, instruction.cr_field, result);
         const bool ordered = instruction.opcode == Opcode::floating_compare_ordered ||
-            instruction.opcode == Opcode::paired_single_compare_ordered0;
+            instruction.opcode == Opcode::paired_single_compare_ordered0 ||
+            instruction.opcode == Opcode::paired_single_compare_ordered1;
         if (is_binary64_signaling_nan(a_raw) || is_binary64_signaling_nan(b_raw))
         {
             raise_fpscr_exception(state, fpscr::vxsnan_mask);

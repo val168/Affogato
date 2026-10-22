@@ -200,6 +200,7 @@ enum class Opcode
     paired_single_compare_unordered0,
     paired_single_compare_unordered1,
     paired_single_compare_ordered0,
+    paired_single_compare_ordered1,
     paired_single_move_register,
     paired_single_negate,
     paired_single_absolute_value,

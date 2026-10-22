@@ -199,6 +199,15 @@ DecodedInstruction decode(std::uint32_t raw) noexcept
             instruction.fp_compare_a = static_cast<std::uint8_t>(field(raw, 16, 0x1FU));
             instruction.fp_compare_b = static_cast<std::uint8_t>(field(raw, 11, 0x1FU));
         }
+        else if (field(raw, 1, 0x3FFU) == 96U &&
+                 (raw & ((0x3U << 21U) | 1U)) == 0U)
+        {
+            instruction.opcode = Opcode::paired_single_compare_ordered1;
+            instruction.cr_field = static_cast<std::uint8_t>(field(raw, 23, 0x7U));
+            instruction.fp_compare_a = static_cast<std::uint8_t>(field(raw, 16, 0x1FU));
+            instruction.fp_compare_b = static_cast<std::uint8_t>(field(raw, 11, 0x1FU));
+            instruction.fp_compare_uses_ps1 = true;
+        }
         else if (field(raw, 1, 0x1FU) == 21U &&
                  field(raw, 6, 0x1FU) == 0U && (raw & 1U) == 0U)
         {

@@ -898,6 +898,11 @@ void decoder_tests()
     assert(ps_cmpo0.cr_field == 2U && ps_cmpo0.fp_compare_a == 1U &&
            ps_cmpo0.fp_compare_b == 2U);
     assert(decode(0x11011041U).opcode == Opcode::unsupported);
+    const DecodedInstruction ps_cmpo1 = decode(0x110110C0U);
+    assert(ps_cmpo1.opcode == Opcode::paired_single_compare_ordered1);
+    assert(ps_cmpo1.cr_field == 2U && ps_cmpo1.fp_compare_a == 1U &&
+           ps_cmpo1.fp_compare_b == 2U && ps_cmpo1.fp_compare_uses_ps1);
+    assert(decode(0x110110C1U).opcode == Opcode::unsupported);
     const DecodedInstruction ps_add = decode(0x1007482AU);
     assert(ps_add.opcode == Opcode::paired_single_add);
     assert(ps_add.fp_register == 0U && ps_add.fp_source_a == 7U &&
@@ -26724,6 +26729,39 @@ void paired_single_compare_ordered0_tests()
     assert((signaling_nan.state.fpscr & fpscr::vxvc_mask) != 0U);
 }
 
+void paired_single_compare_ordered1_tests()
+{
+    const auto double_bits = [](double value) { return std::bit_cast<std::uint64_t>(value); };
+    constexpr std::uint32_t exact_encoding = 0x110110C0U;
+    const auto decoded = decode(exact_encoding);
+    assert(decoded.opcode == Opcode::paired_single_compare_ordered1);
+    assert(decoded.cr_field == 2U && decoded.fp_compare_a == 1U &&
+           decoded.fp_compare_b == 2U && decoded.fp_compare_uses_ps1);
+
+    EspressoCore less(4U);
+    less.state.fpr[1] = double_bits(9.0);
+    less.state.fpr[2] = double_bits(2.0);
+    less.state.fpr_ps1[1] = double_bits(-1.0);
+    less.state.fpr_ps1[2] = double_bits(0.0);
+    less.memory.write32_be(0U, exact_encoding);
+    assert(less.step() == StepResult::executed);
+    assert(((less.state.cr >> 20U) & 0xFU) == 0x8U);
+
+    EspressoCore quiet_nan(4U);
+    quiet_nan.state.fpr[1] = double_bits(1.0);
+    quiet_nan.state.fpr[2] = double_bits(2.0);
+    quiet_nan.state.fpr_ps1[1] = 0x7FF8123456789ABCULL;
+    quiet_nan.state.fpr_ps1[2] = double_bits(2.0);
+    quiet_nan.memory.write32_be(0U, exact_encoding);
+    assert(quiet_nan.step() == StepResult::executed);
+    assert((quiet_nan.state.fpscr & fpscr::vxvc_mask) != 0U);
+    assert((quiet_nan.state.fpscr & fpscr::vxsnan_mask) == 0U);
+    const auto history_result = quiet_nan.run(0U);
+    const auto& history = history_result.instruction_history.front();
+    assert(history.opcode_name == "ps_cmpo1" && history.fp_compare_uses_ps1);
+    assert(history.fp_compare_a_raw == 0x7FF8123456789ABCULL);
+}
+
 void paired_single_add_tests()
 {
     const auto encode_ps_add = [](std::uint8_t destination, std::uint8_t source_a,
@@ -28052,6 +28090,7 @@ int main(int argc, char* argv[])
     paired_single_compare_unordered0_tests();
     paired_single_compare_unordered1_tests();
     paired_single_compare_ordered0_tests();
+    paired_single_compare_ordered1_tests();
     paired_single_add_tests();
     paired_single_subtract_tests();
     paired_single_multiply_scalar0_tests();
