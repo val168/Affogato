@@ -16263,6 +16263,79 @@ void gx2_invalidate_hle_tests()
     assert(memory_after == memory_before);
 }
 
+void gx2_calc_geometry_shader_input_ring_buffer_size_hle_tests()
+{
+    constexpr std::uint32_t return_address = 0x027508B4U;
+    EspressoCore core(0x1000U);
+    register_gx2_hle(core.hle);
+    const std::uint32_t import = core.hle.bind_import(
+        "gx2", "GX2CalcGeometryShaderInputRingBufferSize");
+    const std::uint32_t wrong_library = core.hle.bind_import(
+        "coreinit", "GX2CalcGeometryShaderInputRingBufferSize");
+    assert(import != 0U && wrong_library != import);
+
+    core.state.gpr.fill(0xA4000000U);
+    core.state.cr = 0x12345678U;
+    core.state.xer = 0x87654321U;
+    core.state.ctr = 0xCAFEBABEU;
+    core.state.fpscr = 0xA5A55A5AU;
+    const auto gprs_before = core.state.gpr;
+    const auto fprs_before = core.state.fpr;
+    const auto ps1_before = core.state.fpr_ps1;
+    const std::uint32_t cr_before = core.state.cr;
+    const std::uint32_t xer_before = core.state.xer;
+    const std::uint32_t ctr_before = core.state.ctr;
+    const std::uint32_t fpscr_before = core.state.fpscr;
+    std::vector<std::uint8_t> memory_before(core.memory.size());
+    core.memory.read_bytes(0U, memory_before);
+
+    const auto calculate = [&](std::uint32_t ring_item_size) {
+        core.state.gpr[3] = ring_item_size;
+        core.state.cia = import;
+        core.state.lr = return_address;
+        return core.run(1U);
+    };
+
+    // Cemu's GX2 export evaluates (ringItemSize * 4) * 0x1000 in uint32
+    // arithmetic, equivalent to a modulo-2^32 left shift by 14.
+    constexpr std::array<std::pair<std::uint32_t, std::uint32_t>, 5U> cases{{
+        {0U, 0U},
+        {1U, 0x00004000U},
+        {2U, 0x00008000U},
+        {0x12345U, 0x48D14000U},
+        {0xFFFFFFFFU, 0xFFFFC000U},
+    }};
+    for (const auto& [input, expected] : cases)
+    {
+        const RunResult result = calculate(input);
+        assert(result.reason == StopReason::instruction_limit);
+        assert(result.steps == 1U);
+        assert(core.state.gpr[3] == expected);
+        for (std::size_t index = 4U; index < core.state.gpr.size(); ++index)
+        {
+            assert(core.state.gpr[index] == gprs_before[index]);
+        }
+        assert(core.state.cia == return_address);
+        assert(core.state.lr == return_address);
+        assert(core.state.cr == cr_before);
+        assert(core.state.xer == xer_before);
+        assert(core.state.ctr == ctr_before);
+        assert(core.state.fpscr == fpscr_before);
+        assert(core.state.fpr == fprs_before);
+        assert(core.state.fpr_ps1 == ps1_before);
+    }
+
+    std::vector<std::uint8_t> memory_after(core.memory.size());
+    core.memory.read_bytes(0U, memory_after);
+    assert(memory_after == memory_before);
+
+    core.state.cia = wrong_library;
+    const RunResult wrong_result = core.run(1U);
+    assert(wrong_result.reason == StopReason::unimplemented_hle_call);
+    assert(wrong_result.hle_call ==
+           "coreinit::GX2CalcGeometryShaderInputRingBufferSize");
+}
+
 void gx2_calc_fetch_shader_size_ex_hle_tests()
 {
     constexpr std::uint32_t return_address = 0x027508B4U;
@@ -26148,6 +26221,7 @@ int main(int argc, char* argv[])
     mem_alloc_from_frm_heap_ex_hle_tests();
     gx2_temp_get_gpu_version_hle_tests();
     gx2_invalidate_hle_tests();
+    gx2_calc_geometry_shader_input_ring_buffer_size_hle_tests();
     gx2_calc_fetch_shader_size_ex_hle_tests();
     gx2_init_fetch_shader_ex_hle_tests();
     gx2_init_sampler_hle_tests();

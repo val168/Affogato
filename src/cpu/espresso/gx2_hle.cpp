@@ -685,6 +685,15 @@ void register_gx2_hle(HleDispatcher& dispatcher)
 
     dispatcher.register_function(
         "gx2",
+        "GX2CalcGeometryShaderInputRingBufferSize",
+        [](EspressoCore& core) {
+            // Cemu's GX2 export computes (ringItemSize * 4) * 0x1000 in
+            // uint32 arithmetic. Keep the guest ABI's modulo-2^32 behavior.
+            core.state.gpr[3] = core.state.gpr[3] * 4U * 0x1000U;
+        });
+
+    dispatcher.register_function(
+        "gx2",
         "GX2InitFetchShaderEx",
         [](EspressoCore& core) {
             constexpr const char* api_name = "gx2::GX2InitFetchShaderEx";
