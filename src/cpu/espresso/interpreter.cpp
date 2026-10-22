@@ -654,6 +654,7 @@ void set_xer_carry(CpuState& state, bool carry) noexcept
     case Opcode::floating_multiply_subtract_double: return "fmsub";
     case Opcode::floating_negative_multiply_add_double: return "fnmadd";
     case Opcode::floating_negative_multiply_subtract_double: return "fnmsub";
+    case Opcode::floating_reciprocal_square_root_estimate: return "frsqrte";
     case Opcode::floating_move_register: return "fmr";
     case Opcode::floating_negate: return "fneg";
     case Opcode::floating_absolute_value: return "fabs";
@@ -1118,6 +1119,15 @@ void add_history_source(
         entry.fp_integer_conversion_source = instruction.fp_source_b;
         entry.fp_integer_conversion_source_raw = state.fpr[instruction.fp_source_b];
         entry.fp_integer_conversion_destination = instruction.fp_register;
+        return entry;
+    }
+    if (opcode == Opcode::floating_reciprocal_square_root_estimate)
+    {
+        entry.has_fp_source = true;
+        entry.fp_source_register = instruction.fp_source_b;
+        entry.fp_source_value = state.fpr[instruction.fp_source_b];
+        entry.has_fp_destination = true;
+        entry.fp_destination_register = instruction.fp_register;
         return entry;
     }
     if (opcode == Opcode::floating_compare_unordered ||
@@ -4885,6 +4895,56 @@ StepResult EspressoCore::step()
         const bool rounded_up = inexact &&
             std::fabs(extended_result) > std::fabs(source);
         commit_result(single_bits, inexact, rounded_up);
+        break;
+    }
+
+    case Opcode::floating_reciprocal_square_root_estimate:
+    {
+        const std::uint64_t source_raw = state.fpr[instruction.fp_source_b];
+        const double source = std::bit_cast<double>(source_raw);
+        std::uint64_t result_raw{};
+        bool suppress_write = false;
+
+        if (is_binary64_signaling_nan(source_raw))
+        {
+            raise_fpscr_exception(state, fpscr::vxsnan_mask);
+            suppress_write = (state.fpscr & fpscr::ve_mask) != 0U;
+            result_raw = quiet_nan_binary64_bits(source_raw);
+        }
+        else if (is_binary64_nan(source_raw))
+        {
+            result_raw = quiet_nan_binary64_bits(source_raw);
+        }
+        else if (source < 0.0)
+        {
+            raise_fpscr_exception(state, fpscr::vxsqrt_mask);
+            suppress_write = (state.fpscr & fpscr::ve_mask) != 0U;
+            result_raw = quiet_nan_binary64_bits(0U);
+        }
+        else if (source == 0.0)
+        {
+            raise_fpscr_exception(state, fpscr::zx_mask);
+            suppress_write = (state.fpscr & fpscr::ze_mask) != 0U;
+            result_raw = ((source_raw & binary64_sign_mask) != 0U
+                    ? binary64_sign_mask : 0U) |
+                binary64_exponent_mask;
+        }
+        else if (std::isinf(source))
+        {
+            result_raw = 0U;
+        }
+        else
+        {
+            // PowerPC specifies an estimate (relative error <= 1/32), not a
+            // uniquely rounded value. A host double estimate is within that bound.
+            result_raw = std::bit_cast<std::uint64_t>(1.0 / std::sqrt(source));
+        }
+
+        if (!suppress_write)
+        {
+            state.fpr[instruction.fp_register] = result_raw;
+            set_double_arithmetic_fprf(state, result_raw);
+        }
         break;
     }
 

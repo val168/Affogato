@@ -831,6 +831,12 @@ void decoder_tests()
            ps_sum0.fp_source_b == 2U && ps_sum0.fp_source_c == 2U);
     assert(((0x10211094U >> 1U) & 0x1FU) == 10U);
     assert(decode(0x10211095U).opcode == Opcode::unsupported);
+    const DecodedInstruction frsqrte = decode(0xFC800834U);
+    assert(frsqrte.opcode == Opcode::floating_reciprocal_square_root_estimate);
+    assert(frsqrte.fp_register == 4U && frsqrte.fp_source_b == 1U);
+    assert(((0xFC800834U >> 1U) & 0x3FFU) == 26U);
+    assert(decode(0xFC800835U).opcode == Opcode::unsupported);
+    assert(decode(0xFC810834U).opcode == Opcode::unsupported);
 
     const DecodedInstruction mflr = decode(0x7C0802A6U); // mflr r0
     assert(mflr.opcode == Opcode::move_from_link_register);
@@ -4839,6 +4845,93 @@ void floating_absolute_value_tests()
     assert(trace.find("fabs f1.ps0=0x0000000000000000 -> f1.ps0=0x0000000000000000") !=
            std::string::npos);
     assert(trace.find("ps1 unchanged=0x3FF6666660000000") != std::string::npos);
+}
+
+void floating_reciprocal_square_root_estimate_tests()
+{
+    constexpr std::uint32_t wind_waker_word = 0xFC800834U;
+    const auto encode = [](std::uint8_t destination, std::uint8_t source,
+                           bool record = false) {
+        return 0xFC000000U |
+            (static_cast<std::uint32_t>(source) << 11U) |
+            (static_cast<std::uint32_t>(destination) << 21U) |
+            (26U << 1U) | static_cast<std::uint32_t>(record);
+    };
+    const auto double_bits = [](double value) { return std::bit_cast<std::uint64_t>(value); };
+    assert(encode(4U, 1U) == wind_waker_word);
+    const auto exact = decode(wind_waker_word);
+    assert(exact.opcode == Opcode::floating_reciprocal_square_root_estimate);
+    assert(exact.fp_register == 4U && exact.fp_source_b == 1U);
+    assert(decode(encode(7U, 3U, true)).opcode == Opcode::unsupported);
+
+    const auto execute = [&](std::uint64_t source, std::uint32_t initial_fpscr,
+                             std::uint64_t initial_destination = 0xDEADBEEF01234567ULL) {
+        EspressoCore core(16U);
+        core.state.fpr[2] = source;
+        core.state.fpr_ps1[2] = 0x1111222233334444ULL;
+        core.state.fpr[4] = initial_destination;
+        core.state.fpr_ps1[4] = 0xAABBCCDDEEFF0011ULL;
+        core.state.fpscr = initial_fpscr;
+        core.state.gpr.fill(0x87654321U);
+        core.state.cr = 0x12345678U;
+        core.state.xer = 0xA00000A5U;
+        core.state.lr = 0xABCDEF00U;
+        core.state.ctr = 0x12345670U;
+        core.memory.write32_be(0U, encode(4U, 2U));
+        const auto gprs_before = core.state.gpr;
+        const auto mem_before = core.memory.read32_be(4U);
+        const RunResult result = core.run(1U);
+        assert(result.steps == 1U);
+        assert(core.state.cia == 4U);
+        assert(core.state.gpr == gprs_before);
+        assert(core.state.cr == 0x12345678U);
+        assert(core.state.xer == 0xA00000A5U);
+        assert(core.state.lr == 0xABCDEF00U && core.state.ctr == 0x12345670U);
+        assert(core.state.fpr_ps1[4] == 0xAABBCCDDEEFF0011ULL);
+        assert(core.memory.read32_be(4U) == mem_before);
+        return std::pair{core.state, result};
+    };
+
+    const auto normal = execute(double_bits(4.0), 0U);
+    const double normal_value = std::bit_cast<double>(normal.first.fpr[4]);
+    assert(std::fabs(normal_value - 0.5) < 1e-15);
+    assert(((normal.first.fpscr & fpscr::fprf_mask) >> 12U) == 0x04U);
+    assert(normal.second.instruction_history.front().opcode_name == "frsqrte");
+    assert(format_instruction_history(normal.second).find("frsqrte") != std::string::npos);
+
+    const auto positive_infinity = execute(0x7FF0000000000000ULL, 0U);
+    assert(positive_infinity.first.fpr[4] == double_bits(0.0));
+
+    const auto zero = execute(double_bits(0.0), 0U);
+    assert(zero.first.fpr[4] == 0x7FF0000000000000ULL);
+    assert((zero.first.fpscr & (fpscr::zx_mask | fpscr::fx_mask)) ==
+           (fpscr::zx_mask | fpscr::fx_mask));
+
+    const auto negative_zero = execute(0x8000000000000000ULL, 0U);
+    assert(negative_zero.first.fpr[4] == 0xFFF0000000000000ULL);
+
+    const auto zero_enabled = execute(double_bits(0.0), fpscr::ze_mask);
+    assert(zero_enabled.first.fpr[4] == 0xDEADBEEF01234567ULL);
+    assert((zero_enabled.first.fpscr & fpscr::fex_mask) != 0U);
+
+    const auto negative = execute(double_bits(-4.0), 0U);
+    assert(negative.first.fpr[4] == 0x7FF8000000000000ULL);
+    assert((negative.first.fpscr & (fpscr::vxsqrt_mask | fpscr::vx_mask)) ==
+           (fpscr::vxsqrt_mask | fpscr::vx_mask));
+
+    const auto negative_enabled = execute(double_bits(-4.0), fpscr::ve_mask);
+    assert(negative_enabled.first.fpr[4] == 0xDEADBEEF01234567ULL);
+    assert((negative_enabled.first.fpscr & fpscr::fex_mask) != 0U);
+
+    const auto quiet_nan = execute(0xFFF8123456789ABCULL, 0U);
+    assert(quiet_nan.first.fpr[4] == 0xFFF8123456789ABCULL);
+    assert((quiet_nan.first.fpscr & fpscr::vxsnan_mask) == 0U);
+
+    const auto signaling_nan = execute(0xFFF0123456789ABCULL, 0U);
+    assert(signaling_nan.first.fpr[4] == 0xFFF8123456789ABCULL);
+    assert((signaling_nan.first.fpscr & fpscr::vxsnan_mask) != 0U);
+    const auto signaling_nan_enabled = execute(0xFFF0123456789ABCULL, fpscr::ve_mask);
+    assert(signaling_nan_enabled.first.fpr[4] == 0xDEADBEEF01234567ULL);
 }
 
 void floating_negative_absolute_value_tests()
@@ -27219,6 +27312,7 @@ int main(int argc, char* argv[])
     floating_move_to_fpscr_fields_tests();
     floating_negate_tests();
     floating_absolute_value_tests();
+    floating_reciprocal_square_root_estimate_tests();
     floating_negative_absolute_value_tests();
     floating_select_tests();
     floating_subtract_double_tests();
