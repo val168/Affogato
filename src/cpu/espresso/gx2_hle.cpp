@@ -74,6 +74,7 @@ constexpr std::uint32_t gx2_attrib_stream_size = 0x20U;
 constexpr std::uint32_t gx2_max_fetch_attributes = 64U;
 constexpr std::uint32_t gx2_sampler_size = 0x0CU;
 constexpr std::uint32_t gx2_surface_size = 0x74U;
+constexpr std::uint32_t gx2_texture_size = 0x9CU;
 constexpr std::uint32_t gx2_surface_use_color_buffer = 0x02U;
 constexpr std::uint32_t gx2_surface_use_depth_buffer = 0x04U;
 constexpr std::uint32_t gx2_surface_dim_1d = 0U;
@@ -85,6 +86,7 @@ constexpr std::uint32_t gx2_tile_mode_1d_thick = 3U;
 constexpr std::uint32_t gx2_tile_mode_2d_thin1 = 4U;
 constexpr std::uint32_t gx2_tile_mode_2d_thick = 7U;
 constexpr std::uint32_t gx2_tile_mode_linear_special = 16U;
+constexpr std::uint32_t gx2_texture_regs_offset = 0x88U;
 constexpr std::uint32_t latte_pipe_interleave_bytes = 256U;
 constexpr std::uint32_t latte_pipe_count = 2U;
 constexpr std::uint32_t latte_bank_count = 4U;
@@ -798,6 +800,227 @@ void calculate_gx2_surface_size_and_alignment(
         core.memory.write32_be(
             surface_address + 0x40U + static_cast<std::uint32_t>(index * 4U),
             mip_offsets[index]);
+    }
+}
+
+std::uint32_t gx2_texture_endian_swap(std::uint32_t format)
+{
+    switch (format & 0x3FU)
+    {
+    case 0x01U: // R8
+    case 0x02U: // R4_G4
+    case 0x0DU: // R32
+    case 0x0EU: // FLOAT_R32
+    case 0x1DU: // R32_G32
+    case 0x1EU: // FLOAT_R32_G32
+    case 0x22U: // R32_G32_B32_A32
+    case 0x23U: // FLOAT_R32_G32_B32_A32
+    case 0x31U: // BC1
+    case 0x32U: // BC2
+    case 0x33U: // BC3
+    case 0x34U: // BC4
+    case 0x35U: // BC5
+        return 0U;
+    case 0x05U: // R16
+    case 0x06U: // FLOAT_R16
+    case 0x07U: // R8_G8
+    case 0x08U: // R5_G6_B5
+    case 0x0AU: // R5_G5_B5_A1
+    case 0x0BU: // R4_G4_B4_A4
+    case 0x0CU: // A1_B5_G5_R5
+        return 1U;
+    case 0x0FU: // R16_G16
+    case 0x10U: // FLOAT_R16_G16
+    case 0x11U: // R24_X8 / D24_S8
+    case 0x16U: // R11_G11_B10
+    case 0x19U: // R10_G10_B10_A2
+    case 0x1AU: // R8_G8_B8_A8
+    case 0x1BU: // A2_B10_G10_R10
+        return 2U;
+    case 0x1FU: // R16_G16_B16_A16
+    case 0x20U: // FLOAT_R16_G16_B16_A16
+        return 3U;
+    default:
+        throw HleExecutionError(
+            "gx2::GX2InitTextureRegs: unsupported format endian mode for " +
+            std::to_string(format));
+    }
+}
+
+void initialize_gx2_texture_registers(
+    EspressoCore& core,
+    std::uint32_t texture_address)
+{
+    constexpr const char* api_name = "gx2::GX2InitTextureRegs";
+    if (texture_address == 0U || (texture_address & 3U) != 0U ||
+        texture_address > std::numeric_limits<std::uint32_t>::max() -
+                              gx2_texture_size)
+    {
+        throw HleExecutionError(std::string(api_name) +
+                                ": texture pointer is null or misaligned");
+    }
+
+    std::array<std::uint32_t, gx2_texture_size / sizeof(std::uint32_t)> words{};
+    for (std::size_t index = 0U; index < words.size(); ++index)
+    {
+        words[index] = core.memory.read32_be(
+            texture_address + static_cast<std::uint32_t>(index * sizeof(std::uint32_t)));
+    }
+
+    constexpr std::uint32_t surface_width_offset = 0x04U;
+    constexpr std::uint32_t surface_height_offset = 0x08U;
+    constexpr std::uint32_t surface_depth_offset = 0x0CU;
+    constexpr std::uint32_t surface_levels_offset = 0x10U;
+    constexpr std::uint32_t surface_format_offset = 0x14U;
+    constexpr std::uint32_t surface_aa_offset = 0x18U;
+    constexpr std::uint32_t surface_use_offset = 0x1CU;
+    constexpr std::uint32_t surface_tile_mode_offset = 0x30U;
+    constexpr std::uint32_t surface_pitch_offset = 0x3CU;
+    constexpr std::uint32_t view_first_mip_offset = 0x74U;
+    constexpr std::uint32_t view_num_mips_offset = 0x78U;
+    constexpr std::uint32_t view_first_slice_offset = 0x7CU;
+    constexpr std::uint32_t view_num_slices_offset = 0x80U;
+    constexpr std::uint32_t component_map_offset = 0x84U;
+
+    const std::uint32_t dimension = words[0];
+    const std::uint32_t width = words[surface_width_offset / 4U];
+    const std::uint32_t height = std::max(words[surface_height_offset / 4U], 1U);
+    const std::uint32_t depth = std::max(words[surface_depth_offset / 4U], 1U);
+    const std::uint32_t surface_levels =
+        std::max(words[surface_levels_offset / 4U], 1U);
+    const std::uint32_t format = words[surface_format_offset / 4U];
+    const std::uint32_t aa_mode = words[surface_aa_offset / 4U];
+    const std::uint32_t surface_use = words[surface_use_offset / 4U];
+    const std::uint32_t tile_mode = words[surface_tile_mode_offset / 4U];
+    const std::uint32_t pitch = words[surface_pitch_offset / 4U];
+    const std::uint32_t view_first_mip = words[view_first_mip_offset / 4U];
+    const std::uint32_t view_num_mips =
+        std::max(words[view_num_mips_offset / 4U], 1U);
+    const std::uint32_t view_first_slice =
+        words[view_first_slice_offset / 4U];
+    const std::uint32_t view_num_slices =
+        std::max(words[view_num_slices_offset / 4U], 1U);
+    const std::uint32_t component_map = words[component_map_offset / 4U];
+
+    if (dimension > 7U || width > 0x2000U || height > 0x2000U ||
+        depth > 0x2000U || aa_mode > 3U || surface_levels > 16U ||
+        view_first_mip > 15U || view_num_mips > 16U ||
+        view_first_mip + view_num_mips > surface_levels ||
+        view_first_slice > 0x1FFFU || view_num_slices > 0x2000U ||
+        view_first_slice + view_num_slices > 0x2000U)
+    {
+        throw HleExecutionError(std::string(api_name) +
+                                ": texture dimensions or view range are invalid");
+    }
+
+    // The register data-format field uses the low six bits of GX2SurfaceFormat;
+    // validate that the format is one whose layout and byte ordering we model.
+    const std::uint32_t base_format = format & 0x3FU;
+    const bool compressed = base_format >= 0x31U && base_format <= 0x35U;
+    if (!compressed)
+        (void)gx2_surface_format_bits(format);
+    if ((format & ~0x0F3FU) != 0U)
+    {
+        throw HleExecutionError(std::string(api_name) +
+                                ": unsupported surface format flags");
+    }
+    if (tile_mode > 15U)
+    {
+        throw HleExecutionError(std::string(api_name) +
+                                ": unsupported hardware tile mode " +
+                                std::to_string(tile_mode));
+    }
+    const std::uint32_t component_x = (component_map >> 24U) & 7U;
+    const std::uint32_t component_y = (component_map >> 16U) & 7U;
+    const std::uint32_t component_z = (component_map >> 8U) & 7U;
+    const std::uint32_t component_w = component_map & 7U;
+    if (component_x > 5U || component_y > 5U ||
+        component_z > 5U || component_w > 5U)
+    {
+        throw HleExecutionError(std::string(api_name) +
+                                ": invalid texture component selector");
+    }
+
+    if (compressed && pitch > std::numeric_limits<std::uint32_t>::max() / 4U)
+    {
+        throw HleExecutionError(std::string(api_name) + ": texture pitch overflows");
+    }
+    const std::uint32_t pixel_pitch = compressed ? pitch * 4U : pitch;
+    const std::uint32_t encoded_pitch = pixel_pitch == 0U
+        ? 0x7FFU
+        : ((pixel_pitch >> 3U) - 1U) & 0x7FFU;
+    const std::uint32_t encoded_width = width == 0U ? 0x1FFFU : width - 1U;
+    const std::uint32_t tile_type = (surface_use & gx2_surface_use_depth_buffer) != 0U
+        ? 1U
+        : 0U;
+
+    // Latte SQ_TEX_RESOURCE_WORD0/1 field positions.
+    const std::uint32_t word0 =
+        (dimension & 7U) |
+        ((tile_mode & 0xFU) << 3U) |
+        (tile_type << 7U) |
+        (encoded_pitch << 8U) |
+        ((encoded_width & 0x1FFFU) << 19U);
+    const std::uint32_t word1_depth =
+        dimension == 3U
+            ? (depth / 6U == 0U ? 0U : depth / 6U - 1U)
+            : (dimension == 2U || dimension == 4U || dimension == 5U ||
+                       dimension == 7U
+                   ? depth - 1U
+                   : 0U);
+    if (dimension == 3U && (depth < 6U || depth % 6U != 0U))
+    {
+        throw HleExecutionError(std::string(api_name) +
+                                ": cubemap depth must be a multiple of six");
+    }
+    const std::uint32_t word1 =
+        ((height - 1U) & 0x1FFFU) |
+        ((word1_depth & 0x1FFFU) << 13U) |
+        ((format & 0x3FU) << 26U);
+
+    const std::uint32_t signed_format = (format & 0x200U) != 0U ? 1U : 0U;
+    const std::uint32_t numeric_format = (format & 0x800U) != 0U
+        ? 2U
+        : ((format & 0x100U) != 0U ? 1U : 0U);
+    const std::uint32_t force_degamma = (format & 0x400U) != 0U ? 1U : 0U;
+    const std::uint32_t word4 =
+        signed_format * 0x55U |
+        (numeric_format << 8U) |
+        (force_degamma << 11U) |
+        (gx2_texture_endian_swap(format) << 12U) |
+        (2U << 14U) |
+        (component_x << 16U) |
+        (component_y << 19U) |
+        (component_z << 22U) |
+        (component_w << 25U) |
+        ((view_first_mip & 0xFU) << 28U);
+
+    const std::uint32_t view_last_mip =
+        view_first_mip + view_num_mips - 1U;
+    const std::uint32_t last_mip = aa_mode >= 1U && aa_mode <= 3U
+        ? aa_mode
+        : view_last_mip;
+    const std::uint32_t view_last_slice =
+        view_first_slice + view_num_slices - 1U;
+    const std::uint32_t word5 =
+        (last_mip & 0xFU) |
+        ((view_first_slice & 0x1FFFU) << 4U) |
+        ((view_last_slice & 0x1FFFU) << 17U) |
+        ((dimension == 3U && word1_depth != 0U) ? (1U << 30U) : 0U);
+    constexpr std::uint32_t word6 =
+        4U | (7U << 5U) | (2U << 30U);
+
+    const std::array<std::uint32_t, 5U> registers{
+        word0, word1, word4, word5, word6};
+    core.memory.validate_write_range(
+        texture_address + gx2_texture_regs_offset,
+        static_cast<std::uint32_t>(registers.size() * sizeof(std::uint32_t)));
+    for (std::size_t index = 0U; index < registers.size(); ++index)
+    {
+        core.memory.write32_be(
+            texture_address + gx2_texture_regs_offset +
+                static_cast<std::uint32_t>(index * sizeof(std::uint32_t)),
+            registers[index]);
     }
 }
 
@@ -1820,6 +2043,13 @@ void register_gx2_hle(HleDispatcher& dispatcher)
                 core, out_size, api_name, "size output");
             core.memory.write32_be(out_display_list, display_list);
             core.memory.write32_be(out_size, display_list_size);
+        });
+
+    dispatcher.register_function(
+        "gx2",
+        "GX2InitTextureRegs",
+        [](EspressoCore& core) {
+            initialize_gx2_texture_registers(core, core.state.gpr[3]);
         });
 
     dispatcher.register_function(

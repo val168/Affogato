@@ -20782,6 +20782,110 @@ void gx2_calc_surface_size_and_alignment_hle_tests()
     assert(core.memory.read32_be(surface_address + 0x3CU) == 256U);
 }
 
+void gx2_init_texture_regs_hle_tests()
+{
+    constexpr std::uint32_t texture_address = 0x5000U;
+    constexpr std::uint32_t return_address = 0x02751AC8U;
+    constexpr std::uint32_t texture_size = 0x9CU;
+
+    EspressoCore core(0x10000U);
+    register_gx2_hle(core.hle);
+    const std::uint32_t import = core.hle.bind_import(
+        "gx2", "GX2InitTextureRegs");
+    assert(import != 0U);
+
+    const auto invoke = [&]() {
+        core.state.cia = import;
+        core.state.lr = return_address;
+        return core.run(1U);
+    };
+    const auto write_texture = [&](std::uint32_t dimension,
+                                   std::uint32_t width,
+                                   std::uint32_t height,
+                                   std::uint32_t depth,
+                                   std::uint32_t mip_levels,
+                                   std::uint32_t format,
+                                   std::uint32_t aa,
+                                   std::uint32_t use,
+                                   std::uint32_t tile_mode,
+                                   std::uint32_t pitch,
+                                   std::uint32_t first_mip,
+                                   std::uint32_t num_mips,
+                                   std::uint32_t first_slice,
+                                   std::uint32_t num_slices,
+                                   std::uint32_t component_map) {
+        std::array<std::uint32_t, texture_size / 4U> words{};
+        words[0] = dimension;
+        words[1] = width;
+        words[2] = height;
+        words[3] = depth;
+        words[4] = mip_levels;
+        words[5] = format;
+        words[6] = aa;
+        words[7] = use;
+        words[12] = tile_mode;
+        words[15] = pitch;
+        words[29] = first_mip;
+        words[30] = num_mips;
+        words[31] = first_slice;
+        words[32] = num_slices;
+        words[33] = component_map;
+        for (std::size_t index = 0U; index < words.size(); ++index)
+        {
+            core.memory.write32_be(
+                texture_address + static_cast<std::uint32_t>(index * 4U),
+                words[index]);
+        }
+    };
+
+    core.state.gpr.fill(0xA5000000U);
+    core.state.gpr[3] = texture_address;
+    core.state.gpr[4] = 0x44444444U;
+    core.state.cr = 0x12345678U;
+    core.state.xer = 0xA5A55A5AU;
+    core.state.ctr = 0x87654321U;
+    core.state.fpscr = 0x5A5AA55AU;
+    const auto gprs_before = core.state.gpr;
+    const std::uint32_t cr_before = core.state.cr;
+    const std::uint32_t xer_before = core.state.xer;
+    const std::uint32_t ctr_before = core.state.ctr;
+    const std::uint32_t fpscr_before = core.state.fpscr;
+
+    // Common 2D RGBA8 texture: GX2Texture.regs stores Latte words 0, 1, 4, 5, 6.
+    write_texture(1U, 1280U, 720U, 1U, 1U, 0x1AU, 0U, 1U, 4U,
+                  1280U, 0U, 0U, 0U, 0U, 0x00010203U);
+    auto result = invoke();
+    assert(result.reason == StopReason::instruction_limit);
+    assert(result.steps == 1U && core.state.cia == return_address);
+    assert(core.memory.read32_be(texture_address + 0x88U) == 0x27F89F21U);
+    assert(core.memory.read32_be(texture_address + 0x8CU) == 0x680002CFU);
+    assert(core.memory.read32_be(texture_address + 0x90U) == 0x0688A000U);
+    assert(core.memory.read32_be(texture_address + 0x94U) == 0U);
+    assert(core.memory.read32_be(texture_address + 0x98U) == 0x800000E4U);
+    assert(core.state.gpr == gprs_before);
+    assert(core.state.cr == cr_before && core.state.xer == xer_before);
+    assert(core.state.ctr == ctr_before && core.state.fpscr == fpscr_before);
+
+    // Array views use the requested mip/slice interval and packed component map.
+    write_texture(5U, 64U, 32U, 4U, 4U, 0x11AU, 0U, 1U, 4U,
+                  64U, 1U, 2U, 1U, 2U, 0x05040302U);
+    result = invoke();
+    assert(result.reason == StopReason::instruction_limit);
+    assert(core.memory.read32_be(texture_address + 0x88U) == 0x01F80725U);
+    assert(core.memory.read32_be(texture_address + 0x8CU) == 0x6800601FU);
+    assert(core.memory.read32_be(texture_address + 0x90U) == 0x14E5A100U);
+    assert(core.memory.read32_be(texture_address + 0x94U) == 0x00040012U);
+    assert(core.memory.read32_be(texture_address + 0x98U) == 0x800000E4U);
+
+    // Zero view counts follow GX2's default-one behavior, and sRGB enables degamma.
+    write_texture(1U, 32U, 16U, 1U, 1U, 0x41AU, 0U, 1U, 4U,
+                  32U, 0U, 0U, 0U, 0U, 0x00010203U);
+    result = invoke();
+    assert(result.reason == StopReason::instruction_limit);
+    assert(core.memory.read32_be(texture_address + 0x90U) == 0x0688A800U);
+    assert(core.memory.read32_be(texture_address + 0x94U) == 0U);
+}
+
 void gx2_set_tv_buffer_hle_tests()
 {
     constexpr std::uint32_t buffer_address = 0x0A001000U;
@@ -28512,6 +28616,7 @@ int main(int argc, char* argv[])
     gx2_setup_context_state_ex_hle_tests();
     gx2_get_context_state_display_list_hle_tests();
     gx2_calc_surface_size_and_alignment_hle_tests();
+    gx2_init_texture_regs_hle_tests();
     gx2_calc_tv_size_hle_tests();
     gx2_set_tv_buffer_hle_tests();
     gx2_set_tv_scale_hle_tests();
