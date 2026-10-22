@@ -91,8 +91,13 @@ constexpr std::uint32_t gx2_texture_regs_offset = 0x88U;
 constexpr std::uint32_t gx2_pixel_texture_register_base = 0x00038000U;
 constexpr std::uint32_t gx2_vertex_texture_register_base = 0x00039180U;
 constexpr std::uint32_t gx2_geometry_texture_register_base = 0x0003A4C0U;
+constexpr std::uint32_t gx2_pixel_sampler_register_base = 0x0003C000U;
+constexpr std::uint32_t gx2_vertex_sampler_register_base = 0x0003C0D8U;
+constexpr std::uint32_t gx2_geometry_sampler_register_base = 0x0003C1B0U;
 constexpr std::uint32_t gx2_texture_register_count = 7U;
 constexpr std::uint32_t gx2_texture_unit_count = 16U;
+constexpr std::uint32_t gx2_sampler_register_count = 3U;
+constexpr std::uint32_t gx2_sampler_unit_count = 16U;
 constexpr std::uint32_t latte_pipe_interleave_bytes = 256U;
 constexpr std::uint32_t latte_pipe_count = 2U;
 constexpr std::uint32_t latte_bank_count = 4U;
@@ -1109,6 +1114,55 @@ void set_gx2_texture(
     {
         commands.push_back({
             Gx2CommandType::set_shader_resource,
+            first_register + static_cast<std::uint32_t>(index * sizeof(std::uint32_t)),
+            binding.registers[index]});
+    }
+    bindings[unit] = binding;
+}
+
+void set_gx2_sampler(
+    EspressoCore& core,
+    std::uint32_t sampler_address,
+    std::uint32_t unit,
+    const char* api_name,
+    std::uint32_t register_base,
+    std::array<std::optional<Gx2SamplerBinding>, gx2_sampler_unit_count>& bindings)
+{
+    if (!core.gx2.initialized)
+    {
+        throw HleExecutionError(
+            std::string(api_name) + ": GX2 has not been initialized");
+    }
+    if (sampler_address == 0U || (sampler_address & 3U) != 0U ||
+        static_cast<std::uint64_t>(sampler_address) + gx2_sampler_size >
+            guest_address_space_end)
+    {
+        throw HleExecutionError(
+            std::string(api_name) + ": sampler pointer is null, misaligned, or wraps");
+    }
+    if (unit >= gx2_sampler_unit_count)
+    {
+        throw HleExecutionError(
+            std::string(api_name) + ": pixel sampler unit is out of range");
+    }
+
+    Gx2SamplerBinding binding{};
+    binding.sampler_address = sampler_address;
+    for (std::size_t index = 0U; index < binding.registers.size(); ++index)
+    {
+        binding.registers[index] = core.memory.read32_be(
+            sampler_address + static_cast<std::uint32_t>(index * sizeof(std::uint32_t)));
+    }
+
+    const std::uint32_t first_register =
+        register_base +
+        unit * gx2_sampler_register_count * sizeof(std::uint32_t);
+    auto& commands = core.gx2.pending_commands;
+    commands.reserve(commands.size() + binding.registers.size());
+    for (std::size_t index = 0U; index < binding.registers.size(); ++index)
+    {
+        commands.push_back({
+            Gx2CommandType::set_shader_sampler,
             first_register + static_cast<std::uint32_t>(index * sizeof(std::uint32_t)),
             binding.registers[index]});
     }
@@ -2459,6 +2513,45 @@ void register_gx2_hle(HleDispatcher& dispatcher)
                 "gx2::GX2SetGeometryTexture",
                 gx2_geometry_texture_register_base,
                 core.gx2.geometry_textures);
+        });
+
+    dispatcher.register_function(
+        "gx2",
+        "GX2SetPixelSampler",
+        [](EspressoCore& core) {
+            set_gx2_sampler(
+                core,
+                core.state.gpr[3],
+                core.state.gpr[4],
+                "gx2::GX2SetPixelSampler",
+                gx2_pixel_sampler_register_base,
+                core.gx2.pixel_samplers);
+        });
+
+    dispatcher.register_function(
+        "gx2",
+        "GX2SetVertexSampler",
+        [](EspressoCore& core) {
+            set_gx2_sampler(
+                core,
+                core.state.gpr[3],
+                core.state.gpr[4],
+                "gx2::GX2SetVertexSampler",
+                gx2_vertex_sampler_register_base,
+                core.gx2.vertex_samplers);
+        });
+
+    dispatcher.register_function(
+        "gx2",
+        "GX2SetGeometrySampler",
+        [](EspressoCore& core) {
+            set_gx2_sampler(
+                core,
+                core.state.gpr[3],
+                core.state.gpr[4],
+                "gx2::GX2SetGeometrySampler",
+                gx2_geometry_sampler_register_base,
+                core.gx2.geometry_samplers);
         });
 
     dispatcher.register_function(

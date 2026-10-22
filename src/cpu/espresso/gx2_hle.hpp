@@ -14,6 +14,7 @@ enum class Gx2CommandType
 {
     set_context_register,
     set_shader_resource,
+    set_shader_sampler,
 };
 
 struct Gx2Command
@@ -39,6 +40,14 @@ struct Gx2TextureBinding
     std::array<std::uint32_t, 7U> registers{};
 
     bool operator==(const Gx2TextureBinding&) const = default;
+};
+
+struct Gx2SamplerBinding
+{
+    std::uint32_t sampler_address{};
+    std::array<std::uint32_t, 3U> registers{};
+
+    bool operator==(const Gx2SamplerBinding&) const = default;
 };
 
 struct Gx2ColorBufferState
@@ -133,6 +142,9 @@ struct Gx2RuntimeState
     std::array<std::optional<Gx2TextureBinding>, 16U> pixel_textures{};
     std::array<std::optional<Gx2TextureBinding>, 16U> vertex_textures{};
     std::array<std::optional<Gx2TextureBinding>, 16U> geometry_textures{};
+    std::array<std::optional<Gx2SamplerBinding>, 16U> pixel_samplers{};
+    std::array<std::optional<Gx2SamplerBinding>, 16U> vertex_samplers{};
+    std::array<std::optional<Gx2SamplerBinding>, 16U> geometry_samplers{};
     std::uint64_t clear_color_sequence{};
     std::optional<Gx2ClearColorRequest> latest_clear_color;
     bool sx_alpha_test_control_valid{};

@@ -21451,6 +21451,77 @@ void gx2_set_vertex_and_geometry_texture_hle_tests()
     assert(core.gx2.pending_commands[7U].register_address == 0x0003A4F8U);
 }
 
+void gx2_set_pixel_sampler_hle_tests()
+{
+    constexpr std::uint32_t sampler_address = 0x6000U;
+    constexpr std::uint32_t return_address = 0x02751AC8U;
+    constexpr std::uint32_t unit = 2U;
+    constexpr std::uint32_t register_base = 0x0003C000U;
+
+    EspressoCore core(0x10000U);
+    register_gx2_hle(core.hle);
+    core.gx2.initialized = true;
+    const std::uint32_t import = core.hle.bind_import(
+        "gx2", "GX2SetPixelSampler");
+    assert(import != 0U);
+    core.memory.write32_be(sampler_address + 0x00U, 0x11223344U);
+    core.memory.write32_be(sampler_address + 0x04U, 0x55667788U);
+    core.memory.write32_be(sampler_address + 0x08U, 0x99AABBCCU);
+    core.state.gpr[3] = sampler_address;
+    core.state.gpr[4] = unit;
+    core.state.lr = return_address;
+    const auto gprs_before = core.state.gpr;
+    core.state.cia = import;
+    const auto result = core.run(1U);
+    assert(result.reason == StopReason::instruction_limit);
+    assert(result.steps == 1U && core.state.cia == return_address);
+    assert(core.state.gpr == gprs_before);
+
+    const Gx2SamplerBinding expected{
+        sampler_address, {0x11223344U, 0x55667788U, 0x99AABBCCU}};
+    assert(core.gx2.pixel_samplers[unit] == expected);
+    assert(core.gx2.pending_commands.size() == 3U);
+    const std::uint32_t first_register = register_base + unit * 3U * 4U;
+    for (std::size_t index = 0U; index < expected.registers.size(); ++index)
+    {
+        const Gx2Command& command = core.gx2.pending_commands[index];
+        assert(command.type == Gx2CommandType::set_shader_sampler);
+        assert(command.register_address ==
+               first_register + static_cast<std::uint32_t>(index * 4U));
+        assert(command.value == expected.registers[index]);
+    }
+
+    // Binding reads the current guest-owned sampler descriptor on each call.
+    core.memory.write32_be(sampler_address + 0x04U, 0xDEADBEEFU);
+    core.state.cia = import;
+    assert(core.run(1U).reason == StopReason::instruction_limit);
+    assert(core.gx2.pixel_samplers[unit]->registers[1U] == 0xDEADBEEFU);
+    assert(core.gx2.pending_commands.size() == 6U);
+
+    core.state.gpr[4] = 16U;
+    core.state.cia = import;
+    assert(core.run(1U).reason == StopReason::hle_error);
+    assert(core.gx2.pending_commands.size() == 6U);
+
+    const std::uint32_t vertex_import = core.hle.bind_import(
+        "gx2", "GX2SetVertexSampler");
+    const std::uint32_t geometry_import = core.hle.bind_import(
+        "gx2", "GX2SetGeometrySampler");
+    assert(vertex_import != 0U && geometry_import != 0U);
+    core.state.gpr[4] = 1U;
+    core.state.cia = vertex_import;
+    assert(core.run(1U).reason == StopReason::instruction_limit);
+    assert(core.gx2.vertex_samplers[1U].has_value());
+    assert(core.gx2.pending_commands[6U].register_address == 0x0003C0E4U);
+
+    core.state.gpr[4] = 2U;
+    core.state.cia = geometry_import;
+    assert(core.run(1U).reason == StopReason::instruction_limit);
+    assert(core.gx2.geometry_samplers[2U].has_value());
+    assert(core.gx2.pending_commands[9U].register_address == 0x0003C1C8U);
+    assert(core.gx2.pending_commands.size() == 12U);
+}
+
 void gx2_set_tv_buffer_hle_tests()
 {
     constexpr std::uint32_t buffer_address = 0x0A001000U;
@@ -29190,6 +29261,7 @@ int main(int argc, char* argv[])
     gx2_init_texture_regs_hle_tests();
     gx2_set_pixel_texture_hle_tests();
     gx2_set_vertex_and_geometry_texture_hle_tests();
+    gx2_set_pixel_sampler_hle_tests();
     gx2_calc_tv_size_hle_tests();
     gx2_set_tv_buffer_hle_tests();
     gx2_set_tv_scale_hle_tests();
