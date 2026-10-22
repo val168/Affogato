@@ -104,6 +104,7 @@ struct InstructionHistoryEntry
     bool paired_fp_multiply_add{};
     bool paired_fp_multiply_subtract{};
     bool paired_fp_multiply_add_scalar0{};
+    bool paired_fp_multiply_add_scalar1{};
     bool paired_fp_sum0{};
     bool paired_fp_quantized_store{};
     std::uint8_t paired_fp_store_gqr{};
