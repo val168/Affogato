@@ -72,6 +72,7 @@ constexpr std::uint32_t gx2_fetch_shader_instruction_size = 0x10U;
 constexpr std::uint32_t gx2_fetch_shader_struct_size = 0x20U;
 constexpr std::uint32_t gx2_attrib_stream_size = 0x20U;
 constexpr std::uint32_t gx2_max_fetch_attributes = 64U;
+constexpr std::uint32_t gx2_sampler_size = 0x0CU;
 
 struct Gx2AttribStream
 {
@@ -862,6 +863,49 @@ void register_gx2_hle(HleDispatcher& dispatcher)
                     fetch_shader_address + static_cast<std::uint32_t>(index * 4U),
                     descriptor[index]);
             }
+        });
+
+    dispatcher.register_function(
+        "gx2",
+        "GX2InitSampler",
+        [](EspressoCore& core) {
+            constexpr const char* api_name = "gx2::GX2InitSampler";
+            const std::uint32_t sampler_address = core.state.gpr[3];
+            const std::uint32_t clamp_mode = core.state.gpr[4];
+            const std::uint32_t filter_mode = core.state.gpr[5];
+
+            if (sampler_address == 0U || (sampler_address & 3U) != 0U)
+            {
+                throw HleExecutionError(
+                    std::string(api_name) + ": sampler pointer is null or misaligned");
+            }
+            if (clamp_mode > 7U)
+            {
+                throw HleExecutionError(
+                    std::string(api_name) + ": invalid clamp mode " +
+                    std::to_string(clamp_mode));
+            }
+            if (filter_mode > 2U)
+            {
+                throw HleExecutionError(
+                    std::string(api_name) + ": invalid XY filter mode " +
+                    std::to_string(filter_mode));
+            }
+
+            core.memory.validate_write_range(sampler_address, gx2_sampler_size);
+
+            // GX2Sampler stores the three Latte SQ_TEX_SAMPLER words in guest
+            // big-endian order. GX2InitSampler applies the same clamp/filter
+            // setting on all axes, uses the maximum default LOD, and marks
+            // the final word as a valid texture-sampler descriptor.
+            const std::uint32_t clamp_fields =
+                clamp_mode | (clamp_mode << 3U) | (clamp_mode << 6U);
+            const std::uint32_t filter_fields =
+                (filter_mode << 9U) | (filter_mode << 12U);
+            core.memory.write32_be(sampler_address + 0x00U,
+                                   clamp_fields | filter_fields);
+            core.memory.write32_be(sampler_address + 0x04U, 0x000FFC00U);
+            core.memory.write32_be(sampler_address + 0x08U, 0x80000000U);
         });
 
     dispatcher.register_function(

@@ -16391,6 +16391,76 @@ void gx2_init_fetch_shader_ex_hle_tests()
     }
 }
 
+void gx2_init_sampler_hle_tests()
+{
+    constexpr std::uint32_t return_address = 0x02750A10U;
+    constexpr std::uint32_t sampler_address = 0x100U;
+
+    EspressoCore core(0x1000U);
+    register_gx2_hle(core.hle);
+    const std::uint32_t import = core.hle.bind_import(
+        "gx2", "GX2InitSampler");
+    assert(import != 0U);
+
+    const auto invoke = [&](std::uint32_t clamp_mode, std::uint32_t filter_mode) {
+        core.state.gpr[3] = sampler_address;
+        core.state.gpr[4] = clamp_mode;
+        core.state.gpr[5] = filter_mode;
+        core.state.cia = import;
+        core.state.lr = return_address;
+        return core.run(1U);
+    };
+
+    core.memory.write32_be(sampler_address + 0x00U, 0xAAAAAAAAU);
+    core.memory.write32_be(sampler_address + 0x04U, 0xBBBBBBBBU);
+    core.memory.write32_be(sampler_address + 0x08U, 0xCCCCCCCCU);
+    core.state.gpr.fill(0xA4000000U);
+    core.state.gpr[3] = sampler_address;
+    core.state.gpr[4] = 2U; // GX2_TEX_CLAMP_MODE_CLAMP
+    core.state.gpr[5] = 1U; // GX2_TEX_XY_FILTER_MODE_LINEAR
+    core.state.cr = 0x456789ABU;
+    core.state.xer = 0xA5A55A5AU;
+    core.state.ctr = 0x87654321U;
+    core.state.fpscr = 0x5AA5A55AU;
+    const auto gprs_before = core.state.gpr;
+    const auto fprs_before = core.state.fpr;
+    const auto ps1_before = core.state.fpr_ps1;
+    const std::uint32_t cr_before = core.state.cr;
+    const std::uint32_t xer_before = core.state.xer;
+    const std::uint32_t ctr_before = core.state.ctr;
+    const std::uint32_t fpscr_before = core.state.fpscr;
+
+    assert(invoke(2U, 1U).reason == StopReason::instruction_limit);
+    assert(core.state.gpr == gprs_before);
+    assert(core.state.fpr == fprs_before);
+    assert(core.state.fpr_ps1 == ps1_before);
+    assert(core.state.cr == cr_before);
+    assert(core.state.xer == xer_before);
+    assert(core.state.ctr == ctr_before);
+    assert(core.state.fpscr == fpscr_before);
+    assert(core.state.cia == return_address);
+
+    // All three address axes use CLAMP and both XY filters use LINEAR.
+    assert(core.memory.read32_be(sampler_address + 0x00U) == 0x00001292U);
+    // MAX_LOD is the maximum representable u4.6 value (15 + 63/64).
+    assert(core.memory.read32_be(sampler_address + 0x04U) == 0x000FFC00U);
+    // SQ_TEX_SAMPLER_WORD2.TYPE marks a valid sampler descriptor.
+    assert(core.memory.read32_be(sampler_address + 0x08U) == 0x80000000U);
+
+    const std::array<std::uint32_t, 3U> sampler_before{
+        core.memory.read32_be(sampler_address),
+        core.memory.read32_be(sampler_address + 4U),
+        core.memory.read32_be(sampler_address + 8U)};
+    assert(invoke(8U, 1U).reason == StopReason::hle_error);
+    assert(invoke(2U, 3U).reason == StopReason::hle_error);
+    for (std::size_t index = 0U; index < sampler_before.size(); ++index)
+    {
+        assert(core.memory.read32_be(
+                   sampler_address + static_cast<std::uint32_t>(index * 4U)) ==
+               sampler_before[index]);
+    }
+}
+
 void gx2_init_hle_tests()
 {
     constexpr std::uint32_t return_address = 0x0274BD9CU;
@@ -26025,6 +26095,7 @@ int main(int argc, char* argv[])
     gx2_invalidate_hle_tests();
     gx2_calc_fetch_shader_size_ex_hle_tests();
     gx2_init_fetch_shader_ex_hle_tests();
+    gx2_init_sampler_hle_tests();
     gx2_init_hle_tests();
     gx2_clear_color_hle_tests();
     gx2_set_color_buffer_hle_tests();
