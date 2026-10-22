@@ -21321,6 +21321,95 @@ void gx2_init_texture_regs_hle_tests()
     assert(core.memory.read32_be(texture_address + 0x94U) == 0U);
 }
 
+void gx2_set_pixel_texture_hle_tests()
+{
+    constexpr std::uint32_t texture_address = 0x5000U;
+    constexpr std::uint32_t return_address = 0x02751AC8U;
+    constexpr std::uint32_t unit = 2U;
+    constexpr std::uint32_t register_base = 0x00038000U;
+
+    EspressoCore core(0x10000U);
+    register_gx2_hle(core.hle);
+    const std::uint32_t import = core.hle.bind_import(
+        "gx2", "GX2SetPixelTexture");
+    assert(import != 0U);
+    core.gx2.initialized = true;
+
+    std::array<std::uint32_t, 0x9CU / 4U> texture{};
+    texture[0x24U / 4U] = 0x12345600U;
+    texture[0x28U / 4U] = 0x23456700U;
+    texture[0x30U / 4U] = 4U; // macro-tiled
+    texture[0x34U / 4U] = 0x00020100U; // swizzle applies to image and mips
+    texture[0x88U / 4U] = 0x11223344U;
+    texture[0x8CU / 4U] = 0x55667788U;
+    texture[0x90U / 4U] = 0x99AABBCCU;
+    texture[0x94U / 4U] = 0xDDEEFF00U;
+    texture[0x98U / 4U] = 0x10203040U;
+    for (std::size_t index = 0U; index < texture.size(); ++index)
+    {
+        core.memory.write32_be(
+            texture_address + static_cast<std::uint32_t>(index * 4U),
+            texture[index]);
+    }
+
+    core.state.gpr.fill(0xA5000000U);
+    core.state.gpr[3] = texture_address;
+    core.state.gpr[4] = unit;
+    core.state.lr = return_address;
+    const auto gprs_before = core.state.gpr;
+    const auto invoke = [&]() {
+        core.state.cia = import;
+        return core.run(1U);
+    };
+
+    const auto result = invoke();
+    assert(result.reason == StopReason::instruction_limit);
+    assert(result.steps == 1U && core.state.cia == return_address);
+    assert(core.state.gpr == gprs_before);
+
+    const Gx2TextureBinding expected_binding{
+        texture_address,
+        {0x11223344U, 0x55667788U, 0x00123457U, 0x00234566U,
+         0x99AABBCCU, 0xDDEEFF00U, 0x10203040U}};
+    assert(core.gx2.pixel_textures[unit] == expected_binding);
+    assert(core.gx2.pending_commands.size() == 7U);
+    const std::uint32_t first_register = register_base + unit * 7U * 4U;
+    for (std::size_t index = 0U; index < expected_binding.registers.size(); ++index)
+    {
+        const Gx2Command& command = core.gx2.pending_commands[index];
+        assert(command.type == Gx2CommandType::set_shader_resource);
+        assert(command.register_address ==
+               first_register + static_cast<std::uint32_t>(index * 4U));
+        assert(command.value == expected_binding.registers[index]);
+    }
+
+    // A missing mip allocation reuses the image address, as GX2 specifies.
+    core.memory.write32_be(texture_address + 0x28U, 0U);
+    core.state.gpr[4] = 3U;
+    core.state.cia = import;
+    const auto no_mips = core.run(1U);
+    assert(no_mips.reason == StopReason::instruction_limit);
+    assert(core.gx2.pixel_textures[3U]->registers[2U] == 0x00123457U);
+    assert(core.gx2.pixel_textures[3U]->registers[3U] == 0x00123457U);
+
+    const auto commands_before_invalid = core.gx2.pending_commands.size();
+    core.state.gpr[4] = 16U;
+    core.state.cia = import;
+    const auto invalid_unit = core.run(1U);
+    assert(invalid_unit.reason == StopReason::hle_error);
+    assert(core.gx2.pending_commands.size() == commands_before_invalid);
+    assert(!core.gx2.pixel_textures[15U].has_value());
+
+    EspressoCore uninitialized(0x10000U);
+    register_gx2_hle(uninitialized.hle);
+    const std::uint32_t uninitialized_import = uninitialized.hle.bind_import(
+        "gx2", "GX2SetPixelTexture");
+    uninitialized.state.gpr[3] = texture_address;
+    uninitialized.state.gpr[4] = unit;
+    uninitialized.state.cia = uninitialized_import;
+    assert(uninitialized.run(1U).reason == StopReason::hle_error);
+}
+
 void gx2_set_tv_buffer_hle_tests()
 {
     constexpr std::uint32_t buffer_address = 0x0A001000U;
@@ -29058,6 +29147,7 @@ int main(int argc, char* argv[])
     gx2_get_context_state_display_list_hle_tests();
     gx2_calc_surface_size_and_alignment_hle_tests();
     gx2_init_texture_regs_hle_tests();
+    gx2_set_pixel_texture_hle_tests();
     gx2_calc_tv_size_hle_tests();
     gx2_set_tv_buffer_hle_tests();
     gx2_set_tv_scale_hle_tests();

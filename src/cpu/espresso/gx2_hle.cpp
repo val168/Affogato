@@ -88,6 +88,9 @@ constexpr std::uint32_t gx2_tile_mode_2d_thin1 = 4U;
 constexpr std::uint32_t gx2_tile_mode_2d_thick = 7U;
 constexpr std::uint32_t gx2_tile_mode_linear_special = 16U;
 constexpr std::uint32_t gx2_texture_regs_offset = 0x88U;
+constexpr std::uint32_t gx2_pixel_texture_register_base = 0x00038000U;
+constexpr std::uint32_t gx2_texture_register_count = 7U;
+constexpr std::uint32_t gx2_texture_unit_count = 16U;
 constexpr std::uint32_t latte_pipe_interleave_bytes = 256U;
 constexpr std::uint32_t latte_pipe_count = 2U;
 constexpr std::uint32_t latte_bank_count = 4U;
@@ -1023,6 +1026,89 @@ void initialize_gx2_texture_registers(
                 static_cast<std::uint32_t>(index * sizeof(std::uint32_t)),
             registers[index]);
     }
+}
+
+void set_gx2_pixel_texture(
+    EspressoCore& core,
+    std::uint32_t texture_address,
+    std::uint32_t unit)
+{
+    constexpr const char* api_name = "gx2::GX2SetPixelTexture";
+    if (!core.gx2.initialized)
+    {
+        throw HleExecutionError(
+            std::string(api_name) + ": GX2 has not been initialized");
+    }
+    if (texture_address == 0U || (texture_address & 3U) != 0U ||
+        static_cast<std::uint64_t>(texture_address) + gx2_texture_size >
+            guest_address_space_end)
+    {
+        throw HleExecutionError(
+            std::string(api_name) + ": texture pointer is null, misaligned, or wraps");
+    }
+    if (unit >= gx2_texture_unit_count)
+    {
+        throw HleExecutionError(
+            std::string(api_name) + ": pixel texture unit is out of range");
+    }
+
+    // Snapshot all guest-owned descriptor fields before mutating runtime state.
+    // GX2Texture::regs stores resource words 0, 1, 4, 5, and 6; words 2 and 3
+    // are derived from the image and mipmap addresses when the texture is bound.
+    const std::uint32_t image_address = core.memory.read32_be(texture_address + 0x24U);
+    std::uint32_t mipmap_address = core.memory.read32_be(texture_address + 0x28U);
+    const std::uint32_t tile_mode = core.memory.read32_be(texture_address + 0x30U);
+    const std::uint32_t swizzle = core.memory.read32_be(texture_address + 0x34U);
+    const std::uint32_t word0 = core.memory.read32_be(texture_address + 0x88U);
+    const std::uint32_t word1 = core.memory.read32_be(texture_address + 0x8CU);
+    const std::uint32_t word4 = core.memory.read32_be(texture_address + 0x90U);
+    const std::uint32_t word5 = core.memory.read32_be(texture_address + 0x94U);
+    const std::uint32_t word6 = core.memory.read32_be(texture_address + 0x98U);
+
+    if ((swizzle & 0xFFU) != 0U)
+    {
+        throw HleExecutionError(
+            std::string(api_name) + ": unsupported low-byte swizzle bits");
+    }
+    if (mipmap_address == 0U)
+        mipmap_address = image_address;
+
+    // Latte resource words store 256-byte address units. Cafe guest addresses
+    // in Affogato's RAM map are the GPU-visible address values, so retain the
+    // address bits above the 256-byte alignment boundary as the hardware does.
+    const std::uint32_t swizzle_stop_level = (swizzle >> 16U) & 0xFFU;
+    const bool macro_tiled = tile_mode >= 4U && tile_mode <= 15U;
+    const std::uint32_t resource_image_address =
+        macro_tiled && swizzle_stop_level > 0U
+            ? image_address ^ (swizzle & 0xFFFFU)
+            : image_address;
+    if (macro_tiled && swizzle_stop_level > 1U)
+        mipmap_address ^= swizzle & 0xFFFFU;
+
+    Gx2TextureBinding binding{};
+    binding.texture_address = texture_address;
+    binding.registers = {
+        word0,
+        word1,
+        resource_image_address >> 8U,
+        mipmap_address >> 8U,
+        word4,
+        word5,
+        word6};
+
+    const std::uint32_t first_register =
+        gx2_pixel_texture_register_base +
+        unit * gx2_texture_register_count * sizeof(std::uint32_t);
+    auto& commands = core.gx2.pending_commands;
+    commands.reserve(commands.size() + binding.registers.size());
+    for (std::size_t index = 0U; index < binding.registers.size(); ++index)
+    {
+        commands.push_back({
+            Gx2CommandType::set_shader_resource,
+            first_register + static_cast<std::uint32_t>(index * sizeof(std::uint32_t)),
+            binding.registers[index]});
+    }
+    core.gx2.pixel_textures[unit] = binding;
 }
 
 std::uint32_t pack_stencil_ref_mask(
@@ -2330,6 +2416,13 @@ void register_gx2_hle(HleDispatcher& dispatcher)
         "GX2InitTextureRegs",
         [](EspressoCore& core) {
             initialize_gx2_texture_registers(core, core.state.gpr[3]);
+        });
+
+    dispatcher.register_function(
+        "gx2",
+        "GX2SetPixelTexture",
+        [](EspressoCore& core) {
+            set_gx2_pixel_texture(core, core.state.gpr[3], core.state.gpr[4]);
         });
 
     dispatcher.register_function(

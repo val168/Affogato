@@ -13,6 +13,7 @@ class HleDispatcher;
 enum class Gx2CommandType
 {
     set_context_register,
+    set_shader_resource,
 };
 
 struct Gx2Command
@@ -30,6 +31,14 @@ struct Gx2ClearColorRequest
     std::array<float, 4U> rgba{};
 
     bool operator==(const Gx2ClearColorRequest&) const = default;
+};
+
+struct Gx2TextureBinding
+{
+    std::uint32_t texture_address{};
+    std::array<std::uint32_t, 7U> registers{};
+
+    bool operator==(const Gx2TextureBinding&) const = default;
 };
 
 struct Gx2ColorBufferState
@@ -121,6 +130,7 @@ struct Gx2RuntimeState
     std::array<std::uint32_t, 4U> cb_blend_constant{};
     std::array<std::optional<Gx2ColorBufferState>, 8U> color_buffer_descriptors{};
     std::array<std::uint32_t, 8U> bound_color_buffers{};
+    std::array<std::optional<Gx2TextureBinding>, 16U> pixel_textures{};
     std::uint64_t clear_color_sequence{};
     std::optional<Gx2ClearColorRequest> latest_clear_color;
     bool sx_alpha_test_control_valid{};
