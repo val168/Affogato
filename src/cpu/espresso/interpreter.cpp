@@ -758,6 +758,7 @@ void set_xer_carry(CpuState& state, bool carry) noexcept
     case Opcode::paired_single_sum1: return "ps_sum1";
     case Opcode::paired_single_divide: return "ps_div";
     case Opcode::paired_single_compare_unordered0: return "ps_cmpu0";
+    case Opcode::paired_single_compare_unordered1: return "ps_cmpu1";
     case Opcode::paired_single_move_register: return "ps_mr";
     case Opcode::paired_single_negate: return "ps_neg";
     case Opcode::paired_single_absolute_value: return "ps_abs";
@@ -1167,14 +1168,20 @@ void add_history_source(
     }
     if (opcode == Opcode::floating_compare_unordered ||
         opcode == Opcode::floating_compare_ordered ||
-        opcode == Opcode::paired_single_compare_unordered0)
+        opcode == Opcode::paired_single_compare_unordered0 ||
+        opcode == Opcode::paired_single_compare_unordered1)
     {
         entry.has_fp_compare = true;
         entry.fp_compare_cr_field = instruction.cr_field;
         entry.fp_compare_a_register = instruction.fp_compare_a;
         entry.fp_compare_b_register = instruction.fp_compare_b;
-        entry.fp_compare_a_raw = state.fpr[instruction.fp_compare_a];
-        entry.fp_compare_b_raw = state.fpr[instruction.fp_compare_b];
+        entry.fp_compare_a_raw = instruction.fp_compare_uses_ps1
+            ? state.fpr_ps1[instruction.fp_compare_a]
+            : state.fpr[instruction.fp_compare_a];
+        entry.fp_compare_b_raw = instruction.fp_compare_uses_ps1
+            ? state.fpr_ps1[instruction.fp_compare_b]
+            : state.fpr[instruction.fp_compare_b];
+        entry.fp_compare_uses_ps1 = instruction.fp_compare_uses_ps1;
         return entry;
     }
     if (opcode == Opcode::floating_divide_single || opcode == Opcode::floating_divide_double ||
@@ -3415,11 +3422,16 @@ StepResult EspressoCore::step()
         break;
 
     case Opcode::paired_single_compare_unordered0:
+    case Opcode::paired_single_compare_unordered1:
     case Opcode::floating_compare_unordered:
     case Opcode::floating_compare_ordered:
     {
-        const std::uint64_t a_raw = state.fpr[instruction.fp_compare_a];
-        const std::uint64_t b_raw = state.fpr[instruction.fp_compare_b];
+        const std::uint64_t a_raw = instruction.fp_compare_uses_ps1
+            ? state.fpr_ps1[instruction.fp_compare_a]
+            : state.fpr[instruction.fp_compare_a];
+        const std::uint64_t b_raw = instruction.fp_compare_uses_ps1
+            ? state.fpr_ps1[instruction.fp_compare_b]
+            : state.fpr[instruction.fp_compare_b];
         const bool a_nan = is_binary64_nan(a_raw);
         const bool b_nan = is_binary64_nan(b_raw);
         std::uint8_t result = fp_unordered;

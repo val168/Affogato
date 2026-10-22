@@ -146,6 +146,7 @@ struct InstructionHistoryEntry
     std::uint8_t fp_compare_b_register{};
     std::uint64_t fp_compare_a_raw{};
     std::uint64_t fp_compare_b_raw{};
+    bool fp_compare_uses_ps1{};
     std::uint8_t fp_compare_result{};
     bool has_fp_arithmetic{};
     bool has_fp_arithmetic_result{};
