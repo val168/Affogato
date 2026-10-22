@@ -3115,6 +3115,14 @@ void register_coreinit_hle(HleDispatcher& dispatcher)
         });
     dispatcher.register_function(
         "coreinit",
+        "DCFlushRangeNoSync",
+        [](EspressoCore&) {
+            // GuestMemory is immediately coherent and Affogato has neither an
+            // Espresso D-cache nor a cached GPU buffer view to write back or
+            // invalidate. The range therefore needs no work in this model.
+        });
+    dispatcher.register_function(
+        "coreinit",
         "OSBlockSet",
         [](EspressoCore& core) {
             const std::uint32_t destination = core.state.gpr[3];

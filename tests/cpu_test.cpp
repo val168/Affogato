@@ -11271,6 +11271,61 @@ void memcpy_hle_tests()
 
 void os_block_set_hle_tests();
 
+void dc_flush_range_no_sync_hle_tests()
+{
+    constexpr std::uint32_t address = 0x180U;
+    constexpr std::uint32_t size = 0x80U;
+    constexpr std::uint32_t return_address = 0x0274BE78U;
+
+    EspressoCore core(0x1000U);
+    register_coreinit_hle(core.hle);
+    const std::uint32_t import = core.hle.bind_import(
+        "coreinit", "DCFlushRangeNoSync");
+    const std::uint32_t wrong_library = core.hle.bind_import(
+        "gx2", "DCFlushRangeNoSync");
+    assert(import != 0U && wrong_library != import);
+
+    for (std::uint32_t offset = 0U; offset < size; ++offset)
+    {
+        core.memory.write8(address + offset,
+                           static_cast<std::uint8_t>(offset ^ 0xA5U));
+    }
+    std::vector<std::uint8_t> bytes_before(size);
+    core.memory.read_bytes(address, bytes_before);
+    core.state.gpr.fill(0xC8000000U);
+    core.state.gpr[3] = address;
+    core.state.gpr[4] = size;
+    core.state.cr = 0x12345678U;
+    core.state.xer = 0xA5A55A5AU;
+    core.state.ctr = 0x87654321U;
+    core.state.fpscr = 0x5A5AA55AU;
+    const auto gprs_before = core.state.gpr;
+    const auto fprs_before = core.state.fpr;
+    const auto ps1_before = core.state.fpr_ps1;
+    const std::uint32_t cr_before = core.state.cr;
+    const std::uint32_t xer_before = core.state.xer;
+    const std::uint32_t ctr_before = core.state.ctr;
+    const std::uint32_t fpscr_before = core.state.fpscr;
+
+    core.state.cia = import;
+    core.state.lr = return_address;
+    const RunResult result = core.run(1U);
+    assert(result.reason == StopReason::instruction_limit && result.steps == 1U);
+    assert(core.state.cia == return_address && core.state.lr == return_address);
+    assert(core.state.gpr == gprs_before);
+    assert(core.state.cr == cr_before && core.state.xer == xer_before);
+    assert(core.state.ctr == ctr_before && core.state.fpscr == fpscr_before);
+    assert(core.state.fpr == fprs_before && core.state.fpr_ps1 == ps1_before);
+    std::vector<std::uint8_t> bytes_after(size);
+    core.memory.read_bytes(address, bytes_after);
+    assert(bytes_after == bytes_before);
+
+    core.state.cia = wrong_library;
+    const RunResult wrong_result = core.run(1U);
+    assert(wrong_result.reason == StopReason::unimplemented_hle_call);
+    assert(wrong_result.hle_call == "gx2::DCFlushRangeNoSync");
+}
+
 void os_block_move_hle_tests()
 {
     EspressoCore core(0x20U);
@@ -26341,6 +26396,7 @@ int main(int argc, char* argv[])
     memset_hle_tests();
     memcpy_hle_tests();
     os_block_move_hle_tests();
+    dc_flush_range_no_sync_hle_tests();
     os_block_set_hle_tests();
     os_get_system_info_hle_tests();
     nn_act_initialize_hle_tests();
