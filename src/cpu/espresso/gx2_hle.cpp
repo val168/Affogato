@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <bit>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -1724,6 +1725,72 @@ void register_gx2_hle(HleDispatcher& dispatcher)
                 (filter_z << z_filter_shift) |
                 (filter_mip << mip_filter_shift);
             core.memory.write32_be(sampler_address, new_word0);
+        });
+
+    dispatcher.register_function(
+        "gx2",
+        "GX2InitSamplerLOD",
+        [](EspressoCore& core) {
+            constexpr const char* api_name = "gx2::GX2InitSamplerLOD";
+            constexpr std::uint32_t min_lod_mask = 0x3FFU;
+            constexpr std::uint32_t max_lod_shift = 10U;
+            constexpr std::uint32_t lod_bias_shift = 20U;
+            constexpr std::uint32_t lod_bias_mask = 0xFFFU;
+            constexpr double lod_fractional_scale = 64.0;
+
+            const std::uint32_t sampler_address = core.state.gpr[3];
+            const double min_lod_argument = std::bit_cast<double>(core.state.fpr[1]);
+            const double max_lod_argument = std::bit_cast<double>(core.state.fpr[2]);
+            const double lod_bias_argument = std::bit_cast<double>(core.state.fpr[3]);
+
+            if (sampler_address == 0U || (sampler_address & 3U) != 0U)
+            {
+                throw HleExecutionError(
+                    std::string(api_name) + ": sampler pointer is null or misaligned");
+            }
+            if (std::isnan(min_lod_argument) || std::isnan(max_lod_argument) ||
+                std::isnan(lod_bias_argument))
+            {
+                throw HleExecutionError(
+                    std::string(api_name) + ": LOD arguments must not be NaN");
+            }
+
+            // Latte stores min/max LOD as unsigned u4.6 and bias as signed
+            // s6.6. Saturate before conversion so infinities and out-of-range
+            // arguments do not invoke undefined floating-to-integer casts.
+            const double min_lod = std::clamp(min_lod_argument, 0.0, 16.0);
+            const double max_lod = std::clamp(max_lod_argument, 0.0, 16.0);
+            const double lod_bias = std::clamp(lod_bias_argument, -32.0, 32.0);
+            const std::uint32_t min_lod_fixed = static_cast<std::uint32_t>(
+                std::clamp(
+                    std::floor(min_lod * lod_fractional_scale),
+                    0.0,
+                    static_cast<double>(min_lod_mask)));
+            const std::uint32_t max_lod_fixed = static_cast<std::uint32_t>(
+                std::clamp(
+                    std::floor(max_lod * lod_fractional_scale),
+                    0.0,
+                    static_cast<double>(min_lod_mask)));
+            const std::int32_t lod_bias_fixed = static_cast<std::int32_t>(
+                std::clamp(
+                    std::floor(lod_bias * lod_fractional_scale),
+                    -2048.0,
+                    2047.0));
+            const std::uint32_t encoded_lod_bias =
+                static_cast<std::uint32_t>(lod_bias_fixed) & lod_bias_mask;
+
+            core.memory.validate_write_range(sampler_address, gx2_sampler_size);
+            const std::uint32_t old_word1 =
+                core.memory.read32_be(sampler_address + 0x04U);
+            constexpr std::uint32_t lod_fields_mask =
+                min_lod_mask | (min_lod_mask << max_lod_shift) |
+                (lod_bias_mask << lod_bias_shift);
+            const std::uint32_t new_word1 =
+                (old_word1 & ~lod_fields_mask) |
+                min_lod_fixed |
+                (max_lod_fixed << max_lod_shift) |
+                (encoded_lod_bias << lod_bias_shift);
+            core.memory.write32_be(sampler_address + 0x04U, new_word1);
         });
 
     dispatcher.register_function(
