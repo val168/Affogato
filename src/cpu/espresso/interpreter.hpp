@@ -100,6 +100,7 @@ struct InstructionHistoryEntry
     bool paired_fp_unary{};
     bool paired_fp_scalar_multiply{};
     bool paired_fp_vector_multiply{};
+    bool paired_fp_multiply_add{};
     bool paired_fp_quantized_store{};
     std::uint8_t paired_fp_store_gqr{};
     std::uint8_t paired_fp_store_type{};
@@ -109,10 +110,13 @@ struct InstructionHistoryEntry
     std::uint8_t paired_fp_destination_register{};
     std::uint8_t paired_fp_source_a_register{};
     std::uint8_t paired_fp_source_b_register{};
+    std::uint8_t paired_fp_source_c_register{};
     std::uint64_t paired_fp_source_a_ps0{};
     std::uint64_t paired_fp_source_a_ps1{};
     std::uint64_t paired_fp_source_b_ps0{};
     std::uint64_t paired_fp_source_b_ps1{};
+    std::uint64_t paired_fp_source_c_ps0{};
+    std::uint64_t paired_fp_source_c_ps1{};
     std::uint64_t paired_fp_destination_ps0{};
     std::uint64_t paired_fp_destination_ps1{};
     bool has_paired_fp_select{};

@@ -743,6 +743,7 @@ void set_xer_carry(CpuState& state, bool carry) noexcept
     case Opcode::paired_single_merge10: return "ps_merge10";
     case Opcode::paired_single_merge11: return "ps_merge11";
     case Opcode::paired_single_multiply: return "ps_mul";
+    case Opcode::paired_single_multiply_add: return "ps_madd";
     case Opcode::paired_single_multiply_scalar0: return "ps_muls0";
     case Opcode::paired_single_move_register: return "ps_mr";
     case Opcode::paired_single_negate: return "ps_neg";
@@ -916,6 +917,22 @@ void add_history_source(
         entry.paired_fp_source_a_ps1 = state.fpr_ps1[instruction.fp_source_a];
         entry.paired_fp_source_b_ps0 = state.fpr[instruction.fp_source_c];
         entry.paired_fp_source_b_ps1 = state.fpr_ps1[instruction.fp_source_c];
+        return entry;
+    }
+    if (opcode == Opcode::paired_single_multiply_add)
+    {
+        entry.has_paired_fp_state = true;
+        entry.paired_fp_multiply_add = true;
+        entry.paired_fp_destination_register = instruction.fp_register;
+        entry.paired_fp_source_a_register = instruction.fp_source_a;
+        entry.paired_fp_source_b_register = instruction.fp_source_b;
+        entry.paired_fp_source_c_register = instruction.fp_source_c;
+        entry.paired_fp_source_a_ps0 = state.fpr[instruction.fp_source_a];
+        entry.paired_fp_source_a_ps1 = state.fpr_ps1[instruction.fp_source_a];
+        entry.paired_fp_source_b_ps0 = state.fpr[instruction.fp_source_b];
+        entry.paired_fp_source_b_ps1 = state.fpr_ps1[instruction.fp_source_b];
+        entry.paired_fp_source_c_ps0 = state.fpr[instruction.fp_source_c];
+        entry.paired_fp_source_c_ps1 = state.fpr_ps1[instruction.fp_source_c];
         return entry;
     }
     if (opcode == Opcode::paired_single_select)
@@ -2043,6 +2060,18 @@ std::string format_instruction_history(const RunResult& result)
                 {
                     text << " (not written)";
                 }
+            }
+            else if (entry.paired_fp_multiply_add)
+            {
+                print_paired_source('A', entry.paired_fp_source_a_register,
+                                    entry.paired_fp_source_a_ps0,
+                                    entry.paired_fp_source_a_ps1);
+                print_paired_source('C', entry.paired_fp_source_c_register,
+                                    entry.paired_fp_source_c_ps0,
+                                    entry.paired_fp_source_c_ps1);
+                print_paired_source('B', entry.paired_fp_source_b_register,
+                                    entry.paired_fp_source_b_ps0,
+                                    entry.paired_fp_source_b_ps1);
             }
             else if (entry.paired_fp_vector_multiply)
             {
@@ -5830,6 +5859,36 @@ StepResult EspressoCore::step()
         const bool flush_denormals = !scalar;
         const float result_ps0 = multiply_lane(a_ps0, c_ps0, flush_denormals);
         const float result_ps1 = multiply_lane(a_ps1, c_ps1, flush_denormals);
+        state.fpr[instruction.fp_register] =
+            std::bit_cast<std::uint64_t>(static_cast<double>(result_ps0));
+        state.fpr_ps1[instruction.fp_register] =
+            std::bit_cast<std::uint64_t>(static_cast<double>(result_ps1));
+        break;
+    }
+
+    case Opcode::paired_single_multiply_add:
+    {
+        const double a_ps0 = std::bit_cast<double>(state.fpr[instruction.fp_source_a]);
+        const double a_ps1 = std::bit_cast<double>(state.fpr_ps1[instruction.fp_source_a]);
+        const double b_ps0 = std::bit_cast<double>(state.fpr[instruction.fp_source_b]);
+        const double b_ps1 = std::bit_cast<double>(state.fpr_ps1[instruction.fp_source_b]);
+        const double c_ps0 = std::bit_cast<double>(round_multiply_operand_25bit(
+            state.fpr[instruction.fp_source_c]));
+        const double c_ps1 = std::bit_cast<double>(round_multiply_operand_25bit(
+            state.fpr_ps1[instruction.fp_source_c]));
+        const auto multiply_add_lane = [](double a, double c, double b) {
+            const float rounded_product = static_cast<float>(a * c);
+            float result = static_cast<float>(static_cast<double>(rounded_product) + b);
+            std::uint32_t bits = std::bit_cast<std::uint32_t>(result);
+            if ((bits & 0x7F800000U) == 0U && (bits & 0x007FFFFFU) != 0U)
+            {
+                bits &= 0x80000000U;
+                result = std::bit_cast<float>(bits);
+            }
+            return result;
+        };
+        const float result_ps0 = multiply_add_lane(a_ps0, c_ps0, b_ps0);
+        const float result_ps1 = multiply_add_lane(a_ps1, c_ps1, b_ps1);
         state.fpr[instruction.fp_register] =
             std::bit_cast<std::uint64_t>(static_cast<double>(result_ps0));
         state.fpr_ps1[instruction.fp_register] =

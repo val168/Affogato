@@ -183,6 +183,7 @@ enum class Opcode
     paired_single_merge10,
     paired_single_merge11,
     paired_single_multiply,
+    paired_single_multiply_add,
     paired_single_multiply_scalar0,
     paired_single_move_register,
     paired_single_negate,
