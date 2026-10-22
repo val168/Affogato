@@ -510,6 +510,7 @@ void set_xer_carry(CpuState& state, bool carry) noexcept
             instruction.opcode == Opcode::store_byte_update ||
             instruction.opcode == Opcode::load_halfword_zero ||
             instruction.opcode == Opcode::load_halfword_zero_update ||
+            instruction.opcode == Opcode::paired_single_quantized_load ||
             instruction.opcode == Opcode::load_halfword_algebraic ||
             instruction.opcode == Opcode::store_halfword ||
             instruction.opcode == Opcode::store_halfword_update ||
@@ -715,6 +716,8 @@ void set_xer_carry(CpuState& state, bool carry) noexcept
     case Opcode::move_to_count_register: return "mtctr";
     case Opcode::move_from_xer: return "mfxer";
     case Opcode::move_to_xer: return "mtxer";
+    case Opcode::move_from_gqr: return "mfgqr";
+    case Opcode::move_to_gqr: return "mtgqr";
     case Opcode::move_from_time_base_lower: return "mftb";
     case Opcode::move_from_time_base_upper: return "mftbu";
     case Opcode::conditional_branch_to_count_register: return "bcctr";
@@ -743,6 +746,7 @@ void set_xer_carry(CpuState& state, bool carry) noexcept
     case Opcode::paired_single_absolute_value: return "ps_abs";
     case Opcode::paired_single_negative_absolute_value: return "ps_nabs";
     case Opcode::paired_single_select: return "ps_sel";
+    case Opcode::paired_single_quantized_load: return "psq_l";
     case Opcode::condition_bit_and: return "crand";
     case Opcode::condition_bit_and_complement: return "crandc";
     case Opcode::condition_bit_or: return "cror";
@@ -954,6 +958,19 @@ void add_history_source(
     if (opcode == Opcode::move_to_condition_register_fields)
     {
         add_history_source(entry, state, instruction.destination);
+        return entry;
+    }
+    if (opcode == Opcode::paired_single_quantized_load)
+    {
+        entry.has_effective_address = true;
+        entry.effective_address = effective_address(
+            state, instruction.base, instruction.immediate);
+        if (instruction.base != 0U)
+        {
+            add_history_source(entry, state, instruction.base);
+        }
+        entry.has_paired_fp_state = true;
+        entry.paired_fp_destination_register = instruction.fp_register;
         return entry;
     }
     if (opcode == Opcode::move_condition_register_from_xer)
@@ -1410,6 +1427,7 @@ void add_history_source(
     case Opcode::move_to_link_register:
     case Opcode::move_to_count_register:
     case Opcode::move_to_xer:
+    case Opcode::move_to_gqr:
         add_history_source(entry, state, instruction.destination);
         break;
     default:
@@ -1502,6 +1520,7 @@ void add_history_source(
     case Opcode::move_from_link_register:
     case Opcode::move_from_count_register:
     case Opcode::move_from_xer:
+    case Opcode::move_from_gqr:
     case Opcode::move_from_time_base_lower:
     case Opcode::move_from_time_base_upper:
         entry.has_destination = true;
@@ -4923,6 +4942,11 @@ StepResult EspressoCore::step()
         state.gpr[instruction.destination] = state.xer;
         break;
 
+    case Opcode::move_from_gqr:
+        state.gpr[instruction.destination] =
+            state.gqr[instruction.quantized_register];
+        break;
+
     case Opcode::move_from_time_base_lower:
     case Opcode::move_from_time_base_upper:
     {
@@ -4940,6 +4964,11 @@ StepResult EspressoCore::step()
 
     case Opcode::move_to_xer:
         state.xer = state.gpr[instruction.destination];
+        break;
+
+    case Opcode::move_to_gqr:
+        state.gqr[instruction.quantized_register] =
+            state.gpr[instruction.destination];
         break;
 
     case Opcode::load_word_zero:
@@ -5462,6 +5491,73 @@ StepResult EspressoCore::step()
         {
             state.gpr[instruction.base] = address;
         }
+        break;
+    }
+
+    case Opcode::paired_single_quantized_load:
+    {
+        const std::uint32_t base = instruction.base == 0U
+            ? 0U : state.gpr[instruction.base];
+        const std::uint32_t address =
+            base + static_cast<std::uint32_t>(instruction.immediate);
+        const std::uint32_t gqr =
+            state.gqr[instruction.quantized_register];
+        const std::uint32_t load_type = (gqr >> 16U) & 0x7U;
+        std::int32_t scale = static_cast<std::int32_t>((gqr >> 24U) & 0x3FU);
+        if ((scale & 0x20) != 0)
+        {
+            scale -= 0x40;
+        }
+
+        const auto load_lane = [&](std::uint32_t lane_address) -> std::uint64_t {
+            float value = 0.0F;
+            switch (load_type)
+            {
+            case 0U:
+                value = std::bit_cast<float>(memory.read32_be(lane_address));
+                break;
+            case 4U:
+                value = static_cast<float>(memory.read8(lane_address));
+                value = std::ldexp(value, -scale);
+                break;
+            case 5U:
+                value = static_cast<float>(memory.read16_be(lane_address));
+                value = std::ldexp(value, -scale);
+                break;
+            case 6U:
+                value = static_cast<float>(std::bit_cast<std::int8_t>(
+                    memory.read8(lane_address)));
+                value = std::ldexp(value, -scale);
+                break;
+            case 7U:
+                value = static_cast<float>(std::bit_cast<std::int16_t>(
+                    memory.read16_be(lane_address)));
+                value = std::ldexp(value, -scale);
+                break;
+            default:
+                break;
+            }
+            return std::bit_cast<std::uint64_t>(static_cast<double>(value));
+        };
+
+        if (load_type < 4U)
+        {
+            // GQR load types 1-3 are reserved and have no defined result.
+            if (load_type != 0U)
+            {
+                pending_history_entry_.completed = false;
+                append_instruction_history(std::move(pending_history_entry_));
+                has_pending_history_entry_ = false;
+                return StepResult::unsupported_instruction;
+            }
+        }
+        const std::uint64_t ps0 = load_lane(address);
+        const std::uint64_t ps1 = instruction.paired_single_w
+            ? std::bit_cast<std::uint64_t>(1.0)
+            : load_lane(address + (load_type == 0U ? 4U :
+                (load_type == 4U || load_type == 6U ? 1U : 2U)));
+        state.fpr[instruction.fp_register] = ps0;
+        state.fpr_ps1[instruction.fp_register] = ps1;
         break;
     }
 

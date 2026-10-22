@@ -41,6 +41,7 @@ struct CpuState
     std::array<std::uint32_t, 32> gpr{};
     std::array<std::uint64_t, 32> fpr{};
     std::array<std::uint64_t, 32> fpr_ps1{};
+    std::array<std::uint32_t, 8> gqr{};
 
     std::uint32_t cr{};
     std::uint32_t xer{};

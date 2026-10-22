@@ -157,6 +157,8 @@ enum class Opcode
     move_to_count_register,
     move_from_xer,
     move_to_xer,
+    move_from_gqr,
+    move_to_gqr,
     move_from_time_base_lower,
     move_from_time_base_upper,
     conditional_branch_to_count_register,
@@ -185,6 +187,7 @@ enum class Opcode
     paired_single_absolute_value,
     paired_single_negative_absolute_value,
     paired_single_select,
+    paired_single_quantized_load,
     condition_bit_and,
     condition_bit_and_complement,
     condition_bit_or,
@@ -233,12 +236,14 @@ struct DecodedInstruction
     std::uint8_t mask_begin{};
     std::uint8_t mask_end{};
     std::uint8_t string_byte_count{};
+    std::uint8_t quantized_register{};
 
     // Signed for immediate arithmetic and branch displacement; unsigned for logical ops.
     std::int32_t immediate{};
     bool absolute{};
     bool link{};
     bool record{};
+    bool paired_single_w{};
 };
 
 [[nodiscard]] DecodedInstruction decode(std::uint32_t raw) noexcept;

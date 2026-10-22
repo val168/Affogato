@@ -715,6 +715,15 @@ void decoder_tests()
     assert(decode(0xA4000002U).opcode == Opcode::unsupported); // RA=0
     assert(decode(0xA54A0002U).opcode == Opcode::unsupported); // RA=RT
 
+    const DecodedInstruction psq_l = decode(0xE0E70000U);
+    assert(psq_l.opcode == Opcode::paired_single_quantized_load);
+    assert(psq_l.fp_register == 7U && psq_l.base == 7U);
+    assert(psq_l.quantized_register == 0U && !psq_l.paired_single_w);
+    assert(psq_l.immediate == 0);
+    const DecodedInstruction psq_lw = decode(0xE0E78000U);
+    assert(psq_lw.opcode == Opcode::paired_single_quantized_load);
+    assert(psq_lw.paired_single_w);
+
     const DecodedInstruction lha = decode(0xA98A0000U); // lha r12, 0(r10)
     assert(lha.opcode == Opcode::load_halfword_algebraic);
     assert(lha.destination == 12);
@@ -794,6 +803,23 @@ void decoder_tests()
     const DecodedInstruction mfxer = decode(0x7C6102A6U); // mfxer r3
     assert(mfxer.opcode == Opcode::move_from_xer);
     assert(mfxer.destination == 3U);
+
+    const auto encode_spr = [](std::uint8_t reg, std::uint16_t spr,
+                               std::uint16_t xo) {
+        return (31U << 26U) |
+            (static_cast<std::uint32_t>(reg) << 21U) |
+            (static_cast<std::uint32_t>(spr & 0x1FU) << 16U) |
+            (static_cast<std::uint32_t>(spr >> 5U) << 11U) |
+            (static_cast<std::uint32_t>(xo) << 1U);
+    };
+    const DecodedInstruction mfgqr = decode(encode_spr(3U, 912U, 339U));
+    assert(mfgqr.opcode == Opcode::move_from_gqr);
+    assert(mfgqr.destination == 3U && mfgqr.quantized_register == 0U);
+    const DecodedInstruction mtgqr = decode(encode_spr(5U, 919U, 467U));
+    assert(mtgqr.opcode == Opcode::move_to_gqr);
+    assert(mtgqr.destination == 5U && mtgqr.quantized_register == 7U);
+    assert(decode(encode_spr(3U, 920U, 339U)).opcode == Opcode::unsupported);
+    assert(decode(encode_spr(3U, 912U, 339U) | 1U).opcode == Opcode::unsupported);
     assert(decode(0x7C6102A7U).opcode == Opcode::unsupported);
 
     const DecodedInstruction mtlr = decode(0x7C0803A6U); // mtlr r0
@@ -2057,6 +2083,49 @@ void move_to_xer_tests()
     assert(format_instruction_history(result).find("mtxer") != std::string::npos);
 
     assert(decode(instruction | 1U).opcode == Opcode::unsupported);
+}
+
+void move_gqr_tests()
+{
+    const auto encode_spr = [](std::uint8_t reg, std::uint16_t spr,
+                               std::uint16_t xo) {
+        return (31U << 26U) |
+            (static_cast<std::uint32_t>(reg) << 21U) |
+            (static_cast<std::uint32_t>(spr & 0x1FU) << 16U) |
+            (static_cast<std::uint32_t>(spr >> 5U) << 11U) |
+            (static_cast<std::uint32_t>(xo) << 1U);
+    };
+    const std::uint32_t mfgqr_r3_gqr0 = encode_spr(3U, 912U, 339U);
+    const std::uint32_t mtgqr_gqr7_r5 = encode_spr(5U, 919U, 467U);
+    assert(decode(mfgqr_r3_gqr0).opcode == Opcode::move_from_gqr);
+    assert(decode(mtgqr_gqr7_r5).opcode == Opcode::move_to_gqr);
+
+    EspressoCore core(0x100U);
+    core.state.gqr[0] = 0x00050006U;
+    core.state.gpr[3] = 0xDEADBEEFU;
+    core.state.gpr[5] = 0x12345678U;
+    core.memory.write32_be(0U, mfgqr_r3_gqr0);
+    core.memory.write32_be(4U, mtgqr_gqr7_r5);
+    const auto gprs_before = core.state.gpr;
+    const RunResult result = core.run(2U);
+    assert(result.reason == StopReason::instruction_limit && result.steps == 2U);
+    assert(core.state.gpr[3] == 0x00050006U);
+    assert(core.state.gqr[0] == 0x00050006U);
+    assert(core.state.gqr[7] == 0x12345678U);
+    for (std::size_t reg = 0U; reg < core.state.gpr.size(); ++reg)
+    {
+        if (reg != 3U)
+        {
+            assert(core.state.gpr[reg] == gprs_before[reg]);
+        }
+    }
+    assert(result.instruction_history[0].opcode_name == "mfgqr");
+    assert(result.instruction_history[0].has_destination);
+    assert(result.instruction_history[0].destination_value == 0x00050006U);
+    assert(result.instruction_history[1].opcode_name == "mtgqr");
+    assert(result.instruction_history[1].source_count == 1U);
+    assert(result.instruction_history[1].source_registers[0] == 5U);
+    assert(result.instruction_history[1].source_values[0] == 0x12345678U);
 }
 
 void move_to_condition_register_fields_tests()
@@ -12942,6 +13011,10 @@ void guest_thread_cooperative_context_switch_tests()
     core.state.xer = 0x87654321U;
     core.state.ctr = 0xCAFEBABEU;
     core.state.fpscr = 0x5A5AA55AU;
+    for (std::uint32_t reg = 0U; reg < core.state.gqr.size(); ++reg)
+    {
+        core.state.gqr[reg] = 0xA0000000U + reg * 0x101U;
+    }
     core.state.gpr[3] = 0U;
     core.state.gpr[4] = sleep_ticks;
     core.state.lr = after_default_sleep;
@@ -12953,12 +13026,17 @@ void guest_thread_cooperative_context_switch_tests()
     const std::uint32_t default_xer = core.state.xer;
     const std::uint32_t default_ctr = core.state.ctr;
     const std::uint32_t default_fpscr = core.state.fpscr;
+    const auto default_gqr = core.state.gqr;
 
     assert(core.run(1U).reason == StopReason::instruction_limit);
     assert(core.current_thread_address == worker);
     assert(core.state.cia == worker_entry);
     assert(core.state.gpr[1] == (worker_stack_top - 8U));
     assert(core.state.gpr[3] == worker_argument);
+    assert(core.state.gqr[2] == 0x00040004U);
+    assert(core.state.gqr[3] == 0x00050005U);
+    assert(core.state.gqr[4] == 0x00060006U);
+    assert(core.state.gqr[5] == 0x00070007U);
     assert(core.memory.read32_be(default_thread + 0x98U) ==
            after_default_sleep);
     assert(core.memory.read8(default_thread + 0x324U) == 4U); // WAITING
@@ -12972,6 +13050,7 @@ void guest_thread_cooperative_context_switch_tests()
     core.state.xer = 0x11223344U;
     core.state.ctr = 0x55667788U;
     core.state.fpscr = 0x99AABBCCU;
+    core.state.gqr.fill(0xB6000000U);
     core.state.gpr[3] = 0U;
     core.state.gpr[4] = sleep_ticks;
     core.state.lr = after_worker_sleep;
@@ -12987,9 +13066,15 @@ void guest_thread_cooperative_context_switch_tests()
     assert(core.state.xer == default_xer);
     assert(core.state.ctr == default_ctr);
     assert(core.state.fpscr == default_fpscr);
+    assert(core.state.gqr == default_gqr);
     assert(core.memory.read8(default_thread + 0x324U) == 2U); // RUNNING
     assert(core.memory.read8(worker + 0x324U) == 1U); // READY
     assert(core.memory.read32_be(worker + 0x98U) == after_worker_sleep);
+    for (std::uint32_t reg = 0U; reg < core.state.gqr.size(); ++reg)
+    {
+        assert(core.memory.read32_be(worker + 0x1BCU + reg * 4U) ==
+               0xB6000000U);
+    }
     assert(core.guest_scheduler_ticks == sleep_ticks);
 }
 
@@ -25567,6 +25652,98 @@ void floating_point_double_update_store_tests()
     assert(failed.has_destination && failed.destination_register == 6U);
 }
 
+void paired_single_quantized_load_tests()
+{
+    const auto encode_psq_l = [](
+        std::uint8_t destination, std::uint8_t base, std::int16_t displacement,
+        bool single_element, std::uint8_t gqr) {
+        return (56U << 26U) |
+            (static_cast<std::uint32_t>(destination) << 21U) |
+            (static_cast<std::uint32_t>(base) << 16U) |
+            (static_cast<std::uint32_t>(single_element) << 15U) |
+            (static_cast<std::uint32_t>(gqr & 0x7U) << 12U) |
+            static_cast<std::uint16_t>(displacement);
+    };
+
+    EspressoCore float_pair(0x100U);
+    float_pair.state.gpr[7] = 0x40U;
+    float_pair.state.fpr[7] = 0xDEADBEEF01234567ULL;
+    float_pair.state.fpr_ps1[7] = 0x89ABCDEF76543210ULL;
+    float_pair.memory.write32_be(0U, 0xE0E70000U);
+    float_pair.memory.write32_be(
+        0x40U, std::bit_cast<std::uint32_t>(1.5F));
+    float_pair.memory.write32_be(
+        0x44U, std::bit_cast<std::uint32_t>(-2.25F));
+    const auto original_gprs = float_pair.state.gpr;
+    const std::uint32_t original_cr = float_pair.state.cr;
+    const std::uint32_t original_xer = float_pair.state.xer;
+    const std::uint32_t original_fpscr = float_pair.state.fpscr;
+    const RunResult pair_result = float_pair.run(1U);
+    assert(pair_result.reason == StopReason::instruction_limit);
+    assert(float_pair.state.fpr[7] == std::bit_cast<std::uint64_t>(1.5));
+    assert(float_pair.state.fpr_ps1[7] == std::bit_cast<std::uint64_t>(-2.25));
+    assert(float_pair.state.gpr == original_gprs);
+    assert(float_pair.state.cr == original_cr && float_pair.state.xer == original_xer);
+    assert(float_pair.state.fpscr == original_fpscr);
+    const InstructionHistoryEntry& pair_history =
+        pair_result.instruction_history.front();
+    assert(pair_history.opcode_name == "psq_l");
+    assert(pair_history.has_effective_address && pair_history.effective_address == 0x40U);
+    assert(pair_history.has_paired_fp_state);
+    assert(pair_history.paired_fp_destination_ps0 == std::bit_cast<std::uint64_t>(1.5));
+    assert(pair_history.paired_fp_destination_ps1 == std::bit_cast<std::uint64_t>(-2.25));
+
+    // W=1 reads only one element and forces PS1 to exactly +1.0.
+    EspressoCore scalar(0x100U);
+    scalar.memory.map_region(0x2000U, 4U);
+    scalar.state.gpr[7] = 0x2000U;
+    scalar.memory.write32_be(0U, encode_psq_l(7U, 7U, 0, true, 0U));
+    scalar.memory.write32_be(0x2000U, std::bit_cast<std::uint32_t>(-0.5F));
+    scalar.state.fpr_ps1[7] = 0xDEADBEEF01234567ULL;
+    assert(scalar.step() == StepResult::executed);
+    assert(scalar.state.fpr[7] == std::bit_cast<std::uint64_t>(-0.5));
+    assert(scalar.state.fpr_ps1[7] == std::bit_cast<std::uint64_t>(1.0));
+    assert(scalar.state.gpr[7] == 0x2000U);
+
+    // Signed 16-bit quantized values use the selected GQR load type and scale.
+    EspressoCore quantized(0x100U);
+    quantized.state.gpr[6] = 0x40U;
+    quantized.state.gqr[1] = (7U << 16U) | (1U << 24U); // signed 16, scale 1
+    quantized.memory.write32_be(0U, encode_psq_l(4U, 6U, 0, false, 1U));
+    quantized.memory.write16_be(0x40U, 7U);
+    quantized.memory.write16_be(0x42U, 0xFFFEU);
+    assert(quantized.step() == StepResult::executed);
+    assert(quantized.state.fpr[4] == std::bit_cast<std::uint64_t>(3.5));
+    assert(quantized.state.fpr_ps1[4] == std::bit_cast<std::uint64_t>(-1.0));
+
+    // RA=0 is a literal zero base, not the contents of GPR0.
+    EspressoCore zero_base(0x100U);
+    zero_base.state.cia = 0x20U;
+    zero_base.state.gpr[0] = 0x40U;
+    zero_base.memory.write32_be(0x20U, encode_psq_l(3U, 0U, 0, true, 0U));
+    zero_base.memory.write32_be(0U, std::bit_cast<std::uint32_t>(2.0F));
+    assert(zero_base.step() == StepResult::executed);
+    assert(zero_base.state.fpr[3] == std::bit_cast<std::uint64_t>(2.0));
+
+    // A fault on the second lane must not partially change either FPR lane.
+    EspressoCore fault(0x100U);
+    fault.memory.map_region(0x2000U, 4U);
+    fault.state.gpr[7] = 0x2000U;
+    fault.state.fpr[7] = 0x1111222233334444ULL;
+    fault.state.fpr_ps1[7] = 0x5555666677778888ULL;
+    fault.memory.write32_be(0U, 0xE0E70000U);
+    fault.memory.write32_be(0x2000U, std::bit_cast<std::uint32_t>(3.0F));
+    const RunResult fault_result = fault.run(1U);
+    assert(fault_result.reason == StopReason::memory_fault);
+    assert(fault_result.detail.find("read 4 byte(s)") != std::string::npos);
+    assert(fault_result.instruction_history.front().opcode_name == "psq_l");
+    assert(fault_result.instruction_history.front().has_effective_address);
+    assert(fault_result.instruction_history.front().effective_address == 0x2000U);
+    assert(!fault_result.instruction_history.front().completed);
+    assert(fault.state.fpr[7] == 0x1111222233334444ULL);
+    assert(fault.state.fpr_ps1[7] == 0x5555666677778888ULL);
+}
+
 void paired_single_merge00_tests()
 {
     const auto encode_ps_merge00 = [](std::uint8_t destination, std::uint8_t source_a,
@@ -26411,6 +26588,7 @@ int main(int argc, char* argv[])
     move_from_xer_tests();
     move_from_time_base_tests();
     move_to_xer_tests();
+    move_gqr_tests();
     move_to_condition_register_fields_tests();
     move_condition_register_from_xer_tests();
     integer_alu_tests();
@@ -26455,6 +26633,7 @@ int main(int argc, char* argv[])
     floating_point_store_tests();
     floating_point_double_store_tests();
     floating_point_double_update_store_tests();
+    paired_single_quantized_load_tests();
     paired_single_merge00_tests();
     paired_single_select_tests();
     paired_single_move_register_tests();

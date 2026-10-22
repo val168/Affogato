@@ -444,6 +444,16 @@ DecodedInstruction decode(std::uint32_t raw) noexcept
                 instruction.destination =
                     static_cast<std::uint8_t>(field(raw, 21, 0x1FU));
             }
+            else if (spr >= 912U && spr <= 919U && (raw & 1U) == 0U)
+            {
+                instruction.opcode = extended_opcode == 339U
+                    ? Opcode::move_from_gqr
+                    : Opcode::move_to_gqr;
+                instruction.destination =
+                    static_cast<std::uint8_t>(field(raw, 21, 0x1FU));
+                instruction.quantized_register =
+                    static_cast<std::uint8_t>(spr - 912U);
+            }
             else if ((spr == 8 || spr == 9) && (raw & 1U) == 0U)
             {
                 instruction.destination =
@@ -1354,6 +1364,15 @@ DecodedInstruction decode(std::uint32_t raw) noexcept
             instruction.fp_register = static_cast<std::uint8_t>(field(raw, 21, 0x1FU));
             instruction.immediate = sign_extend(raw, 16);
         }
+        break;
+
+    case 56: // psq_l
+        instruction.opcode = Opcode::paired_single_quantized_load;
+        instruction.fp_register = static_cast<std::uint8_t>(field(raw, 21, 0x1FU));
+        instruction.base = static_cast<std::uint8_t>(field(raw, 16, 0x1FU));
+        instruction.paired_single_w = field(raw, 15, 1U) != 0U;
+        instruction.quantized_register = static_cast<std::uint8_t>(field(raw, 12, 0x7U));
+        instruction.immediate = sign_extend(raw, 12);
         break;
 
     case 59: // Single-precision A-form arithmetic

@@ -871,6 +871,12 @@ void save_guest_context(
     core.memory.write32_be(thread + os_context_xer_offset, core.state.xer);
     core.memory.write32_be(thread + os_context_srr0_offset, resume_cia);
     core.memory.write32_be(thread + os_context_fpscr_offset, core.state.fpscr);
+    for (std::uint32_t reg = 0U; reg < core.state.gqr.size(); ++reg)
+    {
+        core.memory.write32_be(
+            thread + os_context_gqr_offset + reg * sizeof(std::uint32_t),
+            core.state.gqr[reg]);
+    }
     for (std::uint32_t reg = 0U; reg < core.state.fpr.size(); ++reg)
     {
         core.memory.write64_be(
@@ -907,6 +913,11 @@ void load_guest_context(EspressoCore& core, std::uint32_t thread)
     core.state.xer = read32(os_context_xer_offset);
     core.state.cia = read32(os_context_srr0_offset);
     core.state.fpscr = read32(os_context_fpscr_offset);
+    for (std::uint32_t reg = 0U; reg < core.state.gqr.size(); ++reg)
+    {
+        core.state.gqr[reg] = read32(
+            os_context_gqr_offset + reg * sizeof(std::uint32_t));
+    }
     for (std::uint32_t reg = 0U; reg < core.state.fpr.size(); ++reg)
     {
         core.state.fpr[reg] = read64(
