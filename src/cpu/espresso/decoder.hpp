@@ -97,6 +97,7 @@ enum class Opcode
     floating_multiply_subtract_double,
     floating_negative_multiply_add_double,
     floating_negative_multiply_subtract_double,
+    floating_reciprocal_estimate_single,
     floating_reciprocal_square_root_estimate,
     floating_move_register,
     floating_negate,

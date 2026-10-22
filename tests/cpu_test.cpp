@@ -924,6 +924,13 @@ void decoder_tests()
     assert(((0xFC800834U >> 1U) & 0x3FFU) == 26U);
     assert(decode(0xFC800835U).opcode == Opcode::unsupported);
     assert(decode(0xFC810834U).opcode == Opcode::unsupported);
+    const DecodedInstruction fres = decode(0xFC800830U);
+    assert(fres.opcode == Opcode::floating_reciprocal_estimate_single);
+    assert(fres.fp_register == 4U && fres.fp_source_b == 1U);
+    assert(((0xFC800830U >> 1U) & 0x3FFU) == 24U);
+    assert(decode(0xFC800831U).opcode == Opcode::unsupported);
+    assert(decode(0xFC810830U).opcode == Opcode::unsupported);
+    assert(decode(0xFC800870U).opcode == Opcode::unsupported);
 
     const DecodedInstruction mflr = decode(0x7C0802A6U); // mflr r0
     assert(mflr.opcode == Opcode::move_from_link_register);
@@ -5019,6 +5026,79 @@ void floating_reciprocal_square_root_estimate_tests()
     assert((signaling_nan.first.fpscr & fpscr::vxsnan_mask) != 0U);
     const auto signaling_nan_enabled = execute(0xFFF0123456789ABCULL, fpscr::ve_mask);
     assert(signaling_nan_enabled.first.fpr[4] == 0xDEADBEEF01234567ULL);
+}
+
+void floating_reciprocal_estimate_single_tests()
+{
+    constexpr std::uint32_t instruction = 0xFC800830U; // fres f4,f1
+    const auto double_bits = [](double value) { return std::bit_cast<std::uint64_t>(value); };
+    assert(decode(instruction).opcode == Opcode::floating_reciprocal_estimate_single);
+
+    const auto execute = [&](std::uint64_t source, std::uint32_t initial_fpscr = 0U) {
+        EspressoCore core(16U);
+        core.state.fpr[1] = source;
+        core.state.fpr[4] = 0xDEADBEEF01234567ULL;
+        core.state.fpr_ps1[4] = 0xAABBCCDDEEFF0011ULL;
+        core.state.fpscr = initial_fpscr;
+        core.state.gpr.fill(0x87654321U);
+        core.state.cr = 0x12345678U;
+        core.state.xer = 0xA00000A5U;
+        core.state.lr = 0xABCDEF00U;
+        core.state.ctr = 0x12345670U;
+        core.memory.write32_be(0U, instruction);
+        const auto gprs_before = core.state.gpr;
+        const auto result = core.run(1U);
+        assert(result.steps == 1U && core.state.cia == 4U);
+        assert(core.state.gpr == gprs_before);
+        assert(core.state.cr == 0x12345678U);
+        assert(core.state.xer == 0xA00000A5U);
+        assert(core.state.lr == 0xABCDEF00U && core.state.ctr == 0x12345670U);
+        assert(result.instruction_history.front().opcode_name == "fres");
+        return std::pair{core.state, result};
+    };
+
+    const auto four = execute(double_bits(4.0));
+    assert(four.first.fpr[4] == double_bits(0.25));
+    assert(four.first.fpr_ps1[4] == double_bits(0.25));
+    assert(((four.first.fpscr & fpscr::fprf_mask) >> 12U) == 0x04U);
+
+    const auto three = execute(double_bits(3.0));
+    const float one_third = static_cast<float>(1.0 / 3.0);
+    assert(three.first.fpr[4] == double_bits(static_cast<double>(one_third)));
+    assert(three.first.fpr_ps1[4] == three.first.fpr[4]);
+    assert((three.first.fpscr & (fpscr::fi_mask | fpscr::xx_mask)) ==
+           (fpscr::fi_mask | fpscr::xx_mask));
+
+    const auto negative = execute(double_bits(-2.0));
+    assert(negative.first.fpr[4] == double_bits(-0.5));
+
+    const auto positive_zero = execute(double_bits(0.0));
+    assert(positive_zero.first.fpr[4] == 0x7FF0000000000000ULL);
+    assert((positive_zero.first.fpscr & (fpscr::zx_mask | fpscr::fx_mask)) ==
+           (fpscr::zx_mask | fpscr::fx_mask));
+    const auto negative_zero = execute(0x8000000000000000ULL);
+    assert(negative_zero.first.fpr[4] == 0xFFF0000000000000ULL);
+    const auto zero_enabled = execute(double_bits(0.0), fpscr::ze_mask);
+    assert(zero_enabled.first.fpr[4] == 0xDEADBEEF01234567ULL);
+    assert(zero_enabled.first.fpr_ps1[4] == 0xAABBCCDDEEFF0011ULL);
+
+    const auto positive_infinity = execute(0x7FF0000000000000ULL);
+    assert(positive_infinity.first.fpr[4] == double_bits(0.0));
+    const auto negative_infinity = execute(0xFFF0000000000000ULL);
+    assert(negative_infinity.first.fpr[4] == 0x8000000000000000ULL);
+
+    const auto quiet_nan = execute(0xFFF8123456789ABCULL);
+    assert((quiet_nan.first.fpr[4] >> 63U) == 1U);
+    assert((quiet_nan.first.fpr[4] & 0x7FF0000000000000ULL) ==
+           0x7FF0000000000000ULL);
+    assert((quiet_nan.first.fpscr & fpscr::vxsnan_mask) == 0U);
+    const auto signaling_nan = execute(0xFFF0123456789ABCULL);
+    assert((signaling_nan.first.fpr[4] & 0x7FF8000000000000ULL) ==
+           0x7FF8000000000000ULL);
+    assert((signaling_nan.first.fpscr & fpscr::vxsnan_mask) != 0U);
+    const auto signaling_nan_enabled = execute(0xFFF0123456789ABCULL, fpscr::ve_mask);
+    assert(signaling_nan_enabled.first.fpr[4] == 0xDEADBEEF01234567ULL);
+    assert(signaling_nan_enabled.first.fpr_ps1[4] == 0xAABBCCDDEEFF0011ULL);
 }
 
 void floating_negative_absolute_value_tests()
@@ -28205,6 +28285,7 @@ int main(int argc, char* argv[])
     floating_negate_tests();
     floating_absolute_value_tests();
     floating_reciprocal_square_root_estimate_tests();
+    floating_reciprocal_estimate_single_tests();
     floating_negative_absolute_value_tests();
     floating_select_tests();
     floating_subtract_double_tests();

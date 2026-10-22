@@ -654,6 +654,7 @@ void set_xer_carry(CpuState& state, bool carry) noexcept
     case Opcode::floating_multiply_subtract_double: return "fmsub";
     case Opcode::floating_negative_multiply_add_double: return "fnmadd";
     case Opcode::floating_negative_multiply_subtract_double: return "fnmsub";
+    case Opcode::floating_reciprocal_estimate_single: return "fres";
     case Opcode::floating_reciprocal_square_root_estimate: return "frsqrte";
     case Opcode::floating_move_register: return "fmr";
     case Opcode::floating_negate: return "fneg";
@@ -1159,7 +1160,8 @@ void add_history_source(
         entry.fp_integer_conversion_destination = instruction.fp_register;
         return entry;
     }
-    if (opcode == Opcode::floating_reciprocal_square_root_estimate)
+    if (opcode == Opcode::floating_reciprocal_estimate_single ||
+        opcode == Opcode::floating_reciprocal_square_root_estimate)
     {
         entry.has_fp_source = true;
         entry.fp_source_register = instruction.fp_source_b;
@@ -5009,6 +5011,70 @@ StepResult EspressoCore::step()
         {
             state.fpr[instruction.fp_register] = result_raw;
             set_double_arithmetic_fprf(state, result_raw);
+        }
+        break;
+    }
+
+    case Opcode::floating_reciprocal_estimate_single:
+    {
+        const std::uint64_t source_raw = state.fpr[instruction.fp_source_b];
+        const double source = std::bit_cast<double>(source_raw);
+        bool suppress_write = false;
+        std::uint32_t result_bits{};
+        bool inexact = false;
+        bool rounded_up = false;
+
+        if (is_binary64_signaling_nan(source_raw))
+        {
+            raise_fpscr_exception(state, fpscr::vxsnan_mask);
+            suppress_write = (state.fpscr & fpscr::ve_mask) != 0U;
+            result_bits = quiet_nan_single_bits(source_raw);
+        }
+        else if (is_binary64_nan(source_raw))
+        {
+            result_bits = quiet_nan_single_bits(source_raw);
+        }
+        else if (source == 0.0)
+        {
+            raise_fpscr_exception(state, fpscr::zx_mask);
+            suppress_write = (state.fpscr & fpscr::ze_mask) != 0U;
+            const std::uint32_t sign =
+                (source_raw & binary64_sign_mask) != 0U ? 0x80000000U : 0U;
+            result_bits = sign | 0x7F800000U;
+        }
+        else if (std::isinf(source))
+        {
+            result_bits = (source_raw & binary64_sign_mask) != 0U
+                ? 0x80000000U
+                : 0U;
+        }
+        else
+        {
+            // fres permits implementation-dependent estimates. Correctly round
+            // the host binary64 reciprocal to single precision; this is within
+            // the architectural 1/256 relative-error bound for normal results.
+            const double reciprocal = 1.0 / source;
+            const float estimate = static_cast<float>(reciprocal);
+            const double extended_estimate = static_cast<double>(estimate);
+            result_bits = std::bit_cast<std::uint32_t>(estimate);
+            inexact = extended_estimate != reciprocal;
+            rounded_up = inexact &&
+                std::fabs(extended_estimate) > std::fabs(reciprocal);
+            // TODO: model fres OX/UX behavior for extreme reciprocal overflow
+            // and underflow, including OE/UE destination suppression.
+        }
+
+        if (!suppress_write)
+        {
+            const float result = std::bit_cast<float>(result_bits);
+            const std::uint64_t extended_result =
+                std::bit_cast<std::uint64_t>(static_cast<double>(result));
+            state.fpr[instruction.fp_register] = extended_result;
+            state.fpr_ps1[instruction.fp_register] = extended_result;
+            set_single_arithmetic_result_status(state, result_bits, inexact, rounded_up);
+            pending_history_entry_.has_fp_arithmetic_result = true;
+            pending_history_entry_.fp_arithmetic_result_raw = extended_result;
+            pending_history_entry_.fp_arithmetic_single_bits = result_bits;
         }
         break;
     }
