@@ -208,6 +208,14 @@ DecodedInstruction decode(std::uint32_t raw) noexcept
             instruction.fp_compare_b = static_cast<std::uint8_t>(field(raw, 11, 0x1FU));
             instruction.fp_compare_uses_ps1 = true;
         }
+        else if (field(raw, 1, 0x1FU) == 26U &&
+                 field(raw, 16, 0x1FU) == 0U &&
+                 field(raw, 6, 0x1FU) == 0U && (raw & 1U) == 0U)
+        {
+            instruction.opcode = Opcode::paired_single_reciprocal_square_root_estimate;
+            instruction.fp_register = static_cast<std::uint8_t>(field(raw, 21, 0x1FU));
+            instruction.fp_source_b = static_cast<std::uint8_t>(field(raw, 11, 0x1FU));
+        }
         else if (field(raw, 1, 0x1FU) == 21U &&
                  field(raw, 6, 0x1FU) == 0U && (raw & 1U) == 0U)
         {

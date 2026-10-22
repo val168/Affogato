@@ -903,6 +903,12 @@ void decoder_tests()
     assert(ps_cmpo1.cr_field == 2U && ps_cmpo1.fp_compare_a == 1U &&
            ps_cmpo1.fp_compare_b == 2U && ps_cmpo1.fp_compare_uses_ps1);
     assert(decode(0x110110C1U).opcode == Opcode::unsupported);
+    const DecodedInstruction ps_rsqrte = decode(0x10800834U);
+    assert(ps_rsqrte.opcode == Opcode::paired_single_reciprocal_square_root_estimate);
+    assert(ps_rsqrte.fp_register == 4U && ps_rsqrte.fp_source_b == 1U);
+    assert(((0x10800834U >> 1U) & 0x1FU) == 26U);
+    assert(decode(0x10800835U).opcode == Opcode::unsupported);
+    assert(decode(0x10800874U).opcode == Opcode::unsupported);
     const DecodedInstruction ps_add = decode(0x1007482AU);
     assert(ps_add.opcode == Opcode::paired_single_add);
     assert(ps_add.fp_register == 0U && ps_add.fp_source_a == 7U &&
@@ -27435,6 +27441,72 @@ void paired_single_move_register_tests()
     assert(alias.state.fpr_ps1[7] == 0x2222222222222222ULL);
 }
 
+void paired_single_reciprocal_square_root_estimate_tests()
+{
+    constexpr std::uint32_t instruction = 0x10800834U; // ps_rsqrte f4,f1
+    const auto double_bits = [](double value) { return std::bit_cast<std::uint64_t>(value); };
+    const DecodedInstruction decoded = decode(instruction);
+    assert(decoded.opcode == Opcode::paired_single_reciprocal_square_root_estimate);
+    assert(decoded.fp_register == 4U && decoded.fp_source_b == 1U);
+
+    EspressoCore core(8U);
+    core.state.fpr[1] = double_bits(4.0);
+    core.state.fpr_ps1[1] = double_bits(16.0);
+    core.state.fpr[4] = 0xDEADBEEF01234567ULL;
+    core.state.fpr_ps1[4] = 0xAABBCCDDEEFF0011ULL;
+    core.state.fpscr = 0x89ABCDEFU;
+    core.state.gpr.fill(0x76543210U);
+    core.state.cr = 0x12345678U;
+    core.state.xer = 0xA00000A5U;
+    core.state.lr = 0xABCDEF00U;
+    core.state.ctr = 0x12345670U;
+    core.memory.write32_be(0U, instruction);
+    const auto original_gprs = core.state.gpr;
+    assert(core.step() == StepResult::executed);
+    assert(core.state.fpr[4] == double_bits(0.5));
+    assert(core.state.fpr_ps1[4] == double_bits(0.25));
+    assert(core.state.fpscr == 0x89ABCDEFU);
+    assert(core.state.gpr == original_gprs);
+    assert(core.state.cr == 0x12345678U && core.state.xer == 0xA00000A5U);
+    assert(core.state.lr == 0xABCDEF00U && core.state.ctr == 0x12345670U);
+
+    EspressoCore alias(8U);
+    alias.state.fpr[4] = double_bits(4.0);
+    alias.state.fpr_ps1[4] = double_bits(16.0);
+    alias.memory.write32_be(0U, 0x10802034U); // ps_rsqrte f4,f4
+    assert(alias.step() == StepResult::executed);
+    assert(alias.state.fpr[4] == double_bits(0.5));
+    assert(alias.state.fpr_ps1[4] == double_bits(0.25));
+
+    const auto lane_result = [&](std::uint64_t source0, std::uint64_t source1) {
+        EspressoCore lane_core(8U);
+        lane_core.state.fpr[1] = source0;
+        lane_core.state.fpr_ps1[1] = source1;
+        lane_core.memory.write32_be(0U, instruction);
+        assert(lane_core.step() == StepResult::executed);
+        return std::pair{lane_core.state.fpr[4], lane_core.state.fpr_ps1[4]};
+    };
+    const auto zeros = lane_result(0U, 0x8000000000000000ULL);
+    assert(zeros.first == 0x7FF0000000000000ULL);
+    assert(zeros.second == 0xFFF0000000000000ULL);
+    const auto infinities = lane_result(0x7FF0000000000000ULL, 0xFFF0000000000000ULL);
+    assert(infinities.first == 0U);
+    assert(std::isnan(std::bit_cast<double>(infinities.second)));
+    const auto negative = lane_result(double_bits(-4.0), double_bits(9.0));
+    assert(std::isnan(std::bit_cast<double>(negative.first)));
+    assert(negative.second == double_bits(1.0 / 3.0) ||
+           std::fabs(std::bit_cast<double>(negative.second) - 1.0 / 3.0) < 1e-7);
+
+    EspressoCore history_core(8U);
+    history_core.state.fpr[1] = double_bits(4.0);
+    history_core.state.fpr_ps1[1] = double_bits(16.0);
+    history_core.memory.write32_be(0U, instruction);
+    const RunResult history_result = history_core.run(1U);
+    assert(history_result.instruction_history.front().opcode_name == "ps_rsqrte");
+    assert(history_result.instruction_history.front().has_paired_fp_state);
+    assert(history_result.instruction_history.front().paired_fp_unary);
+}
+
 void paired_single_negate_tests()
 {
     const auto encode_ps_neg = [](std::uint8_t destination, std::uint8_t source,
@@ -28180,6 +28252,7 @@ int main(int argc, char* argv[])
     paired_single_negative_multiply_add_tests();
     paired_single_negative_multiply_subtract_tests();
     paired_single_move_register_tests();
+    paired_single_reciprocal_square_root_estimate_tests();
     paired_single_negate_tests();
     paired_single_absolute_value_tests();
     paired_single_negative_absolute_value_tests();
