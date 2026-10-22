@@ -69,6 +69,21 @@ constexpr std::uint32_t gx2_buffering_mode_triple = 3U;
 // The Wii U GFD/GX2 resource format identifies this platform as GPU version 2.
 constexpr std::uint32_t gx2_gpu_version = 2U;
 constexpr std::uint32_t gx2_fetch_shader_instruction_size = 0x10U;
+constexpr std::uint32_t gx2_fetch_shader_struct_size = 0x20U;
+constexpr std::uint32_t gx2_attrib_stream_size = 0x20U;
+constexpr std::uint32_t gx2_max_fetch_attributes = 64U;
+
+struct Gx2AttribStream
+{
+    std::uint32_t location{};
+    std::uint32_t buffer{};
+    std::uint32_t offset{};
+    std::uint32_t format{};
+    std::uint32_t type{};
+    std::uint32_t alu_divisor{};
+    std::uint32_t mask{};
+    std::uint32_t endian_swap{};
+};
 
 struct TvDimensions
 {
@@ -104,6 +119,55 @@ void validate_scan_surface_format(
             std::string("gx2::") + api_name + ": unsupported surface format " +
             std::to_string(surface_format));
     }
+}
+
+std::uint32_t gx2_attrib_format_bytes(std::uint32_t format)
+{
+    constexpr std::array<std::uint8_t, 20U> byte_sizes{
+        1U, 1U, 2U, 2U, 2U, 4U, 4U, 4U, 4U, 4U,
+        4U, 4U, 8U, 8U, 8U, 8U, 12U, 12U, 16U, 16U};
+    const std::uint32_t data_format = format & 0x3FU;
+    if (data_format >= byte_sizes.size())
+    {
+        return 0U;
+    }
+    return byte_sizes[data_format];
+}
+
+std::uint32_t gx2_attrib_endian_swap(std::uint32_t format)
+{
+    switch (format & 0x3FU)
+    {
+    case 0x00U: // 8
+    case 0x01U: // 4_4
+        return 0U;
+    case 0x02U: // 16
+    case 0x03U: // 16_FLOAT
+    case 0x04U: // 8_8
+    case 0x07U: // 16_16
+    case 0x08U: // 16_16_FLOAT
+    case 0x0EU: // 16_16_16_16
+    case 0x0FU: // 16_16_16_16_FLOAT
+        return 1U;
+    default:
+        return 2U;
+    }
+}
+
+Gx2AttribStream read_attrib_stream(
+    EspressoCore& core,
+    std::uint32_t address)
+{
+    Gx2AttribStream result{};
+    result.location = core.memory.read32_be(address);
+    result.buffer = core.memory.read32_be(address + 0x04U);
+    result.offset = core.memory.read32_be(address + 0x08U);
+    result.format = core.memory.read32_be(address + 0x0CU);
+    result.type = core.memory.read32_be(address + 0x10U);
+    result.alu_divisor = core.memory.read32_be(address + 0x14U);
+    result.mask = core.memory.read32_be(address + 0x18U);
+    result.endian_swap = core.memory.read32_be(address + 0x1CU);
+    return result;
 }
 
 Gx2ColorBufferState read_color_buffer(
@@ -616,6 +680,188 @@ void register_gx2_hle(HleDispatcher& dispatcher)
 
             core.state.gpr[3] =
                 attribute_count * gx2_fetch_shader_instruction_size;
+        });
+
+    dispatcher.register_function(
+        "gx2",
+        "GX2InitFetchShaderEx",
+        [](EspressoCore& core) {
+            constexpr const char* api_name = "gx2::GX2InitFetchShaderEx";
+            constexpr std::uint32_t maximum_buffer_index = 15U;
+            const std::uint32_t fetch_shader_address = core.state.gpr[3];
+            const std::uint32_t program_address = core.state.gpr[4];
+            const std::uint32_t attribute_count = core.state.gpr[5];
+            const std::uint32_t attributes_address = core.state.gpr[6];
+            const std::uint32_t fetch_shader_type = core.state.gpr[7];
+            const std::uint32_t tessellation_mode = core.state.gpr[8];
+
+            if (fetch_shader_type != 0U || tessellation_mode != 0U)
+            {
+                throw HleExecutionError(
+                    std::string(api_name) +
+                    ": only non-tessellated fetch shaders are implemented");
+            }
+            if (attribute_count > gx2_max_fetch_attributes)
+            {
+                throw HleExecutionError(
+                    std::string(api_name) + ": attribute count exceeds safety limit");
+            }
+            if (fetch_shader_address == 0U || (fetch_shader_address & 3U) != 0U)
+            {
+                throw HleExecutionError(
+                    std::string(api_name) + ": fetch-shader descriptor is null or misaligned");
+            }
+            if (static_cast<std::uint64_t>(fetch_shader_address) +
+                    gx2_fetch_shader_struct_size >
+                guest_address_space_end)
+            {
+                throw HleExecutionError(
+                    std::string(api_name) + ": descriptor range wraps guest address space");
+            }
+
+            const std::uint64_t program_size =
+                static_cast<std::uint64_t>(attribute_count) *
+                gx2_fetch_shader_instruction_size;
+            const std::uint64_t attribute_bytes_size =
+                static_cast<std::uint64_t>(attribute_count) * gx2_attrib_stream_size;
+            if (program_size > std::numeric_limits<std::uint32_t>::max() ||
+                (program_size != 0U &&
+                 (program_address == 0U || (program_address & 3U) != 0U)) ||
+                (attribute_count != 0U &&
+                 (attributes_address == 0U || (attributes_address & 3U) != 0U)))
+            {
+                throw HleExecutionError(
+                    std::string(api_name) + ": null, misaligned, or oversized argument");
+            }
+            if (static_cast<std::uint64_t>(program_address) + program_size >
+                    guest_address_space_end ||
+                static_cast<std::uint64_t>(attributes_address) +
+                        attribute_bytes_size >
+                    guest_address_space_end)
+            {
+                throw HleExecutionError(
+                    std::string(api_name) + ": buffer range wraps guest address space");
+            }
+
+            // Read all source descriptors and validate both destinations
+            // before writing either output, so a bad guest pointer cannot
+            // leave a half-initialized fetch shader.
+            std::vector<std::uint8_t> attribute_bytes(
+                static_cast<std::size_t>(attribute_bytes_size));
+            if (!attribute_bytes.empty())
+            {
+                core.memory.read_bytes(attributes_address, attribute_bytes);
+            }
+            core.memory.validate_write_range(
+                fetch_shader_address, gx2_fetch_shader_struct_size);
+            if (program_size != 0U)
+            {
+                core.memory.validate_write_range(
+                    program_address, static_cast<std::size_t>(program_size));
+            }
+
+            std::vector<std::uint32_t> program_words;
+            program_words.reserve(static_cast<std::size_t>(attribute_count) * 4U);
+            for (std::uint32_t index = 0U; index < attribute_count; ++index)
+            {
+                const std::uint32_t address = attributes_address +
+                    index * gx2_attrib_stream_size;
+                const Gx2AttribStream attribute = read_attrib_stream(core, address);
+                if (attribute.type != 0U)
+                {
+                    throw HleExecutionError(
+                        std::string(api_name) +
+                        ": per-instance attributes are not implemented");
+                }
+                if (attribute.buffer > maximum_buffer_index)
+                {
+                    throw HleExecutionError(
+                        std::string(api_name) + ": unsupported attribute buffer index " +
+                        std::to_string(attribute.buffer));
+                }
+                if (attribute.location >= 128U || attribute.offset > 0xFFFFU)
+                {
+                    throw HleExecutionError(
+                        std::string(api_name) +
+                        ": attribute location or offset is not encodable");
+                }
+                const std::uint32_t fetch_bytes =
+                    gx2_attrib_format_bytes(attribute.format);
+                if (fetch_bytes == 0U)
+                {
+                    throw HleExecutionError(
+                        std::string(api_name) + ": unsupported attribute format " +
+                        std::to_string(attribute.format));
+                }
+
+                const std::uint32_t endian_swap =
+                    attribute.endian_swap == 3U
+                        ? gx2_attrib_endian_swap(attribute.format)
+                        : attribute.endian_swap;
+                if (endian_swap > 2U)
+                {
+                    throw HleExecutionError(
+                        std::string(api_name) + ": invalid attribute endian mode");
+                }
+
+                // Latte VTX instruction word 0: semantic fetch, vertex-index
+                // source GPR 0.X, attribute buffer slot, and byte fetch span.
+                const std::uint32_t word0 =
+                    1U |
+                    (attribute.buffer << 8U) |
+                    ((fetch_bytes - 1U) << 26U);
+
+                const std::uint32_t selector_x = (attribute.mask >> 24U) & 0x7U;
+                const std::uint32_t selector_y = (attribute.mask >> 16U) & 0x7U;
+                const std::uint32_t selector_z = (attribute.mask >> 8U) & 0x7U;
+                const std::uint32_t selector_w = attribute.mask & 0x7U;
+                const std::uint32_t data_format = attribute.format & 0x3FU;
+                const std::uint32_t number_format =
+                    (attribute.format & 0x800U) != 0U ? 2U :
+                    (attribute.format & 0x100U) != 0U ? 1U : 0U;
+                const std::uint32_t word1 =
+                    attribute.location |
+                    (selector_x << 9U) |
+                    (selector_y << 12U) |
+                    (selector_z << 15U) |
+                    (selector_w << 18U) |
+                    (data_format << 22U) |
+                    (number_format << 28U) |
+                    ((attribute.format & 0x200U) != 0U ? 1U << 30U : 0U);
+
+                const std::uint32_t word2 =
+                    attribute.offset |
+                    (endian_swap << 16U) |
+                    (1U << 19U); // MEGA_FETCH
+
+                program_words.push_back(word0);
+                program_words.push_back(word1);
+                program_words.push_back(word2);
+                program_words.push_back(0U); // VTX word 3 is reserved padding.
+            }
+
+            for (std::size_t index = 0U; index < program_words.size(); ++index)
+            {
+                core.memory.write32_be(
+                    program_address + static_cast<std::uint32_t>(index * 4U),
+                    program_words[index]);
+            }
+
+            const std::array<std::uint32_t, 8U> descriptor{
+                fetch_shader_type,
+                0U, // SQ_PGM_RESOURCES_FS: fetch-only program uses no ALU GPRs.
+                static_cast<std::uint32_t>(program_size),
+                program_address,
+                attribute_count,
+                0U, // numDivisors
+                0U,
+                0U};
+            for (std::size_t index = 0U; index < descriptor.size(); ++index)
+            {
+                core.memory.write32_be(
+                    fetch_shader_address + static_cast<std::uint32_t>(index * 4U),
+                    descriptor[index]);
+            }
         });
 
     dispatcher.register_function(

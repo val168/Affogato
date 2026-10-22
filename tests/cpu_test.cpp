@@ -16261,6 +16261,136 @@ void gx2_calc_fetch_shader_size_ex_hle_tests()
     assert(calculate(0x10000000U, 0U, 0U).reason == StopReason::hle_error);
 }
 
+void gx2_init_fetch_shader_ex_hle_tests()
+{
+    constexpr std::uint32_t return_address = 0x027508B4U;
+    constexpr std::uint32_t shader_address = 0x100U;
+    constexpr std::uint32_t attribs_address = 0x200U;
+    constexpr std::uint32_t program_address = 0x400U;
+    constexpr std::uint32_t attrib_count = 1U;
+
+    EspressoCore core(0x2000U);
+    register_gx2_hle(core.hle);
+    const std::uint32_t import = core.hle.bind_import(
+        "gx2", "GX2InitFetchShaderEx");
+    assert(import != 0U);
+
+    const auto write_attribute = [&](std::uint32_t address,
+                                     const std::array<std::uint32_t, 8U>& fields) {
+        for (std::size_t index = 0U; index < fields.size(); ++index)
+        {
+            core.memory.write32_be(
+                address + static_cast<std::uint32_t>(index * 4U), fields[index]);
+        }
+    };
+    const auto invoke = [&](std::uint32_t type, std::uint32_t tessellation_mode) {
+        core.state.gpr[3] = shader_address;
+        core.state.gpr[4] = program_address;
+        core.state.gpr[5] = attrib_count;
+        core.state.gpr[6] = attribs_address;
+        core.state.gpr[7] = type;
+        core.state.gpr[8] = tessellation_mode;
+        core.state.cia = import;
+        core.state.lr = return_address;
+        return core.run(1U);
+    };
+
+    write_attribute(attribs_address, {
+        3U,       // semantic location
+        3U,       // GX2 attribute buffer slot
+        8U,       // byte offset
+        0x80DU,   // FLOAT_32_32: scaled, 8-byte fetch
+        0U,       // per-vertex
+        0U,       // divisor
+        0x00010203U, // X/Y/Z/W destination selectors = 0/1/2/3
+        3U,       // automatic endian mode
+    });
+    core.memory.write32_be(shader_address + 0x00U, 0xAAAAAAAAU);
+    core.memory.write32_be(shader_address + 0x04U, 0xBBBBBBBBU);
+    core.memory.write32_be(shader_address + 0x08U, 0xCCCCCCCCU);
+    core.memory.write32_be(program_address, 0xDEADBEEFU);
+
+    core.state.gpr.fill(0xA4000000U);
+    core.state.gpr[3] = shader_address;
+    core.state.gpr[4] = program_address;
+    core.state.gpr[5] = attrib_count;
+    core.state.gpr[6] = attribs_address;
+    core.state.gpr[7] = 0U;
+    core.state.gpr[8] = 0U;
+    core.state.cr = 0x456789ABU;
+    core.state.xer = 0xA5A55A5AU;
+    core.state.ctr = 0x87654321U;
+    core.state.fpscr = 0x5AA5A55AU;
+    const auto gprs_before = core.state.gpr;
+    const auto fprs_before = core.state.fpr;
+    const auto ps1_before = core.state.fpr_ps1;
+    const std::uint32_t cr_before = core.state.cr;
+    const std::uint32_t xer_before = core.state.xer;
+    const std::uint32_t ctr_before = core.state.ctr;
+    const std::uint32_t fpscr_before = core.state.fpscr;
+
+    assert(invoke(0U, 0U).reason == StopReason::instruction_limit);
+    assert(core.state.gpr == gprs_before);
+    assert(core.state.fpr == fprs_before);
+    assert(core.state.fpr_ps1 == ps1_before);
+    assert(core.state.cr == cr_before);
+    assert(core.state.xer == xer_before);
+    assert(core.state.ctr == ctr_before);
+    assert(core.state.fpscr == fpscr_before);
+    assert(core.state.cia == return_address);
+
+    // GX2FetchShader is eight BE words: type, resources, size, program,
+    // attribCount, numDivisors and two divisor slots.
+    assert(core.memory.read32_be(shader_address + 0x00U) == 0U);
+    assert(core.memory.read32_be(shader_address + 0x04U) == 0U);
+    assert(core.memory.read32_be(shader_address + 0x08U) == 0x10U);
+    assert(core.memory.read32_be(shader_address + 0x0CU) == program_address);
+    assert(core.memory.read32_be(shader_address + 0x10U) == attrib_count);
+    assert(core.memory.read32_be(shader_address + 0x14U) == 0U);
+    assert(core.memory.read32_be(shader_address + 0x18U) == 0U);
+    assert(core.memory.read32_be(shader_address + 0x1CU) == 0U);
+
+    // One 128-bit Latte VTX semantic-fetch instruction, followed by its pad.
+    assert(core.memory.read32_be(program_address + 0x00U) == 0x1C000301U);
+    assert(core.memory.read32_be(program_address + 0x04U) == 0x234D1003U);
+    assert(core.memory.read32_be(program_address + 0x08U) == 0x000A0008U);
+    assert(core.memory.read32_be(program_address + 0x0CU) == 0U);
+
+    // Unsupported modes/formats are rejected transactionally and never
+    // partially overwrite the descriptor or program buffer.
+    const std::array<std::uint32_t, 8U> descriptor_before{
+        core.memory.read32_be(shader_address),
+        core.memory.read32_be(shader_address + 4U),
+        core.memory.read32_be(shader_address + 8U),
+        core.memory.read32_be(shader_address + 12U),
+        core.memory.read32_be(shader_address + 16U),
+        core.memory.read32_be(shader_address + 20U),
+        core.memory.read32_be(shader_address + 24U),
+        core.memory.read32_be(shader_address + 28U)};
+    const std::array<std::uint32_t, 4U> program_before{
+        core.memory.read32_be(program_address),
+        core.memory.read32_be(program_address + 4U),
+        core.memory.read32_be(program_address + 8U),
+        core.memory.read32_be(program_address + 12U)};
+    assert(invoke(1U, 0U).reason == StopReason::hle_error);
+    assert(invoke(0U, 1U).reason == StopReason::hle_error);
+    write_attribute(attribs_address, {
+        3U, 3U, 8U, 0xFFFFU, 0U, 0U, 0U, 3U});
+    assert(invoke(0U, 0U).reason == StopReason::hle_error);
+    for (std::size_t index = 0U; index < descriptor_before.size(); ++index)
+    {
+        assert(core.memory.read32_be(
+                   shader_address + static_cast<std::uint32_t>(index * 4U)) ==
+               descriptor_before[index]);
+    }
+    for (std::size_t index = 0U; index < program_before.size(); ++index)
+    {
+        assert(core.memory.read32_be(
+                   program_address + static_cast<std::uint32_t>(index * 4U)) ==
+               program_before[index]);
+    }
+}
+
 void gx2_init_hle_tests()
 {
     constexpr std::uint32_t return_address = 0x0274BD9CU;
@@ -25894,6 +26024,7 @@ int main(int argc, char* argv[])
     gx2_temp_get_gpu_version_hle_tests();
     gx2_invalidate_hle_tests();
     gx2_calc_fetch_shader_size_ex_hle_tests();
+    gx2_init_fetch_shader_ex_hle_tests();
     gx2_init_hle_tests();
     gx2_clear_color_hle_tests();
     gx2_set_color_buffer_hle_tests();
