@@ -707,6 +707,14 @@ void decoder_tests()
     assert(lhz.opcode == Opcode::load_halfword_zero);
     assert(lhz.destination == 5);
 
+    const DecodedInstruction lhzu = decode(0xA4EA0002U); // lhzu r7, 2(r10)
+    assert(lhzu.opcode == Opcode::load_halfword_zero_update);
+    assert(lhzu.destination == 7U && lhzu.base == 10U);
+    assert(lhzu.immediate == 2);
+    assert((0xA4EA0002U >> 26U) == 41U);
+    assert(decode(0xA4000002U).opcode == Opcode::unsupported); // RA=0
+    assert(decode(0xA54A0002U).opcode == Opcode::unsupported); // RA=RT
+
     const DecodedInstruction lha = decode(0xA98A0000U); // lha r12, 0(r10)
     assert(lha.opcode == Opcode::load_halfword_algebraic);
     assert(lha.destination == 12);
@@ -21993,6 +22001,85 @@ void store_halfword_update_tests()
     assert(failed.has_destination && failed.destination_register == 8U);
 }
 
+void load_halfword_zero_update_tests()
+{
+    constexpr std::uint32_t wind_waker_instruction = 0xA4EA0002U;
+    constexpr std::uint32_t wind_waker_base = 0x06E35FF6U;
+    constexpr std::uint32_t wind_waker_address = 0x06E35FF8U;
+    constexpr std::uint32_t original_cr = 0xA5C36E91U;
+    constexpr std::uint32_t original_xer = 0x800000A5U;
+    constexpr std::uint32_t original_lr = 0x12345678U;
+    constexpr std::uint32_t original_ctr = 0x87654321U;
+    constexpr std::uint32_t original_fpscr = 0x5AA55AA5U;
+
+    EspressoCore core(0x100U);
+    core.memory.map_region(wind_waker_address, 2U);
+    core.memory.write16_be(wind_waker_address, 0x8001U);
+    core.memory.write32_be(0U, wind_waker_instruction);
+    core.state.gpr.fill(0xC8000000U);
+    core.state.gpr[10] = wind_waker_base;
+    core.state.gpr[7] = 0xDEADBEEFU;
+    core.state.cr = original_cr;
+    core.state.xer = original_xer;
+    core.state.lr = original_lr;
+    core.state.ctr = original_ctr;
+    core.state.fpscr = original_fpscr;
+    const auto original_gprs = core.state.gpr;
+    const auto original_fprs = core.state.fpr;
+    const auto original_ps1 = core.state.fpr_ps1;
+
+    const RunResult result = core.run(1U);
+    assert(result.reason == StopReason::instruction_limit && result.steps == 1U);
+    assert(core.state.gpr[7] == 0x00008001U);
+    assert(core.state.gpr[10] == wind_waker_address);
+    for (std::size_t reg = 0U; reg < core.state.gpr.size(); ++reg)
+    {
+        if (reg != 7U && reg != 10U)
+        {
+            assert(core.state.gpr[reg] == original_gprs[reg]);
+        }
+    }
+    assert(core.state.cr == original_cr && core.state.xer == original_xer);
+    assert(core.state.lr == original_lr && core.state.ctr == original_ctr);
+    assert(core.state.fpscr == original_fpscr);
+    assert(core.state.fpr == original_fprs && core.state.fpr_ps1 == original_ps1);
+    assert(core.memory.read16_be(wind_waker_address) == 0x8001U);
+
+    const InstructionHistoryEntry& history = result.instruction_history.front();
+    assert(history.opcode_name == "lhzu");
+    assert(history.has_effective_address &&
+           history.effective_address == wind_waker_address);
+    assert(history.has_destination && history.destination_register == 7U);
+    assert(history.destination_value == 0x00008001U);
+    assert(history.source_count == 1U && history.source_registers[0] == 10U);
+    assert(history.source_values[0] == wind_waker_base);
+
+    // A negative D-form displacement is sign-extended before address addition.
+    EspressoCore negative_displacement(0x100U);
+    negative_displacement.state.gpr[10] = 0x80U;
+    negative_displacement.state.gpr[7] = 0xDEADBEEFU;
+    negative_displacement.memory.write32_be(0U, 0xA4EAFFFEU);
+    negative_displacement.memory.write16_be(0x7EU, 0xFFFFU);
+    assert(negative_displacement.step() == StepResult::executed);
+    assert(negative_displacement.state.gpr[7] == 0x0000FFFFU);
+    assert(negative_displacement.state.gpr[10] == 0x7EU);
+
+    // The read is transactional: a fault must not update RT or the base.
+    EspressoCore fault(0x100U);
+    fault.state.gpr[10] = 0x2000U;
+    fault.state.gpr[7] = 0xDEADBEEFU;
+    fault.memory.write32_be(0U, wind_waker_instruction);
+    const RunResult fault_result = fault.run(1U);
+    assert(fault_result.reason == StopReason::memory_fault);
+    assert(fault_result.detail.find("read 2 byte(s)") != std::string::npos);
+    assert(fault_result.instruction_history.front().opcode_name == "lhzu");
+    assert(fault_result.instruction_history.front().has_effective_address);
+    assert(fault_result.instruction_history.front().effective_address == 0x2002U);
+    assert(!fault_result.instruction_history.front().completed);
+    assert(fault.state.gpr[10] == 0x2000U);
+    assert(fault.state.gpr[7] == 0xDEADBEEFU);
+}
+
 void store_halfword_indexed_tests()
 {
     const auto encode_sthx = [](std::uint8_t source, std::uint8_t base,
@@ -26488,6 +26575,7 @@ int main(int argc, char* argv[])
     floating_convert_to_integer_word_tests();
     floating_convert_to_integer_word_zero_tests();
     load_store_tests();
+    load_halfword_zero_update_tests();
     store_halfword_update_tests();
     store_halfword_indexed_tests();
     store_floating_as_integer_word_indexed_tests();

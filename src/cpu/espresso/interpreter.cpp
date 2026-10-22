@@ -509,6 +509,7 @@ void set_xer_carry(CpuState& state, bool carry) noexcept
             instruction.opcode == Opcode::store_byte ||
             instruction.opcode == Opcode::store_byte_update ||
             instruction.opcode == Opcode::load_halfword_zero ||
+            instruction.opcode == Opcode::load_halfword_zero_update ||
             instruction.opcode == Opcode::load_halfword_algebraic ||
             instruction.opcode == Opcode::store_halfword ||
             instruction.opcode == Opcode::store_halfword_update ||
@@ -702,6 +703,7 @@ void set_xer_carry(CpuState& state, bool carry) noexcept
     case Opcode::store_byte: return "stb";
     case Opcode::store_byte_update: return "stbu";
     case Opcode::load_halfword_zero: return "lhz";
+    case Opcode::load_halfword_zero_update: return "lhzu";
     case Opcode::load_halfword_algebraic: return "lha";
     case Opcode::store_halfword: return "sth";
     case Opcode::store_halfword_update: return "sthu";
@@ -1224,6 +1226,7 @@ void add_history_source(
         opcode == Opcode::store_single ||
         opcode == Opcode::store_single_update || opcode == Opcode::store_double ||
         opcode == Opcode::store_double_update ||
+        opcode == Opcode::load_halfword_zero_update ||
         opcode == Opcode::load_halfword_algebraic || opcode == Opcode::store_halfword_update)
     {
         if (instruction.base != 0)
@@ -1268,6 +1271,7 @@ void add_history_source(
     case Opcode::load_byte_zero:
     case Opcode::load_byte_update:
     case Opcode::load_halfword_zero:
+    case Opcode::load_halfword_zero_update:
     case Opcode::load_halfword_algebraic:
     case Opcode::store_single_update:
     case Opcode::store_word:
@@ -1493,6 +1497,7 @@ void add_history_source(
     case Opcode::load_byte_zero:
     case Opcode::load_byte_update:
     case Opcode::load_halfword_zero:
+    case Opcode::load_halfword_zero_update:
     case Opcode::load_halfword_algebraic:
     case Opcode::move_from_link_register:
     case Opcode::move_from_count_register:
@@ -5311,6 +5316,16 @@ StepResult EspressoCore::step()
         state.gpr[instruction.destination] =
             memory.read16_be(effective_address(state, instruction.base, instruction.immediate));
         break;
+
+    case Opcode::load_halfword_zero_update:
+    {
+        const std::uint32_t address =
+            effective_address(state, instruction.base, instruction.immediate);
+        const std::uint16_t value = memory.read16_be(address);
+        state.gpr[instruction.destination] = static_cast<std::uint32_t>(value);
+        state.gpr[instruction.base] = address;
+        break;
+    }
 
     case Opcode::load_halfword_algebraic:
     {
