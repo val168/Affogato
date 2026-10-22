@@ -1680,6 +1680,51 @@ void register_gx2_hle(HleDispatcher& dispatcher)
 
     dispatcher.register_function(
         "gx2",
+        "GX2InitSamplerZMFilter",
+        [](EspressoCore& core) {
+            constexpr const char* api_name = "gx2::GX2InitSamplerZMFilter";
+            constexpr std::uint32_t z_filter_max = 2U;
+            constexpr std::uint32_t mip_filter_max = 2U;
+            constexpr std::uint32_t z_filter_shift = 24U;
+            constexpr std::uint32_t mip_filter_shift = 27U;
+            constexpr std::uint32_t z_filter_mask = 0x7U;
+            constexpr std::uint32_t mip_filter_mask = 0x3U;
+
+            const std::uint32_t sampler_address = core.state.gpr[3];
+            const std::uint32_t filter_z = core.state.gpr[4];
+            const std::uint32_t filter_mip = core.state.gpr[5];
+
+            if (sampler_address == 0U || (sampler_address & 3U) != 0U)
+            {
+                throw HleExecutionError(
+                    std::string(api_name) + ": sampler pointer is null or misaligned");
+            }
+            if (filter_z > z_filter_max)
+            {
+                throw HleExecutionError(
+                    std::string(api_name) + ": invalid Z filter mode");
+            }
+            if (filter_mip > mip_filter_max)
+            {
+                throw HleExecutionError(
+                    std::string(api_name) + ": invalid mip filter mode");
+            }
+
+            core.memory.validate_write_range(sampler_address, gx2_sampler_size);
+            const std::uint32_t word2 =
+                core.memory.read32_be(sampler_address + 0x08U);
+            constexpr std::uint32_t fields_mask =
+                (z_filter_mask << z_filter_shift) |
+                (mip_filter_mask << mip_filter_shift);
+            const std::uint32_t new_word2 =
+                (word2 & ~fields_mask) |
+                (filter_z << z_filter_shift) |
+                (filter_mip << mip_filter_shift);
+            core.memory.write32_be(sampler_address + 0x08U, new_word2);
+        });
+
+    dispatcher.register_function(
+        "gx2",
         "GX2Init",
         [](EspressoCore& core) {
             // Cemu treats repeated GX2Init calls as successful no-ops. Check
