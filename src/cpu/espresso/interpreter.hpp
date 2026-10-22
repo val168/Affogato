@@ -99,6 +99,7 @@ struct InstructionHistoryEntry
     bool has_paired_fp_state{};
     bool paired_fp_unary{};
     bool paired_fp_scalar_multiply{};
+    bool paired_fp_vector_multiply{};
     bool paired_fp_quantized_store{};
     std::uint8_t paired_fp_store_gqr{};
     std::uint8_t paired_fp_store_type{};

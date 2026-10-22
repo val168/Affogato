@@ -811,6 +811,14 @@ void decoder_tests()
     assert((0x11A70598U & 1U) == 0U);
     assert(decode(0x11A70599U).opcode == Opcode::unsupported);
     assert(decode(0x11A70D98U).opcode == Opcode::unsupported);
+    const DecodedInstruction ps_mul = decode(0x104200B2U);
+    assert(ps_mul.opcode == Opcode::paired_single_multiply);
+    assert(ps_mul.fp_register == 2U && ps_mul.fp_source_a == 2U &&
+           ps_mul.fp_source_c == 2U);
+    assert(((0x104200B2U >> 1U) & 0x1FU) == 25U);
+    assert(((0x104200B2U >> 11U) & 0x1FU) == 0U);
+    assert(decode(0x104200B3U).opcode == Opcode::unsupported);
+    assert(decode(0x104208B2U).opcode == Opcode::unsupported);
 
     const DecodedInstruction mflr = decode(0x7C0802A6U); // mflr r0
     assert(mflr.opcode == Opcode::move_from_link_register);
@@ -25983,6 +25991,104 @@ void paired_single_select_tests()
     assert(alias.state.fpr_ps1[6] == 0x2222222222222222ULL); // -0 selects C
 }
 
+void paired_single_multiply_tests()
+{
+    const auto encode_ps_mul = [](std::uint8_t destination, std::uint8_t source_a,
+                                  std::uint8_t source_c, bool record = false) {
+        return 0x10000000U |
+            (static_cast<std::uint32_t>(destination) << 21U) |
+            (static_cast<std::uint32_t>(source_a) << 16U) |
+            (static_cast<std::uint32_t>(source_c) << 6U) |
+            (25U << 1U) | static_cast<std::uint32_t>(record);
+    };
+    const auto double_bits = [](double value) { return std::bit_cast<std::uint64_t>(value); };
+    constexpr std::uint32_t exact_encoding = 0x104200B2U;
+    assert(encode_ps_mul(2U, 2U, 2U) == exact_encoding);
+    assert(decode(exact_encoding).opcode == Opcode::paired_single_multiply);
+    assert(decode(encode_ps_mul(8U, 2U, 2U, true)).opcode == Opcode::unsupported);
+    assert(decode(exact_encoding | (1U << 11U)).opcode == Opcode::unsupported);
+
+    EspressoCore core(4U);
+    core.state.fpr[2] = double_bits(2.0);
+    core.state.fpr_ps1[2] = double_bits(-3.0);
+    core.state.fpr[3] = double_bits(4.0);
+    core.state.fpr_ps1[3] = double_bits(-2.0);
+    core.state.fpr[8] = double_bits(100.0);
+    core.state.fpr_ps1[8] = double_bits(200.0);
+    core.state.fpscr = 0xDEADBEEFU;
+    core.state.gpr.fill(0xA5A5A5A5U);
+    core.state.cr = 0x12345678U;
+    core.state.xer = 0xA00000A5U;
+    core.memory.write32_be(0U, encode_ps_mul(8U, 2U, 3U));
+    const auto gprs_before = core.state.gpr;
+    assert(core.step() == StepResult::executed);
+    assert(core.state.fpr[8] == double_bits(8.0));
+    assert(core.state.fpr_ps1[8] == double_bits(6.0));
+    assert(core.state.fpr[2] == double_bits(2.0));
+    assert(core.state.fpr_ps1[2] == double_bits(-3.0));
+    assert(core.state.fpr[3] == double_bits(4.0));
+    assert(core.state.fpr_ps1[3] == double_bits(-2.0));
+    assert(core.state.gpr == gprs_before);
+    assert(core.state.cr == 0x12345678U && core.state.xer == 0xA00000A5U);
+    assert(core.state.fpscr == 0xDEADBEEFU);
+
+    const RunResult history_result = core.run(0U);
+    const InstructionHistoryEntry& history = history_result.instruction_history.front();
+    assert(history.opcode_name == "ps_mul");
+    assert(history.has_paired_fp_state && history.paired_fp_vector_multiply);
+    assert(history.paired_fp_source_a_ps0 == double_bits(2.0));
+    assert(history.paired_fp_source_a_ps1 == double_bits(-3.0));
+    assert(history.paired_fp_source_b_ps0 == double_bits(4.0));
+    assert(history.paired_fp_source_b_ps1 == double_bits(-2.0));
+    assert(history.paired_fp_destination_ps0 == double_bits(8.0));
+    assert(history.paired_fp_destination_ps1 == double_bits(6.0));
+    assert(format_instruction_history(history_result).find("ps_mul") != std::string::npos);
+
+    // Destination/source aliases use both original lanes.
+    EspressoCore alias_a(4U);
+    alias_a.state.fpr[5] = double_bits(2.0);
+    alias_a.state.fpr_ps1[5] = double_bits(-4.0);
+    alias_a.state.fpr[6] = double_bits(3.0);
+    alias_a.state.fpr_ps1[6] = double_bits(0.5);
+    alias_a.memory.write32_be(0U, encode_ps_mul(5U, 5U, 6U));
+    assert(alias_a.step() == StepResult::executed);
+    assert(alias_a.state.fpr[5] == double_bits(6.0));
+    assert(alias_a.state.fpr_ps1[5] == double_bits(-2.0));
+
+    EspressoCore alias_c(4U);
+    alias_c.state.fpr[5] = double_bits(2.0);
+    alias_c.state.fpr_ps1[5] = double_bits(3.0);
+    alias_c.memory.write32_be(0U, encode_ps_mul(5U, 6U, 5U));
+    alias_c.state.fpr[6] = double_bits(4.0);
+    alias_c.state.fpr_ps1[6] = double_bits(-2.0);
+    assert(alias_c.step() == StepResult::executed);
+    assert(alias_c.state.fpr[5] == double_bits(8.0));
+    assert(alias_c.state.fpr_ps1[5] == double_bits(-6.0));
+
+    // The frC lanes use the same 25-bit operand rounding as the other Espresso
+    // multiply-family instructions.
+    EspressoCore rounded(4U);
+    rounded.state.fpr[1] = double_bits(1.0);
+    rounded.state.fpr_ps1[1] = double_bits(1.0);
+    rounded.state.fpr[2] = double_bits(1.0 + std::ldexp(1.0, -26));
+    rounded.state.fpr_ps1[2] = double_bits(1.0);
+    rounded.memory.write32_be(0U, encode_ps_mul(3U, 1U, 2U));
+    assert(rounded.step() == StepResult::executed);
+    assert(rounded.state.fpr[3] == double_bits(1.0));
+    assert(rounded.state.fpr_ps1[3] == double_bits(1.0));
+
+    // Paired-single multiply flushes a subnormal binary32 result to signed zero.
+    EspressoCore flush(4U);
+    flush.state.fpr[1] = double_bits(std::ldexp(1.0, -126));
+    flush.state.fpr_ps1[1] = double_bits(-std::ldexp(1.0, -126));
+    flush.state.fpr[2] = double_bits(0.5);
+    flush.state.fpr_ps1[2] = double_bits(0.5);
+    flush.memory.write32_be(0U, encode_ps_mul(3U, 1U, 2U));
+    assert(flush.step() == StepResult::executed);
+    assert(flush.state.fpr[3] == double_bits(0.0));
+    assert(flush.state.fpr_ps1[3] == double_bits(-0.0));
+}
+
 void paired_single_multiply_scalar0_tests()
 {
     const auto encode_ps_muls0 = [](std::uint8_t destination, std::uint8_t source_a,
@@ -26853,6 +26959,7 @@ int main(int argc, char* argv[])
     paired_single_quantized_store_tests();
     paired_single_merge00_tests();
     paired_single_select_tests();
+    paired_single_multiply_tests();
     paired_single_multiply_scalar0_tests();
     paired_single_move_register_tests();
     paired_single_negate_tests();
