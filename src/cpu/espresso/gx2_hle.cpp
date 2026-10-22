@@ -1568,11 +1568,12 @@ void register_gx2_hle(HleDispatcher& dispatcher)
             const std::uint32_t clamp_fields =
                 clamp_mode | (clamp_mode << 3U) | (clamp_mode << 6U);
             const std::uint32_t filter_fields =
-                (filter_mode << 9U) | (filter_mode << 12U);
-            core.memory.write32_be(sampler_address + 0x00U,
-                                   clamp_fields | filter_fields);
+                (filter_mode << 20U) | (filter_mode << 22U);
+            core.memory.write32_be(sampler_address + 0x00U, clamp_fields);
             core.memory.write32_be(sampler_address + 0x04U, 0x000FFC00U);
-            core.memory.write32_be(sampler_address + 0x08U, 0x80000000U);
+            core.memory.write32_be(
+                sampler_address + 0x08U,
+                0x80000000U | filter_fields);
         });
 
     dispatcher.register_function(
@@ -1619,6 +1620,62 @@ void register_gx2_hle(HleDispatcher& dispatcher)
                 (clamp_y << clamp_y_shift) |
                 (clamp_z << clamp_z_shift);
             core.memory.write32_be(sampler_address, new_word0);
+        });
+
+    dispatcher.register_function(
+        "gx2",
+        "GX2InitSamplerXYFilter",
+        [](EspressoCore& core) {
+            constexpr const char* api_name = "gx2::GX2InitSamplerXYFilter";
+            constexpr std::uint32_t max_aniso_max = 4U;
+            constexpr std::uint32_t xy_filter_max = 2U;
+            constexpr std::uint32_t max_aniso_shift = 9U;
+            constexpr std::uint32_t mag_filter_shift = 20U;
+            constexpr std::uint32_t min_filter_shift = 22U;
+            constexpr std::uint32_t field_mask = 0x7U;
+            constexpr std::uint32_t xy_filter_mask = 0x3U;
+
+            const std::uint32_t sampler_address = core.state.gpr[3];
+            const std::uint32_t filter_mag = core.state.gpr[4];
+            const std::uint32_t filter_min = core.state.gpr[5];
+            const std::uint32_t max_aniso = core.state.gpr[6];
+
+            if (sampler_address == 0U || (sampler_address & 3U) != 0U)
+            {
+                throw HleExecutionError(
+                    std::string(api_name) + ": sampler pointer is null or misaligned");
+            }
+            if (filter_mag > xy_filter_max || filter_min > xy_filter_max)
+            {
+                throw HleExecutionError(
+                    std::string(api_name) + ": invalid XY filter mode");
+            }
+            if (max_aniso > max_aniso_max)
+            {
+                throw HleExecutionError(
+                    std::string(api_name) + ": invalid anisotropy ratio");
+            }
+
+            // The descriptor is three BE register words. Validate the entire
+            // object before changing either word, then preserve every field
+            // unrelated to anisotropy and XY filtering.
+            core.memory.validate_write_range(sampler_address, gx2_sampler_size);
+            const std::uint32_t word0 =
+                core.memory.read32_be(sampler_address + 0x00U);
+            const std::uint32_t word2 =
+                core.memory.read32_be(sampler_address + 0x08U);
+            const std::uint32_t max_aniso_mask = field_mask << max_aniso_shift;
+            const std::uint32_t xy_filter_fields_mask =
+                (xy_filter_mask << mag_filter_shift) |
+                (xy_filter_mask << min_filter_shift);
+            const std::uint32_t new_word0 =
+                (word0 & ~max_aniso_mask) | (max_aniso << max_aniso_shift);
+            const std::uint32_t new_word2 =
+                (word2 & ~xy_filter_fields_mask) |
+                (filter_mag << mag_filter_shift) |
+                (filter_min << min_filter_shift);
+            core.memory.write32_be(sampler_address + 0x00U, new_word0);
+            core.memory.write32_be(sampler_address + 0x08U, new_word2);
         });
 
     dispatcher.register_function(
