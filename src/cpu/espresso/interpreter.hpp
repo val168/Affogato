@@ -98,6 +98,7 @@ struct InstructionHistoryEntry
     std::uint32_t stored_integer_word_value{};
     bool has_paired_fp_state{};
     bool paired_fp_unary{};
+    bool paired_fp_scalar_multiply{};
     std::uint8_t paired_fp_destination_register{};
     std::uint8_t paired_fp_source_a_register{};
     std::uint8_t paired_fp_source_b_register{};

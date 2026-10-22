@@ -741,6 +741,7 @@ void set_xer_carry(CpuState& state, bool carry) noexcept
     case Opcode::paired_single_merge01: return "ps_merge01";
     case Opcode::paired_single_merge10: return "ps_merge10";
     case Opcode::paired_single_merge11: return "ps_merge11";
+    case Opcode::paired_single_multiply_scalar0: return "ps_muls0";
     case Opcode::paired_single_move_register: return "ps_mr";
     case Opcode::paired_single_negate: return "ps_neg";
     case Opcode::paired_single_absolute_value: return "ps_abs";
@@ -897,6 +898,18 @@ void add_history_source(
         entry.paired_fp_source_a_ps1 = state.fpr_ps1[entry.paired_fp_source_a_register];
         entry.paired_fp_source_b_ps0 = state.fpr[instruction.fp_source_b];
         entry.paired_fp_source_b_ps1 = state.fpr_ps1[instruction.fp_source_b];
+        return entry;
+    }
+    if (opcode == Opcode::paired_single_multiply_scalar0)
+    {
+        entry.has_paired_fp_state = true;
+        entry.paired_fp_scalar_multiply = true;
+        entry.paired_fp_destination_register = instruction.fp_register;
+        entry.paired_fp_source_a_register = instruction.fp_source_a;
+        entry.paired_fp_source_b_register = instruction.fp_source_c;
+        entry.paired_fp_source_a_ps0 = state.fpr[instruction.fp_source_a];
+        entry.paired_fp_source_a_ps1 = state.fpr_ps1[instruction.fp_source_a];
+        entry.paired_fp_source_b_ps0 = state.fpr[instruction.fp_source_c];
         return entry;
     }
     if (opcode == Opcode::paired_single_select)
@@ -1979,7 +1992,17 @@ std::string format_instruction_history(const RunResult& result)
                      << static_cast<unsigned>(reg) << "{ps0=0x" << std::hex
                      << std::setw(16) << ps0 << ",ps1=0x" << std::setw(16) << ps1 << '}';
             };
-            if (entry.paired_fp_unary)
+            if (entry.paired_fp_scalar_multiply)
+            {
+                print_paired_source('A', entry.paired_fp_source_a_register,
+                                    entry.paired_fp_source_a_ps0,
+                                    entry.paired_fp_source_a_ps1);
+                text << " fC=f" << std::dec
+                     << static_cast<unsigned>(entry.paired_fp_source_b_register)
+                     << ".ps0=0x" << std::hex << std::setw(16)
+                     << entry.paired_fp_source_b_ps0;
+            }
+            else if (entry.paired_fp_unary)
             {
                 print_paired_source('B', entry.paired_fp_source_b_register,
                                     entry.paired_fp_source_b_ps0,
@@ -5619,6 +5642,23 @@ StepResult EspressoCore::step()
         state.fpr_ps1[instruction.fp_register] = result_ps1;
         pending_history_entry_.paired_fp_select_result_ps0 = result_ps0;
         pending_history_entry_.paired_fp_select_result_ps1 = result_ps1;
+        break;
+    }
+
+    case Opcode::paired_single_multiply_scalar0:
+    {
+        const std::uint64_t a_ps0_raw = state.fpr[instruction.fp_source_a];
+        const std::uint64_t a_ps1_raw = state.fpr_ps1[instruction.fp_source_a];
+        const std::uint64_t c_ps0_raw = state.fpr[instruction.fp_source_c];
+        const double a_ps0 = std::bit_cast<double>(a_ps0_raw);
+        const double a_ps1 = std::bit_cast<double>(a_ps1_raw);
+        const double c_ps0 = std::bit_cast<double>(round_multiply_operand_25bit(c_ps0_raw));
+        const float result_ps0 = static_cast<float>(a_ps0 * c_ps0);
+        const float result_ps1 = static_cast<float>(a_ps1 * c_ps0);
+        state.fpr[instruction.fp_register] =
+            std::bit_cast<std::uint64_t>(static_cast<double>(result_ps0));
+        state.fpr_ps1[instruction.fp_register] =
+            std::bit_cast<std::uint64_t>(static_cast<double>(result_ps1));
         break;
     }
 
