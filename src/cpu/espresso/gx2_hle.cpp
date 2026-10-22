@@ -73,6 +73,22 @@ constexpr std::uint32_t gx2_fetch_shader_struct_size = 0x20U;
 constexpr std::uint32_t gx2_attrib_stream_size = 0x20U;
 constexpr std::uint32_t gx2_max_fetch_attributes = 64U;
 constexpr std::uint32_t gx2_sampler_size = 0x0CU;
+constexpr std::uint32_t gx2_surface_size = 0x74U;
+constexpr std::uint32_t gx2_surface_use_color_buffer = 0x02U;
+constexpr std::uint32_t gx2_surface_use_depth_buffer = 0x04U;
+constexpr std::uint32_t gx2_surface_dim_1d = 0U;
+constexpr std::uint32_t gx2_surface_dim_3d = 2U;
+constexpr std::uint32_t gx2_tile_mode_default = 0U;
+constexpr std::uint32_t gx2_tile_mode_linear_aligned = 1U;
+constexpr std::uint32_t gx2_tile_mode_1d_thin1 = 2U;
+constexpr std::uint32_t gx2_tile_mode_1d_thick = 3U;
+constexpr std::uint32_t gx2_tile_mode_2d_thin1 = 4U;
+constexpr std::uint32_t gx2_tile_mode_2d_thick = 7U;
+constexpr std::uint32_t gx2_tile_mode_linear_special = 16U;
+constexpr std::uint32_t latte_pipe_interleave_bytes = 256U;
+constexpr std::uint32_t latte_pipe_count = 2U;
+constexpr std::uint32_t latte_bank_count = 4U;
+constexpr std::uint32_t latte_split_size = 2048U;
 
 struct Gx2AttribStream
 {
@@ -373,6 +389,416 @@ std::uint32_t calculate_drc_size(
             "gx2::GX2CalcDRCSize: calculated size overflows uint32_t");
     }
     return static_cast<std::uint32_t>(size);
+}
+
+struct Gx2SurfaceMipLayout
+{
+    std::uint32_t pitch{};
+    std::uint32_t height{};
+    std::uint32_t depth{};
+    std::uint32_t base_alignment{};
+    std::uint32_t pitch_alignment{};
+    std::uint32_t height_alignment{};
+    std::uint64_t size{};
+};
+
+std::uint32_t gx2_surface_format_bits(std::uint32_t format)
+{
+    // GX2 formats share the low six-bit component layout across UNORM, UINT,
+    // SNORM, SINT, SRGB, and floating-point variants.
+    switch (format & 0x3FU)
+    {
+    case 0x01U: return 8U;   // R8
+    case 0x02U: return 8U;   // R4_G4
+    case 0x05U: return 16U;  // R16
+    case 0x07U: return 16U;  // R8_G8
+    case 0x06U: return 16U;  // FLOAT_R16
+    case 0x08U:             // R5_G6_B5
+    case 0x0AU:             // R5_G5_B5_A1
+    case 0x0BU:             // R4_G4_B4_A4
+    case 0x0CU: return 16U; // A1_B5_G5_R5
+    case 0x0DU:             // UINT_R32
+    case 0x0EU: return 32U; // FLOAT_R32
+    case 0x0FU: return 32U; // R16_G16
+    case 0x10U: return 32U; // FLOAT_R16_G16
+    case 0x11U: return 32U; // R24_X8
+    case 0x16U: return 32U; // R11_G11_B10
+    case 0x19U:             // R10_G10_B10_A2
+    case 0x1AU:             // R8_G8_B8_A8
+    case 0x1BU: return 32U; // A2_B10_G10_R10
+    case 0x1DU:             // UINT_R32_G32
+    case 0x1EU: return 64U; // FLOAT_R32_G32
+    case 0x1FU:             // R16_G16_B16_A16
+    case 0x20U: return 64U; // FLOAT_R16_G16_B16_A16
+    case 0x22U:             // R32_G32_B32_A32
+    case 0x23U: return 128U;// FLOAT_R32_G32_B32_A32
+    default:
+        throw HleExecutionError(
+            "gx2::GX2CalcSurfaceSizeAndAlignment: unsupported surface format " +
+            std::to_string(format));
+    }
+}
+
+std::uint32_t align_gx2_dimension(std::uint32_t value, std::uint32_t alignment)
+{
+    if (alignment == 0U)
+    {
+        throw HleExecutionError(
+            "gx2::GX2CalcSurfaceSizeAndAlignment: invalid zero layout alignment");
+    }
+    const std::uint64_t aligned =
+        (static_cast<std::uint64_t>(value) + alignment - 1U) / alignment * alignment;
+    if (aligned > std::numeric_limits<std::uint32_t>::max())
+    {
+        throw HleExecutionError(
+            "gx2::GX2CalcSurfaceSizeAndAlignment: aligned dimension overflows uint32_t");
+    }
+    return static_cast<std::uint32_t>(aligned);
+}
+
+Gx2SurfaceMipLayout calculate_gx2_surface_mip_layout(
+    std::uint32_t width,
+    std::uint32_t height,
+    std::uint32_t depth,
+    std::uint32_t dimension,
+    std::uint32_t format_bits,
+    std::uint32_t samples,
+    std::uint32_t tile_mode,
+    std::uint32_t mip_level,
+    bool display_surface)
+{
+    std::uint32_t base_alignment = 1U;
+    std::uint32_t pitch_alignment = 1U;
+    std::uint32_t height_alignment = 1U;
+    std::uint32_t depth_alignment = 1U;
+    std::uint32_t thickness = 1U;
+    std::uint32_t normalized_bits = format_bits;
+
+    if (normalized_bits == 24U || normalized_bits == 48U ||
+        normalized_bits == 96U)
+    {
+        normalized_bits /= 3U;
+    }
+
+    switch (tile_mode)
+    {
+    case gx2_tile_mode_linear_special:
+        break;
+    case gx2_tile_mode_linear_aligned:
+        base_alignment = latte_pipe_interleave_bytes;
+        pitch_alignment = std::max(
+            64U, (8U * latte_pipe_interleave_bytes) / normalized_bits);
+        break;
+    case gx2_tile_mode_1d_thin1:
+    case gx2_tile_mode_1d_thick:
+        thickness = tile_mode == gx2_tile_mode_1d_thick ? 4U : 1U;
+        depth_alignment = thickness;
+        base_alignment = latte_pipe_interleave_bytes;
+        pitch_alignment = std::max(
+            8U, latte_pipe_interleave_bytes / normalized_bits / samples / thickness);
+        height_alignment = 8U;
+        break;
+    case gx2_tile_mode_2d_thin1:
+    case gx2_tile_mode_2d_thick:
+    {
+        thickness = tile_mode == gx2_tile_mode_2d_thick ? 4U : 1U;
+        depth_alignment = thickness;
+        constexpr std::uint32_t macro_width = 8U * latte_bank_count;
+        constexpr std::uint32_t macro_height = 8U * latte_pipe_count;
+        pitch_alignment = std::max(
+            macro_width,
+            macro_width * (latte_pipe_interleave_bytes / normalized_bits /
+                           (8U * thickness) / samples));
+        height_alignment = macro_height;
+        const std::uint64_t macro_tile_bytes =
+            static_cast<std::uint64_t>(samples) * normalized_bits * macro_height *
+            macro_width / 8U;
+        const std::uint64_t aligned_row_bytes =
+            static_cast<std::uint64_t>(samples) * macro_height * normalized_bits *
+            pitch_alignment / 8U;
+        std::uint64_t base = std::max(macro_tile_bytes, aligned_row_bytes);
+        const std::uint64_t micro_tile_bytes =
+            static_cast<std::uint64_t>(thickness) * samples * normalized_bits * 64U / 8U;
+        const std::uint64_t splits = micro_tile_bytes < latte_split_size
+            ? 1U
+            : micro_tile_bytes / latte_split_size;
+        base /= splits;
+        if (base > std::numeric_limits<std::uint32_t>::max())
+        {
+            throw HleExecutionError(
+                "gx2::GX2CalcSurfaceSizeAndAlignment: base alignment overflows uint32_t");
+        }
+        base_alignment = static_cast<std::uint32_t>(base);
+        break;
+    }
+    default:
+        throw HleExecutionError(
+            "gx2::GX2CalcSurfaceSizeAndAlignment: unsupported tile mode " +
+            std::to_string(tile_mode));
+    }
+
+    // Scan/display surfaces require pitch alignment to at least 32 pixels.
+    // This is applied after the tile-mode alignment is derived, matching GX2's
+    // display-surface adjustment without changing non-display layouts.
+    if (display_surface)
+    {
+        pitch_alignment = align_gx2_dimension(pitch_alignment, 32U);
+    }
+
+    const std::uint32_t mip_width = std::max(width >> mip_level, 1U);
+    const std::uint32_t mip_height =
+        dimension == gx2_surface_dim_1d ? 1U : std::max(height >> mip_level, 1U);
+    const std::uint32_t mip_depth = dimension == gx2_surface_dim_3d
+        ? std::max(depth >> mip_level, 1U)
+        : (dimension == 4U || dimension == 5U || dimension == 7U ? depth : 1U);
+
+    if (mip_level != 0U && tile_mode != gx2_tile_mode_linear_special)
+    {
+        // Non-base mip levels are power-of-two padded before the tile's own
+        // pitch/height/depth alignment is applied.
+        pitch_alignment = std::bit_ceil(pitch_alignment);
+        height_alignment = std::bit_ceil(height_alignment);
+        depth_alignment = std::bit_ceil(depth_alignment);
+    }
+
+    const std::uint32_t padded_mip_width =
+        mip_level != 0U && tile_mode != gx2_tile_mode_linear_special
+            ? std::bit_ceil(mip_width)
+            : mip_width;
+    const std::uint32_t padded_mip_height =
+        mip_level != 0U && tile_mode != gx2_tile_mode_linear_special
+            ? std::bit_ceil(mip_height)
+            : mip_height;
+    const std::uint32_t padded_mip_depth =
+        mip_level != 0U && tile_mode != gx2_tile_mode_linear_special
+            ? std::bit_ceil(mip_depth)
+            : mip_depth;
+
+    Gx2SurfaceMipLayout layout{};
+    layout.pitch = align_gx2_dimension(padded_mip_width, pitch_alignment);
+    layout.height = align_gx2_dimension(padded_mip_height, height_alignment);
+    layout.depth = align_gx2_dimension(padded_mip_depth, depth_alignment);
+    layout.base_alignment = base_alignment;
+    layout.pitch_alignment = pitch_alignment;
+    layout.height_alignment = height_alignment;
+    const std::uint64_t maximum_texels =
+        (static_cast<std::uint64_t>(std::numeric_limits<std::uint32_t>::max()) * 8U) /
+        (static_cast<std::uint64_t>(format_bits) * samples);
+    std::uint64_t texels = layout.pitch;
+    if (layout.height != 0U && texels > maximum_texels / layout.height)
+    {
+        throw HleExecutionError(
+            "gx2::GX2CalcSurfaceSizeAndAlignment: surface level size overflows uint32_t");
+    }
+    texels *= layout.height;
+    if (layout.depth != 0U && texels > maximum_texels / layout.depth)
+    {
+        throw HleExecutionError(
+            "gx2::GX2CalcSurfaceSizeAndAlignment: surface level size overflows uint32_t");
+    }
+    texels *= layout.depth;
+    layout.size = texels * format_bits * samples / 8U;
+    return layout;
+}
+
+void calculate_gx2_surface_size_and_alignment(
+    EspressoCore& core,
+    std::uint32_t surface_address)
+{
+    constexpr const char* api_name = "gx2::GX2CalcSurfaceSizeAndAlignment";
+    if (surface_address == 0U || (surface_address & 3U) != 0U)
+    {
+        throw HleExecutionError(std::string(api_name) +
+                                ": surface pointer is null or misaligned");
+    }
+
+    std::array<std::uint32_t, gx2_surface_size / sizeof(std::uint32_t)> words{};
+    for (std::size_t index = 0U; index < words.size(); ++index)
+    {
+        words[index] = core.memory.read32_be(
+            surface_address + static_cast<std::uint32_t>(index * sizeof(std::uint32_t)));
+    }
+
+    const std::uint32_t dimension = words[0];
+    const std::uint32_t width = words[1];
+    const std::uint32_t height = words[2];
+    const std::uint32_t depth = words[3];
+    std::uint32_t mip_levels = words[4];
+    const std::uint32_t format = words[5];
+    const std::uint32_t aa_mode = words[6];
+    const std::uint32_t surface_use = words[7];
+    std::uint32_t tile_mode = words[12];
+    std::uint32_t swizzle = words[13];
+
+    if (dimension > 7U || width == 0U || height == 0U || depth == 0U ||
+        width >= 0x01000000U || height >= 0x01000000U ||
+        depth >= 0x01000000U || aa_mode > 3U)
+    {
+        throw HleExecutionError(std::string(api_name) +
+                                ": invalid surface dimensions, dimension, or AA mode");
+    }
+
+    const std::uint32_t format_bits = gx2_surface_format_bits(format);
+    const std::uint32_t samples = 1U << aa_mode;
+    const bool is_3d = dimension == gx2_surface_dim_3d;
+    const bool color_buffer = (surface_use & gx2_surface_use_color_buffer) != 0U;
+    const bool depth_buffer = (surface_use & gx2_surface_use_depth_buffer) != 0U;
+    const bool display_surface = (surface_use & 0x08U) != 0U;
+
+    if (tile_mode == gx2_tile_mode_default)
+    {
+        if (dimension != gx2_surface_dim_1d || depth_buffer || aa_mode != 0U)
+        {
+            tile_mode = (!is_3d || color_buffer)
+                ? gx2_tile_mode_2d_thin1
+                : gx2_tile_mode_2d_thick;
+        }
+        else
+        {
+            tile_mode = gx2_tile_mode_linear_aligned;
+        }
+    }
+
+    if (mip_levels == 0U)
+    {
+        mip_levels = 1U;
+    }
+    std::uint32_t max_levels = 1U;
+    for (std::uint32_t extent = std::max(width, height); extent > 1U; extent >>= 1U)
+    {
+        ++max_levels;
+    }
+    if (is_3d)
+    {
+        std::uint32_t depth_levels = 1U;
+        for (std::uint32_t extent = depth; extent > 1U; extent >>= 1U)
+            ++depth_levels;
+        max_levels = std::max(max_levels, depth_levels);
+    }
+    mip_levels = std::min(mip_levels, max_levels);
+
+    if (tile_mode != gx2_tile_mode_linear_special &&
+        tile_mode != gx2_tile_mode_linear_aligned &&
+        tile_mode != gx2_tile_mode_1d_thin1 &&
+        tile_mode != gx2_tile_mode_1d_thick &&
+        tile_mode != gx2_tile_mode_2d_thin1 &&
+        tile_mode != gx2_tile_mode_2d_thick)
+    {
+        throw HleExecutionError(std::string(api_name) +
+                                ": unsupported effective tile mode " +
+                                std::to_string(tile_mode));
+    }
+
+    if (tile_mode == gx2_tile_mode_2d_thin1 ||
+        tile_mode == gx2_tile_mode_2d_thick)
+    {
+        const Gx2SurfaceMipLayout first = calculate_gx2_surface_mip_layout(
+            width, height, depth, dimension, format_bits, samples, tile_mode, 0U,
+            display_surface);
+        if (width < first.pitch_alignment && height < first.height_alignment)
+        {
+            tile_mode = tile_mode == gx2_tile_mode_2d_thick
+                ? gx2_tile_mode_1d_thick
+                : gx2_tile_mode_1d_thin1;
+        }
+    }
+
+    swizzle = (swizzle & 0xFF00FFFFU) |
+              ((tile_mode == gx2_tile_mode_2d_thin1 ||
+                tile_mode == gx2_tile_mode_2d_thick) ? 0x000D0000U : 0U);
+
+    std::array<std::uint32_t, 13U> mip_offsets{};
+    std::uint64_t previous_size = 0U;
+    std::uint64_t current_mip_offset = 0U;
+    std::uint32_t first_mip_offset = 0U;
+    std::uint32_t image_size = 0U;
+    std::uint32_t alignment = 0U;
+    std::uint32_t pitch = 0U;
+
+    for (std::uint32_t level = 0U; level < mip_levels; ++level)
+    {
+        std::uint32_t level_tile_mode = tile_mode;
+        if (level != 0U &&
+            (tile_mode == gx2_tile_mode_2d_thin1 ||
+             tile_mode == gx2_tile_mode_2d_thick))
+        {
+            const std::uint32_t mip_width = std::max(width >> level, 1U);
+            const std::uint32_t mip_height = std::max(height >> level, 1U);
+            const Gx2SurfaceMipLayout macro = calculate_gx2_surface_mip_layout(
+                width, height, depth, dimension, format_bits, samples, tile_mode,
+                level, display_surface);
+            if (mip_width < macro.pitch_alignment ||
+                mip_height < macro.height_alignment)
+            {
+                level_tile_mode = tile_mode == gx2_tile_mode_2d_thick
+                    ? gx2_tile_mode_1d_thick
+                    : gx2_tile_mode_1d_thin1;
+            }
+        }
+
+        const Gx2SurfaceMipLayout layout = calculate_gx2_surface_mip_layout(
+            width, height, depth, dimension, format_bits, samples,
+            level_tile_mode, level, display_surface);
+        if (layout.size > std::numeric_limits<std::uint32_t>::max())
+        {
+            throw HleExecutionError(std::string(api_name) +
+                                    ": surface level size overflows uint32_t");
+        }
+
+        if (level == 0U)
+        {
+            image_size = static_cast<std::uint32_t>(layout.size);
+            alignment = layout.base_alignment;
+            pitch = layout.pitch;
+        }
+        else
+        {
+            const std::uint64_t align = layout.base_alignment;
+            const std::uint64_t padding =
+                (align - current_mip_offset % align) % align;
+            current_mip_offset += padding + previous_size;
+            if (current_mip_offset > std::numeric_limits<std::uint32_t>::max())
+            {
+                throw HleExecutionError(std::string(api_name) +
+                                        ": mip offset overflows uint32_t");
+            }
+            if (level == 1U)
+            {
+                first_mip_offset = static_cast<std::uint32_t>(current_mip_offset);
+            }
+            else
+            {
+                mip_offsets[level - 1U] = static_cast<std::uint32_t>(current_mip_offset);
+            }
+        }
+        previous_size = layout.size;
+    }
+
+    const std::uint64_t mipmap_size = mip_levels > 1U
+        ? previous_size + current_mip_offset
+        : 0U;
+    if (mipmap_size > std::numeric_limits<std::uint32_t>::max())
+    {
+        throw HleExecutionError(std::string(api_name) +
+                                ": mipmap size overflows uint32_t");
+    }
+    mip_offsets[0] = first_mip_offset;
+
+    core.memory.validate_write_range(surface_address, gx2_surface_size);
+    core.memory.write32_be(surface_address + 0x10U, mip_levels);
+    core.memory.write32_be(surface_address + 0x20U, image_size);
+    core.memory.write32_be(surface_address + 0x28U,
+                           static_cast<std::uint32_t>(mipmap_size));
+    core.memory.write32_be(surface_address + 0x30U, tile_mode);
+    core.memory.write32_be(surface_address + 0x34U, swizzle);
+    core.memory.write32_be(surface_address + 0x38U, alignment);
+    core.memory.write32_be(surface_address + 0x3CU, pitch);
+    for (std::size_t index = 0U; index < mip_offsets.size(); ++index)
+    {
+        core.memory.write32_be(
+            surface_address + 0x40U + static_cast<std::uint32_t>(index * 4U),
+            mip_offsets[index]);
+    }
 }
 
 std::uint32_t pack_stencil_ref_mask(
@@ -1394,6 +1820,13 @@ void register_gx2_hle(HleDispatcher& dispatcher)
                 core, out_size, api_name, "size output");
             core.memory.write32_be(out_display_list, display_list);
             core.memory.write32_be(out_size, display_list_size);
+        });
+
+    dispatcher.register_function(
+        "gx2",
+        "GX2CalcSurfaceSizeAndAlignment",
+        [](EspressoCore& core) {
+            calculate_gx2_surface_size_and_alignment(core, core.state.gpr[3]);
         });
 
     dispatcher.register_function(

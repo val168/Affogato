@@ -20663,6 +20663,125 @@ void gx2_calc_tv_size_hle_tests()
     assert(result.hle_call == "coreinit::GX2CalcTVSize");
 }
 
+void gx2_calc_surface_size_and_alignment_hle_tests()
+{
+    constexpr std::uint32_t surface_address = 0x4000U;
+    constexpr std::uint32_t return_address = 0x02751AC8U;
+    constexpr std::uint32_t surface_size = 0x74U;
+    constexpr std::uint32_t rgba8_format = 0x1AU;
+    constexpr std::uint32_t r8_format = 0x01U;
+
+    EspressoCore core(0x10000U);
+    register_gx2_hle(core.hle);
+    const std::uint32_t import = core.hle.bind_import(
+        "gx2", "GX2CalcSurfaceSizeAndAlignment");
+    assert(import != 0U);
+
+    const auto invoke = [&]() {
+        core.state.cia = import;
+        core.state.lr = return_address;
+        return core.run(1U);
+    };
+    const auto write_surface = [&](std::uint32_t dimension,
+                                   std::uint32_t width,
+                                   std::uint32_t height,
+                                   std::uint32_t depth,
+                                   std::uint32_t mip_levels,
+                                   std::uint32_t format,
+                                   std::uint32_t aa,
+                                   std::uint32_t use,
+                                   std::uint32_t tile_mode,
+                                   std::uint32_t swizzle) {
+        std::array<std::uint32_t, surface_size / 4U> words{};
+        words[0] = dimension;
+        words[1] = width;
+        words[2] = height;
+        words[3] = depth;
+        words[4] = mip_levels;
+        words[5] = format;
+        words[6] = aa;
+        words[7] = use;
+        words[9] = 0x12345678U; // image pointer must be preserved
+        words[11] = 0x87654321U; // mipmap pointer must be preserved
+        words[12] = tile_mode;
+        words[13] = swizzle;
+        for (std::size_t index = 0U; index < words.size(); ++index)
+        {
+            core.memory.write32_be(
+                surface_address + static_cast<std::uint32_t>(index * 4U),
+                words[index]);
+        }
+    };
+
+    core.state.gpr.fill(0xA5000000U);
+    core.state.gpr[3] = surface_address;
+    core.state.gpr[4] = 0x44444444U;
+    core.state.cr = 0x12345678U;
+    core.state.xer = 0xA5A55A5AU;
+    core.state.ctr = 0x87654321U;
+    core.state.fpscr = 0x5A5AA55AU;
+    const auto gprs_before = core.state.gpr;
+    const auto fprs_before = core.state.fpr;
+    const auto ps1_before = core.state.fpr_ps1;
+    const std::uint32_t cr_before = core.state.cr;
+    const std::uint32_t xer_before = core.state.xer;
+    const std::uint32_t ctr_before = core.state.ctr;
+    const std::uint32_t fpscr_before = core.state.fpscr;
+
+    // WUT's GX2Surface layout is 0x74 bytes. A common 1280x720 RGBA8 render
+    // surface computes the known 3,686,400-byte allocation and 1280-pixel pitch.
+    write_surface(1U, 1280U, 720U, 1U, 1U, rgba8_format, 0U, 0xAU, 0U, 0U);
+    auto result = invoke();
+    assert(result.reason == StopReason::instruction_limit);
+    assert(result.steps == 1U && core.state.cia == return_address);
+    assert(core.memory.read32_be(surface_address + 0x10U) == 1U);
+    assert(core.memory.read32_be(surface_address + 0x20U) == 3'686'400U);
+    assert(core.memory.read32_be(surface_address + 0x24U) == 0x12345678U);
+    assert(core.memory.read32_be(surface_address + 0x28U) == 0U);
+    assert(core.memory.read32_be(surface_address + 0x2CU) == 0x87654321U);
+    assert(core.memory.read32_be(surface_address + 0x30U) == 4U);
+    assert(core.memory.read32_be(surface_address + 0x34U) == 0x000D0000U);
+    assert(core.memory.read32_be(surface_address + 0x38U) == 2048U);
+    assert(core.memory.read32_be(surface_address + 0x3CU) == 1280U);
+    for (std::uint32_t index = 0U; index < 13U; ++index)
+    {
+        assert(core.memory.read32_be(surface_address + 0x40U + index * 4U) == 0U);
+    }
+    assert(core.state.gpr == gprs_before);
+    assert(core.state.fpr == fprs_before && core.state.fpr_ps1 == ps1_before);
+    assert(core.state.cr == cr_before && core.state.xer == xer_before);
+    assert(core.state.ctr == ctr_before && core.state.fpscr == fpscr_before);
+
+    // Linear-special mode is tightly packed and does not acquire tiled padding.
+    write_surface(1U, 13U, 7U, 1U, 1U, r8_format, 0U, 1U,
+                  16U, 0x00AB0000U);
+    result = invoke();
+    assert(result.reason == StopReason::instruction_limit);
+    assert(core.memory.read32_be(surface_address + 0x20U) == 91U);
+    assert(core.memory.read32_be(surface_address + 0x30U) == 16U);
+    assert(core.memory.read32_be(surface_address + 0x34U) == 0x00000000U);
+    assert(core.memory.read32_be(surface_address + 0x38U) == 1U);
+    assert(core.memory.read32_be(surface_address + 0x3CU) == 13U);
+
+    write_surface(1U, 8U, 4U, 1U, 4U, r8_format, 0U, 1U, 16U, 0U);
+    result = invoke();
+    assert(result.reason == StopReason::instruction_limit);
+    assert(core.memory.read32_be(surface_address + 0x20U) == 32U);
+    assert(core.memory.read32_be(surface_address + 0x28U) == 43U);
+    assert(core.memory.read32_be(surface_address + 0x40U) == 32U);
+    assert(core.memory.read32_be(surface_address + 0x44U) == 40U);
+    assert(core.memory.read32_be(surface_address + 0x48U) == 42U);
+
+    // The default one-dimensional layout resolves to linear-aligned storage.
+    write_surface(0U, 17U, 1U, 1U, 1U, r8_format, 0U, 1U, 0U, 0U);
+    result = invoke();
+    assert(result.reason == StopReason::instruction_limit);
+    assert(core.memory.read32_be(surface_address + 0x20U) == 256U);
+    assert(core.memory.read32_be(surface_address + 0x30U) == 1U);
+    assert(core.memory.read32_be(surface_address + 0x38U) == 256U);
+    assert(core.memory.read32_be(surface_address + 0x3CU) == 256U);
+}
+
 void gx2_set_tv_buffer_hle_tests()
 {
     constexpr std::uint32_t buffer_address = 0x0A001000U;
@@ -28392,6 +28511,7 @@ int main(int argc, char* argv[])
     gx2_set_alpha_to_mask_hle_tests();
     gx2_setup_context_state_ex_hle_tests();
     gx2_get_context_state_display_list_hle_tests();
+    gx2_calc_surface_size_and_alignment_hle_tests();
     gx2_calc_tv_size_hle_tests();
     gx2_set_tv_buffer_hle_tests();
     gx2_set_tv_scale_hle_tests();
