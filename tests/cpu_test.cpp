@@ -893,6 +893,11 @@ void decoder_tests()
     assert(ps_cmpu1.cr_field == 2U && ps_cmpu1.fp_compare_a == 1U &&
            ps_cmpu1.fp_compare_b == 2U && ps_cmpu1.fp_compare_uses_ps1);
     assert(decode(0x11011081U).opcode == Opcode::unsupported);
+    const DecodedInstruction ps_cmpo0 = decode(0x11011040U);
+    assert(ps_cmpo0.opcode == Opcode::paired_single_compare_ordered0);
+    assert(ps_cmpo0.cr_field == 2U && ps_cmpo0.fp_compare_a == 1U &&
+           ps_cmpo0.fp_compare_b == 2U);
+    assert(decode(0x11011041U).opcode == Opcode::unsupported);
     const DecodedInstruction ps_add = decode(0x1007482AU);
     assert(ps_add.opcode == Opcode::paired_single_add);
     assert(ps_add.fp_register == 0U && ps_add.fp_source_a == 7U &&
@@ -26685,6 +26690,40 @@ void paired_single_compare_unordered1_tests()
     assert((unordered.state.fpscr & fpscr::vxsnan_mask) != 0U);
 }
 
+void paired_single_compare_ordered0_tests()
+{
+    const auto double_bits = [](double value) { return std::bit_cast<std::uint64_t>(value); };
+    constexpr std::uint32_t exact_encoding = 0x11011040U;
+    const auto decoded = decode(exact_encoding);
+    assert(decoded.opcode == Opcode::paired_single_compare_ordered0);
+    assert(decoded.cr_field == 2U && decoded.fp_compare_a == 1U &&
+           decoded.fp_compare_b == 2U);
+
+    EspressoCore greater(4U);
+    greater.state.fpr[1] = double_bits(3.0);
+    greater.state.fpr[2] = double_bits(2.0);
+    greater.memory.write32_be(0U, exact_encoding);
+    assert(greater.step() == StepResult::executed);
+    assert(((greater.state.cr >> 20U) & 0xFU) == 0x4U); // CR.GT
+
+    EspressoCore quiet_nan(4U);
+    quiet_nan.state.fpr[1] = 0x7FF8123456789ABCULL;
+    quiet_nan.state.fpr[2] = double_bits(1.0);
+    quiet_nan.memory.write32_be(0U, exact_encoding);
+    assert(quiet_nan.step() == StepResult::executed);
+    assert(((quiet_nan.state.cr >> 20U) & 0xFU) == 0x1U);
+    assert((quiet_nan.state.fpscr & fpscr::vxvc_mask) != 0U);
+    assert((quiet_nan.state.fpscr & fpscr::vxsnan_mask) == 0U);
+
+    EspressoCore signaling_nan(4U);
+    signaling_nan.state.fpr[1] = 0x7FF0000000000001ULL;
+    signaling_nan.state.fpr[2] = double_bits(1.0);
+    signaling_nan.memory.write32_be(0U, exact_encoding);
+    assert(signaling_nan.step() == StepResult::executed);
+    assert((signaling_nan.state.fpscr & fpscr::vxsnan_mask) != 0U);
+    assert((signaling_nan.state.fpscr & fpscr::vxvc_mask) != 0U);
+}
+
 void paired_single_add_tests()
 {
     const auto encode_ps_add = [](std::uint8_t destination, std::uint8_t source_a,
@@ -28012,6 +28051,7 @@ int main(int argc, char* argv[])
     paired_single_divide_tests();
     paired_single_compare_unordered0_tests();
     paired_single_compare_unordered1_tests();
+    paired_single_compare_ordered0_tests();
     paired_single_add_tests();
     paired_single_subtract_tests();
     paired_single_multiply_scalar0_tests();
