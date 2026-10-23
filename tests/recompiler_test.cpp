@@ -80,6 +80,17 @@ namespace
            (static_cast<std::uint32_t>(end) << 1U) | (record ? 1U : 0U);
 }
 
+[[nodiscard]] constexpr std::uint32_t rlwimi_form(
+    std::uint8_t destination, std::uint8_t source, std::uint8_t shift,
+    std::uint8_t begin, std::uint8_t end, bool record)
+{
+    return (20U << 26U) | (static_cast<std::uint32_t>(source) << 21U) |
+           (static_cast<std::uint32_t>(destination) << 16U) |
+           (static_cast<std::uint32_t>(shift) << 11U) |
+           (static_cast<std::uint32_t>(begin) << 6U) |
+           (static_cast<std::uint32_t>(end) << 1U) | (record ? 1U : 0U);
+}
+
 [[nodiscard]] constexpr std::uint32_t lfd_form(
     std::uint8_t destination, std::uint8_t base, std::int16_t displacement)
 {
@@ -1832,6 +1843,74 @@ void recompiler_srawi_differential_tests()
     }
 }
 
+void recompiler_rlwimi_differential_tests()
+{
+    constexpr std::uint32_t start = 0x100U;
+    std::array<std::uint32_t, 32U> program{};
+    program[0] = rlwimi_form(12U, 30U, 6U, 24U, 25U, false);
+    for (std::uint32_t index = 1U; index < program.size(); ++index)
+    {
+        const std::uint8_t source = static_cast<std::uint8_t>((index * 7U + 5U) % 32U);
+        std::uint8_t destination = index % 4U == 1U
+            ? source
+            : static_cast<std::uint8_t>((index * 11U + 3U) % 32U);
+        if (destination == 12U)
+        {
+            destination = 13U;
+        }
+        const std::uint8_t begin = static_cast<std::uint8_t>((index * 13U) % 32U);
+        const std::uint8_t end = static_cast<std::uint8_t>((index * 17U + 31U) % 32U);
+        program[index] = rlwimi_form(destination, source,
+            static_cast<std::uint8_t>(index), begin, end, (index & 1U) != 0U);
+    }
+
+    EspressoCore interpreted(0x1000U);
+    EspressoCore compiled(0x1000U);
+    for (EspressoCore* core : {&interpreted, &compiled})
+    {
+        for (std::size_t index = 0U; index < program.size(); ++index)
+        {
+            core->memory.write32_be(
+                start + static_cast<std::uint32_t>(index * 4U), program[index]);
+        }
+        core->state.cia = start;
+        for (std::uint32_t reg = 0U; reg < core->state.gpr.size(); ++reg)
+        {
+            core->state.gpr[reg] = 0x9E3779B9U * (reg + 1U) ^ (reg << 27U);
+        }
+        core->state.gpr[30] = 3U;
+        core->state.gpr[12] = 0x1234563FU;
+        core->state.cr = 0xA5C39E71U;
+        core->state.xer = 0x87654321U;
+        core->state.lr = 0xABCDEF00U;
+        core->state.ctr = 0xFEDCBA98U;
+        core->state.fpscr = 0x89ABCDEFU;
+    }
+
+    const RunResult oracle = interpreted.run(program.size());
+    Recompiler recompiler;
+    const RunResult actual = recompiler.run(compiled, program.size());
+    assert(actual.reason == oracle.reason);
+    assert(actual.steps == oracle.steps && actual.steps == program.size());
+    assert(actual.cia == oracle.cia);
+    assert(compiled.state.gpr == interpreted.state.gpr);
+    assert(compiled.state.gpr[12] == 0x123456FFU);
+    assert(compiled.state.cr == interpreted.state.cr);
+    assert(compiled.state.xer == interpreted.state.xer);
+    assert(compiled.state.lr == interpreted.state.lr);
+    assert(compiled.state.ctr == interpreted.state.ctr);
+    assert(compiled.state.fpscr == interpreted.state.fpscr);
+    assert(recompiler.statistics().native_instructions == program.size());
+    assert(recompiler.statistics().interpreter_fallbacks == 0U);
+    assert(actual.instruction_history.size() == program.size());
+    for (std::size_t index = 0U; index < program.size(); ++index)
+    {
+        const bool record = index != 0U && (index & 1U) != 0U;
+        assert(actual.instruction_history[index].opcode_name ==
+            (record ? "rlwimi." : "rlwimi"));
+    }
+}
+
 void recompiler_cntlzw_differential_tests()
 {
     constexpr std::uint32_t start = 0x100U;
@@ -2615,6 +2694,7 @@ int main()
     recompiler_slw_differential_tests();
     recompiler_srw_differential_tests();
     recompiler_srawi_differential_tests();
+    recompiler_rlwimi_differential_tests();
     recompiler_cntlzw_differential_tests();
     recompiler_rlwinm_differential_tests();
     recompiler_lfd_differential_tests();

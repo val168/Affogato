@@ -457,6 +457,10 @@ struct BlockCode
     {
         return true;
     }
+    if (insn.opcode == Opcode::rotate_left_word_and_mask_insert && insn.record)
+    {
+        return true;
+    }
     switch (insn.opcode)
     {
     case Opcode::addi:
@@ -500,6 +504,7 @@ struct BlockCode
     case Opcode::shift_right_word:
     case Opcode::arithmetic_shift_right_immediate:
     case Opcode::count_leading_zeros:
+    case Opcode::rotate_left_word_and_mask_insert:
     case Opcode::load_word_zero:
     case Opcode::load_byte_zero:
     case Opcode::load_halfword_zero:
@@ -551,6 +556,7 @@ struct BlockCode
     case Opcode::subtract_from: return "subf";
     case Opcode::subtract_from_carrying: return "subfc";
     case Opcode::subtract_from_extended: return "subfe";
+    case Opcode::rotate_left_word_and_mask_insert: return "rlwimi";
     case Opcode::bitwise_or: return "or";
     case Opcode::bitwise_and: return "and";
     case Opcode::bitwise_xor: return "xor";
@@ -1687,8 +1693,16 @@ struct Recompiler::Impl
                 break;
             }
             case Opcode::rotate_left_word_and_mask:
+            case Opcode::rotate_left_word_and_mask_insert:
             {
+                const bool insert =
+                    insn.opcode == Opcode::rotate_left_word_and_mask_insert;
+                x86::Gp old_destination{};
                 x86::Gp value = compiler.new_gp32("rotate_mask_value");
+                if (insert)
+                {
+                    old_destination = read_guest_gpr(insn.destination);
+                }
                 compiler.mov(value, read_guest_gpr(insn.source));
                 if (insn.shift != 0U)
                 {
@@ -1707,6 +1721,11 @@ struct Recompiler::Impl
                     }
                 }
                 compiler.and_(value, imm(mask));
+                if (insert)
+                {
+                    compiler.and_(old_destination, imm(~mask));
+                    compiler.or_(value, old_destination);
+                }
                 write_guest_gpr(insn.destination, value);
 
                 if (insn.record)
