@@ -3,7 +3,7 @@
 ## WWHD checkpoint
 
 - RPX: `cking.rpx`; entry point `0x028EA9E0`; 24 sections.
-- Latest confirmed run: 6,080,538 guest instructions; stop CIA `0x00000000`; GPR3 `0`; LR `0x027B6844`; CTR `0`; stop is an unsupported fetch of `0x46524D48` after `bcctr` loads CTR from zero. The 64-instruction trace shows a preceding loop copying surface words from `0x10168214` into a temporary buffer before `GX2CalcSurfaceSizeAndAlignment`, then a generic callback path loads object `0x06E4F660` through `0x101F8C2C`; its `+0x10` field is null. An opt-in guest write watch confirmed guest code installs the global pointer at `0x02785DE0` and separately writes zero to the `+0x10` field at `0x02785D14` and `0x02785EC4`. Subsequent indirect-pointer loads resolve to zero. `0x46524D48` is the synthetic `FRMH` header mirrored at low address zero by the MEM1 alias, so this is a null indirect call obscured by the current flat memory map, not a missing PPC opcode. The owning object/expected callback remains unidentified; do not synthesize a target. Uninstrumented Release guest execution remains about 1.1 s.
+- Latest confirmed run: 6,080,538 guest instructions; stop CIA `0x00000000`; GPR3 `0`; LR `0x027B6844`; CTR `0`; stop is an unsupported fetch of `0x46524D48` after `bcctr` loads CTR from zero. The 64-instruction trace shows a preceding loop copying surface words from `0x10168214` into a temporary buffer before `GX2CalcSurfaceSizeAndAlignment`, then a generic callback path loads object `0x06E4F660` through `0x101F8C2C`; its `+0x10` field is null. An opt-in guest write watch confirmed guest code installs the global pointer at `0x02785DE0` and separately writes zero to the `+0x10` field at `0x02785D14` and `0x02785EC4`. A memory dump shows the object has a valid vtable at `0x06E4F598` and populated neighboring fields, so this is a null member callback rather than a wholly unconstructed object. Subsequent indirect-pointer loads resolve to zero. `0x46524D48` is the synthetic `FRMH` header mirrored at low address zero by the MEM1 alias, so this is a null indirect call obscured by the current flat memory map, not a missing PPC opcode. The owning object/expected callback remains unidentified; do not synthesize a target. Uninstrumented Release guest execution remains about 1.1 s.
 - Latest JIT run after native `lfs`: 4,158,093 native instructions, 1,922,446 interpreter fallbacks, 22,956 compiled blocks, 1,882,460 block-cache hits. Release guest time across three runs: 1.148/1.146/1.182 s versus 1.322/1.257/1.359 s before `lfs`; medians 1.148 s versus 1.322 s (13.2% lower guest time). Host total medians were 1.340 s versus 1.511 s. The 175,096 `lfs` fallbacks now execute natively. Remaining top fallbacks: `fmadd` 149,463; `stfs` 127,192; `stwu` 107,842; `fmr` 98,684; `stfd` 97,997; `cmpwi` 94,017; `slw` 87,439.
 - No unimplemented HLE was reached. `GX2InitTextureRegs` ran 13 times, along with the sampler initialization and existing GX2 state HLEs.
 
@@ -54,13 +54,14 @@
 - `10f2751` - `gpu: upload staged RGBA8 textures to Vulkan`
 - `79fa40a` - `debug: print full recent HLE trace`
 - `9c8742e` - `debug: retain a wider PPC trace`
-- pending - `debug: watch guest memory writes`
+- `0d7ef50` - `debug: watch guest memory writes`
+- pending - `debug: dump guest memory in RPX diagnostics`
 
 ## Current test status
 
 - Debug and Release CMake/Ninja builds completed; CTest passed 2/2 in both configurations. The opt-in hidden-window Vulkan RGBA8 upload smoke test passed in Debug and Release on the NVIDIA GeForce RTX 5070 Laptop GPU without validation warnings. Debug and Release WWHD remain at 6,080,538 instructions and the same null `bcctr` target. Release RPX load was 91 ms; guest execution was 1.134 s in the latest run.
 - Native `lfs` interpreter/JIT differential tests cover signed zero, finite values, a single subnormal, infinities, qNaN/sNaN, literal-zero `rA`, PS0/PS1 behavior, history, and transactional 4-byte memory faults. Native `lfd` tests cover raw big-endian values, literal-zero `rA`, PS1 preservation, and transactional 8-byte faults.
-- RPX diagnostics capture and print the latest 64 HLE calls and 64 PPC instructions. `--watch-write <guest-address>` opts into a bounded watch of a four-byte word, reporting overlapping guest writes, writer CIA, resulting big-endian word, and local decoded code context. With the option off the only write-path cost is a disabled-watchpoint check. The current slot receives two explicit zero stores; no HLE is adjacent to the null `bcctr`.
+- RPX diagnostics capture and print the latest 64 HLE calls and 64 PPC instructions. `--watch-write <guest-address>` opts into a bounded watch of a four-byte word, reporting overlapping writes, writer CIA, resulting big-endian word, and local decoded code context. The pending `--dump-memory` option provides bounded post-run BE-word inspection. Both are diagnostic-only and disabled unless requested. The current slot receives two explicit zero stores; no HLE is adjacent to the null `bcctr`.
 
 ## Prioritized queue
 

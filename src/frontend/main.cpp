@@ -27,6 +27,7 @@
 #include <string>
 #include <string_view>
 #include <thread>
+#include <utility>
 #include <vector>
 
 namespace
@@ -375,13 +376,15 @@ int run_rpx_diagnostic(int argc, char* argv[])
     {
         std::cerr << "Usage: AffogatoFrontend.exe --run-rpx <file.rpx> "
                      "[--recompiler] [--limit <instructions>] "
-                     "[--watch-write <guest-address>]\n";
+                     "[--watch-write <guest-address>] "
+                     "[--dump-memory <address> <bytes>]...\n";
         return 2;
     }
 
     affogato::ExecutionMode mode = affogato::ExecutionMode::interpreter;
     std::size_t instruction_limit = 5'000'000'000ULL;
     std::optional<std::uint32_t> watched_guest_write_address;
+    std::vector<std::pair<std::uint32_t, std::uint32_t>> guest_memory_dumps;
     for (int index = 3; index < argc; ++index)
     {
         const std::string_view argument(argv[index]);
@@ -411,6 +414,29 @@ int run_rpx_diagnostic(int argc, char* argv[])
                     "--watch-write requires a 32-bit guest address");
             }
             watched_guest_write_address = static_cast<std::uint32_t>(parsed);
+        }
+        else if (argument == "--dump-memory" && index + 2 < argc)
+        {
+            const std::string_view address_text(argv[++index]);
+            const std::string_view size_text(argv[++index]);
+            std::size_t parsed_address_length = 0U;
+            std::size_t parsed_size_length = 0U;
+            const unsigned long long address =
+                std::stoull(std::string(address_text), &parsed_address_length, 0);
+            const unsigned long long size =
+                std::stoull(std::string(size_text), &parsed_size_length, 0);
+            if (parsed_address_length != address_text.size() ||
+                address > std::numeric_limits<std::uint32_t>::max() ||
+                parsed_size_length != size_text.size() || size < 4U || size > 256U ||
+                (address & 3U) != 0U || (size & 3U) != 0U)
+            {
+                throw std::invalid_argument(
+                    "--dump-memory requires an aligned address and 4..256-byte "
+                    "multiple-of-four size");
+            }
+            guest_memory_dumps.emplace_back(
+                static_cast<std::uint32_t>(address),
+                static_cast<std::uint32_t>(size));
         }
         else
         {
@@ -560,6 +586,34 @@ int run_rpx_diagnostic(int argc, char* argv[])
                               << "   <unmapped>" << std::dec << '\n';
                 }
             }
+        }
+    }
+    for (const auto& [dump_address, dump_size] : guest_memory_dumps)
+    {
+        std::cout << "Guest-memory dump at 0x" << std::hex << std::uppercase
+                  << dump_address << " (" << dump_size
+                  << " bytes, big-endian words):\n";
+        try
+        {
+            for (std::uint32_t offset = 0U; offset < dump_size; offset += 16U)
+            {
+                std::cout << "  0x" << std::setw(8) << std::setfill('0')
+                          << (dump_address + offset) << ':';
+                for (std::uint32_t word_offset = 0U;
+                     word_offset < 16U && offset + word_offset < dump_size;
+                     word_offset += 4U)
+                {
+                    std::cout << " 0x" << std::setw(8) << std::setfill('0')
+                              << emulator.core().memory.read32_be(
+                                     dump_address + offset + word_offset);
+                }
+                std::cout << '\n';
+            }
+            std::cout << std::setfill(' ') << std::dec;
+        }
+        catch (const std::exception& error)
+        {
+            std::cout << "  <dump failed: " << error.what() << ">\n";
         }
     }
     if (result.execution.hle_call == "coreinit::OSReceiveMessage")
