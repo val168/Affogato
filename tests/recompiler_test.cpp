@@ -320,6 +320,56 @@ void recompiler_neg_differential_test()
     assert(actual.instruction_history.back().opcode_name == "neg.");
 }
 
+void recompiler_mullw_differential_test()
+{
+    constexpr std::uint32_t start = 0x100U;
+    const std::array<std::uint32_t, 3U> program{
+        x_form(3U, 3U, 4U, 235U),       // r3 = INT_MIN * 3 modulo 2^32.
+        x_form(5U, 6U, 7U, 235U, true),  // Negative wrapped result updates CR0.
+        x_form(8U, 8U, 8U, 235U),       // All operands alias; (-1) * (-1) = 1.
+    };
+    EspressoCore interpreted(0x1000U);
+    EspressoCore compiled(0x1000U);
+    for (EspressoCore* core : {&interpreted, &compiled})
+    {
+        for (std::size_t index = 0; index < program.size(); ++index)
+        {
+            core->memory.write32_be(start + static_cast<std::uint32_t>(index * 4U),
+                                    program[index]);
+        }
+        core->state.cia = start;
+        core->state.gpr[3] = 0x80000000U;
+        core->state.gpr[4] = 3U;
+        core->state.gpr[6] = 0x7FFFFFFFU;
+        core->state.gpr[7] = 2U;
+        core->state.gpr[8] = 0xFFFFFFFFU;
+        core->state.cr = 0xA1B2C3D4U;
+        core->state.xer = 0xD2345678U;
+    }
+    const std::uint32_t xer_before = interpreted.state.xer;
+    const RunResult oracle = interpreted.run(program.size());
+    Recompiler recompiler;
+    const RunResult actual = recompiler.run(compiled, program.size());
+    assert(actual.reason == oracle.reason && actual.steps == program.size());
+    assert(actual.cia == oracle.cia);
+    assert(compiled.state.gpr == interpreted.state.gpr);
+    assert(compiled.state.gpr[3] == 0x80000000U);
+    assert(compiled.state.gpr[5] == 0xFFFFFFFEU);
+    assert(compiled.state.gpr[8] == 1U);
+    assert(compiled.state.cr == interpreted.state.cr);
+    assert((compiled.state.cr >> 28U) == 9U); // LT plus the existing XER.SO.
+    assert(compiled.state.xer == xer_before);
+    assert(recompiler.statistics().native_instructions == program.size());
+    assert(recompiler.statistics().interpreter_fallbacks == 0U);
+    const InstructionHistoryEntry& history = actual.instruction_history.back();
+    assert(history.opcode_name == "mullw" && history.completed);
+    assert(history.source_count == 2U);
+    assert(history.source_registers[0] == 8U && history.source_values[0] == 0xFFFFFFFFU);
+    assert(history.source_registers[1] == 8U && history.source_values[1] == 0xFFFFFFFFU);
+    assert(history.has_destination && history.destination_register == 8U);
+    assert(history.destination_value == 1U);
+}
+
 void recompiler_cmpwi_differential_test()
 {
     constexpr std::uint32_t start = 0x100U;
@@ -4096,6 +4146,7 @@ int main()
     recompiler_differential_arithmetic_test();
     recompiler_mulli_differential_test();
     recompiler_neg_differential_test();
+    recompiler_mullw_differential_test();
     recompiler_cmpwi_differential_test();
     recompiler_cmplwi_differential_test();
     recompiler_cmpw_differential_test();

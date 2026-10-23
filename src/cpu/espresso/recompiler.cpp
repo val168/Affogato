@@ -75,6 +75,13 @@ struct NativeMulliRecord
     std::uint32_t result{};
 };
 
+struct NativeMullwRecord
+{
+    std::uint32_t source_a{};
+    std::uint32_t source_b{};
+    std::uint32_t result{};
+};
+
 struct NativeExecutionContext
 {
     GuestMemory* memory{};
@@ -85,6 +92,7 @@ struct NativeExecutionContext
     std::array<NativePsqStoreRecord, 64> psq_store_records{};
     std::array<NativePsqLoadRecord, 64> psq_load_records{};
     std::array<NativeMulliRecord, 64> mulli_records{};
+    std::array<NativeMullwRecord, 64> mullw_records{};
     std::uint64_t memory_access_calls{};
     bool failed{};
     bool guest_memory_fault{};
@@ -938,6 +946,10 @@ struct BlockCode
     {
         return true;
     }
+    if (insn.opcode == Opcode::multiply_low_word && insn.record)
+    {
+        return true;
+    }
     if (insn.opcode == Opcode::subtract_from_carrying)
     {
         return true;
@@ -968,6 +980,7 @@ struct BlockCode
     case Opcode::addi:
     case Opcode::addis:
     case Opcode::multiply_low_immediate:
+    case Opcode::multiply_low_word:
     case Opcode::negate:
     case Opcode::add_immediate_carry:
     case Opcode::subtract_from_immediate_carry:
@@ -1066,6 +1079,7 @@ struct BlockCode
     case Opcode::addi: return "addi";
     case Opcode::addis: return "addis";
     case Opcode::multiply_low_immediate: return "mulli";
+    case Opcode::multiply_low_word: return "mullw";
     case Opcode::negate: return "neg";
     case Opcode::add_immediate_carry: return "addic";
     case Opcode::subtract_from_immediate_carry: return "subfic";
@@ -1668,6 +1682,56 @@ struct Recompiler::Impl
                 compiler.mov(x86::dword_ptr(context, static_cast<std::int32_t>(
                     record_base + offsetof(NativeMulliRecord, result))), result);
                 write_guest_gpr(insn.destination, result);
+                break;
+            }
+            case Opcode::multiply_low_word:
+            {
+                const std::size_t record_base = offsetof(NativeExecutionContext, mullw_records) +
+                    index * sizeof(NativeMullwRecord);
+                const x86::Gp source_a = read_guest_gpr(insn.base);
+                const x86::Gp source_b = read_guest_gpr(insn.source);
+                compiler.mov(x86::dword_ptr(context, static_cast<std::int32_t>(
+                    record_base + offsetof(NativeMullwRecord, source_a))), source_a);
+                compiler.mov(x86::dword_ptr(context, static_cast<std::int32_t>(
+                    record_base + offsetof(NativeMullwRecord, source_b))), source_b);
+                x86::Gp result = compiler.new_gp32("mullw_result");
+                compiler.mov(result, source_a);
+                compiler.imul(result, source_b);
+                compiler.mov(x86::dword_ptr(context, static_cast<std::int32_t>(
+                    record_base + offsetof(NativeMullwRecord, result))), result);
+                write_guest_gpr(insn.destination, result);
+                if (insn.record)
+                {
+                    compiler.test(result, result);
+                    x86::Gp less = compiler.new_gp32("mullw_cr0_lt");
+                    x86::Gp greater = compiler.new_gp32("mullw_cr0_gt");
+                    x86::Gp equal = compiler.new_gp32("mullw_cr0_eq");
+                    compiler.mov(less, imm(0U));
+                    compiler.setl(less.r8());
+                    compiler.mov(greater, imm(0U));
+                    compiler.setg(greater.r8());
+                    compiler.mov(equal, imm(0U));
+                    compiler.sete(equal.r8());
+                    compiler.shl(less, imm(3U));
+                    compiler.shl(greater, imm(2U));
+                    compiler.shl(equal, imm(1U));
+                    compiler.or_(less, greater);
+                    compiler.or_(less, equal);
+
+                    x86::Gp xer_so = compiler.new_gp32("mullw_cr0_so");
+                    compiler.mov(xer_so, x86::dword_ptr(
+                        state, static_cast<std::int32_t>(offsetof(CpuState, xer))));
+                    compiler.shr(xer_so, imm(31U));
+                    compiler.or_(less, xer_so);
+                    compiler.shl(less, imm(28U));
+                    x86::Gp cr = compiler.new_gp32("mullw_cr0");
+                    compiler.mov(cr, x86::dword_ptr(
+                        state, static_cast<std::int32_t>(offsetof(CpuState, cr))));
+                    compiler.and_(cr, imm(0x0FFFFFFFU));
+                    compiler.or_(cr, less);
+                    compiler.mov(x86::dword_ptr(
+                        state, static_cast<std::int32_t>(offsetof(CpuState, cr))), cr);
+                }
                 break;
             }
             case Opcode::negate:
@@ -3593,6 +3657,21 @@ RunResult Recompiler::run(EspressoCore& core, std::size_t max_steps)
                 entry.source_registers[0] = insn.base;
                 entry.source_values[0] = record.source_value;
                 entry.source_count = 1U;
+                entry.has_destination = true;
+                entry.destination_register = insn.destination;
+                entry.destination_value = record.result;
+                core.append_instruction_history(std::move(entry));
+                continue;
+            }
+            if (insn.opcode == Opcode::multiply_low_word)
+            {
+                InstructionHistoryEntry entry = native_history(insn, cia);
+                const NativeMullwRecord& record = context.mullw_records[i];
+                entry.source_registers[0] = insn.base;
+                entry.source_values[0] = record.source_a;
+                entry.source_registers[1] = insn.source;
+                entry.source_values[1] = record.source_b;
+                entry.source_count = 2U;
                 entry.has_destination = true;
                 entry.destination_register = insn.destination;
                 entry.destination_value = record.result;

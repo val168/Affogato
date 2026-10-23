@@ -2,6 +2,7 @@
 
 ## WWHD checkpoint
 
+- Latest dual-game Release regression after native `mullw`: WWHD remains at 6,080,538 instructions, stop CIA `0`, GPR3/4/5 `0/512/256`, unsupported null-target fetch `0x46524D48`; 5,532,474 native instructions, 548,065 interpreter fallbacks, 14,000 compiled blocks. BOTW remains at 860,172 instructions, stop CIA `0`, GPR3/4/5 `0/4,194,304/64`, same unsupported fetch; 856,511 native instructions, 3,662 fallbacks, 18,101 blocks. Both checkpoints are unchanged; BOTW `mullw` fallbacks are gone; no wall-time speedup is claimed.
 - Latest dual-game Release regression after native `neg`: WWHD remains at 6,080,538 instructions, stop CIA `0`, GPR3/4/5 `0/512/256`, unsupported null-target fetch `0x46524D48`; 5,514,118 native instructions, 566,421 interpreter fallbacks, 14,061 compiled blocks. BOTW remains at 860,172 instructions, stop CIA `0`, GPR3/4/5 `0/4,194,304/64`, same unsupported fetch; 856,473 native instructions, 3,700 fallbacks, 18,108 blocks. BOTW's 76 `neg` fallback calls are now native; no wall-time speedup is claimed.
 - Latest dual-game Release regression after native `nor`: WWHD remains at 6,080,538 instructions, stop CIA `0`, GPR3/4/5 `0/512/256`, unsupported null-target fetch `0x46524D48`; 5,514,108 native instructions, 566,431 interpreter fallbacks, 14,063 compiled blocks. BOTW remains at 860,172 instructions, stop CIA `0`, GPR3/4/5 `0/4,194,304/64`, same unsupported fetch; 856,397 native instructions, 3,776 fallbacks, 18,110 blocks. BOTW's 57 `nor` fallback calls are now native; no wall-time speedup is claimed.
 - Latest dual-game Release regression after native `mulli`: WWHD remains at 6,080,538 instructions, stop CIA `0`, GPR3/4/5 `0/512/256`, unsupported null-target fetch `0x46524D48`; 5,514,107 native instructions, 566,432 interpreter fallbacks, 14,064 compiled blocks. BOTW remains at 860,172 instructions, stop CIA `0`, GPR3/4/5 `0/4,194,304/64`, same unsupported fetch; 856,340 native instructions, 3,833 fallbacks, 18,110 blocks. Both checkpoints are unchanged; no wall-time speedup is claimed.
@@ -77,7 +78,8 @@
 
 ## Completed commits
 
-- `43e98c7` - `jit: emit native neg`
+- `7e87761` - `jit: emit native mullw`
+- `33ff413` - `jit: emit native neg`
 - `1674fd1` - `jit: emit native nor`
 - `7942b65` - `jit: emit native mulli`
 - `90ab0b0` - `gx2: implement sampler border type`
@@ -177,6 +179,7 @@
 - Native JIT `mulli` now uses a 32-bit low-product lowering while preserving actual GPR0 as the RA source, modulo-32-bit results, destination aliasing, and source/immediate/result history. Differential tests cover negative operands, product wrap, RA=0, zero immediate, and untouched CR/XER. Debug and Release CTest pass; both game checkpoints and stop reasons remain unchanged, and BOTW no longer lists `mulli` among its fallback leaders.
 - Native JIT `nor` now emits OR followed by bitwise NOT, supports record-form CR0/XER.SO behavior, and preserves register aliasing. Differential coverage includes non-record execution and negative-result `nor.` with SO propagation. Debug and Release CTest pass; WWHD/BOTW checkpoints and stop reasons remain unchanged, and all 57 BOTW `nor` fallbacks are now native.
 - Native JIT `neg` now lowers non-overflow negation directly and correctly handles optional CR0 recording without changing XER; `nego` remains distinct and unsupported by this path. Differential tests cover destination/source aliasing, INT_MIN wraparound, GPR0, record results, and sticky SO propagation. Debug and Release CTest pass; both game checkpoints remain unchanged, with BOTW fallbacks reduced by 76.
+- Native JIT `mullw` now computes the modulo-32-bit low product with a non-OE host multiply and optional CR0 recording; the separate `mullwo` path is unchanged. Differential tests cover signed inputs, destination/source aliasing, all-operands-equal, wraparound, CR0/SO, XER preservation, and pre-instruction operand history. Debug/Release CTest and both game regressions pass; BOTW's 38 `mullw` fallbacks are gone.
 - RPX diagnostics capture and print the latest 512 HLE calls and 64 PPC instructions. `--trace-hle <library::symbol>` filters the bounded trace to one exact HLE symbol. `--watch-write <guest-address>` opts into a bounded watch of a four-byte word, reporting overlapping writes, writer CIA, resulting big-endian word, local decoded code context, and all 32 GPRs at each matching write. `--dump-memory` provides bounded post-run BE-word inspection. All are diagnostic-only and disabled unless requested.
 
 ## Prioritized queue
