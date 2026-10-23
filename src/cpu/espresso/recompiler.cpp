@@ -1265,8 +1265,7 @@ RunResult Recompiler::run(EspressoCore& core, std::size_t max_steps)
     {
         ++impl_->stats.dispatcher_entries;
         const std::uint32_t start = core.state.cia;
-        if (start >= HleDispatcher::first_import_address &&
-            start < HleDispatcher::import_address_limit)
+        if (core.hle.is_import_address(start))
         {
             count_fallback(true);
             StepResult step_result{};
@@ -1398,8 +1397,7 @@ RunResult Recompiler::run(EspressoCore& core, std::size_t max_steps)
                     for (std::size_t i = 0; i < max_block_instructions; ++i)
                     {
                         const std::uint32_t cia = start + static_cast<std::uint32_t>(i * 4U);
-                        if (cia >= HleDispatcher::first_import_address &&
-                            cia < HleDispatcher::import_address_limit)
+                        if (core.hle.is_import_address(cia))
                         {
                             break;
                         }

@@ -11,7 +11,7 @@
 
 ## Secondary BOTW checkpoint
 
-- `U-King.rpx` is present at the local test path, but the current loader rejects it before guest execution with `RPX section overlaps the reserved HLE import address range`. This is a separate loader/address-allocation issue; it has not been changed as part of the WWHD investigation.
+- The loader now relocates its HLE data/import windows when an RPX section overlaps the defaults. BOTW passes that check and now stops at unsupported relocation type 68 (`R_PPC_DTPMOD32`) in section 3, guest address `0x103F3174`, symbol `s_memoryRouter__14hkMemoryRouter` (symbol value 4, addend 0). It remains pre-guest and is not yet a CPU regression checkpoint.
 
 ## Graphics checkpoint
 
@@ -63,20 +63,21 @@
 - `0d7ef50` - `debug: watch guest memory writes`
 - `50c38dd` - `debug: dump guest memory in RPX diagnostics`
 - `75ef1ec` - `debug: filter recent HLE call trace`
-- pending - `debug: capture GPRs at watched guest writes`
+- `0b656bb` - `debug: capture GPRs at watched guest writes`
+- pending - `loader: relocate HLE ranges around RPX sections`
 
 ## Current test status
 
-- Debug and Release CMake/Ninja builds completed; CTest passed 2/2 in both configurations. The opt-in hidden-window Vulkan RGBA8 upload smoke test passed in Debug and Release on the NVIDIA GeForce RTX 5070 Laptop GPU without validation warnings. Debug and Release WWHD remain at 6,080,538 instructions and the same null `bcctr` target. Release RPX load was 91 ms; guest execution was 1.134 s in the latest run.
+- Debug and Release CMake/Ninja builds completed; CTest passed 2/2 in both configurations. The opt-in hidden-window Vulkan RGBA8 upload smoke test passed in Debug and Release on the NVIDIA GeForce RTX 5070 Laptop GPU without validation warnings. WWHD remains at 6,080,538 instructions and the same null `bcctr` target. The RPX loader range relocation lets BOTW pass the previous reserved-import overlap rejection and exposes its first TLS relocation requirement.
 - Native `lfs` interpreter/JIT differential tests cover signed zero, finite values, a single subnormal, infinities, qNaN/sNaN, literal-zero `rA`, PS0/PS1 behavior, history, and transactional 4-byte memory faults. Native `lfd` tests cover raw big-endian values, literal-zero `rA`, PS1 preservation, and transactional 8-byte faults.
 - RPX diagnostics capture and print the latest 512 HLE calls and 64 PPC instructions. `--trace-hle <library::symbol>` filters the bounded trace to one exact HLE symbol. `--watch-write <guest-address>` opts into a bounded watch of a four-byte word, reporting overlapping writes, writer CIA, resulting big-endian word, local decoded code context, and all 32 GPRs at each matching write. `--dump-memory` provides bounded post-run BE-word inspection. All are diagnostic-only and disabled unless requested.
 
 ## Prioritized queue
 
-1. Trace the guest caller/callee path into `0x027538C0`, especially the branch using global `0x10208B64`, and identify which guest initialization is expected to populate that context.
+1. Implement the single-module `R_PPC_DTPMOD32` relocation with verified Cafe/ELF TLS module-ID semantics, then rerun BOTW to expose the next loader/runtime boundary.
 2. Determine whether the null indirect callback is caused by a missing guest initialization path or an incorrect runtime/HLE result; do not fabricate a callback or turn address zero into a valid call.
 3. Audit actual guest shader, draw, and scan-buffer producers; the current WWHD run stops before any draw or texture-binding HLE is observed.
 4. Connect binding-time/command-ordered guest snapshots to the Vulkan texture uploader only when a correct guest use point is available; do not assume a bind-time snapshot remains valid through later writes.
 5. Add shader resource descriptors, shader translation, draw submission, and guest framebuffer presentation in independently testable steps. Do not present the clear-test window as game output.
 6. Revisit measured JIT fallbacks only with a repeatable Release benchmark: native `fmr`, `stfs`, and `stwu` prototypes each passed targeted differential checks but regressed full WWHD timing, so they were discarded.
-7. Diagnose BOTW's section/import-range collision before treating it as a valid CPU regression target.
+7. Once BOTW reaches guest code, establish a stable secondary baseline and run it against each subsequent CPU change.

@@ -9,6 +9,28 @@
 namespace affogato::cpu::espresso
 {
 
+void HleDispatcher::configure_guest_address_base(std::uint32_t data_base)
+{
+    constexpr std::uint32_t range_size = 0x00100000U;
+    const std::uint64_t end = static_cast<std::uint64_t>(data_base) +
+        2ULL * range_size;
+    if ((data_base & (range_size - 1U)) != 0U || end > (1ULL << 32U))
+    {
+        throw std::invalid_argument("HLE guest address base must be 1 MiB-aligned and fit guest space");
+    }
+    if (!addresses_.empty() || !data_addresses_.empty())
+    {
+        throw std::logic_error("HLE guest address ranges cannot change after imports are bound");
+    }
+
+    data_range_begin_ = data_base;
+    data_range_end_ = data_base + range_size;
+    import_range_begin_ = data_range_end_;
+    import_range_end_ = static_cast<std::uint32_t>(end);
+    next_data_address_ = data_range_begin_;
+    next_import_address_ = import_range_begin_;
+}
+
 void HleDispatcher::register_function(std::string library, std::string symbol, Handler handler)
 {
     if (library.empty() || symbol.empty() || !handler)
@@ -59,7 +81,7 @@ std::uint32_t HleDispatcher::bind_import(std::string library, std::string symbol
     {
         return existing->second;
     }
-    if (next_import_address_ > import_address_limit - 4U)
+    if (next_import_address_ > import_range_end_ - 4U)
     {
         throw std::length_error("HLE import trampoline address range is exhausted");
     }
@@ -94,7 +116,7 @@ std::optional<std::uint32_t> HleDispatcher::bind_data_import(
         (static_cast<std::uint64_t>(next_data_address_) + data.alignment - 1U) &
         ~static_cast<std::uint64_t>(data.alignment - 1U);
     const std::uint64_t end = address + data.size;
-    if (address < first_data_address || end > data_address_limit)
+    if (address < data_range_begin_ || end > data_range_end_)
     {
         throw std::length_error("HLE data export address range is exhausted");
     }

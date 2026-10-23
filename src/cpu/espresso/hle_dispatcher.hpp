@@ -58,6 +58,28 @@ public:
     static constexpr std::uint32_t first_import_address = 0x03F00000U;
     static constexpr std::uint32_t import_address_limit = 0x04000000U;
 
+    void configure_guest_address_base(std::uint32_t data_base);
+    [[nodiscard]] std::uint32_t data_range_begin() const noexcept
+    {
+        return data_range_begin_;
+    }
+    [[nodiscard]] std::uint32_t data_range_end() const noexcept
+    {
+        return data_range_end_;
+    }
+    [[nodiscard]] std::uint32_t import_range_begin() const noexcept
+    {
+        return import_range_begin_;
+    }
+    [[nodiscard]] std::uint32_t import_range_end() const noexcept
+    {
+        return import_range_end_;
+    }
+    [[nodiscard]] bool is_import_address(std::uint32_t address) const noexcept
+    {
+        return address >= import_range_begin_ && address < import_range_end_;
+    }
+
     void register_function(std::string library, std::string symbol, Handler handler);
     void register_data(
         std::string library,
@@ -115,6 +137,10 @@ private:
     std::size_t next_recent_call_{};
     bool recent_call_trace_enabled_{};
     std::string recent_call_trace_filter_;
+    std::uint32_t data_range_begin_{first_data_address};
+    std::uint32_t data_range_end_{data_address_limit};
+    std::uint32_t import_range_begin_{first_import_address};
+    std::uint32_t import_range_end_{import_address_limit};
     std::uint32_t next_import_address_{first_import_address};
     std::uint32_t next_data_address_{first_data_address};
     std::string last_unimplemented_call_;

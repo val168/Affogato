@@ -158,17 +158,72 @@ struct TrampolineAllocator
     return address < other_address + other_size && other_address < address + size;
 }
 
+void relocate_hle_ranges_if_needed(
+    EspressoCore& core,
+    const std::vector<LoadedSection>& loaded)
+{
+    const std::uint64_t range_size = HleDispatcher::data_address_limit -
+        HleDispatcher::first_data_address;
+    const std::uint64_t combined_size = range_size * 2U;
+    const bool default_range_conflicts = std::any_of(
+        loaded.begin(), loaded.end(), [&core, range_size](const LoadedSection& section) {
+            return !section.contents.empty() &&
+                (ranges_overlap(section.address, section.contents.size(),
+                     core.hle.data_range_begin(), range_size) ||
+                 ranges_overlap(section.address, section.contents.size(),
+                     core.hle.import_range_begin(), range_size));
+        });
+    if (!default_range_conflicts)
+    {
+        return;
+    }
+
+    constexpr std::uint64_t alignment = 0x00100000U;
+    constexpr std::uint64_t stack_and_heap_reserve = 0x00010000U;
+    const std::uint64_t guest_limit = std::min<std::uint64_t>(
+        core.memory.size() > stack_and_heap_reserve
+            ? core.memory.size() - stack_and_heap_reserve
+            : 0U,
+        rpl_loader_metadata_base);
+    if (guest_limit < combined_size)
+    {
+        return;
+    }
+
+    std::uint64_t candidate =
+        (guest_limit - combined_size) & ~(alignment - 1U);
+    for (;;)
+    {
+        const bool occupied = std::any_of(
+            loaded.begin(), loaded.end(), [candidate, combined_size](const LoadedSection& section) {
+                return !section.contents.empty() && ranges_overlap(
+                    candidate, combined_size, section.address, section.contents.size());
+            });
+        if (!occupied)
+        {
+            core.hle.configure_guest_address_base(static_cast<std::uint32_t>(candidate));
+            return;
+        }
+        if (candidate < alignment)
+        {
+            return;
+        }
+        candidate -= alignment;
+    }
+}
+
 [[nodiscard]] bool trampoline_slot_available(
     std::uint32_t address,
     const std::vector<LoadedSection>& loaded,
-    const std::vector<LoadedSection>& trampolines)
+    const std::vector<LoadedSection>& trampolines,
+    const HleDispatcher& hle)
 {
     const std::uint64_t end = static_cast<std::uint64_t>(address) + trampoline_size;
     if (end > guest_address_space_end ||
-        (address < HleDispatcher::data_address_limit &&
-         end > HleDispatcher::first_data_address) ||
-        (address < HleDispatcher::import_address_limit &&
-         end > HleDispatcher::first_import_address))
+        ranges_overlap(address, trampoline_size, hle.data_range_begin(),
+            hle.data_range_end() - hle.data_range_begin()) ||
+        ranges_overlap(address, trampoline_size, hle.import_range_begin(),
+            hle.import_range_end() - hle.import_range_begin()))
     {
         return false;
     }
@@ -184,7 +239,8 @@ struct TrampolineAllocator
     TrampolineAllocator& allocator,
     std::uint32_t target_address,
     const std::vector<LoadedSection>& loaded,
-    const std::vector<LoadedSection>& trampolines)
+    const std::vector<LoadedSection>& trampolines,
+    const HleDispatcher& hle)
 {
     const auto in_rel24_range = [target_address](std::uint32_t address) {
         const std::int64_t displacement = static_cast<std::int64_t>(address) - target_address;
@@ -202,7 +258,8 @@ struct TrampolineAllocator
         {
             break;
         }
-        if (trampoline_slot_available(static_cast<std::uint32_t>(candidate), loaded, trampolines))
+        if (trampoline_slot_available(
+                static_cast<std::uint32_t>(candidate), loaded, trampolines, hle))
         {
             return static_cast<std::uint32_t>(candidate);
         }
@@ -221,7 +278,8 @@ struct TrampolineAllocator
         {
             break;
         }
-        if (trampoline_slot_available(static_cast<std::uint32_t>(candidate), loaded, trampolines))
+        if (trampoline_slot_available(
+                static_cast<std::uint32_t>(candidate), loaded, trampolines, hle))
         {
             return static_cast<std::uint32_t>(candidate);
         }
@@ -605,7 +663,8 @@ void apply_relocations(
                     try
                     {
                         trampoline_address = allocate_trampoline(
-                            trampoline_allocator, target_address, loaded, trampolines);
+                            trampoline_allocator, target_address, loaded, trampolines,
+                            core.hle);
                     }
                     catch (const std::invalid_argument& error)
                     {
@@ -636,8 +695,16 @@ void apply_relocations(
                 break;
             }
             default:
-                throw std::invalid_argument("RPX contains an unsupported PowerPC relocation type " +
-                                            std::to_string(type));
+            {
+                std::ostringstream message;
+                message << "RPX contains unsupported PowerPC relocation type " << type
+                        << " in section " << relocation_section.info
+                        << " at guest address 0x" << std::hex << std::uppercase
+                        << target_address << " for symbol '" << relocation_symbol
+                        << "' (symbol value 0x" << symbol_value << ", addend 0x"
+                        << static_cast<std::uint32_t>(addend) << ')';
+                throw std::invalid_argument(message.str());
+            }
             }
         }
     }
@@ -837,23 +904,32 @@ RpxLoadResult load_rpx32_powerpc(EspressoCore& core, std::span<const std::uint8_
         throw std::invalid_argument("RPX entry point is not inside a loaded executable section");
     }
 
-    for (const LoadedSection& section : loaded)
+    relocate_hle_ranges_if_needed(core, loaded);
+
+    for (std::size_t index = 0U; index < loaded.size(); ++index)
     {
+        const LoadedSection& section = loaded[index];
         const std::uint64_t section_end =
             static_cast<std::uint64_t>(section.address) + section.contents.size();
         if (section.contents.empty())
         {
             continue;
         }
-        if (section.address < HleDispatcher::import_address_limit &&
-            section_end > HleDispatcher::first_import_address)
+        if (ranges_overlap(section.address, section.contents.size(),
+                core.hle.import_range_begin(),
+                core.hle.import_range_end() - core.hle.import_range_begin()))
         {
-            throw std::invalid_argument("RPX section overlaps the reserved HLE import address range");
+            throw std::invalid_argument(section_range_error(
+                index, section.address, section.contents.size(), section_end,
+                "overlaps the reserved HLE import address range"));
         }
-        if (section.address < HleDispatcher::data_address_limit &&
-            section_end > HleDispatcher::first_data_address)
+        if (ranges_overlap(section.address, section.contents.size(),
+                core.hle.data_range_begin(),
+                core.hle.data_range_end() - core.hle.data_range_begin()))
         {
-            throw std::invalid_argument("RPX section overlaps the reserved HLE data address range");
+            throw std::invalid_argument(section_range_error(
+                index, section.address, section.contents.size(), section_end,
+                "overlaps the reserved HLE data address range"));
         }
     }
 
@@ -950,11 +1026,11 @@ RpxLoadResult load_rpx32_powerpc(EspressoCore& core, std::span<const std::uint8_
             add_occupied_range(trampoline.address, trampoline.contents.size());
         }
         add_occupied_range(
-            HleDispatcher::first_import_address,
-            HleDispatcher::import_address_limit - HleDispatcher::first_import_address);
+            core.hle.import_range_begin(),
+            core.hle.import_range_end() - core.hle.import_range_begin());
         add_occupied_range(
-            HleDispatcher::first_data_address,
-            HleDispatcher::data_address_limit - HleDispatcher::first_data_address);
+            core.hle.data_range_begin(),
+            core.hle.data_range_end() - core.hle.data_range_begin());
         std::sort(occupied_ranges.begin(), occupied_ranges.end());
 
         std::uint64_t selected_begin = 0;

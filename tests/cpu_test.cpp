@@ -10604,6 +10604,31 @@ void rpx_loader_tests()
     assert(imported_function_core.state.gpr[3] == 42U);
     assert(imported_function_core.state.cia == 0x80U);
 
+    const auto colliding_import_file = make_minimal_compressed_rpx(
+        HleDispatcher::first_import_address - 8U, 16,
+        imported_function_symbol, {}, import_options);
+    EspressoCore colliding_import_core(0x05000000U);
+    colliding_import_core.hle.register_function(
+        "coreinit", "TestFunction",
+        [](EspressoCore& core) { core.state.gpr[3] = 42U; });
+    static_cast<void>(load_rpx32_powerpc(
+        colliding_import_core, colliding_import_file));
+    const std::uint32_t relocated_function_address =
+        colliding_import_core.hle.bind_import("coreinit", "TestFunction");
+    assert(colliding_import_core.hle.data_range_begin() !=
+        HleDispatcher::first_data_address);
+    assert(relocated_function_address >=
+        colliding_import_core.hle.import_range_begin());
+    assert(relocated_function_address <
+        colliding_import_core.hle.import_range_end());
+    assert(colliding_import_core.memory.read32_be(imported_data_slot) ==
+        relocated_function_address);
+    colliding_import_core.state.cia = relocated_function_address;
+    colliding_import_core.state.lr = 0x80U;
+    assert(colliding_import_core.step() == StepResult::executed);
+    assert(colliding_import_core.state.gpr[3] == 42U);
+    assert(colliding_import_core.state.cia == 0x80U);
+
     const RpxRelocationSymbol unregistered_data_symbol{
         "UnregisteredData", imported_data_slot, 1, 1, 8, 0};
     const auto unregistered_data_file = make_minimal_compressed_rpx(
@@ -10614,6 +10639,27 @@ void rpx_loader_tests()
         unregistered_data_core.hle.bind_import("coreinit", "UnregisteredData");
     assert(unregistered_data_core.memory.read32_be(0x0200000CU) == imported_data_slot);
     assert(unregistered_data_core.memory.read32_be(imported_data_slot) == fallback_import_address);
+
+    RpxRelocationOptions unsupported_relocation{};
+    unsupported_relocation.type = 68U;
+    const auto unsupported_relocation_file = make_minimal_compressed_rpx(
+        0x02000000U, 16U, {}, unsupported_relocation);
+    EspressoCore unsupported_relocation_core(0x1000U);
+    bool unsupported_relocation_diagnostic = false;
+    try
+    {
+        static_cast<void>(load_rpx32_powerpc(
+            unsupported_relocation_core, unsupported_relocation_file));
+    }
+    catch (const std::invalid_argument& error)
+    {
+        const std::string message = error.what();
+        unsupported_relocation_diagnostic =
+            message.find("relocation type 68") != std::string::npos &&
+            message.find("guest address 0x200000C") != std::string::npos &&
+            message.find("symbol '$UNDEF'") != std::string::npos;
+    }
+    assert(unsupported_relocation_diagnostic);
 
     EspressoCore reserved_section_core(0x1000U);
     bool reserved_data_section_rejected = false;
@@ -10630,6 +10676,25 @@ void rpx_loader_tests()
             std::string::npos;
     }
     assert(reserved_data_section_rejected);
+
+    EspressoCore reserved_import_core(0x1000U);
+    bool reserved_import_section_rejected = false;
+    try
+    {
+        const auto reserved_file = make_minimal_compressed_rpx(
+            HleDispatcher::first_import_address - 8U);
+        static_cast<void>(load_rpx32_powerpc(reserved_import_core, reserved_file));
+    }
+    catch (const std::invalid_argument& error)
+    {
+        const std::string message = error.what();
+        reserved_import_section_rejected =
+            message.find("section 1") != std::string::npos &&
+            message.find("reserved HLE import address range") != std::string::npos &&
+            message.find("guest address 0x3EFFFF8") != std::string::npos &&
+            message.find("section size 0x10") != std::string::npos;
+    }
+    assert(reserved_import_section_rejected);
 
     EspressoCore reserved_heap_core(0x04010000U);
     static_cast<void>(load_rpx32_powerpc(
