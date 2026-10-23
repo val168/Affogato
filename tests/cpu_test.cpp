@@ -21893,6 +21893,32 @@ void latte_texture_staging_tests()
         255U, 0U, 0U, 255U, 0U, 255U, 0U, 255U,
         0U, 0U, 255U, 255U, 255U, 255U, 255U, 255U}));
 
+    const auto expect_packed_rgba = [&](std::uint32_t format,
+                                        const std::array<std::uint8_t, 12U>& bytes,
+                                        const std::vector<std::uint8_t>& expected) {
+        descriptor.format = format;
+        descriptor.endian_swap = 1U;
+        const auto packed = affogato::gpu::stage_linear_rgba8_texture(
+            descriptor, bytes);
+        assert(packed.has_value());
+        assert(packed->pixels == expected);
+    };
+    const std::vector<std::uint8_t> primary_colors{
+        255U, 0U, 0U, 255U, 0U, 255U, 0U, 255U,
+        0U, 0U, 255U, 255U, 255U, 255U, 255U, 255U};
+    expect_packed_rgba(0x0AU,
+        {0xF8U, 0x01U, 0x07U, 0xC1U, 0xA0U, 0xB0U,
+         0x00U, 0x3FU, 0xFFU, 0xFFU, 0xC0U, 0xD0U},
+        primary_colors);
+    expect_packed_rgba(0x0BU,
+        {0xF0U, 0x0FU, 0x0FU, 0x0FU, 0xA0U, 0xB0U,
+         0x00U, 0xFFU, 0xFFU, 0xFFU, 0xC0U, 0xD0U},
+        primary_colors);
+    expect_packed_rgba(0x0CU,
+        {0x80U, 0x1FU, 0x83U, 0xE0U, 0xA0U, 0xB0U,
+         0xFCU, 0x00U, 0xFFU, 0xFFU, 0xC0U, 0xD0U},
+        primary_colors);
+
     descriptor.format = 0x1AU;
     descriptor.endian_swap = 2U;
     descriptor.component_selectors = {0U, 1U, 2U, 3U};

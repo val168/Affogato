@@ -36,6 +36,9 @@ stage_linear_rgba8_texture(
     constexpr std::uint32_t gx2_unorm_r8_format = 0x01U;
     constexpr std::uint32_t gx2_unorm_rg8_format = 0x07U;
     constexpr std::uint32_t gx2_unorm_rgb565_format = 0x08U;
+    constexpr std::uint32_t gx2_unorm_rgba5551_format = 0x0AU;
+    constexpr std::uint32_t gx2_unorm_rgba4444_format = 0x0BU;
+    constexpr std::uint32_t gx2_unorm_argb1555_format = 0x0CU;
     constexpr std::uint32_t gx2_unorm_rgba8_format = 0x1AU;
     constexpr std::uint32_t gx2_unorm_numeric_format = 0U;
     constexpr std::uint32_t rgba8_bytes_per_pixel = 4U;
@@ -45,7 +48,15 @@ stage_linear_rgba8_texture(
     std::uint32_t source_channels = 0U;
     std::uint32_t source_bytes_per_pixel = 0U;
     std::uint32_t expected_endian_swap = 0U;
-    const bool packed_rgb565 = descriptor.format == gx2_unorm_rgb565_format;
+    enum class PackedFormat
+    {
+        none,
+        rgb565,
+        rgba5551,
+        rgba4444,
+        argb1555,
+    };
+    PackedFormat packed_format = PackedFormat::none;
     switch (descriptor.format)
     {
     case gx2_unorm_r8_format:
@@ -59,6 +70,22 @@ stage_linear_rgba8_texture(
         expected_endian_swap = 1U;
         break;
     case gx2_unorm_rgb565_format:
+        packed_format = PackedFormat::rgb565;
+        source_bytes_per_pixel = 2U;
+        expected_endian_swap = 1U;
+        break;
+    case gx2_unorm_rgba5551_format:
+        packed_format = PackedFormat::rgba5551;
+        source_bytes_per_pixel = 2U;
+        expected_endian_swap = 1U;
+        break;
+    case gx2_unorm_rgba4444_format:
+        packed_format = PackedFormat::rgba4444;
+        source_bytes_per_pixel = 2U;
+        expected_endian_swap = 1U;
+        break;
+    case gx2_unorm_argb1555_format:
+        packed_format = PackedFormat::argb1555;
         source_bytes_per_pixel = 2U;
         expected_endian_swap = 1U;
         break;
@@ -127,18 +154,55 @@ stage_linear_rgba8_texture(
                 static_cast<std::size_t>(x) * rgba8_bytes_per_pixel;
             const std::uint8_t* source = guest_bytes.data() + source_offset;
             std::array<std::uint8_t, 4U> logical_rgba{};
-            if (packed_rgb565)
+            if (packed_format != PackedFormat::none)
             {
                 const std::uint32_t packed =
                     (static_cast<std::uint32_t>(source[0U]) << 8U) | source[1U];
-                const std::uint32_t red = (packed >> 11U) & 0x1FU;
-                const std::uint32_t green = (packed >> 5U) & 0x3FU;
-                const std::uint32_t blue = packed & 0x1FU;
-                logical_rgba = {
-                    static_cast<std::uint8_t>((red << 3U) | (red >> 2U)),
-                    static_cast<std::uint8_t>((green << 2U) | (green >> 4U)),
-                    static_cast<std::uint8_t>((blue << 3U) | (blue >> 2U)),
-                    0xFFU};
+                const auto expand5 = [](std::uint32_t value) {
+                    return static_cast<std::uint8_t>((value << 3U) | (value >> 2U));
+                };
+                const auto expand4 = [](std::uint32_t value) {
+                    return static_cast<std::uint8_t>((value << 4U) | value);
+                };
+                switch (packed_format)
+                {
+                case PackedFormat::rgb565:
+                {
+                    const std::uint32_t red = (packed >> 11U) & 0x1FU;
+                    const std::uint32_t green = (packed >> 5U) & 0x3FU;
+                    const std::uint32_t blue = packed & 0x1FU;
+                    logical_rgba = {
+                        expand5(red),
+                        static_cast<std::uint8_t>((green << 2U) | (green >> 4U)),
+                        expand5(blue), 0xFFU};
+                    break;
+                }
+                case PackedFormat::rgba5551:
+                    logical_rgba = {
+                        expand5((packed >> 11U) & 0x1FU),
+                        expand5((packed >> 6U) & 0x1FU),
+                        expand5((packed >> 1U) & 0x1FU),
+                        static_cast<std::uint8_t>(
+                            (packed & 1U) != 0U ? 0xFFU : 0U)};
+                    break;
+                case PackedFormat::rgba4444:
+                    logical_rgba = {
+                        expand4((packed >> 12U) & 0xFU),
+                        expand4((packed >> 8U) & 0xFU),
+                        expand4((packed >> 4U) & 0xFU),
+                        expand4(packed & 0xFU)};
+                    break;
+                case PackedFormat::argb1555:
+                    logical_rgba = {
+                        expand5(packed & 0x1FU),
+                        expand5((packed >> 5U) & 0x1FU),
+                        expand5((packed >> 10U) & 0x1FU),
+                        static_cast<std::uint8_t>(
+                            (packed & 0x8000U) != 0U ? 0xFFU : 0U)};
+                    break;
+                case PackedFormat::none:
+                    break;
+                }
             }
             else
             {
