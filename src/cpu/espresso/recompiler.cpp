@@ -380,6 +380,10 @@ struct BlockCode
     {
         return true;
     }
+    if (insn.opcode == Opcode::shift_left_word && insn.record)
+    {
+        return true;
+    }
     switch (insn.opcode)
     {
     case Opcode::addi:
@@ -418,6 +422,7 @@ struct BlockCode
     case Opcode::floating_move_register:
     case Opcode::floating_negate:
     case Opcode::floating_absolute_value:
+    case Opcode::shift_left_word:
     case Opcode::load_word_zero:
     case Opcode::load_byte_zero:
     case Opcode::load_halfword_zero:
@@ -492,6 +497,7 @@ struct BlockCode
     case Opcode::floating_move_register: return "fmr";
     case Opcode::floating_negate: return "fneg";
     case Opcode::floating_absolute_value: return "fabs";
+    case Opcode::shift_left_word: return "slw";
     case Opcode::load_word_zero: return "lwz";
     case Opcode::load_byte_zero: return "lbz";
     case Opcode::load_halfword_zero: return "lhz";
@@ -827,6 +833,59 @@ struct Recompiler::Impl
                 compiler.mov(x86::dword_ptr(
                     state, static_cast<std::int32_t>(offsetof(CpuState, xer))), xer);
                 write_guest_gpr(insn.destination, result);
+                break;
+            }
+            case Opcode::shift_left_word:
+            {
+                x86::Gp shift = compiler.new_gp32("slw_shift");
+                compiler.mov(shift, read_guest_gpr(insn.base));
+                compiler.and_(shift, imm(0x3FU));
+
+                x86::Gp result = compiler.new_gp32("slw_result");
+                compiler.mov(result, read_guest_gpr(insn.source));
+                Label zero_result = compiler.new_label();
+                Label shift_done = compiler.new_label();
+                compiler.test(shift, imm(0x20U));
+                compiler.jnz(zero_result);
+                compiler.shl(result, shift);
+                compiler.jmp(shift_done);
+                compiler.bind(zero_result);
+                compiler.mov(result, imm(0U));
+                compiler.bind(shift_done);
+                write_guest_gpr(insn.destination, result);
+
+                if (insn.record)
+                {
+                    compiler.test(result, result);
+                    x86::Gp less = compiler.new_gp32("slw_cr0_lt");
+                    x86::Gp greater = compiler.new_gp32("slw_cr0_gt");
+                    x86::Gp equal = compiler.new_gp32("slw_cr0_eq");
+                    compiler.mov(less, imm(0U));
+                    compiler.setl(less.r8());
+                    compiler.mov(greater, imm(0U));
+                    compiler.setg(greater.r8());
+                    compiler.mov(equal, imm(0U));
+                    compiler.sete(equal.r8());
+                    compiler.shl(less, imm(3U));
+                    compiler.shl(greater, imm(2U));
+                    compiler.shl(equal, imm(1U));
+                    compiler.or_(less, greater);
+                    compiler.or_(less, equal);
+
+                    x86::Gp xer_so = compiler.new_gp32("slw_cr0_so");
+                    compiler.mov(xer_so, x86::dword_ptr(
+                        state, static_cast<std::int32_t>(offsetof(CpuState, xer))));
+                    compiler.shr(xer_so, imm(31U));
+                    compiler.or_(less, xer_so);
+                    compiler.shl(less, imm(28U));
+                    x86::Gp cr = compiler.new_gp32("slw_cr0");
+                    compiler.mov(cr, x86::dword_ptr(
+                        state, static_cast<std::int32_t>(offsetof(CpuState, cr))));
+                    compiler.and_(cr, imm(0x0FFFFFFFU));
+                    compiler.or_(cr, less);
+                    compiler.mov(x86::dword_ptr(
+                        state, static_cast<std::int32_t>(offsetof(CpuState, cr))), cr);
+                }
                 break;
             }
             case Opcode::add_immediate_carry:

@@ -1423,6 +1423,70 @@ void recompiler_stwu_differential_tests()
     assert(!fault.instruction_history.back().completed);
 }
 
+void recompiler_slw_differential_tests()
+{
+    constexpr std::uint32_t start = 0x100U;
+    constexpr std::array<std::array<std::uint8_t, 3U>, 4U> registers{{
+        {{3U, 4U, 5U}}, {{3U, 3U, 5U}}, {{3U, 4U, 4U}}, {{3U, 3U, 3U}}}};
+    constexpr std::array<std::uint32_t, 8U> source_values{
+        0U, 1U, 0x80000000U, 0xFFFFFFFFU,
+        0x12345678U, 0x40000001U, 0x7FFFFFFFU, 0xA5C39E71U};
+
+    for (std::uint32_t count = 0U; count < 64U; ++count)
+    {
+        for (std::size_t pattern = 0U; pattern < registers.size(); ++pattern)
+        {
+            for (const bool record : {false, true})
+            {
+                EspressoCore interpreted(0x1000U);
+                EspressoCore compiled(0x1000U);
+                const auto [source, destination, shift_register] = registers[pattern];
+                const std::uint32_t source_value = source_values[(count + pattern) %
+                    source_values.size()];
+                const std::uint32_t effective_source = source == shift_register
+                    ? count : source_value;
+                const std::uint32_t initial_cr = 0xA5C39E71U;
+                const std::uint32_t initial_xer = (pattern & 1U) != 0U
+                    ? 0x87654321U : 0x07654321U;
+                const std::uint32_t instruction = x_form(
+                    source, destination, shift_register, 24U, record);
+                for (EspressoCore* core : {&interpreted, &compiled})
+                {
+                    core->memory.write32_be(start, instruction);
+                    core->state.cia = start;
+                    core->state.gpr.fill(0xDEADBEEFU);
+                    core->state.gpr[source] = source_value;
+                    core->state.gpr[shift_register] = count;
+                    core->state.cr = initial_cr;
+                    core->state.xer = initial_xer;
+                    core->state.lr = 0xABCDEF00U;
+                    core->state.ctr = 0xFEDCBA98U;
+                    core->state.fpscr = 0x89ABCDEFU;
+                }
+
+                const RunResult oracle = interpreted.run(1U);
+                Recompiler recompiler;
+                const RunResult actual = recompiler.run(compiled, 1U);
+                assert(actual.reason == oracle.reason);
+                assert(actual.steps == oracle.steps && actual.steps == 1U);
+                assert(actual.cia == oracle.cia);
+                assert(compiled.state.gpr == interpreted.state.gpr);
+                assert(compiled.state.gpr[destination] == (count >= 32U
+                    ? 0U : effective_source << count));
+                assert(compiled.state.cr == interpreted.state.cr);
+                assert(compiled.state.xer == interpreted.state.xer);
+                assert(compiled.state.lr == interpreted.state.lr);
+                assert(compiled.state.ctr == interpreted.state.ctr);
+                assert(compiled.state.fpscr == interpreted.state.fpscr);
+                assert(recompiler.statistics().native_instructions == 1U);
+                assert(recompiler.statistics().interpreter_fallbacks == 0U);
+                assert(actual.instruction_history.back().opcode_name ==
+                    (record ? "slw." : "slw"));
+            }
+        }
+    }
+}
+
 void recompiler_rlwinm_differential_tests()
 {
     constexpr std::uint32_t start = 0x100U;
@@ -2133,6 +2197,7 @@ int main()
     recompiler_fabs_differential_tests();
     recompiler_stfs_differential_tests();
     recompiler_stwu_differential_tests();
+    recompiler_slw_differential_tests();
     recompiler_rlwinm_differential_tests();
     recompiler_lfd_differential_tests();
     recompiler_lfs_differential_tests();
