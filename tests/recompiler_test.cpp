@@ -29,6 +29,17 @@ namespace
            (static_cast<std::uint32_t>(xo) << 1U);
 }
 
+[[nodiscard]] constexpr std::uint32_t rlwinm_form(
+    std::uint8_t destination, std::uint8_t source, std::uint8_t shift,
+    std::uint8_t begin, std::uint8_t end, bool record)
+{
+    return (21U << 26U) | (static_cast<std::uint32_t>(source) << 21U) |
+           (static_cast<std::uint32_t>(destination) << 16U) |
+           (static_cast<std::uint32_t>(shift) << 11U) |
+           (static_cast<std::uint32_t>(begin) << 6U) |
+           (static_cast<std::uint32_t>(end) << 1U) | (record ? 1U : 0U);
+}
+
 void recompiler_differential_arithmetic_test()
 {
     EspressoCore interpreted(0x1000U);
@@ -181,6 +192,66 @@ void recompiler_condition_bit_differential_tests()
                 assert(compiled.state.cr == interpreted.state.cr);
                 assert(recompiler.statistics().native_instructions == 1U);
                 assert(recompiler.statistics().interpreter_fallbacks == 0U);
+            }
+        }
+    }
+}
+
+void recompiler_rlwinm_differential_tests()
+{
+    constexpr std::uint32_t start = 0x100U;
+    constexpr std::array<std::uint32_t, 6U> inputs{
+        0U, 1U, 0x80000000U, 0xFFFFFFFFU, 0xA5C39E71U, 0x7FFFFFFFU};
+    constexpr std::array<std::array<std::uint8_t, 3U>, 5U> fields{{
+        {{0U, 0U, 31U}}, {{1U, 4U, 11U}}, {{31U, 28U, 3U}},
+        {{17U, 0U, 31U}}, {{5U, 12U, 19U}}}};
+
+    for (const std::uint32_t input : inputs)
+    {
+        for (const auto [shift, begin, end] : fields)
+        {
+            for (const bool record : {false, true})
+            {
+                for (const bool summary_overflow : {false, true})
+                {
+                    for (const bool alias : {false, true})
+                    {
+                        EspressoCore interpreted(0x1000U);
+                        EspressoCore compiled(0x1000U);
+                        const std::uint8_t destination = alias ? 3U : 4U;
+                        const std::uint8_t source = 3U;
+                        const std::uint32_t instruction = rlwinm_form(
+                            destination, source, shift, begin, end, record);
+                        for (EspressoCore* core : {&interpreted, &compiled})
+                        {
+                            core->memory.write32_be(start, instruction);
+                            core->state.cia = start;
+                            core->state.gpr[source] = input;
+                            if (!alias)
+                            {
+                                core->state.gpr[destination] = 0xDEADBEEFU;
+                            }
+                            core->state.cr = 0x5A5AA5A5U;
+                            core->state.xer = summary_overflow ? 0x80000000U : 0U;
+                        }
+
+                        const RunResult oracle = interpreted.run(1U);
+                        Recompiler recompiler;
+                        const RunResult actual = recompiler.run(compiled, 1U);
+                        assert(actual.steps == oracle.steps && actual.steps == 1U);
+                        assert(actual.cia == oracle.cia);
+                        assert(compiled.state.gpr == interpreted.state.gpr);
+                        assert(compiled.state.cr == interpreted.state.cr);
+                        assert(compiled.state.xer == interpreted.state.xer);
+                        assert(recompiler.statistics().native_instructions == 1U);
+                        assert(recompiler.statistics().interpreter_fallbacks == 0U);
+                        if (record)
+                        {
+                            const std::string history = format_instruction_history(actual);
+                            assert(history.find("rlwinm.") != std::string::npos);
+                        }
+                    }
+                }
             }
         }
     }
@@ -622,6 +693,7 @@ int main()
     recompiler_destination_aliases_second_source_test();
     recompiler_logical_differential_test();
     recompiler_condition_bit_differential_tests();
+    recompiler_rlwinm_differential_tests();
     recompiler_step_budget_test();
     recompiler_recent_history_window_test();
     recompiler_branch_test();

@@ -4,7 +4,7 @@
 
 - RPX: `cking.rpx`; entry point `0x028EA9E0`; 24 sections.
 - Latest confirmed run: 6,080,538 guest instructions; stop CIA `0x00000000`; GPR3 `0`; stop is an unsupported fetch of `0x46524D48` after `bcctr` loaded CTR from a null callback field. The wider trace shows both the thread-specific candidate and the global object's `+0x10` candidate are null. `0x46524D48` is the synthetic `FRMH` header mirrored at low address zero by the MEM1 alias, so this is a null indirect call obscured by the current flat memory map, not a missing PPC opcode. The caller's object owner is still unidentified; do not synthesize a target.
-- Latest JIT run: 3,257,927 native instructions, 2,822,612 interpreter fallbacks, 26,090 compiled blocks, 1,892,359 block-cache hits; guest execution 5.344 s. Top fallbacks: `lfd` 364,827; `rlwinm` 360,245; `lfs` 175,096; `fmadd` 149,463; `stfs` 127,192; `stwu` 107,842; `fmr` 98,684; `stfd` 97,997.
+- Latest JIT run after native `rlwinm`: 3,618,170 native instructions, 2,462,369 interpreter fallbacks, 25,964 compiled blocks, 1,909,003 block-cache hits; guest execution 5.138 s. `rlwinm`'s previous 360,245 fallbacks are now native. Remaining top fallbacks: `lfd` 364,827; `lfs` 175,096; `fmadd` 149,463; `stfs` 127,192; `stwu` 107,842; `fmr` 98,684; `stfd` 97,997.
 - No unimplemented HLE was reached. `GX2InitTextureRegs` ran 13 times, along with the sampler initialization and existing GX2 state HLEs.
 
 ## Graphics checkpoint
@@ -44,12 +44,14 @@
 - `eb78c56` - `gpu: stage linear R4G4 textures`
 - `adbdc10` - `gpu: correct Latte 2D dimension handling`
 - `08225b2` - `jit: add native emission for CR logical operations`
+- `c678494` - `jit: report interpreter fallback hot spots`
+- `8ac29a7` - `jit: emit native rlwinm instructions`
 
 ## Current test status
 
 - Debug build: `build/debug-win-native`, Ninja; build is current.
 - Both freshly rebuilt Debug test executables passed (the MSYS `ctest` wrapper currently mangles Windows paths in this shell, so executables were run directly).
-- Latest WWHD diagnostic: 6,080,538 instructions; stop remains at CIA 0 with null `bcctr` target (`CTR=0`). RPX load 188 ms; guest execution 5,344 ms.
+- Native CR-logical and `rlwinm` interpreter/JIT differential tests pass. Latest WWHD diagnostic: 6,080,538 instructions; stop remains at CIA 0 with null `bcctr` target (`CTR=0`). RPX load 188 ms; guest execution 5,138 ms.
 
 ## Prioritized queue
 
@@ -57,4 +59,4 @@
 2. Add a Vulkan image-upload path for the already-supported linear RGBA8 staging representation, with resource lifetime/synchronization tests and no claim that current WWHD has submitted a draw.
 3. Audit actual guest shader, draw, and scan-buffer producers; the current WWHD run stops before any draw or texture-binding HLE is observed.
 4. Add real render submission and guest framebuffer presentation only after command and resource state are available; do not present the clear-test window as game output.
-5. Use the new per-opcode fallback report to target frequent native-emission gaps; `rlwinm` is the next high-volume candidate, then `lfd`/`lfs` and FP arithmetic.
+5. Continue from the fallback ranking: evaluate native `lfd`, `lfs`, and double `fmadd`, prioritizing safe semantics and comparing guest time; then stores/update forms.

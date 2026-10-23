@@ -200,6 +200,8 @@ struct BlockCode
     case Opcode::condition_bit_nand:
     case Opcode::condition_bit_equivalence:
         return !insn.record;
+    case Opcode::rotate_left_word_and_mask:
+        return true;
     default:
         return false;
     }
@@ -250,6 +252,7 @@ struct BlockCode
     case Opcode::condition_bit_xor: return "crxor";
     case Opcode::condition_bit_nand: return "crnand";
     case Opcode::condition_bit_equivalence: return "creqv";
+    case Opcode::rotate_left_word_and_mask: return "rlwinm";
     default: return "<native>";
     }
 }
@@ -349,6 +352,10 @@ struct BlockCode
     entry.instruction_word = insn.raw;
     entry.has_instruction_word = true;
     entry.opcode_name = name(insn.opcode);
+    if (insn.record)
+    {
+        entry.opcode_name += '.';
+    }
     entry.completed = true;
 
     // Native blocks may contain dependencies between guest instructions. Until
@@ -652,6 +659,65 @@ struct Recompiler::Impl
                 compiler.or_(cr, lhs);
                 compiler.mov(x86::dword_ptr(
                     state, static_cast<std::int32_t>(cr_offset)), cr);
+                break;
+            }
+            case Opcode::rotate_left_word_and_mask:
+            {
+                x86::Gp value = compiler.new_gp32("rotate_mask_value");
+                compiler.mov(value, read_guest_gpr(insn.source));
+                if (insn.shift != 0U)
+                {
+                    compiler.rol(value, imm(insn.shift));
+                }
+
+                std::uint32_t mask = 0U;
+                for (std::uint32_t bit = 0U; bit < 32U; ++bit)
+                {
+                    const bool selected = insn.mask_begin <= insn.mask_end
+                        ? bit >= insn.mask_begin && bit <= insn.mask_end
+                        : bit >= insn.mask_begin || bit <= insn.mask_end;
+                    if (selected)
+                    {
+                        mask |= 1U << (31U - bit);
+                    }
+                }
+                compiler.and_(value, imm(mask));
+                write_guest_gpr(insn.destination, value);
+
+                if (insn.record)
+                {
+                    constexpr std::size_t cr_offset = offsetof(CpuState, cr);
+                    constexpr std::size_t xer_offset = offsetof(CpuState, xer);
+                    x86::Gp field = compiler.new_gp32("record_cr0");
+                    compiler.mov(field, value);
+                    compiler.shr(field, imm(28U));
+                    compiler.and_(field, imm(8U));
+
+                    x86::Gp equal = compiler.new_gp32("record_equal");
+                    x86::Gp greater = compiler.new_gp32("record_greater");
+                    compiler.test(value, value);
+                    compiler.setz(equal.r8());
+                    compiler.setg(greater.r8());
+                    compiler.shl(equal, imm(1U));
+                    compiler.or_(field, equal);
+                    compiler.shl(greater, imm(2U));
+                    compiler.or_(field, greater);
+
+                    x86::Gp summary_overflow = compiler.new_gp32("record_so");
+                    compiler.mov(summary_overflow, x86::dword_ptr(
+                        state, static_cast<std::int32_t>(xer_offset)));
+                    compiler.shr(summary_overflow, imm(31U));
+                    compiler.or_(field, summary_overflow);
+                    compiler.shl(field, imm(28U));
+
+                    x86::Gp cr = compiler.new_gp32("record_cr");
+                    compiler.mov(cr, x86::dword_ptr(
+                        state, static_cast<std::int32_t>(cr_offset)));
+                    compiler.and_(cr, imm(0x0FFFFFFFU));
+                    compiler.or_(cr, field);
+                    compiler.mov(x86::dword_ptr(
+                        state, static_cast<std::int32_t>(cr_offset)), cr);
+                }
                 break;
             }
             case Opcode::branch:
