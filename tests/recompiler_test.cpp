@@ -153,6 +153,15 @@ namespace
         static_cast<std::uint16_t>(displacement);
 }
 
+[[nodiscard]] constexpr std::uint32_t lmw_form(
+    std::uint8_t first_destination, std::uint8_t base, std::int16_t displacement)
+{
+    return (46U << 26U) |
+        (static_cast<std::uint32_t>(first_destination) << 21U) |
+        (static_cast<std::uint32_t>(base) << 16U) |
+        static_cast<std::uint16_t>(displacement);
+}
+
 
 void recompiler_differential_arithmetic_test()
 {
@@ -2987,6 +2996,102 @@ void recompiler_lwzu_differential_tests()
     assert(!fault.instruction_history.back().completed);
 }
 
+void recompiler_lmw_differential_tests()
+{
+    struct Case
+    {
+        std::uint8_t first_destination;
+        std::uint8_t base_register;
+        std::uint32_t base_value;
+        std::int16_t displacement;
+    };
+    constexpr std::uint32_t start = 0x100U;
+    constexpr std::array cases{
+        Case{29U, 6U, 0x300U, -4},
+        Case{4U, 4U, 0x300U, 8}, // rA is overwritten; EA must use its old value.
+    };
+
+    for (const Case& test : cases)
+    {
+        EspressoCore interpreted(0x1000U);
+        EspressoCore compiled(0x1000U);
+        const std::uint32_t instruction = lmw_form(
+            test.first_destination, test.base_register, test.displacement);
+        const std::uint32_t address = test.base_value +
+            static_cast<std::uint32_t>(test.displacement);
+        for (EspressoCore* core : {&interpreted, &compiled})
+        {
+            core->memory.write32_be(start, instruction);
+            core->state.cia = start;
+            core->state.gpr.fill(0xDEADBEEFU);
+            core->state.gpr[test.base_register] = test.base_value;
+            for (std::uint32_t reg = test.first_destination; reg < 32U; ++reg)
+            {
+                const std::uint32_t value = 0x10203040U + reg * 0x01010101U;
+                core->memory.write32_be(address + (reg - test.first_destination) * 4U,
+                    value);
+            }
+            core->state.cr = 0xA5C39E71U;
+            core->state.xer = 0x87654321U;
+            core->state.lr = 0xABCDEF00U;
+            core->state.ctr = 0xFEDCBA98U;
+            core->state.fpscr = 0x89ABCDEFU;
+        }
+
+        const RunResult oracle = interpreted.run(1U);
+        Recompiler recompiler;
+        const RunResult actual = recompiler.run(compiled, 1U);
+        assert(actual.reason == oracle.reason && actual.steps == oracle.steps);
+        assert(actual.steps == 1U && actual.cia == oracle.cia);
+        assert(compiled.state.gpr == interpreted.state.gpr);
+        assert(compiled.state.fpr == interpreted.state.fpr);
+        assert(compiled.state.fpr_ps1 == interpreted.state.fpr_ps1);
+        assert(compiled.state.cr == interpreted.state.cr);
+        assert(compiled.state.xer == interpreted.state.xer);
+        assert(compiled.state.lr == interpreted.state.lr);
+        assert(compiled.state.ctr == interpreted.state.ctr);
+        assert(compiled.state.fpscr == interpreted.state.fpscr);
+        assert(recompiler.statistics().native_instructions == 1U);
+        assert(recompiler.statistics().interpreter_fallbacks == 0U);
+        const InstructionHistoryEntry& history = actual.instruction_history.back();
+        assert(history.opcode_name == "lmw" && history.completed);
+        assert(history.has_register_range &&
+            history.range_first_register == test.first_destination &&
+            history.range_last_register == 31U);
+        assert(history.has_effective_address && history.effective_address == address);
+    }
+
+    EspressoCore interpreted_fault(0x1000U);
+    EspressoCore compiled_fault(0x1000U);
+    for (EspressoCore* core : {&interpreted_fault, &compiled_fault})
+    {
+        core->memory.write32_be(start, lmw_form(29U, 6U, 0));
+        core->memory.write32_be(0xFF8U, 0x11223344U);
+        core->memory.write32_be(0xFFCU, 0x55667788U);
+        core->state.cia = start;
+        core->state.gpr[6] = 0xFF8U;
+        core->state.gpr[29] = 0xAAAAAAAAU;
+        core->state.gpr[30] = 0xBBBBBBBBU;
+        core->state.gpr[31] = 0xCCCCCCCCU;
+    }
+    const RunResult oracle_fault = interpreted_fault.run(1U);
+    Recompiler fault_recompiler;
+    const RunResult actual_fault = fault_recompiler.run(compiled_fault, 1U);
+    assert(actual_fault.reason == oracle_fault.reason);
+    assert(actual_fault.reason == StopReason::memory_fault);
+    assert(actual_fault.detail.find("read 4 byte(s)") != std::string::npos);
+    assert(actual_fault.detail.find("0x00001000") != std::string::npos);
+    assert(compiled_fault.state.gpr == interpreted_fault.state.gpr);
+    assert(compiled_fault.state.gpr[29] == 0x11223344U);
+    assert(compiled_fault.state.gpr[30] == 0x55667788U);
+    assert(compiled_fault.state.gpr[31] == 0xCCCCCCCCU);
+    assert(compiled_fault.state.cia == start);
+    assert(!actual_fault.instruction_history.empty());
+    assert(actual_fault.instruction_history.back().opcode_name == "lmw");
+    assert(actual_fault.instruction_history.back().has_register_range);
+    assert(!actual_fault.instruction_history.back().completed);
+}
+
 void recompiler_dcbst_differential_tests()
 {
     struct Case
@@ -3499,6 +3604,7 @@ int main()
     recompiler_isync_boundary_differential_test();
     recompiler_lbzu_differential_tests();
     recompiler_lwzu_differential_tests();
+    recompiler_lmw_differential_tests();
     recompiler_dcbst_differential_tests();
     recompiler_dcbf_differential_tests();
     recompiler_branch_test();
