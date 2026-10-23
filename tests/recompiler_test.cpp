@@ -11,12 +11,13 @@ namespace
 {
 
 [[nodiscard]] constexpr std::uint32_t x_form(
-    std::uint8_t rd, std::uint8_t ra, std::uint8_t rb, std::uint16_t xo)
+    std::uint8_t rd, std::uint8_t ra, std::uint8_t rb, std::uint16_t xo,
+    bool record = false)
 {
     return (31U << 26U) | (static_cast<std::uint32_t>(rd) << 21U) |
            (static_cast<std::uint32_t>(ra) << 16U) |
            (static_cast<std::uint32_t>(rb) << 11U) |
-           (static_cast<std::uint32_t>(xo) << 1U);
+           (static_cast<std::uint32_t>(xo) << 1U) | static_cast<std::uint32_t>(record);
 }
 
 [[nodiscard]] constexpr std::uint32_t cmpwi_form(
@@ -511,6 +512,63 @@ void recompiler_logical_differential_test()
     assert(compiled.state.gpr == interpreted.state.gpr);
     assert(compiled.state.gpr[4] == 0x0000BBFD);
     assert(recompiler.statistics().native_instructions == program.size());
+}
+
+void recompiler_logical_record_differential_test()
+{
+    struct Case
+    {
+        std::uint32_t instruction;
+        std::uint32_t source_a;
+        std::uint32_t source_b;
+        std::uint32_t xer;
+        std::uint32_t expected_result;
+        std::uint8_t expected_cr0;
+        const char* name;
+    };
+    constexpr std::array cases{
+        Case{x_form(3U, 5U, 4U, 444U, true), 0x80000000U, 0U,
+             0x80000000U, 0x80000000U, 9U, "or."},
+        Case{x_form(3U, 5U, 4U, 28U, true), 0xFFFFFFFFU, 0U,
+             0U, 0U, 2U, "and."},
+        Case{x_form(3U, 5U, 4U, 316U, true), 5U, 3U,
+             0x80000000U, 6U, 5U, "xor."},
+    };
+
+    for (const Case& test : cases)
+    {
+        EspressoCore interpreted(0x1000U);
+        EspressoCore compiled(0x1000U);
+        for (EspressoCore* core : {&interpreted, &compiled})
+        {
+            core->memory.write32_be(0x100U, test.instruction);
+            core->state.cia = 0x100U;
+            core->state.gpr[3] = test.source_a;
+            core->state.gpr[4] = test.source_b;
+            core->state.cr = 0xA5C36E91U;
+            core->state.xer = test.xer;
+            core->state.lr = 0x12345678U;
+            core->state.ctr = 0x87654321U;
+            core->state.fpscr = 0x89ABCDEFU;
+        }
+
+        const RunResult oracle = interpreted.run(1U);
+        Recompiler recompiler;
+        const RunResult actual = recompiler.run(compiled, 1U);
+        assert(actual.reason == oracle.reason);
+        assert(actual.steps == oracle.steps && actual.steps == 1U);
+        assert(compiled.state.gpr == interpreted.state.gpr);
+        assert(compiled.state.cr == interpreted.state.cr);
+        assert(compiled.state.xer == interpreted.state.xer);
+        assert(compiled.state.lr == interpreted.state.lr);
+        assert(compiled.state.ctr == interpreted.state.ctr);
+        assert(compiled.state.fpscr == interpreted.state.fpscr);
+        assert(compiled.state.gpr[5] == test.expected_result);
+        assert((compiled.state.cr >> 28U) == test.expected_cr0);
+        assert(recompiler.statistics().native_instructions == 1U);
+        assert(recompiler.statistics().interpreter_fallbacks == 0U);
+        assert(actual.instruction_history.back().opcode_name == test.name);
+    }
 }
 
 void recompiler_condition_bit_differential_tests()
@@ -1254,6 +1312,7 @@ int main()
     recompiler_addic_differential_test();
     recompiler_destination_aliases_second_source_test();
     recompiler_logical_differential_test();
+    recompiler_logical_record_differential_test();
     recompiler_condition_bit_differential_tests();
     recompiler_rlwinm_differential_tests();
     recompiler_lfd_differential_tests();

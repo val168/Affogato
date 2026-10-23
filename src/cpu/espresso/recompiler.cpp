@@ -314,6 +314,11 @@ struct BlockCode
 
 [[nodiscard]] bool is_native_instruction(const DecodedInstruction& insn) noexcept
 {
+    if (insn.record && (insn.opcode == Opcode::bitwise_or ||
+        insn.opcode == Opcode::bitwise_and || insn.opcode == Opcode::bitwise_xor))
+    {
+        return true;
+    }
     switch (insn.opcode)
     {
     case Opcode::addi:
@@ -808,6 +813,38 @@ struct Recompiler::Impl
                     else if (insn.opcode == Opcode::bitwise_and) compiler.and_(lhs, rhs);
                     else compiler.xor_(lhs, rhs);
                     write_guest_gpr(insn.destination, lhs);
+                    if (insn.record)
+                    {
+                        compiler.test(lhs, lhs);
+                        x86::Gp less = compiler.new_gp32("logical_cr0_lt");
+                        x86::Gp greater = compiler.new_gp32("logical_cr0_gt");
+                        x86::Gp equal = compiler.new_gp32("logical_cr0_eq");
+                        compiler.mov(less, imm(0U));
+                        compiler.setl(less.r8());
+                        compiler.mov(greater, imm(0U));
+                        compiler.setg(greater.r8());
+                        compiler.mov(equal, imm(0U));
+                        compiler.sete(equal.r8());
+                        compiler.shl(less, imm(3U));
+                        compiler.shl(greater, imm(2U));
+                        compiler.shl(equal, imm(1U));
+                        compiler.or_(less, greater);
+                        compiler.or_(less, equal);
+
+                        x86::Gp xer_so = compiler.new_gp32("logical_cr0_so");
+                        compiler.mov(xer_so, x86::dword_ptr(
+                            state, static_cast<std::int32_t>(offsetof(CpuState, xer))));
+                        compiler.shr(xer_so, imm(31U));
+                        compiler.or_(less, xer_so);
+                        compiler.shl(less, imm(28U));
+                        x86::Gp cr = compiler.new_gp32("logical_cr0");
+                        compiler.mov(cr, x86::dword_ptr(
+                            state, static_cast<std::int32_t>(offsetof(CpuState, cr))));
+                        compiler.and_(cr, imm(0x0FFFFFFFU));
+                        compiler.or_(cr, less);
+                        compiler.mov(x86::dword_ptr(
+                            state, static_cast<std::int32_t>(offsetof(CpuState, cr))), cr);
+                    }
                 }
                 else if (insn.opcode == Opcode::subtract_from)
                 {

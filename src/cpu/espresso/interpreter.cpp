@@ -850,7 +850,10 @@ void add_history_source(
          instruction.opcode == Opcode::arithmetic_shift_right_word ||
          instruction.opcode == Opcode::bitwise_nand ||
          instruction.opcode == Opcode::bitwise_nor ||
-         instruction.opcode == Opcode::bitwise_or_complement) && instruction.record)
+         instruction.opcode == Opcode::bitwise_or_complement ||
+         instruction.opcode == Opcode::bitwise_or ||
+         instruction.opcode == Opcode::bitwise_and ||
+         instruction.opcode == Opcode::bitwise_xor) && instruction.record)
     {
         entry.opcode_name += '.';
     }
