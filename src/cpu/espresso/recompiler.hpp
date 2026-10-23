@@ -13,6 +13,8 @@ namespace affogato::cpu::espresso
 
 struct RecompilerStatistics
 {
+    std::uint64_t compilation_time_ns{};
+    std::uint64_t native_execution_time_ns{};
     std::uint64_t compiled_blocks{};
     std::uint64_t cache_hits{};
     std::uint64_t last_block_cache_hits{};

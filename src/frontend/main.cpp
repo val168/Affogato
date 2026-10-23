@@ -270,7 +270,12 @@ std::string format_result(const affogato::EmulatorRunResult& result)
              << "\nNative instructions: " << result.recompiler_statistics.native_instructions
              << "\nInterpreter fallbacks: " << result.recompiler_statistics.interpreter_fallbacks
              << "\nCompiled blocks: " << result.recompiler_statistics.compiled_blocks
-             << "\nBlock-cache hits: " << result.recompiler_statistics.cache_hits;
+             << "\nBlock-cache hits: " << result.recompiler_statistics.cache_hits
+             << "\nJIT compilation time: "
+             << result.recompiler_statistics.compilation_time_ns / 1'000'000U << " ms"
+             << "\nNative block execution time: "
+             << result.recompiler_statistics.native_execution_time_ns / 1'000'000U
+             << " ms";
         append_fallback_profile(text, result.recompiler_statistics);
     }
     switch (result.execution.reason)
@@ -341,7 +346,12 @@ std::string format_progress(
         text << "\nNative instructions: " << result.recompiler_statistics.native_instructions
              << "\nInterpreter fallbacks: " << result.recompiler_statistics.interpreter_fallbacks
              << "\nCompiled blocks: " << result.recompiler_statistics.compiled_blocks
-             << "\nBlock-cache hits: " << result.recompiler_statistics.cache_hits;
+             << "\nBlock-cache hits: " << result.recompiler_statistics.cache_hits
+             << "\nJIT compilation time: "
+             << result.recompiler_statistics.compilation_time_ns / 1'000'000U << " ms"
+             << "\nNative block execution time: "
+             << result.recompiler_statistics.native_execution_time_ns / 1'000'000U
+             << " ms";
         append_fallback_profile(text, result.recompiler_statistics);
     }
     std::uint64_t gx2_call_total = 0U;

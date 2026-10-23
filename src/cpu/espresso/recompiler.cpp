@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <array>
 #include <bit>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
@@ -1315,7 +1316,20 @@ RunResult Recompiler::run(EspressoCore& core, std::size_t max_steps)
                             break;
                         }
                     }
-                    if (!candidate.instructions.empty() && impl_->compile(candidate))
+                    bool compiled = false;
+                    if (!candidate.instructions.empty())
+                    {
+#ifndef NDEBUG
+                        const auto compile_start = std::chrono::steady_clock::now();
+#endif
+                        compiled = impl_->compile(candidate);
+#ifndef NDEBUG
+                        impl_->stats.compilation_time_ns += static_cast<std::uint64_t>(
+                            std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                std::chrono::steady_clock::now() - compile_start).count());
+#endif
+                    }
+                    if (compiled)
                     {
                         Impl::CacheEntry entry{};
                         entry.block = std::move(candidate);
@@ -1414,7 +1428,15 @@ RunResult Recompiler::run(EspressoCore& core, std::size_t max_steps)
 
         NativeExecutionContext context{};
         context.memory = &core.memory;
+#ifndef NDEBUG
+        const auto native_start = std::chrono::steady_clock::now();
+#endif
         const std::uint32_t executed = block->function(&core.state, &context);
+#ifndef NDEBUG
+        impl_->stats.native_execution_time_ns += static_cast<std::uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now() - native_start).count());
+#endif
         impl_->stats.memory_slow_path_calls += context.memory_access_calls;
         impl_->stats.native_instructions += executed;
         // RunResult exposes only the most recent 32 history records. A native
