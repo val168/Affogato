@@ -425,6 +425,7 @@ struct BlockCode
     case Opcode::load_single:
     case Opcode::load_double:
     case Opcode::store_word:
+    case Opcode::store_word_update:
     case Opcode::store_byte:
     case Opcode::store_halfword:
     case Opcode::store_single:
@@ -498,6 +499,7 @@ struct BlockCode
     case Opcode::load_single: return "lfs";
     case Opcode::load_double: return "lfd";
     case Opcode::store_word: return "stw";
+    case Opcode::store_word_update: return "stwu";
     case Opcode::store_byte: return "stb";
     case Opcode::store_halfword: return "sth";
     case Opcode::store_single: return "stfs";
@@ -533,6 +535,7 @@ struct BlockCode
     case Opcode::load_double:
     case Opcode::store_single:
     case Opcode::store_word:
+    case Opcode::store_word_update:
     case Opcode::store_byte:
     case Opcode::store_halfword:
     case Opcode::load_word_indexed:
@@ -574,7 +577,7 @@ struct BlockCode
     return opcode == Opcode::store_word || opcode == Opcode::store_byte ||
         opcode == Opcode::store_halfword || opcode == Opcode::store_word_indexed ||
         opcode == Opcode::store_byte_indexed || opcode == Opcode::store_halfword_indexed ||
-        opcode == Opcode::store_single;
+        opcode == Opcode::store_single || opcode == Opcode::store_word_update;
 }
 
 [[nodiscard]] bool is_indexed_memory(Opcode opcode) noexcept
@@ -1619,6 +1622,7 @@ struct Recompiler::Impl
             case Opcode::load_halfword_zero:
             case Opcode::load_halfword_algebraic:
             case Opcode::store_word:
+            case Opcode::store_word_update:
             case Opcode::store_byte:
             case Opcode::store_halfword:
             case Opcode::store_single:
@@ -1633,6 +1637,7 @@ struct Recompiler::Impl
                 const bool indexed = is_indexed_memory(insn.opcode);
                 const bool store = is_memory_store(insn.opcode);
                 const bool single_store = insn.opcode == Opcode::store_single;
+                const bool update_base = insn.opcode == Opcode::store_word_update;
                 const bool sign_extend =
                     insn.opcode == Opcode::load_halfword_algebraic ||
                     insn.opcode == Opcode::load_halfword_algebraic_indexed;
@@ -1732,6 +1737,10 @@ struct Recompiler::Impl
                 }
                 else
                 {
+                    if (update_base)
+                    {
+                        write_guest_gpr(insn.base, address);
+                    }
                     // A store can only make the instructions already decoded
                     // into this native block stale if its byte range overlaps
                     // this block. Other cached blocks validate guest page
@@ -2232,10 +2241,17 @@ RunResult Recompiler::run(EspressoCore& core, std::size_t max_steps)
                     entry.stored_halfword_value = static_cast<std::uint16_t>(record.value);
                 }
                 if (insn.opcode == Opcode::store_word ||
-                    insn.opcode == Opcode::store_word_indexed)
+                    insn.opcode == Opcode::store_word_indexed ||
+                    insn.opcode == Opcode::store_word_update)
                 {
                     entry.has_stored_integer_word_value = true;
                     entry.stored_integer_word_value = record.value;
+                }
+                if (insn.opcode == Opcode::store_word_update)
+                {
+                    entry.has_destination = true;
+                    entry.destination_register = insn.base;
+                    entry.destination_value = record.address;
                 }
             }
             else
