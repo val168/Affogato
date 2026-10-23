@@ -2220,6 +2220,85 @@ void recompiler_stwu_differential_tests()
     assert(!fault.instruction_history.back().completed);
 }
 
+void recompiler_stbu_differential_tests()
+{
+    constexpr std::uint32_t start = 0x100U;
+    struct Case
+    {
+        std::uint8_t source;
+        std::uint8_t base;
+        std::uint32_t base_value;
+        std::int16_t displacement;
+        std::uint32_t stored_value;
+    };
+    constexpr std::array<Case, 3U> cases{{
+        {6U, 5U, 0x400U, -1, 0x123456ABU},
+        {5U, 5U, 0x400U, 4, 0x00000400U}, // Store old RA, then update RA.
+        {31U, 2U, 0x800U, 0, 0xFFFFFFFFU}}};
+
+    for (const Case& test : cases)
+    {
+        EspressoCore interpreted(0x1000U);
+        EspressoCore compiled(0x1000U);
+        const std::uint32_t instruction = (39U << 26U) |
+            (static_cast<std::uint32_t>(test.source) << 21U) |
+            (static_cast<std::uint32_t>(test.base) << 16U) |
+            static_cast<std::uint16_t>(test.displacement);
+        for (EspressoCore* core : {&interpreted, &compiled})
+        {
+            core->memory.write32_be(start, instruction);
+            core->state.cia = start;
+            core->state.gpr.fill(0xDEADBEEFU);
+            core->state.gpr[test.base] = test.base_value;
+            core->state.gpr[test.source] = test.stored_value;
+            core->state.cr = 0xA5C39E71U;
+            core->state.xer = 0x76543210U;
+            core->state.lr = 0xABCDEF00U;
+            core->state.ctr = 0xFEDCBA98U;
+            core->state.fpscr = 0x89ABCDEFU;
+        }
+
+        const std::uint32_t expected_address = test.base_value +
+            static_cast<std::uint32_t>(test.displacement);
+        const RunResult oracle = interpreted.run(1U);
+        Recompiler recompiler;
+        const RunResult actual = recompiler.run(compiled, 1U);
+        assert(actual.reason == oracle.reason);
+        assert(actual.steps == oracle.steps && actual.steps == 1U);
+        assert(actual.cia == oracle.cia);
+        assert(compiled.memory.read8(expected_address) ==
+            interpreted.memory.read8(expected_address));
+        assert(compiled.memory.read8(expected_address) ==
+            static_cast<std::uint8_t>(test.stored_value));
+        assert(compiled.state.gpr == interpreted.state.gpr);
+        assert(compiled.state.gpr[test.base] == expected_address);
+        assert(compiled.state.cr == interpreted.state.cr);
+        assert(compiled.state.xer == interpreted.state.xer);
+        assert(compiled.state.lr == interpreted.state.lr);
+        assert(compiled.state.ctr == interpreted.state.ctr);
+        assert(compiled.state.fpscr == interpreted.state.fpscr);
+        assert(recompiler.statistics().native_instructions == 1U);
+        assert(recompiler.statistics().interpreter_fallbacks == 0U);
+        const InstructionHistoryEntry& history = actual.instruction_history.back();
+        assert(history.opcode_name == "stbu");
+        assert(history.has_effective_address && history.effective_address == expected_address);
+        assert(history.has_destination && history.destination_register == test.base);
+        assert(history.destination_value == expected_address);
+    }
+
+    EspressoCore faulting(0x1000U);
+    faulting.memory.write32_be(start, (39U << 26U) | (6U << 21U) | (5U << 16U));
+    faulting.state.cia = start;
+    faulting.state.gpr[5] = 0x2000U;
+    faulting.state.gpr[6] = 0x12345678U;
+    Recompiler recompiler;
+    const RunResult fault = recompiler.run(faulting, 1U);
+    assert(fault.reason == StopReason::memory_fault);
+    assert(faulting.state.gpr[5] == 0x2000U);
+    assert(!fault.instruction_history.empty());
+    assert(!fault.instruction_history.back().completed);
+}
+
 void recompiler_slw_differential_tests()
 {
     constexpr std::uint32_t start = 0x100U;
@@ -4177,6 +4256,7 @@ int main()
     recompiler_stfsu_differential_tests();
     recompiler_stfd_differential_tests();
     recompiler_stwu_differential_tests();
+    recompiler_stbu_differential_tests();
     recompiler_slw_differential_tests();
     recompiler_srw_differential_tests();
     recompiler_srawi_differential_tests();

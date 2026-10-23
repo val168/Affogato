@@ -1043,6 +1043,7 @@ struct BlockCode
     case Opcode::store_word:
     case Opcode::store_word_update:
     case Opcode::store_byte:
+    case Opcode::store_byte_update:
     case Opcode::store_halfword:
     case Opcode::store_single:
     case Opcode::store_single_update:
@@ -1143,6 +1144,7 @@ struct BlockCode
     case Opcode::store_word: return "stw";
     case Opcode::store_word_update: return "stwu";
     case Opcode::store_byte: return "stb";
+    case Opcode::store_byte_update: return "stbu";
     case Opcode::store_halfword: return "sth";
     case Opcode::store_single: return "stfs";
     case Opcode::store_single_update: return "stfsu";
@@ -1189,6 +1191,7 @@ struct BlockCode
     case Opcode::store_word:
     case Opcode::store_word_update:
     case Opcode::store_byte:
+    case Opcode::store_byte_update:
     case Opcode::store_halfword:
     case Opcode::load_word_indexed:
     case Opcode::load_byte_zero_indexed:
@@ -1214,6 +1217,7 @@ struct BlockCode
     case Opcode::load_byte_zero:
     case Opcode::load_byte_update:
     case Opcode::store_byte:
+    case Opcode::store_byte_update:
     case Opcode::load_byte_zero_indexed:
     case Opcode::store_byte_indexed:
     case Opcode::data_cache_block_store:
@@ -1237,7 +1241,8 @@ struct BlockCode
 {
     return opcode == Opcode::store_word || opcode == Opcode::store_byte ||
         opcode == Opcode::store_halfword || opcode == Opcode::store_word_indexed ||
-        opcode == Opcode::store_byte_indexed || opcode == Opcode::store_halfword_indexed ||
+        opcode == Opcode::store_byte_update || opcode == Opcode::store_byte_indexed ||
+        opcode == Opcode::store_halfword_indexed ||
         opcode == Opcode::store_single || opcode == Opcode::store_double ||
         opcode == Opcode::store_word_update || opcode == Opcode::store_single_update;
 }
@@ -3034,6 +3039,7 @@ struct Recompiler::Impl
             case Opcode::store_word:
             case Opcode::store_word_update:
             case Opcode::store_byte:
+            case Opcode::store_byte_update:
             case Opcode::store_halfword:
             case Opcode::store_single:
             case Opcode::store_single_update:
@@ -3061,6 +3067,7 @@ struct Recompiler::Impl
                 const bool double_store = insn.opcode == Opcode::store_double;
                 const bool update_base = insn.opcode == Opcode::load_byte_update ||
                     insn.opcode == Opcode::load_word_update ||
+                    insn.opcode == Opcode::store_byte_update ||
                     insn.opcode == Opcode::store_word_update ||
                     insn.opcode == Opcode::store_single_update;
                 const bool sign_extend =
@@ -3829,6 +3836,7 @@ RunResult Recompiler::run(EspressoCore& core, std::size_t max_steps)
                     entry.stored_integer_word_value = record.value;
                 }
                 if (insn.opcode == Opcode::store_word_update ||
+                    insn.opcode == Opcode::store_byte_update ||
                     insn.opcode == Opcode::store_single_update)
                 {
                     entry.has_destination = true;
