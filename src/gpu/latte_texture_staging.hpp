@@ -31,7 +31,7 @@ stage_linear_rgba8_texture(
     const LatteTextureResourceDescriptor& descriptor,
     std::span<const std::uint8_t> guest_bytes)
 {
-    constexpr std::uint32_t gx2_2d_dimension = 2U;
+    constexpr std::uint32_t gx2_2d_dimension = 1U;
     constexpr std::uint32_t gx2_linear_aligned_tile_mode = 1U;
     constexpr std::uint32_t gx2_unorm_r8_format = 0x01U;
     constexpr std::uint32_t gx2_unorm_rg44_format = 0x02U;

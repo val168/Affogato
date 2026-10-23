@@ -21825,7 +21825,7 @@ void gx2_register_state_tests()
 void latte_texture_staging_tests()
 {
     affogato::gpu::LatteTextureResourceDescriptor descriptor{};
-    descriptor.dimension = 2U;
+    descriptor.dimension = 1U;
     descriptor.tile_mode = 1U;
     descriptor.pitch_pixels = 3U;
     descriptor.width = 2U;
@@ -21936,6 +21936,9 @@ void latte_texture_staging_tests()
     assert(!affogato::gpu::stage_linear_rgba8_texture(
         descriptor, std::span<const std::uint8_t>(guest_bytes).first(23U)));
     auto unsupported = descriptor;
+    unsupported.dimension = 2U; // GX2 dimension 2 is 3D, not 2D.
+    assert(!affogato::gpu::stage_linear_rgba8_texture(unsupported, guest_bytes));
+    unsupported = descriptor;
     unsupported.tile_mode = 4U; // Macro-tiled layout is not decoded here.
     assert(!affogato::gpu::stage_linear_rgba8_texture(unsupported, guest_bytes));
     unsupported = descriptor;
