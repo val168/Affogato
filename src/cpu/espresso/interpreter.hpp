@@ -1,6 +1,7 @@
 #pragma once
 
 #include "cpu/espresso/cpu_state.hpp"
+#include "cpu/espresso/decoder.hpp"
 #include "cpu/espresso/gx2_hle.hpp"
 #include "cpu/espresso/guest_memory.hpp"
 #include "cpu/espresso/hle_dispatcher.hpp"
@@ -418,6 +419,7 @@ private:
     [[nodiscard]] std::vector<InstructionHistoryEntry> instruction_history_snapshot() const;
 };
 
+[[nodiscard]] const char* opcode_mnemonic(Opcode opcode) noexcept;
 [[nodiscard]] std::string format_instruction_history(const RunResult& result);
 
 }

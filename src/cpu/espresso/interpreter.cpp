@@ -1715,6 +1715,11 @@ void add_history_source(
 
 }
 
+const char* opcode_mnemonic(Opcode opcode) noexcept
+{
+    return opcode_name(opcode);
+}
+
 void EspressoCore::append_instruction_history(InstructionHistoryEntry entry) noexcept
 {
     instruction_history_[instruction_history_next_] = std::move(entry);

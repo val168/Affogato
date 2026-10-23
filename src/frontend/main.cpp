@@ -232,6 +232,29 @@ void start_library_scan(
     });
 }
 
+void append_fallback_profile(
+    std::ostringstream& text,
+    const affogato::cpu::espresso::RecompilerStatistics& statistics)
+{
+    std::vector<std::pair<std::uint16_t, std::uint64_t>> fallbacks(
+        statistics.fallbacks_by_opcode.begin(), statistics.fallbacks_by_opcode.end());
+    std::ranges::sort(fallbacks, [](const auto& lhs, const auto& rhs) {
+        return lhs.second > rhs.second;
+    });
+    if (fallbacks.empty()) return;
+
+    text << "\nTop interpreter fallback opcodes:";
+    const std::size_t count = std::min<std::size_t>(8U, fallbacks.size());
+    for (std::size_t i = 0; i < count; ++i)
+    {
+        const auto [opcode, executions] = fallbacks[i];
+        text << "\n  "
+             << affogato::cpu::espresso::opcode_mnemonic(
+                    static_cast<affogato::cpu::espresso::Opcode>(opcode))
+             << ": " << executions;
+    }
+}
+
 std::string format_result(const affogato::EmulatorRunResult& result)
 {
     using affogato::cpu::espresso::StopReason;
@@ -248,6 +271,7 @@ std::string format_result(const affogato::EmulatorRunResult& result)
              << "\nInterpreter fallbacks: " << result.recompiler_statistics.interpreter_fallbacks
              << "\nCompiled blocks: " << result.recompiler_statistics.compiled_blocks
              << "\nBlock-cache hits: " << result.recompiler_statistics.cache_hits;
+        append_fallback_profile(text, result.recompiler_statistics);
     }
     switch (result.execution.reason)
     {
@@ -318,6 +342,7 @@ std::string format_progress(
              << "\nInterpreter fallbacks: " << result.recompiler_statistics.interpreter_fallbacks
              << "\nCompiled blocks: " << result.recompiler_statistics.compiled_blocks
              << "\nBlock-cache hits: " << result.recompiler_statistics.cache_hits;
+        append_fallback_profile(text, result.recompiler_statistics);
     }
     std::uint64_t gx2_call_total = 0U;
     for (const auto& statistic : result.hle_call_statistics)

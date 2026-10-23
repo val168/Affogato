@@ -617,6 +617,7 @@ void recompiler_stop_reason_test()
 
 int main()
 {
+    assert(std::string(opcode_mnemonic(Opcode::floating_multiply_add_double)) == "fmadd");
     recompiler_differential_arithmetic_test();
     recompiler_destination_aliases_second_source_test();
     recompiler_logical_differential_test();
