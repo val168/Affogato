@@ -621,6 +621,7 @@ struct BlockCode
     case Opcode::count_leading_zeros:
     case Opcode::rotate_left_word_and_mask_insert:
     case Opcode::load_word_zero:
+    case Opcode::load_word_update:
     case Opcode::load_byte_zero:
     case Opcode::load_byte_update:
     case Opcode::load_halfword_zero:
@@ -709,6 +710,7 @@ struct BlockCode
     case Opcode::arithmetic_shift_right_immediate: return "srawi";
     case Opcode::count_leading_zeros: return "cntlzw";
     case Opcode::load_word_zero: return "lwz";
+    case Opcode::load_word_update: return "lwzu";
     case Opcode::load_byte_zero: return "lbz";
     case Opcode::load_byte_update: return "lbzu";
     case Opcode::load_halfword_zero: return "lhz";
@@ -747,6 +749,7 @@ struct BlockCode
     switch (opcode)
     {
     case Opcode::load_word_zero:
+    case Opcode::load_word_update:
     case Opcode::load_byte_zero:
     case Opcode::load_byte_update:
     case Opcode::load_halfword_zero:
@@ -2209,6 +2212,7 @@ struct Recompiler::Impl
                 break;
             }
             case Opcode::load_word_zero:
+            case Opcode::load_word_update:
             case Opcode::load_byte_zero:
             case Opcode::load_byte_update:
             case Opcode::load_halfword_zero:

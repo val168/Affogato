@@ -137,6 +137,14 @@ namespace
         static_cast<std::uint16_t>(displacement);
 }
 
+[[nodiscard]] constexpr std::uint32_t lwzu_form(
+    std::uint8_t destination, std::uint8_t base, std::int16_t displacement)
+{
+    return (33U << 26U) | (static_cast<std::uint32_t>(destination) << 21U) |
+        (static_cast<std::uint32_t>(base) << 16U) |
+        static_cast<std::uint16_t>(displacement);
+}
+
 
 void recompiler_differential_arithmetic_test()
 {
@@ -2714,7 +2722,7 @@ void recompiler_interpreter_fallback_test()
     for (EspressoCore* machine : {&interpreted, &core})
     {
         machine->memory.write32_be(0x100U, 0x38600005U); // addi r3,r0,5
-        machine->memory.write32_be(0x104U, 0x84650000U); // lwzu r3,0(r5), fallback
+        machine->memory.write32_be(0x104U, 0x84650000U); // lwzu r3,0(r5)
         machine->memory.write32_be(0x108U, 0x38C30002U); // addi r6,r3,2
         machine->memory.write32_be(0x200U, 0x89ABCDEFU);
         machine->state.cia = 0x100U;
@@ -2729,10 +2737,8 @@ void recompiler_interpreter_fallback_test()
     assert(core.state.gpr == interpreted.state.gpr);
     assert(core.state.gpr[3] == 0x89ABCDEFU);
     assert(core.state.gpr[6] == 0x89ABCDF1U);
-    assert(recompiler.statistics().interpreter_fallbacks == 1U);
-    assert(recompiler.statistics().native_instructions == 2U);
-    assert(recompiler.statistics().fallbacks_by_opcode.at(
-        static_cast<std::uint16_t>(Opcode::load_word_update)) == 1U);
+    assert(recompiler.statistics().interpreter_fallbacks == 0U);
+    assert(recompiler.statistics().native_instructions == 3U);
 }
 
 void recompiler_lbzu_differential_tests()
@@ -2812,6 +2818,90 @@ void recompiler_lbzu_differential_tests()
     const RunResult fault = recompiler.run(faulting, 1U);
     assert(fault.reason == StopReason::memory_fault);
     assert(fault.detail.find("read 1 byte(s)") != std::string::npos);
+    assert(faulting.state.gpr[destination] == 0xDEADBEEFU);
+    assert(faulting.state.gpr[base_register] == 0x2000U);
+    assert(faulting.state.cia == start);
+    assert(!fault.instruction_history.empty());
+    assert(!fault.instruction_history.back().completed);
+}
+
+void recompiler_lwzu_differential_tests()
+{
+    struct Case
+    {
+        std::uint32_t base;
+        std::int16_t displacement;
+        std::uint32_t memory_value;
+        std::uint8_t destination;
+        std::uint8_t base_register;
+    };
+    constexpr std::uint32_t start = 0x100U;
+    constexpr std::array cases{
+        Case{0x300U, 4, 0x00000000U, 3U, 6U},
+        Case{0x300U, 8, 0x7FFFFFFFU, 4U, 7U},
+        Case{0x300U, 12, 0x80000000U, 5U, 8U},
+        Case{0x300U, 16, 0xDEADBEEFU, 9U, 10U},
+        Case{0xFFFFFFFCU, 8, 0x12345678U, 11U, 12U}, // wrap to address 4
+    };
+
+    for (const Case& test : cases)
+    {
+        EspressoCore interpreted(0x1000U);
+        EspressoCore compiled(0x1000U);
+        const std::uint32_t instruction = lwzu_form(
+            test.destination, test.base_register, test.displacement);
+        const std::uint32_t address = test.base +
+            static_cast<std::uint32_t>(test.displacement);
+        for (EspressoCore* core : {&interpreted, &compiled})
+        {
+            core->memory.write32_be(start, instruction);
+            core->memory.write32_be(address, test.memory_value);
+            core->state.cia = start;
+            core->state.gpr.fill(0xDEADBEEFU);
+            core->state.gpr[test.base_register] = test.base;
+            core->state.gpr[test.destination] = 0x12345678U;
+            core->state.cr = 0xA5C39E71U;
+            core->state.xer = 0x87654321U;
+            core->state.lr = 0xABCDEF00U;
+            core->state.ctr = 0xFEDCBA98U;
+            core->state.fpscr = 0x89ABCDEFU;
+        }
+
+        const RunResult oracle = interpreted.run(1U);
+        Recompiler recompiler;
+        const RunResult actual = recompiler.run(compiled, 1U);
+        assert(actual.reason == oracle.reason);
+        assert(actual.steps == oracle.steps && actual.steps == 1U);
+        assert(actual.cia == oracle.cia);
+        assert(compiled.state.gpr == interpreted.state.gpr);
+        assert(compiled.state.gpr[test.destination] == test.memory_value);
+        assert(compiled.state.gpr[test.base_register] == address);
+        assert(compiled.state.cr == interpreted.state.cr);
+        assert(compiled.state.xer == interpreted.state.xer);
+        assert(compiled.state.lr == interpreted.state.lr);
+        assert(compiled.state.ctr == interpreted.state.ctr);
+        assert(compiled.state.fpscr == interpreted.state.fpscr);
+        assert(recompiler.statistics().native_instructions == 1U);
+        assert(recompiler.statistics().interpreter_fallbacks == 0U);
+        const InstructionHistoryEntry& history = actual.instruction_history.back();
+        assert(history.opcode_name == "lwzu");
+        assert(history.has_effective_address && history.effective_address == address);
+        assert(history.has_destination &&
+            history.destination_register == test.destination &&
+            history.destination_value == test.memory_value);
+    }
+
+    EspressoCore faulting(0x1000U);
+    constexpr std::uint8_t base_register = 6U;
+    constexpr std::uint8_t destination = 3U;
+    faulting.memory.write32_be(start, lwzu_form(destination, base_register, 4));
+    faulting.state.cia = start;
+    faulting.state.gpr[base_register] = 0x2000U;
+    faulting.state.gpr[destination] = 0xDEADBEEFU;
+    Recompiler recompiler;
+    const RunResult fault = recompiler.run(faulting, 1U);
+    assert(fault.reason == StopReason::memory_fault);
+    assert(fault.detail.find("read 4 byte(s)") != std::string::npos);
     assert(faulting.state.gpr[destination] == 0xDEADBEEFU);
     assert(faulting.state.gpr[base_register] == 0x2000U);
     assert(faulting.state.cia == start);
@@ -3154,6 +3244,7 @@ int main()
     recompiler_recent_history_window_test();
     recompiler_isync_boundary_differential_test();
     recompiler_lbzu_differential_tests();
+    recompiler_lwzu_differential_tests();
     recompiler_branch_test();
     recompiler_fast_lookup_cache_test();
     recompiler_conditional_branch_tests();
