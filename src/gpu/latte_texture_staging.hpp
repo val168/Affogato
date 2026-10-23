@@ -41,16 +41,30 @@ stage_linear_rgba8_texture(
     constexpr std::uint8_t alpha_selector = 3U;
     constexpr std::uint8_t one_selector = 5U;
 
-    const std::uint32_t source_channels = descriptor.format == gx2_unorm_r8_format
-        ? 1U
-        : descriptor.format == gx2_unorm_rg8_format
-            ? 2U
-            : descriptor.format == gx2_unorm_rgba8_format ? 4U : 0U;
+    std::uint32_t source_channels = 0U;
+    std::uint32_t expected_endian_swap = 0U;
+    switch (descriptor.format)
+    {
+    case gx2_unorm_r8_format:
+        source_channels = 1U;
+        expected_endian_swap = 0U;
+        break;
+    case gx2_unorm_rg8_format:
+        source_channels = 2U;
+        expected_endian_swap = 1U;
+        break;
+    case gx2_unorm_rgba8_format:
+        source_channels = 4U;
+        expected_endian_swap = 2U;
+        break;
+    default:
+        break;
+    }
     if (descriptor.dimension != gx2_2d_dimension ||
         descriptor.tile_mode != gx2_linear_aligned_tile_mode ||
         descriptor.depth_or_layers != 1U || source_channels == 0U ||
         descriptor.numeric_format != gx2_unorm_numeric_format ||
-        descriptor.endian_swap != 0U || descriptor.force_degamma ||
+        descriptor.endian_swap != expected_endian_swap || descriptor.force_degamma ||
         descriptor.base_level != 0U || descriptor.last_level != 0U ||
         descriptor.base_array != 0U || descriptor.last_array != 0U ||
         descriptor.width == 0U || descriptor.height == 0U ||
@@ -85,6 +99,9 @@ stage_linear_rgba8_texture(
     result.height = descriptor.height;
     result.pixels.resize(static_cast<std::size_t>(output_bytes));
 
+    // Guest storage already contains the channel bytes in GX2 format order.
+    // The resource's endian mode describes how Latte fetches those bytes; it
+    // does not require swapping the CPU-side snapshot used for Vulkan upload.
     const std::array<std::uint8_t, 6U> constants{0U, 0U, 0U, 0U, 0U, 0xFFU};
     for (std::uint32_t y = 0U; y < descriptor.height; ++y)
     {

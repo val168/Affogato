@@ -21832,6 +21832,7 @@ void latte_texture_staging_tests()
     descriptor.height = 2U;
     descriptor.depth_or_layers = 1U;
     descriptor.format = 0x1AU;
+    descriptor.endian_swap = 2U;
     descriptor.component_selectors = {0U, 1U, 2U, 3U};
 
     // Each row has three guest pixels, but only two belong to the image.
@@ -21856,6 +21857,7 @@ void latte_texture_staging_tests()
         11U, 10U, 9U, 255U, 15U, 14U, 13U, 255U}));
 
     descriptor.format = 0x01U; // GX2 UNORM R8.
+    descriptor.endian_swap = 0U;
     descriptor.component_selectors = {0U, 4U, 4U, 5U};
     const std::array<std::uint8_t, 6U> r8_bytes{10U, 20U, 99U, 30U, 40U, 98U};
     const auto staged_r8 = affogato::gpu::stage_linear_rgba8_texture(
@@ -21866,6 +21868,7 @@ void latte_texture_staging_tests()
         30U, 0U, 0U, 255U, 40U, 0U, 0U, 255U}));
 
     descriptor.format = 0x07U; // GX2 UNORM R8_G8.
+    descriptor.endian_swap = 1U;
     descriptor.component_selectors = {0U, 1U, 4U, 5U};
     const std::array<std::uint8_t, 12U> rg8_bytes{
         1U, 2U, 3U, 4U, 99U, 98U,
@@ -21878,6 +21881,7 @@ void latte_texture_staging_tests()
         5U, 6U, 0U, 255U, 7U, 8U, 0U, 255U}));
 
     descriptor.format = 0x1AU;
+    descriptor.endian_swap = 2U;
     descriptor.component_selectors = {0U, 1U, 2U, 3U};
     assert(!affogato::gpu::stage_linear_rgba8_texture(
         descriptor, std::span<const std::uint8_t>(guest_bytes).first(23U)));
