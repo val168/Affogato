@@ -359,6 +359,7 @@ struct BlockCode
     case Opcode::move_from_gqr:
     case Opcode::move_to_gqr:
     case Opcode::floating_move_register:
+    case Opcode::floating_negate:
     case Opcode::load_word_zero:
     case Opcode::load_byte_zero:
     case Opcode::load_halfword_zero:
@@ -429,6 +430,7 @@ struct BlockCode
     case Opcode::move_from_gqr: return "mfgqr";
     case Opcode::move_to_gqr: return "mtgqr";
     case Opcode::floating_move_register: return "fmr";
+    case Opcode::floating_negate: return "fneg";
     case Opcode::load_word_zero: return "lwz";
     case Opcode::load_byte_zero: return "lbz";
     case Opcode::load_halfword_zero: return "lhz";
@@ -1422,10 +1424,15 @@ struct Recompiler::Impl
                 break;
             }
             case Opcode::floating_move_register:
+            case Opcode::floating_negate:
             {
                 x86::Gp value = compiler.new_gp64("fpr");
                 compiler.mov(value, x86::qword_ptr(
                     state, static_cast<std::int32_t>(fpr_offset(insn.fp_source_b))));
+                if (insn.opcode == Opcode::floating_negate)
+                {
+                    compiler.btc(value, imm(63U));
+                }
                 compiler.mov(x86::qword_ptr(
                     state, static_cast<std::int32_t>(fpr_offset(insn.fp_register))), value);
                 break;

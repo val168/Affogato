@@ -14,7 +14,9 @@
 - Native JIT `mfgqr` now reads all eight quantization registers directly into any GPR; differential tests cover all eight GQR indices and all 32 destinations. This extends native coverage for paired-single/quantized operations without changing their semantics.
 - Native JIT `mtgqr` now writes any GPR into each of the eight quantization registers. Differential tests cover all 32 GPR sources, four distinctive source patterns, and preservation of the seven unselected GQRs. Current game checkpoints remain unchanged.
 - Native JIT `fmr` now copies raw PS0 bits while leaving PS1 and FPSCR untouched. Differential tests cover all 1,024 source/destination pairs, including self-aliasing, negative zero, qNaN, and sNaN bit patterns.
+- Native JIT `fneg` now toggles only the PS0 sign bit; PS1 and FPSCR are preserved, including for signaling-NaN payloads. Differential tests cover all source/destination pairs and confirm the generated path stays native.
 - After native `fmr`, the same Release game runs retained their stops and instruction counts while WWHD interpreter fallbacks decreased from 1,562,434 to 1,463,750 (native 4,616,789), and BOTW fallbacks decreased from 157,400 to 157,082 (native 703,091). This is a clear fallback-count improvement; wall-clock timings are not compared here because the latest runs were concurrent.
+- After native `fneg`, both game checkpoints remain unchanged; WWHD now has 1,442,626 interpreter fallbacks (4,637,913 native), and BOTW has 157,062 fallbacks (703,111 native). Relative to the prior `fmr` run, this removed another 21,124 WWHD and 20 BOTW fallbacks. Guest runtime remained roughly 1.0–1.1 s in these concurrent runs.
 - The null-target investigation found the watched global `0x10208B64` is cleared by a single guest bulk-zero operation, and WUT confirms `OSThread::specific` begins at `+0x57C`, matching the existing HLE. The guest path then resolves a non-null TSS object and reaches virtual method `0x0276058C`; the callback field is still written as zero by the guest caller. This narrows the cause to that guest virtual-method path, not the thread-specific HLE offset; no target was fabricated.
 - Latest JIT run after native `lfs`: 4,158,093 native instructions, 1,922,446 interpreter fallbacks, 22,956 compiled blocks, 1,882,460 block-cache hits. Release guest time across three runs: 1.148/1.146/1.182 s versus 1.322/1.257/1.359 s before `lfs`; medians 1.148 s versus 1.322 s (13.2% lower guest time). Host total medians were 1.340 s versus 1.511 s. The 175,096 `lfs` fallbacks now execute natively. Remaining top fallbacks: `fmadd` 149,463; `stfs` 127,192; `stwu` 107,842; `fmr` 98,684; `stfd` 97,997; `cmpwi` 94,017; `slw` 87,439.
 - No unimplemented HLE was reached. `GX2InitTextureRegs` ran 13 times, along with the sampler initialization and existing GX2 state HLEs.
@@ -70,6 +72,8 @@
 - `a2ec04b` - `jit: emit native mfxer`
 - `74875b0` - `jit: emit native mtxer`
 - `a883e9d` - `jit: emit native mfgqr`
+- `8fadbcb` - `jit: emit native mtgqr`
+- `66a1be0` - `jit: emit native fmr`
 - `8fadbcb` - `jit: emit native mtgqr`
 - `c678494` - `jit: report interpreter fallback hot spots`
 - `f60e130` - `jit: emit native rlwinm instructions` (pushed HEAD before this `lfd` iteration)
