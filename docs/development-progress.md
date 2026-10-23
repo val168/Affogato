@@ -22,6 +22,7 @@
 - Native JIT `slw` now implements all PPC shift counts (0–31 shift normally; 32–63 yield zero) and Rc/CR0 with XER.SO. Differential tests cover every count in both record modes, destination/source/count alias combinations, and carry/CR preservation. Checkpoints remain stable; WWHD fallbacks decreased by the observed 87,439 `slw` executions to 1,102,887, BOTW by one to 24,735.
 - Native JIT `srw` now handles the unsigned right-shift counterpart, with the same six-bit count cutoff and record behavior. Tests cover every count, Rc, aliases, and high-bit source patterns.
 - After native `srw`, the two startup checkpoints and stops remain unchanged. WWHD has 1,027,805 interpreter fallbacks (5,052,734 native); BOTW remains at 24,735 fallbacks (835,438 native). This removed about 75k WWHD `srw` fallbacks; BOTW did not execute it in this path.
+- Native JIT `srawi` now performs arithmetic shifts, replaces XER.CA according to the sign/discarded-bit rule, and supports record-form CR0/SO. Tests cover all 32 shift amounts, positive and negative boundaries, aliases, old-CA replacement, and Rc. Both checkpoints are stable; WWHD fallbacks are down by 61,798 to 966,007, BOTW by 30 to 24,705.
 - After native `fmr`, the same Release game runs retained their stops and instruction counts while WWHD interpreter fallbacks decreased from 1,562,434 to 1,463,750 (native 4,616,789), and BOTW fallbacks decreased from 157,400 to 157,082 (native 703,091). This is a clear fallback-count improvement; wall-clock timings are not compared here because the latest runs were concurrent.
 - After native `fneg`, both game checkpoints remain unchanged; WWHD now has 1,442,626 interpreter fallbacks (4,637,913 native), and BOTW has 157,062 fallbacks (703,111 native). Relative to the prior `fmr` run, this removed another 21,124 WWHD and 20 BOTW fallbacks. Guest runtime remained roughly 1.0–1.1 s in these concurrent runs.
 - The null-target investigation found the watched global `0x10208B64` is cleared by a single guest bulk-zero operation, and WUT confirms `OSThread::specific` begins at `+0x57C`, matching the existing HLE. The guest path then resolves a non-null TSS object and reaches virtual method `0x0276058C`; the callback field is still written as zero by the guest caller. This narrows the cause to that guest virtual-method path, not the thread-specific HLE offset; no target was fabricated.
@@ -86,6 +87,7 @@
 - `bb80810` - `jit: emit native fabs`
 - `dea8c24` - `jit: emit native stfs stores`
 - `2a3e1b6` - `jit: emit native stwu stores`
+- `13a8eb4` - `jit: emit native srw`
 - `17dd092` - `jit: emit native slw`
 - `2a3e1b6` - `jit: emit native stwu stores`
 - `8fadbcb` - `jit: emit native mtgqr`

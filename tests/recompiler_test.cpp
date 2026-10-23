@@ -1551,6 +1551,75 @@ void recompiler_srw_differential_tests()
     }
 }
 
+void recompiler_srawi_differential_tests()
+{
+    constexpr std::uint32_t start = 0x100U;
+    constexpr std::uint32_t carry_mask = 0x20000000U;
+    constexpr std::array<std::array<std::uint8_t, 2U>, 3U> registers{{
+        {{3U, 4U}}, {{3U, 3U}}, {{0U, 0U}}}};
+    constexpr std::array<std::uint32_t, 6U> source_values{
+        0U, 1U, 0x80000000U, 0x80000001U, 0xFFFFFFFFU, 0xA5C39E71U};
+
+    for (std::uint8_t shift = 0U; shift < 32U; ++shift)
+    {
+        for (std::size_t pattern = 0U; pattern < registers.size(); ++pattern)
+        {
+            for (const bool record : {false, true})
+            {
+                EspressoCore interpreted(0x1000U);
+                EspressoCore compiled(0x1000U);
+                const auto [source, destination] = registers[pattern];
+                const std::uint32_t source_value = source_values[(shift + pattern) %
+                    source_values.size()];
+                const std::uint32_t initial_xer = (shift & 1U) != 0U
+                    ? 0xE7654321U : 0x87654321U;
+                const std::uint32_t instruction = x_form(
+                    source, destination, shift, 824U, record);
+                for (EspressoCore* core : {&interpreted, &compiled})
+                {
+                    core->memory.write32_be(start, instruction);
+                    core->state.cia = start;
+                    core->state.gpr.fill(0xDEADBEEFU);
+                    core->state.gpr[source] = source_value;
+                    core->state.cr = 0xA5C39E71U;
+                    core->state.xer = initial_xer;
+                    core->state.lr = 0xABCDEF00U;
+                    core->state.ctr = 0xFEDCBA98U;
+                    core->state.fpscr = 0x89ABCDEFU;
+                }
+
+                const RunResult oracle = interpreted.run(1U);
+                Recompiler recompiler;
+                const RunResult actual = recompiler.run(compiled, 1U);
+                const std::uint32_t low_mask = shift == 0U
+                    ? 0U : (std::uint32_t{1U} << shift) - 1U;
+                const bool expected_carry = (source_value & 0x80000000U) != 0U &&
+                    (source_value & low_mask) != 0U;
+                const std::int32_t signed_source = std::bit_cast<std::int32_t>(source_value);
+                const std::uint32_t expected_result = static_cast<std::uint32_t>(
+                    signed_source >> shift);
+                const std::uint32_t expected_xer = (initial_xer & ~carry_mask) |
+                    (expected_carry ? carry_mask : 0U);
+                assert(actual.reason == oracle.reason);
+                assert(actual.steps == oracle.steps && actual.steps == 1U);
+                assert(actual.cia == oracle.cia);
+                assert(compiled.state.gpr == interpreted.state.gpr);
+                assert(compiled.state.gpr[destination] == expected_result);
+                assert(compiled.state.xer == interpreted.state.xer);
+                assert(compiled.state.xer == expected_xer);
+                assert(compiled.state.cr == interpreted.state.cr);
+                assert(compiled.state.lr == interpreted.state.lr);
+                assert(compiled.state.ctr == interpreted.state.ctr);
+                assert(compiled.state.fpscr == interpreted.state.fpscr);
+                assert(recompiler.statistics().native_instructions == 1U);
+                assert(recompiler.statistics().interpreter_fallbacks == 0U);
+                assert(actual.instruction_history.back().opcode_name ==
+                    (record ? "srawi." : "srawi"));
+            }
+        }
+    }
+}
+
 void recompiler_rlwinm_differential_tests()
 {
     constexpr std::uint32_t start = 0x100U;
@@ -2263,6 +2332,7 @@ int main()
     recompiler_stwu_differential_tests();
     recompiler_slw_differential_tests();
     recompiler_srw_differential_tests();
+    recompiler_srawi_differential_tests();
     recompiler_rlwinm_differential_tests();
     recompiler_lfd_differential_tests();
     recompiler_lfs_differential_tests();
