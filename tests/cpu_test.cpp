@@ -21919,6 +21919,17 @@ void latte_texture_staging_tests()
          0xFCU, 0x00U, 0xFFU, 0xFFU, 0xC0U, 0xD0U},
         primary_colors);
 
+    descriptor.format = 0x02U; // GX2 UNORM R4_G4.
+    descriptor.endian_swap = 0U;
+    const std::array<std::uint8_t, 6U> rg44_bytes{
+        0xF0U, 0x0FU, 0xAAU, 0xA5U, 0x5AU, 0xBBU};
+    const auto staged_rg44 = affogato::gpu::stage_linear_rgba8_texture(
+        descriptor, rg44_bytes);
+    assert(staged_rg44.has_value());
+    assert((staged_rg44->pixels == std::vector<std::uint8_t>{
+        255U, 0U, 0U, 255U, 0U, 255U, 0U, 255U,
+        170U, 85U, 0U, 255U, 85U, 170U, 0U, 255U}));
+
     descriptor.format = 0x1AU;
     descriptor.endian_swap = 2U;
     descriptor.component_selectors = {0U, 1U, 2U, 3U};

@@ -34,6 +34,7 @@ stage_linear_rgba8_texture(
     constexpr std::uint32_t gx2_2d_dimension = 2U;
     constexpr std::uint32_t gx2_linear_aligned_tile_mode = 1U;
     constexpr std::uint32_t gx2_unorm_r8_format = 0x01U;
+    constexpr std::uint32_t gx2_unorm_rg44_format = 0x02U;
     constexpr std::uint32_t gx2_unorm_rg8_format = 0x07U;
     constexpr std::uint32_t gx2_unorm_rgb565_format = 0x08U;
     constexpr std::uint32_t gx2_unorm_rgba5551_format = 0x0AU;
@@ -51,6 +52,7 @@ stage_linear_rgba8_texture(
     enum class PackedFormat
     {
         none,
+        rg44,
         rgb565,
         rgba5551,
         rgba4444,
@@ -61,6 +63,11 @@ stage_linear_rgba8_texture(
     {
     case gx2_unorm_r8_format:
         source_channels = 1U;
+        source_bytes_per_pixel = 1U;
+        expected_endian_swap = 0U;
+        break;
+    case gx2_unorm_rg44_format:
+        packed_format = PackedFormat::rg44;
         source_bytes_per_pixel = 1U;
         expected_endian_swap = 0U;
         break;
@@ -166,6 +173,11 @@ stage_linear_rgba8_texture(
                 };
                 switch (packed_format)
                 {
+                case PackedFormat::rg44:
+                    logical_rgba = {
+                        expand4((source[0U] >> 4U) & 0xFU),
+                        expand4(source[0U] & 0xFU), 0U, 0xFFU};
+                    break;
                 case PackedFormat::rgb565:
                 {
                     const std::uint32_t red = (packed >> 11U) & 0x1FU;
