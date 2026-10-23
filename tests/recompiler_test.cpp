@@ -430,25 +430,44 @@ void recompiler_addic_differential_test()
         assert(history.has_immediate && history.immediate == test.immediate);
     }
 
-    // The record form keeps its interpreter fallback until native CR handling
-    // is explicitly implemented for this instruction.
-    EspressoCore interpreted(0x1000U);
-    EspressoCore compiled(0x1000U);
-    for (EspressoCore* core : {&interpreted, &compiled})
+    struct RecordCase
     {
-        core->memory.write32_be(0x100U, 0x35290001U); // addic. r9,r9,1
-        core->state.cia = 0x100U;
-        core->state.gpr[9] = 4U;
+        std::uint32_t source;
+        std::int16_t immediate;
+        std::uint32_t xer;
+        std::uint8_t expected_cr0;
+    };
+    constexpr std::array record_cases{
+        RecordCase{0xFFFFFFFCU, 4, 0x80000000U, 3U},
+        RecordCase{0x80000000U, 0, 0U, 8U},
+        RecordCase{1U, 1, 0x80000000U, 5U},
+    };
+    for (const RecordCase& test : record_cases)
+    {
+        EspressoCore interpreted(0x1000U);
+        EspressoCore compiled(0x1000U);
+        for (EspressoCore* core : {&interpreted, &compiled})
+        {
+            core->memory.write32_be(0x100U, 0x34000000U |
+                (9U << 21U) | (9U << 16U) |
+                static_cast<std::uint16_t>(test.immediate));
+            core->state.cia = 0x100U;
+            core->state.gpr[9] = test.source;
+            core->state.xer = test.xer;
+            core->state.cr = 0xA5C36E91U;
+        }
+        const RunResult oracle = interpreted.run(1U);
+        Recompiler recompiler;
+        const RunResult actual = recompiler.run(compiled, 1U);
+        assert(compiled.state.gpr == interpreted.state.gpr);
+        assert(compiled.state.xer == interpreted.state.xer);
+        assert(compiled.state.cr == interpreted.state.cr);
+        assert((compiled.state.cr >> 28U) == test.expected_cr0);
+        assert(recompiler.statistics().native_instructions == 1U);
+        assert(recompiler.statistics().interpreter_fallbacks == 0U);
+        assert(actual.instruction_history.back().opcode_name == "addic.");
+        assert(oracle.steps == actual.steps);
     }
-    const RunResult oracle = interpreted.run(1U);
-    Recompiler recompiler;
-    const RunResult actual = recompiler.run(compiled, 1U);
-    assert(compiled.state.gpr == interpreted.state.gpr);
-    assert(compiled.state.cr == interpreted.state.cr);
-    assert(recompiler.statistics().native_instructions == 0U);
-    assert(recompiler.statistics().interpreter_fallbacks == 1U);
-    assert(actual.instruction_history.back().opcode_name == "addic.");
-    assert(oracle.steps == actual.steps);
 }
 
 void recompiler_destination_aliases_second_source_test()
