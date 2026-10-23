@@ -1723,6 +1723,88 @@ void recompiler_stfs_differential_tests()
     assert(!fault.instruction_history.back().completed);
 }
 
+void recompiler_stfsu_differential_tests()
+{
+    constexpr std::uint32_t start = 0x100U;
+    constexpr std::uint32_t initial_base = 0x300U;
+    constexpr std::int16_t displacement = 4;
+    constexpr std::uint8_t base_register = 6U;
+    constexpr std::uint8_t source_register = 1U;
+    constexpr std::uint32_t instruction = (53U << 26U) |
+        (static_cast<std::uint32_t>(source_register) << 21U) |
+        (static_cast<std::uint32_t>(base_register) << 16U) |
+        static_cast<std::uint16_t>(displacement);
+    constexpr std::array<std::uint64_t, 5U> fp_values{
+        0x0000000000000000ULL, 0x8000000000000000ULL,
+        0x3FF0000000000000ULL, 0x7FF8123456789ABCULL,
+        0x7FF0123456789ABCULL};
+
+    for (const std::uint64_t fp_value : fp_values)
+    {
+        EspressoCore interpreted(0x1000U);
+        EspressoCore compiled(0x1000U);
+        for (EspressoCore* core : {&interpreted, &compiled})
+        {
+            core->memory.write32_be(start, instruction);
+            core->state.cia = start;
+            core->state.gpr.fill(0xA5A5A5A5U);
+            core->state.gpr[base_register] = initial_base;
+            core->state.fpr.fill(0xDEADBEEF01234567ULL);
+            core->state.fpr[source_register] = fp_value;
+            core->state.cr = 0xA5C39E71U;
+            core->state.xer = 0x87654321U;
+            core->state.lr = 0xABCDEF00U;
+            core->state.ctr = 0xFEDCBA98U;
+            core->state.fpscr = 0x89ABCDEFU;
+        }
+
+        const RunResult oracle = interpreted.run(1U);
+        Recompiler recompiler;
+        const RunResult actual = recompiler.run(compiled, 1U);
+        const std::uint32_t expected_value = std::bit_cast<std::uint32_t>(
+            static_cast<float>(std::bit_cast<double>(fp_value)));
+        assert(actual.reason == oracle.reason);
+        assert(actual.steps == oracle.steps && actual.steps == 1U);
+        assert(actual.cia == oracle.cia);
+        assert(compiled.memory.read32_be(initial_base + displacement) == expected_value);
+        assert(compiled.memory.read32_be(initial_base + displacement) ==
+            interpreted.memory.read32_be(initial_base + displacement));
+        assert(compiled.state.gpr == interpreted.state.gpr);
+        assert(compiled.state.gpr[base_register] == initial_base + displacement);
+        assert(compiled.state.fpr == interpreted.state.fpr);
+        assert(compiled.state.cr == interpreted.state.cr);
+        assert(compiled.state.xer == interpreted.state.xer);
+        assert(compiled.state.lr == interpreted.state.lr);
+        assert(compiled.state.ctr == interpreted.state.ctr);
+        assert(compiled.state.fpscr == interpreted.state.fpscr);
+        assert(recompiler.statistics().native_instructions == 1U);
+        assert(recompiler.statistics().interpreter_fallbacks == 0U);
+        const InstructionHistoryEntry& history = actual.instruction_history.back();
+        assert(history.opcode_name == "stfsu");
+        assert(history.has_fp_source && history.fp_source_register == source_register);
+        assert(history.fp_source_value == fp_value);
+        assert(history.has_stored_single_value &&
+            history.stored_single_value == expected_value);
+        assert(history.has_destination &&
+            history.destination_register == base_register &&
+            history.destination_value == initial_base + displacement);
+    }
+
+    EspressoCore faulting(0x1000U);
+    faulting.memory.write32_be(start, instruction);
+    faulting.state.cia = start;
+    faulting.state.gpr[base_register] = 0x2000U;
+    faulting.state.fpr[source_register] = 0x3FF0000000000000ULL;
+    Recompiler recompiler;
+    const RunResult fault = recompiler.run(faulting, 1U);
+    assert(fault.reason == StopReason::memory_fault);
+    assert(fault.detail.find("write 4 byte(s)") != std::string::npos);
+    assert(faulting.state.gpr[base_register] == 0x2000U);
+    assert(faulting.state.cia == start);
+    assert(!fault.instruction_history.empty());
+    assert(!fault.instruction_history.back().completed);
+}
+
 void recompiler_stfd_differential_tests()
 {
     constexpr std::uint32_t start = 0x100U;
@@ -2965,6 +3047,7 @@ int main()
     recompiler_fabs_differential_tests();
     recompiler_ps_merge10_differential_tests();
     recompiler_stfs_differential_tests();
+    recompiler_stfsu_differential_tests();
     recompiler_stfd_differential_tests();
     recompiler_stwu_differential_tests();
     recompiler_slw_differential_tests();

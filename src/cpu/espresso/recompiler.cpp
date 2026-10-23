@@ -631,6 +631,7 @@ struct BlockCode
     case Opcode::store_byte:
     case Opcode::store_halfword:
     case Opcode::store_single:
+    case Opcode::store_single_update:
     case Opcode::store_double:
     case Opcode::load_word_indexed:
     case Opcode::load_byte_zero_indexed:
@@ -717,6 +718,7 @@ struct BlockCode
     case Opcode::store_byte: return "stb";
     case Opcode::store_halfword: return "sth";
     case Opcode::store_single: return "stfs";
+    case Opcode::store_single_update: return "stfsu";
     case Opcode::store_double: return "stfd";
     case Opcode::load_word_indexed: return "lwzx";
     case Opcode::load_byte_zero_indexed: return "lbzx";
@@ -749,6 +751,7 @@ struct BlockCode
     case Opcode::load_single:
     case Opcode::load_double:
     case Opcode::store_single:
+    case Opcode::store_single_update:
     case Opcode::store_double:
     case Opcode::store_word:
     case Opcode::store_word_update:
@@ -796,7 +799,7 @@ struct BlockCode
         opcode == Opcode::store_halfword || opcode == Opcode::store_word_indexed ||
         opcode == Opcode::store_byte_indexed || opcode == Opcode::store_halfword_indexed ||
         opcode == Opcode::store_single || opcode == Opcode::store_double ||
-        opcode == Opcode::store_word_update;
+        opcode == Opcode::store_word_update || opcode == Opcode::store_single_update;
 }
 
 [[nodiscard]] bool is_indexed_memory(Opcode opcode) noexcept
@@ -2210,6 +2213,7 @@ struct Recompiler::Impl
             case Opcode::store_byte:
             case Opcode::store_halfword:
             case Opcode::store_single:
+            case Opcode::store_single_update:
             case Opcode::store_double:
             case Opcode::load_word_indexed:
             case Opcode::load_byte_zero_indexed:
@@ -2221,9 +2225,11 @@ struct Recompiler::Impl
             {
                 const bool indexed = is_indexed_memory(insn.opcode);
                 const bool store = is_memory_store(insn.opcode);
-                const bool single_store = insn.opcode == Opcode::store_single;
+                const bool single_store = insn.opcode == Opcode::store_single ||
+                    insn.opcode == Opcode::store_single_update;
                 const bool double_store = insn.opcode == Opcode::store_double;
-                const bool update_base = insn.opcode == Opcode::store_word_update;
+                const bool update_base = insn.opcode == Opcode::store_word_update ||
+                    insn.opcode == Opcode::store_single_update;
                 const bool sign_extend =
                     insn.opcode == Opcode::load_halfword_algebraic ||
                     insn.opcode == Opcode::load_halfword_algebraic_indexed;
@@ -2839,13 +2845,20 @@ RunResult Recompiler::run(EspressoCore& core, std::size_t max_steps)
                 entry.fp_destination_register = insn.fp_register;
                 entry.fp_destination_value = record.fp_value;
             }
-            else if (insn.opcode == Opcode::store_single)
+            else if (insn.opcode == Opcode::store_single ||
+                insn.opcode == Opcode::store_single_update)
             {
                 entry.has_fp_source = true;
                 entry.fp_source_register = insn.fp_register;
                 entry.fp_source_value = record.fp_value;
                 entry.has_stored_single_value = true;
                 entry.stored_single_value = record.value;
+                if (insn.opcode == Opcode::store_single_update)
+                {
+                    entry.has_destination = true;
+                    entry.destination_register = insn.base;
+                    entry.destination_value = record.address;
+                }
             }
             else if (insn.opcode == Opcode::store_double)
             {
@@ -2872,7 +2885,8 @@ RunResult Recompiler::run(EspressoCore& core, std::size_t max_steps)
                     entry.has_stored_integer_word_value = true;
                     entry.stored_integer_word_value = record.value;
                 }
-                if (insn.opcode == Opcode::store_word_update)
+                if (insn.opcode == Opcode::store_word_update ||
+                    insn.opcode == Opcode::store_single_update)
                 {
                     entry.has_destination = true;
                     entry.destination_register = insn.base;
