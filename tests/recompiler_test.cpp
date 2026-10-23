@@ -297,6 +297,76 @@ void recompiler_fcmpu_differential_test()
     }
 }
 
+void recompiler_subfic_differential_test()
+{
+    struct Case
+    {
+        std::int16_t immediate;
+        std::uint32_t source;
+        std::uint8_t base;
+        std::uint8_t destination;
+        std::uint32_t initial_xer;
+        std::uint32_t expected_result;
+        bool expected_carry;
+    };
+    constexpr std::array cases{
+        Case{5, 5U, 4U, 3U, 0xA5A5A5A5U, 0U, true},
+        Case{5, 6U, 4U, 3U, 0x85A5A5A5U, 0xFFFFFFFFU, false},
+        Case{5, 4U, 4U, 4U, 0x25A5A5A5U, 1U, true},
+        Case{-1, 0U, 0U, 0U, 0xA5A5A5A5U, 0xFFFFFFFFU, true},
+        Case{-1, 0xFFFFFFFFU, 7U, 7U, 0x85A5A5A5U, 0U, true},
+        Case{-17, 0xFFFFFFF0U, 8U, 9U, 0x25A5A5A5U, 0xFFFFFFFFU, false},
+        Case{-17, 0xFFFFFFEEU, 8U, 8U, 0xA5A5A5A5U, 1U, true},
+        Case{0, 1U, 31U, 31U, 0x85A5A5A5U, 0xFFFFFFFFU, false},
+    };
+
+    for (const Case& test : cases)
+    {
+        EspressoCore interpreted(0x1000U);
+        EspressoCore compiled(0x1000U);
+        const std::uint32_t instruction = 0x20000000U |
+            (static_cast<std::uint32_t>(test.destination) << 21U) |
+            (static_cast<std::uint32_t>(test.base) << 16U) |
+            static_cast<std::uint16_t>(test.immediate);
+        for (EspressoCore* core : {&interpreted, &compiled})
+        {
+            core->memory.write32_be(0x100U, instruction);
+            core->state.cia = 0x100U;
+            for (std::uint32_t reg = 0U; reg < core->state.gpr.size(); ++reg)
+            {
+                core->state.gpr[reg] = 0x10203040U + reg * 0x01010101U;
+            }
+            core->state.gpr[test.base] = test.source;
+            core->state.xer = test.initial_xer;
+            core->state.cr = 0xA5C36E91U;
+            core->state.lr = 0x12345678U;
+            core->state.ctr = 0x87654321U;
+        }
+
+        const RunResult oracle = interpreted.run(1U);
+        Recompiler recompiler;
+        const RunResult actual = recompiler.run(compiled, 1U);
+        assert(actual.reason == oracle.reason);
+        assert(actual.steps == oracle.steps && actual.steps == 1U);
+        assert(actual.cia == oracle.cia);
+        assert(compiled.state.gpr == interpreted.state.gpr);
+        assert(compiled.state.gpr[test.destination] == test.expected_result);
+        assert(compiled.state.xer == interpreted.state.xer);
+        assert(((compiled.state.xer & 0x20000000U) != 0U) == test.expected_carry);
+        assert(compiled.state.cr == interpreted.state.cr);
+        assert(compiled.state.lr == interpreted.state.lr);
+        assert(compiled.state.ctr == interpreted.state.ctr);
+        assert((compiled.state.xer & ~0x20000000U) ==
+               (test.initial_xer & ~0x20000000U));
+        assert(recompiler.statistics().native_instructions == 1U);
+        assert(recompiler.statistics().interpreter_fallbacks == 0U);
+        assert(!actual.instruction_history.empty());
+        const InstructionHistoryEntry& history = actual.instruction_history.back();
+        assert(history.opcode_name == "subfic");
+        assert(history.has_immediate && history.immediate == test.immediate);
+    }
+}
+
 void recompiler_destination_aliases_second_source_test()
 {
     constexpr std::uint32_t start = 0x100U;
@@ -1097,6 +1167,7 @@ int main()
     recompiler_cmpwi_differential_test();
     recompiler_cmpw_differential_test();
     recompiler_fcmpu_differential_test();
+    recompiler_subfic_differential_test();
     recompiler_destination_aliases_second_source_test();
     recompiler_logical_differential_test();
     recompiler_condition_bit_differential_tests();
