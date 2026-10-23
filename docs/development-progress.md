@@ -24,6 +24,7 @@
 - After native `srw`, the two startup checkpoints and stops remain unchanged. WWHD has 1,027,805 interpreter fallbacks (5,052,734 native); BOTW remains at 24,735 fallbacks (835,438 native). This removed about 75k WWHD `srw` fallbacks; BOTW did not execute it in this path.
 - Native JIT `srawi` now performs arithmetic shifts, replaces XER.CA according to the sign/discarded-bit rule, and supports record-form CR0/SO. Tests cover all 32 shift amounts, positive and negative boundaries, aliases, old-CA replacement, and Rc. Both checkpoints are stable; WWHD fallbacks are down by 61,798 to 966,007, BOTW by 30 to 24,705.
 - Native JIT `cntlzw` uses portable `bsr` plus explicit zero handling, avoiding an LZCNT host-feature dependency. Differential tests cover zero, all 32 one-hot inputs, additional bit patterns, destination/source aliasing, and both Rc forms. Both games retain their stops; WWHD fallbacks decreased by 43,043 to 922,964 and BOTW by one to 24,704.
+- Native JIT `stfd` now writes the exact PS0 bit pattern as an eight-byte big-endian guest-memory store. Differential tests cover signed zero, finite values, subnormal and NaN payloads, architectural-state preservation, history, and transactional width-8 faults. WWHD remains at 6,080,538 instructions and the same null-CTR fetch stop; interpreter fallbacks fell from 922,964 to 824,974. BOTW remains at 860,172 instructions and the same stop; fallbacks are 24,258. These concurrent game runs are regression observations, not timing benchmarks.
 - After native `fmr`, the same Release game runs retained their stops and instruction counts while WWHD interpreter fallbacks decreased from 1,562,434 to 1,463,750 (native 4,616,789), and BOTW fallbacks decreased from 157,400 to 157,082 (native 703,091). This is a clear fallback-count improvement; wall-clock timings are not compared here because the latest runs were concurrent.
 - After native `fneg`, both game checkpoints remain unchanged; WWHD now has 1,442,626 interpreter fallbacks (4,637,913 native), and BOTW has 157,062 fallbacks (703,111 native). Relative to the prior `fmr` run, this removed another 21,124 WWHD and 20 BOTW fallbacks. Guest runtime remained roughly 1.0–1.1 s in these concurrent runs.
 - The null-target investigation found the watched global `0x10208B64` is cleared by a single guest bulk-zero operation, and WUT confirms `OSThread::specific` begins at `+0x57C`, matching the existing HLE. The guest path then resolves a non-null TSS object and reaches virtual method `0x0276058C`; the callback field is still written as zero by the guest caller. This narrows the cause to that guest virtual-method path, not the thread-specific HLE offset; no target was fabricated.
@@ -91,6 +92,8 @@
 - `13a8eb4` - `jit: emit native srw`
 - `95d3ab9` - `jit: emit native srawi`
 - `17dd092` - `jit: emit native slw`
+- `db776f9` - `jit: emit native cntlzw`
+- pending - `jit: emit native stfd stores`
 - `2a3e1b6` - `jit: emit native stwu stores`
 - `8fadbcb` - `jit: emit native mtgqr`
 - `c678494` - `jit: report interpreter fallback hot spots`
