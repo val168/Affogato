@@ -4,6 +4,7 @@
 #include <array>
 #include <bit>
 #include <cstdint>
+#include <limits>
 #include <string>
 
 using namespace affogato::cpu::espresso;
@@ -3399,6 +3400,166 @@ void recompiler_dcbf_differential_tests()
     assert(!fault.instruction_history.back().completed);
 }
 
+void recompiler_psq_st_differential_tests()
+{
+    const auto encode_psq_st = [](
+        std::uint8_t source, std::uint8_t base, std::int16_t displacement,
+        bool single_element, std::uint8_t gqr) {
+        return (60U << 26U) |
+            (static_cast<std::uint32_t>(source) << 21U) |
+            (static_cast<std::uint32_t>(base) << 16U) |
+            (static_cast<std::uint32_t>(single_element) << 15U) |
+            (static_cast<std::uint32_t>(gqr & 0x7U) << 12U) |
+            (static_cast<std::uint16_t>(displacement) & 0x0FFFU);
+    };
+    const auto double_bits = [](double value) { return std::bit_cast<std::uint64_t>(value); };
+    constexpr std::uint32_t start = 0x100U;
+
+    const auto compare_cores = [](EspressoCore& interpreted, EspressoCore& compiled,
+                                  std::uint32_t instruction) {
+        interpreted.memory.write32_be(start, instruction);
+        compiled.memory.write32_be(start, instruction);
+        interpreted.state.cia = start;
+        compiled.state.cia = start;
+        const RunResult oracle = interpreted.run(1U);
+        Recompiler recompiler;
+        const RunResult actual = recompiler.run(compiled, 1U);
+        assert(actual.reason == oracle.reason && actual.steps == oracle.steps);
+        return std::pair{actual, recompiler.statistics()};
+    };
+
+    // Float32 pair, exact endian representation, and architectural state
+    // preservation (including both source lanes).
+    EspressoCore float_interpreted(0x1000U);
+    EspressoCore float_compiled(0x1000U);
+    for (EspressoCore* core : {&float_interpreted, &float_compiled})
+    {
+        core->state.gpr.fill(0xC001D00DU);
+        core->state.gpr[0] = 0x20U;
+        core->state.gpr[4] = 0x200U;
+        core->state.fpr[13] = double_bits(1.5);
+        core->state.fpr_ps1[13] = double_bits(-2.25);
+        core->state.cr = 0x12345678U;
+        core->state.xer = 0xA0000042U;
+        core->state.lr = 0x10203040U;
+        core->state.ctr = 0x50607080U;
+        core->state.fpscr = 0xCAFEBABEU;
+    }
+    const auto float_gprs = float_interpreted.state.gpr;
+    const auto [float_result, float_stats] = compare_cores(
+        float_interpreted, float_compiled,
+        encode_psq_st(13U, 4U, 16, false, 0U));
+    assert(float_result.steps == 1U);
+    assert(float_compiled.memory.read32_be(0x210U) == std::bit_cast<std::uint32_t>(1.5F));
+    assert(float_compiled.memory.read32_be(0x214U) == std::bit_cast<std::uint32_t>(-2.25F));
+    assert(float_compiled.state.gpr == float_gprs);
+    assert(float_compiled.state.fpr == float_interpreted.state.fpr);
+    assert(float_compiled.state.fpr_ps1 == float_interpreted.state.fpr_ps1);
+    assert(float_compiled.state.cr == float_interpreted.state.cr);
+    assert(float_compiled.state.xer == float_interpreted.state.xer);
+    assert(float_compiled.state.lr == float_interpreted.state.lr);
+    assert(float_compiled.state.ctr == float_interpreted.state.ctr);
+    assert(float_compiled.state.fpscr == float_interpreted.state.fpscr);
+    assert(float_stats.native_instructions == 1U && float_stats.interpreter_fallbacks == 0U);
+    const auto& float_history = float_result.instruction_history.back();
+    assert(float_history.opcode_name == "psq_st" && float_history.completed);
+    assert(float_history.has_effective_address && float_history.effective_address == 0x210U);
+    assert(float_history.has_paired_fp_state && float_history.paired_fp_quantized_store);
+    assert(float_history.paired_fp_source_a_ps0 == double_bits(1.5));
+    assert(float_history.paired_fp_source_a_ps1 == double_bits(-2.25));
+    assert(float_history.paired_fp_store_value0 == std::bit_cast<std::uint32_t>(1.5F));
+    assert(float_history.paired_fp_store_value1 == std::bit_cast<std::uint32_t>(-2.25F));
+
+    // Integer quantization applies the signed GQR scale and clamps before
+    // truncation. W=1 must not touch the next byte or read PS1 for quantization.
+    EspressoCore integer_interpreted(0x1000U);
+    EspressoCore integer_compiled(0x1000U);
+    for (EspressoCore* core : {&integer_interpreted, &integer_compiled})
+    {
+        core->state.gpr[4] = 0x300U;
+        core->state.gqr[2] = (1U << 8U) | 4U; // U8, scale +1.
+        core->state.fpr[3] = double_bits(10.75);
+        core->state.fpr_ps1[3] = double_bits(200.0);
+        core->memory.write8(0x302U, 0xCCU);
+    }
+    const auto [integer_result, integer_stats] = compare_cores(
+        integer_interpreted, integer_compiled,
+        encode_psq_st(3U, 4U, 2, true, 2U));
+    assert(integer_result.steps == 1U);
+    assert(integer_compiled.memory.read8(0x302U) == 21U);
+    assert(integer_compiled.memory.read8(0x303U) == 0U);
+    assert(integer_stats.native_instructions == 1U && integer_stats.interpreter_fallbacks == 0U);
+
+    // Signed 16-bit values use two's complement in guest big-endian order.
+    EspressoCore signed_interpreted(0x1000U);
+    EspressoCore signed_compiled(0x1000U);
+    for (EspressoCore* core : {&signed_interpreted, &signed_compiled})
+    {
+        core->state.gpr[5] = 0x400U;
+        core->state.gqr[1] = 7U | (0x3FU << 8U); // S16, scale -1.
+        core->state.fpr[6] = double_bits(100000.0);
+        core->state.fpr_ps1[6] = double_bits(-3.5);
+    }
+    const auto [signed_result, signed_stats] = compare_cores(
+        signed_interpreted, signed_compiled,
+        encode_psq_st(6U, 5U, 0, false, 1U));
+    assert(signed_result.steps == 1U);
+    assert(signed_compiled.memory.read16_be(0x400U) == 0x7FFFU);
+    assert(signed_compiled.memory.read16_be(0x402U) == 0xFFFFU);
+    assert(signed_stats.native_instructions == 1U && signed_stats.interpreter_fallbacks == 0U);
+
+    // Reserved GQR types and integer NaN conversion remain interpreter
+    // unsupported cases; they must not write memory or count as native.
+    EspressoCore reserved(0x1000U);
+    reserved.state.gqr[0] = 2U;
+    reserved.state.gpr[4] = 0x500U;
+    reserved.memory.write8(0x500U, 0xA5U);
+    reserved.memory.write32_be(start, encode_psq_st(1U, 4U, 0, true, 0U));
+    reserved.state.cia = start;
+    Recompiler reserved_recompiler;
+    const RunResult reserved_result = reserved_recompiler.run(reserved, 1U);
+    assert(reserved_result.reason == StopReason::unsupported_instruction);
+    assert(reserved_result.steps == 0U && reserved.memory.read8(0x500U) == 0xA5U);
+    assert(reserved_result.instruction_history.back().opcode_name == "psq_st");
+    assert(!reserved_result.instruction_history.back().completed);
+    assert(reserved_recompiler.statistics().native_instructions == 0U);
+
+    EspressoCore nan_store(0x1000U);
+    nan_store.state.gqr[0] = 4U;
+    nan_store.state.gpr[4] = 0x510U;
+    nan_store.state.fpr[1] = double_bits(std::numeric_limits<double>::quiet_NaN());
+    nan_store.memory.write8(0x510U, 0x5AU);
+    nan_store.memory.write32_be(start, encode_psq_st(1U, 4U, 0, true, 0U));
+    nan_store.state.cia = start;
+    Recompiler nan_recompiler;
+    const RunResult nan_result = nan_recompiler.run(nan_store, 1U);
+    assert(nan_result.reason == StopReason::unsupported_instruction);
+    assert(nan_store.memory.read8(0x510U) == 0x5AU);
+
+    // A pair crossing an unmapped boundary faults transactionally just like
+    // the interpreter's complete-range validation.
+    EspressoCore fault_interpreted(0x1000U);
+    EspressoCore fault_compiled(0x1000U);
+    for (EspressoCore* core : {&fault_interpreted, &fault_compiled})
+    {
+        core->memory.map_region(0x2000U, 4U);
+        core->memory.write32_be(0x2000U, 0xAABBCCDDU);
+        core->state.gpr[7] = 0x2000U;
+        core->state.fpr[8] = double_bits(9.0);
+        core->state.fpr_ps1[8] = double_bits(10.0);
+    }
+    const auto [fault_result, fault_stats] = compare_cores(
+        fault_interpreted, fault_compiled,
+        encode_psq_st(8U, 7U, 0, false, 0U));
+    assert(fault_result.reason == StopReason::memory_fault);
+    assert(fault_result.detail.find("write 8 byte(s)") != std::string::npos);
+    assert(fault_compiled.memory.read32_be(0x2000U) == 0xAABBCCDDU);
+    assert(fault_compiled.state.cia == start);
+    assert(!fault_result.instruction_history.back().completed);
+    assert(fault_result.instruction_history.back().opcode_name == "psq_st");
+    assert(fault_stats.native_instructions == 0U);
+}
+
 void recompiler_memory_tests()
 {
     EspressoCore watched_store(0x1000U);
@@ -3740,6 +3901,7 @@ int main()
     recompiler_stmw_differential_tests();
     recompiler_dcbst_differential_tests();
     recompiler_dcbf_differential_tests();
+    recompiler_psq_st_differential_tests();
     recompiler_branch_test();
     recompiler_fast_lookup_cache_test();
     recompiler_conditional_branch_tests();

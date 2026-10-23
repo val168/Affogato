@@ -13,6 +13,7 @@
 #include <exception>
 #include <iomanip>
 #include <limits>
+#include <optional>
 #include <type_traits>
 #include <sstream>
 #include <string>
@@ -52,6 +53,15 @@ struct NativeFpIntegerConversionRecord
     bool write_suppressed{};
 };
 
+struct NativePsqStoreRecord
+{
+    std::uint64_t source_ps0{};
+    std::uint64_t source_ps1{};
+    std::uint32_t value0{};
+    std::uint32_t value1{};
+    std::uint32_t gqr{};
+};
+
 struct NativeExecutionContext
 {
     GuestMemory* memory{};
@@ -59,9 +69,11 @@ struct NativeExecutionContext
     std::array<NativeMemoryRecord, 64> memory_records{};
     std::array<NativeFpCompareRecord, 64> fp_compare_records{};
     std::array<NativeFpIntegerConversionRecord, 64> fp_integer_conversion_records{};
+    std::array<NativePsqStoreRecord, 64> psq_store_records{};
     std::uint64_t memory_access_calls{};
     bool failed{};
     bool guest_memory_fault{};
+    bool unsupported_instruction{};
     std::exception_ptr exception{};
     std::uint32_t fault_cia{};
     std::uint32_t failed_address{};
@@ -69,6 +81,147 @@ struct NativeExecutionContext
     std::uint32_t failed_flags{};
     std::uint32_t failed_instruction_index{};
 };
+
+extern "C" std::uint32_t native_psq_store(
+    NativeExecutionContext* context,
+    const CpuState* state,
+    std::uint32_t address,
+    std::uint32_t fp_register,
+    std::uint32_t quantized_register,
+    std::uint32_t single_element,
+    std::uint32_t instruction_index) noexcept
+{
+    if (instruction_index >= context->psq_store_records.size() ||
+        quantized_register >= state->gqr.size() || fp_register >= state->fpr.size())
+    {
+        context->failed = true;
+        context->failed_address = address;
+        context->failed_width = 0U;
+        context->failed_flags = 1U;
+        context->failed_instruction_index = instruction_index;
+        return 2U;
+    }
+
+    const std::uint32_t gqr = state->gqr[quantized_register];
+    const std::uint32_t store_type = gqr & 0x7U;
+    std::int32_t scale = static_cast<std::int32_t>((gqr >> 8U) & 0x3FU);
+    if ((scale & 0x20) != 0)
+    {
+        scale -= 0x40;
+    }
+    if (store_type >= 1U && store_type <= 3U)
+    {
+        context->unsupported_instruction = true;
+        return 1U;
+    }
+
+    NativePsqStoreRecord& record = context->psq_store_records[instruction_index];
+    record.source_ps0 = state->fpr[fp_register];
+    record.source_ps1 = state->fpr_ps1[fp_register];
+    record.gqr = gqr;
+    const float ps0 = static_cast<float>(std::bit_cast<double>(record.source_ps0));
+    const float ps1 = static_cast<float>(std::bit_cast<double>(record.source_ps1));
+    const auto quantize_lane = [&](float lane) -> std::optional<std::uint32_t> {
+        if (store_type == 0U)
+        {
+            return std::bit_cast<std::uint32_t>(lane);
+        }
+        if (std::isnan(lane))
+        {
+            return std::nullopt;
+        }
+        const float scaled = lane * std::ldexp(1.0F, scale);
+        switch (store_type)
+        {
+        case 4U:
+            return static_cast<std::uint32_t>(static_cast<std::uint8_t>(
+                static_cast<std::uint32_t>(std::clamp(scaled, 0.0F, 255.0F))));
+        case 5U:
+            return static_cast<std::uint32_t>(static_cast<std::uint16_t>(
+                static_cast<std::uint32_t>(std::clamp(scaled, 0.0F, 65535.0F))));
+        case 6U:
+            return static_cast<std::uint32_t>(static_cast<std::uint8_t>(
+                static_cast<std::int32_t>(std::clamp(scaled, -128.0F, 127.0F))));
+        case 7U:
+            return static_cast<std::uint32_t>(static_cast<std::uint16_t>(
+                static_cast<std::int32_t>(std::clamp(scaled, -32768.0F, 32767.0F))));
+        default:
+            return std::nullopt;
+        }
+    };
+
+    const auto value0 = quantize_lane(ps0);
+    const auto value1 = single_element != 0U
+        ? std::optional<std::uint32_t>{0U}
+        : quantize_lane(ps1);
+    if (!value0 || !value1)
+    {
+        // Match the interpreter: unsupported quantization does not touch memory.
+        context->unsupported_instruction = true;
+        return 1U;
+    }
+
+    const std::uint32_t lane_width = store_type == 0U ? 4U
+        : (store_type == 4U || store_type == 6U) ? 1U : 2U;
+    const std::uint32_t access_width = single_element != 0U
+        ? lane_width : lane_width * 2U;
+    try
+    {
+        // Validate the complete architectural transfer before either lane is
+        // written, matching the interpreter's all-or-nothing fault behavior.
+        context->memory->validate_write_range(address, access_width);
+        record.value0 = *value0;
+        record.value1 = *value1;
+        for (std::uint32_t lane = 0U; lane < (single_element != 0U ? 1U : 2U); ++lane)
+        {
+            const std::uint32_t lane_address = address + lane * lane_width;
+            const std::uint32_t value = lane == 0U ? *value0 : *value1;
+            if (context->memory->has_write_watchpoint())
+            {
+                context->memory->set_current_guest_cia(
+                    context->block_cia + instruction_index * 4U);
+            }
+            ++context->memory_access_calls;
+            switch (store_type)
+            {
+            case 0U: context->memory->write32_be(lane_address, value); break;
+            case 4U:
+            case 6U: context->memory->write8(lane_address, static_cast<std::uint8_t>(value)); break;
+            case 5U:
+            case 7U: context->memory->write16_be(lane_address, static_cast<std::uint16_t>(value)); break;
+            default: break;
+            }
+        }
+        NativeMemoryRecord& memory_record = context->memory_records[instruction_index];
+        memory_record.address = address;
+        memory_record.fp_value = record.source_ps0;
+        memory_record.value = *value0;
+        memory_record.indexed = false;
+        return 0U;
+    }
+    catch (...)
+    {
+        context->failed = true;
+        context->failed_address = address;
+        context->failed_width = access_width;
+        context->failed_flags = 1U;
+        context->failed_instruction_index = instruction_index;
+        context->fault_cia = context->block_cia + instruction_index * 4U;
+        context->exception = std::current_exception();
+        try
+        {
+            std::rethrow_exception(context->exception);
+        }
+        catch (const GuestMemoryFault&)
+        {
+            context->guest_memory_fault = true;
+        }
+        catch (...)
+        {
+        }
+        return 2U;
+    }
+}
 
 static_assert(std::is_standard_layout_v<NativeExecutionContext>);
 
@@ -725,6 +878,7 @@ struct BlockCode
     case Opcode::floating_absolute_value:
     case Opcode::paired_single_merge00:
     case Opcode::paired_single_merge10:
+    case Opcode::paired_single_quantized_store:
     case Opcode::instruction_sync:
     case Opcode::shift_left_word:
     case Opcode::shift_right_word:
@@ -792,6 +946,7 @@ struct BlockCode
     case Opcode::rotate_left_word_and_mask_insert: return "rlwimi";
     case Opcode::paired_single_merge00: return "ps_merge00";
     case Opcode::paired_single_merge10: return "ps_merge10";
+    case Opcode::paired_single_quantized_store: return "psq_st";
     case Opcode::instruction_sync: return "isync";
     case Opcode::bitwise_or: return "or";
     case Opcode::bitwise_and: return "and";
@@ -892,6 +1047,7 @@ struct BlockCode
     case Opcode::store_word_indexed:
     case Opcode::store_byte_indexed:
     case Opcode::store_halfword_indexed:
+    case Opcode::paired_single_quantized_store:
     case Opcode::data_cache_block_store:
     case Opcode::data_cache_block_flush:
         return true;
@@ -2370,6 +2526,83 @@ struct Recompiler::Impl
                 compiler.bind(store_is_safe);
                 break;
             }
+            case Opcode::paired_single_quantized_store:
+            {
+                const std::uint32_t cia = block.address +
+                    static_cast<std::uint32_t>(index * 4U);
+                const std::size_t record_base = offsetof(NativeExecutionContext, memory_records) +
+                    index * sizeof(NativeMemoryRecord);
+                x86::Gp address = compiler.new_gp32("psq_st_address");
+                if (insn.base == 0U)
+                {
+                    compiler.mov(address, imm(0U));
+                }
+                else
+                {
+                    compiler.mov(address, read_guest_gpr(insn.base));
+                    compiler.mov(x86::dword_ptr(context, static_cast<std::int32_t>(
+                        record_base + offsetof(NativeMemoryRecord, base_value))), address);
+                }
+                compiler.add(address, imm(static_cast<std::uint32_t>(insn.immediate)));
+                compiler.mov(x86::dword_ptr(context, static_cast<std::int32_t>(
+                    offsetof(NativeExecutionContext, fault_cia))), imm(cia));
+
+                auto* invoke = static_cast<InvokeNode*>(nullptr);
+                const auto helper_address = static_cast<std::uint64_t>(
+                    reinterpret_cast<std::uintptr_t>(&native_psq_store));
+                compiler.invoke(Out(invoke), helper_address,
+                    FuncSignature::build<std::uint32_t, NativeExecutionContext*,
+                        const CpuState*, std::uint32_t, std::uint32_t,
+                        std::uint32_t, std::uint32_t, std::uint32_t>(CallConvId::kCDecl));
+                invoke->set_arg(0, context);
+                invoke->set_arg(1, state);
+                invoke->set_arg(2, address);
+                invoke->set_arg(3, imm(insn.fp_register));
+                invoke->set_arg(4, imm(insn.quantized_register));
+                invoke->set_arg(5, imm(insn.paired_single_w ? 1U : 0U));
+                invoke->set_arg(6, imm(static_cast<std::uint32_t>(index)));
+                x86::Gp status = compiler.new_gp32("psq_st_status");
+                invoke->set_ret(0, status);
+
+                Label store_completed = compiler.new_label();
+                compiler.test(status, status);
+                compiler.jz(store_completed);
+                // The helper has either rejected a runtime GQR/NaN case before
+                // touching memory or captured a fault. Resume at this guest
+                // instruction after synchronizing the block's cached GPRs.
+                compiler.mov(x86::dword_ptr(state, static_cast<std::int32_t>(
+                    offsetof(CpuState, cia))), imm(cia));
+                flush_guest_gprs();
+                x86::Gp stopped_at_store = compiler.new_gp32("psq_st_stop_count");
+                compiler.mov(stopped_at_store, imm(static_cast<std::uint32_t>(index)));
+                compiler.ret(stopped_at_store);
+                compiler.bind(store_completed);
+
+                // A store overlapping this translated block must leave now so
+                // the next lookup can validate the code-page generation.
+                Label store_is_safe = compiler.new_label();
+                Label self_modifying = compiler.new_label();
+                compiler.cmp(address, imm(0xFFFFFFF8U));
+                compiler.ja(self_modifying);
+                const std::uint32_t block_end = block.address +
+                    static_cast<std::uint32_t>(block.words.size() * sizeof(std::uint32_t));
+                compiler.cmp(address, imm(block_end));
+                compiler.jae(store_is_safe);
+                x86::Gp store_end = compiler.new_gp32("psq_st_end");
+                compiler.mov(store_end, address);
+                compiler.add(store_end, imm(8U));
+                compiler.cmp(store_end, imm(block.address));
+                compiler.jbe(store_is_safe);
+                compiler.jmp(self_modifying);
+                compiler.bind(self_modifying);
+                compiler.mov(x86::dword_ptr(state, static_cast<std::int32_t>(
+                    offsetof(CpuState, cia))), imm(cia + 4U));
+                x86::Gp completed_store = compiler.new_gp32("psq_st_completed_count");
+                compiler.mov(completed_store, imm(static_cast<std::uint32_t>(index + 1U)));
+                compiler.ret(completed_store);
+                compiler.bind(store_is_safe);
+                break;
+            }
             case Opcode::load_single:
             {
                 const std::size_t record_base = offsetof(NativeExecutionContext, memory_records) +
@@ -3104,6 +3337,33 @@ RunResult Recompiler::run(EspressoCore& core, std::size_t max_steps)
                 core.append_instruction_history(std::move(entry));
                 continue;
             }
+            if (insn.opcode == Opcode::paired_single_quantized_store)
+            {
+                const NativeMemoryRecord& memory_record = context.memory_records[i];
+                const NativePsqStoreRecord& record = context.psq_store_records[i];
+                InstructionHistoryEntry entry = native_history(insn, cia);
+                entry.completed = true;
+                entry.has_effective_address = true;
+                entry.effective_address = memory_record.address;
+                if (insn.base != 0U)
+                {
+                    entry.source_registers[entry.source_count] = insn.base;
+                    entry.source_values[entry.source_count++] = memory_record.base_value;
+                }
+                entry.has_paired_fp_state = true;
+                entry.paired_fp_quantized_store = true;
+                entry.paired_fp_destination_register = insn.fp_register;
+                entry.paired_fp_source_a_register = insn.fp_register;
+                entry.paired_fp_source_a_ps0 = record.source_ps0;
+                entry.paired_fp_source_a_ps1 = record.source_ps1;
+                entry.paired_fp_store_gqr = insn.quantized_register;
+                entry.paired_fp_store_type = static_cast<std::uint8_t>(record.gqr & 0x7U);
+                entry.paired_fp_store_w = insn.paired_single_w;
+                entry.paired_fp_store_value0 = record.value0;
+                entry.paired_fp_store_value1 = record.value1;
+                core.append_instruction_history(std::move(entry));
+                continue;
+            }
             if (!is_memory_instruction(insn.opcode))
             {
                 core.append_instruction_history(native_history(insn, cia));
@@ -3225,6 +3485,25 @@ RunResult Recompiler::run(EspressoCore& core, std::size_t max_steps)
         }
         result.steps += executed;
         result.cia = core.state.cia;
+        if (context.unsupported_instruction)
+        {
+            ++impl_->stats.interpreter_fallbacks;
+            const StepResult fallback_result = core.step();
+            if (fallback_result != StepResult::unsupported_instruction)
+            {
+                result.reason = StopReason::hle_error;
+                result.detail = "native psq_st fallback did not reproduce its unsupported result";
+                result.cia = core.state.cia;
+                include_history();
+                return result;
+            }
+            result.reason = StopReason::unsupported_instruction;
+            result.cia = core.state.cia;
+            result.instruction_word = core.memory.read32_be(core.state.cia);
+            result.has_instruction_word = true;
+            include_history();
+            return result;
+        }
         if (context.failed)
         {
             try
