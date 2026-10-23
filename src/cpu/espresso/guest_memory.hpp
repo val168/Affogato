@@ -116,6 +116,11 @@ public:
         return found == sparse_page_write_generations_.end() ? 0U : found->second;
     }
 
+    [[nodiscard]] std::uint32_t reservation_address(std::uint32_t address) const noexcept
+    {
+        return resolve_alias_address(address);
+    }
+
     void validate_write_range(std::uint32_t address, std::size_t width) const
     {
         validate_access(address, width, GuestMemoryAccess::write);

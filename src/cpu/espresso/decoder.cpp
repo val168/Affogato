@@ -850,6 +850,13 @@ DecodedInstruction decode(std::uint32_t raw) noexcept
             instruction.source = static_cast<std::uint8_t>(field(raw, 11, 0x1FU));
             instruction.record = (raw & 1U) != 0U;
         }
+        else if (extended_opcode == 150U && (raw & 1U) != 0U) // stwcx.
+        {
+            instruction.opcode = Opcode::store_word_conditional_indexed;
+            instruction.destination = static_cast<std::uint8_t>(field(raw, 21, 0x1FU));
+            instruction.base = static_cast<std::uint8_t>(field(raw, 16, 0x1FU));
+            instruction.source = static_cast<std::uint8_t>(field(raw, 11, 0x1FU));
+        }
         else if (extended_opcode == 151) // stwx
         {
             instruction.opcode = Opcode::store_word_indexed;
@@ -868,6 +875,13 @@ DecodedInstruction decode(std::uint32_t raw) noexcept
         else if (extended_opcode == 662U && (raw & 1U) == 0U) // stwbrx
         {
             instruction.opcode = Opcode::store_word_byte_reverse_indexed;
+            instruction.destination = static_cast<std::uint8_t>(field(raw, 21, 0x1FU));
+            instruction.base = static_cast<std::uint8_t>(field(raw, 16, 0x1FU));
+            instruction.source = static_cast<std::uint8_t>(field(raw, 11, 0x1FU));
+        }
+        else if (extended_opcode == 20U && (raw & 1U) == 0U) // lwarx
+        {
+            instruction.opcode = Opcode::load_word_reserve_indexed;
             instruction.destination = static_cast<std::uint8_t>(field(raw, 21, 0x1FU));
             instruction.base = static_cast<std::uint8_t>(field(raw, 16, 0x1FU));
             instruction.source = static_cast<std::uint8_t>(field(raw, 11, 0x1FU));

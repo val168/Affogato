@@ -50,6 +50,11 @@ struct CpuState
     std::uint32_t ctr{};
     std::uint32_t cia{};
 
+    // Per-core reservation used by lwarx/stwcx. Affogato currently executes a
+    // single guest lane and has no asynchronous memory agents.
+    std::uint32_t reservation_address{};
+    bool reservation_valid{};
+
     void reset() noexcept
     {
         *this = {};

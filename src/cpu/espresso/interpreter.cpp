@@ -467,6 +467,7 @@ void set_xer_carry(CpuState& state, bool carry) noexcept
         detail << "; instruction 0x" << std::setw(8) << instruction_word;
         const DecodedInstruction instruction = decode(instruction_word);
         const bool indexed = instruction.opcode == Opcode::load_word_indexed ||
+            instruction.opcode == Opcode::load_word_reserve_indexed ||
             instruction.opcode == Opcode::load_word_indexed_update ||
             instruction.opcode == Opcode::load_word_byte_reverse_indexed ||
             instruction.opcode == Opcode::load_single_indexed ||
@@ -481,6 +482,7 @@ void set_xer_carry(CpuState& state, bool carry) noexcept
             instruction.opcode == Opcode::load_halfword_algebraic_indexed ||
             instruction.opcode == Opcode::load_halfword_algebraic_indexed_update ||
             instruction.opcode == Opcode::store_word_indexed ||
+            instruction.opcode == Opcode::store_word_conditional_indexed ||
             instruction.opcode == Opcode::store_word_indexed_update ||
             instruction.opcode == Opcode::store_word_byte_reverse_indexed ||
             instruction.opcode == Opcode::store_byte_indexed ||
@@ -682,6 +684,7 @@ void set_xer_carry(CpuState& state, bool carry) noexcept
     case Opcode::store_string_word_indexed: return "stswx";
     case Opcode::load_word_update: return "lwzu";
     case Opcode::load_word_indexed: return "lwzx";
+    case Opcode::load_word_reserve_indexed: return "lwarx";
     case Opcode::load_word_indexed_update: return "lwzux";
     case Opcode::load_word_byte_reverse_indexed: return "lwbrx";
     case Opcode::load_byte_zero_indexed: return "lbzx";
@@ -694,6 +697,7 @@ void set_xer_carry(CpuState& state, bool carry) noexcept
     case Opcode::store_word: return "stw";
     case Opcode::store_multiple_word: return "stmw";
     case Opcode::store_word_indexed: return "stwx";
+    case Opcode::store_word_conditional_indexed: return "stwcx.";
     case Opcode::store_word_indexed_update: return "stwux";
     case Opcode::store_word_byte_reverse_indexed: return "stwbrx";
     case Opcode::store_byte_indexed: return "stbx";
@@ -1324,6 +1328,7 @@ void add_history_source(
     }
     const bool store = opcode == Opcode::store_word || opcode == Opcode::store_word_update ||
         opcode == Opcode::store_word_indexed ||
+        opcode == Opcode::store_word_conditional_indexed ||
         opcode == Opcode::store_word_indexed_update ||
         opcode == Opcode::store_word_byte_reverse_indexed || opcode == Opcode::store_byte ||
         opcode == Opcode::store_byte_update || opcode == Opcode::store_byte_indexed ||
@@ -1334,6 +1339,7 @@ void add_history_source(
         opcode == Opcode::store_halfword_byte_reverse_indexed;
 
     if (opcode == Opcode::load_word_indexed ||
+        opcode == Opcode::load_word_reserve_indexed ||
         opcode == Opcode::load_word_indexed_update ||
         opcode == Opcode::load_word_byte_reverse_indexed ||
         opcode == Opcode::load_single_indexed ||
@@ -1348,6 +1354,7 @@ void add_history_source(
         opcode == Opcode::load_halfword_algebraic_indexed ||
         opcode == Opcode::load_halfword_algebraic_indexed_update ||
         opcode == Opcode::store_word_indexed ||
+        opcode == Opcode::store_word_conditional_indexed ||
         opcode == Opcode::store_word_indexed_update ||
         opcode == Opcode::store_word_byte_reverse_indexed ||
         opcode == Opcode::store_byte_indexed ||
@@ -1519,6 +1526,7 @@ void add_history_source(
         add_history_source(entry, state, instruction.base);
         break;
     case Opcode::load_word_indexed:
+    case Opcode::load_word_reserve_indexed:
     case Opcode::load_word_indexed_update:
     case Opcode::load_word_byte_reverse_indexed:
     case Opcode::load_single_indexed:
@@ -1533,6 +1541,7 @@ void add_history_source(
     case Opcode::load_halfword_algebraic_indexed:
     case Opcode::load_halfword_algebraic_indexed_update:
     case Opcode::store_word_indexed:
+    case Opcode::store_word_conditional_indexed:
     case Opcode::store_word_indexed_update:
     case Opcode::store_word_byte_reverse_indexed:
     case Opcode::store_byte_indexed:
@@ -1642,6 +1651,7 @@ void add_history_source(
     case Opcode::load_word_zero:
     case Opcode::load_word_update:
     case Opcode::load_word_indexed:
+    case Opcode::load_word_reserve_indexed:
     case Opcode::load_word_indexed_update:
     case Opcode::load_word_byte_reverse_indexed:
     case Opcode::load_byte_zero_indexed:
@@ -5398,6 +5408,22 @@ StepResult EspressoCore::step()
         break;
     }
 
+    case Opcode::load_word_reserve_indexed:
+    {
+        const std::uint32_t base = instruction.base == 0U
+            ? 0U : state.gpr[instruction.base];
+        const std::uint32_t address = base + state.gpr[instruction.source];
+        if ((address & 3U) != 0U)
+        {
+            throw GuestMemoryFault(address, sizeof(std::uint32_t), GuestMemoryAccess::read);
+        }
+        const std::uint32_t value = memory.read32_be(address);
+        state.gpr[instruction.destination] = value;
+        state.reservation_address = memory.reservation_address(address);
+        state.reservation_valid = true;
+        break;
+    }
+
     case Opcode::load_word_indexed_update:
     {
         const std::uint32_t base = state.gpr[instruction.base];
@@ -5525,6 +5551,34 @@ StepResult EspressoCore::step()
         const std::uint32_t base = instruction.base == 0 ? 0 : state.gpr[instruction.base];
         const std::uint32_t address = base + state.gpr[instruction.source];
         memory.write32_be(address, state.gpr[instruction.destination]);
+        break;
+    }
+
+    case Opcode::store_word_conditional_indexed:
+    {
+        const std::uint32_t base = instruction.base == 0U
+            ? 0U : state.gpr[instruction.base];
+        const std::uint32_t address = base + state.gpr[instruction.source];
+        const std::uint32_t value = state.gpr[instruction.destination];
+        if ((address & 3U) != 0U)
+        {
+            throw GuestMemoryFault(address, sizeof(std::uint32_t), GuestMemoryAccess::write);
+        }
+        const std::uint32_t canonical_address = memory.reservation_address(address);
+        const bool success = state.reservation_valid &&
+            state.reservation_address == canonical_address;
+        if (success)
+        {
+            memory.write32_be(address, value);
+        }
+        // Each conditional-store attempt consumes the single per-core
+        // reservation, whether the address matched or not.
+        state.reservation_valid = false;
+        const std::uint8_t cr0 = static_cast<std::uint8_t>(
+            (success ? cr_equal : 0U) |
+            ((state.xer & xer_summary_overflow_mask) != 0U ? 1U : 0U));
+        state.cr = (state.cr & 0x0FFFFFFFU) |
+            (static_cast<std::uint32_t>(cr0) << 28U);
         break;
     }
 

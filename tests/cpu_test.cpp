@@ -364,6 +364,20 @@ void decoder_tests()
     const std::uint32_t addco = (0x7C845814U & ~(0x3FFU << 1U)) | (522U << 1U);
     assert(decode(addco).opcode == Opcode::add_carrying_overflow);
 
+    const DecodedInstruction lwarx = decode(0x7C006028U); // lwarx r0, 0, r12
+    assert(lwarx.opcode == Opcode::load_word_reserve_indexed);
+    assert(lwarx.destination == 0U);
+    assert(lwarx.base == 0U);
+    assert(lwarx.source == 12U);
+    assert(decode(0x7C006029U).opcode == Opcode::unsupported);
+
+    const DecodedInstruction stwcx = decode(0x7CA0192DU); // stwcx. r5, 0, r3
+    assert(stwcx.opcode == Opcode::store_word_conditional_indexed);
+    assert(stwcx.destination == 5U);
+    assert(stwcx.base == 0U);
+    assert(stwcx.source == 3U);
+    assert(decode(0x7CA0192CU).opcode == Opcode::unsupported);
+
     const DecodedInstruction subf = decode(0x7CC42850U); // subf r6, r4, r5
     assert(subf.opcode == Opcode::subtract_from);
     assert(subf.destination == 6);
@@ -24018,6 +24032,135 @@ void store_halfword_update_tests()
     assert(failed.has_destination && failed.destination_register == 8U);
 }
 
+void reservation_instruction_tests()
+{
+    constexpr auto encode_indexed_x = [](
+        std::uint32_t destination,
+        std::uint32_t base,
+        std::uint32_t index,
+        std::uint32_t xo,
+        bool record) {
+        return (31U << 26U) | (destination << 21U) | (base << 16U) |
+            (index << 11U) | (xo << 1U) | (record ? 1U : 0U);
+    };
+    constexpr std::uint32_t lwarx_r0_0_r12 = 0x7C006028U;
+    constexpr std::uint32_t stwcx_r5_0_r3 =
+        encode_indexed_x(5U, 0U, 3U, 150U, true);
+
+    EspressoCore core(0x4000U);
+    core.memory.write32_be(0x1000U, lwarx_r0_0_r12);
+    core.memory.write32_be(0x1004U, stwcx_r5_0_r3);
+    core.memory.write32_be(0x104U, 0x12345678U);
+    core.state.gpr[0] = 0xDEADBEEFU; // rA=0 is literal zero; rB is still GPR12.
+    core.state.gpr[12] = 0x104U;
+    core.state.gpr[3] = 0x104U;
+    core.state.gpr[5] = 0x87654321U;
+    core.state.cia = 0x1000U;
+    assert(core.step() == StepResult::executed);
+    assert(core.state.gpr[0] == 0x12345678U);
+    assert(core.state.reservation_valid);
+    assert(core.state.reservation_address == 0x104U);
+
+    core.state.xer = 0x80000000U; // preserve and reflect XER.SO in CR0.
+    core.state.cr = 0x12345678U;
+    core.state.cia = 0x1004U;
+    assert(core.step() == StepResult::executed);
+    assert(core.memory.read32_be(0x104U) == 0x87654321U);
+    assert(!core.state.reservation_valid);
+    assert((core.state.cr >> 28U) == 0x3U); // EQ | SO
+    assert((core.state.cr & 0x0FFFFFFFU) == (0x12345678U & 0x0FFFFFFFU));
+
+    // A conditional store with no live reservation must not touch memory, but
+    // must clear CR0[EQ] and preserve CR0[SO] and CR1..CR7.
+    core.memory.write32_be(0x1004U, stwcx_r5_0_r3);
+    core.memory.write32_be(0x104U, 0xAABBCCDDU);
+    core.state.cr = 0x92345678U;
+    core.state.cia = 0x1004U;
+    assert(core.step() == StepResult::executed);
+    assert(core.memory.read32_be(0x104U) == 0xAABBCCDDU);
+    assert(!core.state.reservation_valid);
+    assert((core.state.cr >> 28U) == 1U);
+    assert((core.state.cr & 0x0FFFFFFFU) == (0x92345678U & 0x0FFFFFFFU));
+
+    // The reservation is one-per-core: a second lwarx replaces it. A normal
+    // store by this same core does not itself consume the reservation.
+    core.memory.write32_be(0x108U, 0x01020304U);
+    core.memory.write32_be(0x1008U, encode_indexed_x(7U, 1U, 2U, 20U, false));
+    core.memory.write32_be(0x100CU, 0x90610000U); // stw r3,0(r1)
+    core.memory.write32_be(0x1010U, encode_indexed_x(5U, 0U, 3U, 150U, true));
+    core.state.gpr[1] = 0x100U;
+    core.state.gpr[2] = 8U;
+    core.state.gpr[3] = 0x12345678U;
+    core.state.gpr[7] = 0xFFFFFFFFU;
+    core.state.gpr[5] = 0xCAFEBABEU;
+    core.state.cia = 0x1008U;
+    assert(core.step() == StepResult::executed);
+    assert(core.state.gpr[7] == 0x01020304U);
+    assert(core.state.reservation_valid);
+    assert(core.state.reservation_address == 0x108U);
+    core.state.cia = 0x100CU;
+    assert(core.step() == StepResult::executed);
+    assert(core.memory.read32_be(0x100U) == 0x12345678U);
+    assert(core.state.reservation_valid);
+    core.state.gpr[3] = 0x108U;
+    core.state.cia = 0x1010U;
+    assert(core.step() == StepResult::executed);
+    assert(core.memory.read32_be(0x108U) == 0xCAFEBABEU);
+    assert(!core.state.reservation_valid);
+
+    // A second conditional store fails because the first one consumed the
+    // reservation. An address mismatch likewise cannot store.
+    core.memory.write32_be(0x1014U, encode_indexed_x(5U, 0U, 3U, 150U, true));
+    core.state.cia = 0x1014U;
+    assert(core.step() == StepResult::executed);
+    assert(core.memory.read32_be(0x108U) == 0xCAFEBABEU);
+    assert((core.state.cr >> 28U & 0x2U) == 0U);
+
+    core.state.reservation_valid = true;
+    core.state.reservation_address = 0x104U;
+    core.state.gpr[3] = 0x108U;
+    core.memory.write32_be(0x1018U, encode_indexed_x(5U, 0U, 3U, 150U, true));
+    core.state.cia = 0x1018U;
+    assert(core.step() == StepResult::executed);
+    assert(core.memory.read32_be(0x108U) == 0xCAFEBABEU);
+    assert(!core.state.reservation_valid);
+
+    // Destination/index aliasing uses the pre-instruction register value.
+    core.memory.write32_be(0x101CU, encode_indexed_x(12U, 1U, 12U, 20U, false));
+    core.memory.write32_be(0x104U, 0x0BADF00DU);
+    core.state.gpr[1] = 0x100U;
+    core.state.gpr[12] = 4U;
+    core.state.cia = 0x101CU;
+    assert(core.step() == StepResult::executed);
+    assert(core.state.gpr[12] == 0x0BADF00DU);
+    assert(core.state.reservation_address == 0x104U);
+
+    // A faulting lwarx does not alter its destination or replace an existing
+    // reservation; the aligned in-range rule is checked before committing.
+    EspressoCore fault_core(0x1000U);
+    fault_core.memory.write32_be(0x100U, lwarx_r0_0_r12);
+    fault_core.state.gpr[0] = 0xDEADBEEFU;
+    fault_core.state.gpr[12] = 0x1000U;
+    fault_core.state.reservation_valid = true;
+    fault_core.state.reservation_address = 0x80U;
+    fault_core.state.cia = 0x100U;
+    const RunResult fault = fault_core.run(1U);
+    assert(fault.reason == StopReason::memory_fault);
+    assert(fault.detail.find("read 4 byte(s) at guest address 0x00001000") !=
+           std::string::npos);
+    assert(fault_core.state.gpr[0] == 0xDEADBEEFU);
+    assert(fault_core.state.reservation_valid);
+    assert(fault_core.state.reservation_address == 0x80U);
+
+    EspressoCore alignment_core(0x1000U);
+    alignment_core.memory.write32_be(0x100U, lwarx_r0_0_r12);
+    alignment_core.state.gpr[12] = 0x101U;
+    alignment_core.state.cia = 0x100U;
+    const RunResult alignment_fault = alignment_core.run(1U);
+    assert(alignment_fault.reason == StopReason::memory_fault);
+    assert(alignment_fault.detail.find("0x00000101") != std::string::npos);
+}
+
 void load_halfword_zero_update_tests()
 {
     constexpr std::uint32_t wind_waker_instruction = 0xA4EA0002U;
@@ -30083,6 +30226,7 @@ int main(int argc, char* argv[])
     floating_convert_to_integer_word_tests();
     floating_convert_to_integer_word_zero_tests();
     load_store_tests();
+    reservation_instruction_tests();
     load_halfword_zero_update_tests();
     store_halfword_update_tests();
     store_halfword_indexed_tests();
