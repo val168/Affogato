@@ -40,10 +40,12 @@ constexpr std::uint8_t symbol_binding_weak = 2;
 constexpr std::uint8_t symbol_binding_global = 1;
 constexpr std::uint8_t symbol_type_object = 1;
 constexpr std::uint8_t symbol_type_function = 2;
+constexpr std::uint8_t symbol_type_tls = 6;
 constexpr std::uint32_t rpl_loader_metadata_base = 0xC0000000U;
 constexpr std::uint32_t relocation_none = 0;
 constexpr std::uint32_t relocation_addr32 = 1;
 constexpr std::uint32_t relocation_dtpmod32 = 68;
+constexpr std::uint32_t relocation_dtprel32 = 78;
 constexpr std::uint32_t relocation_ghs_rel16_hi = 252;
 constexpr std::uint32_t relocation_ghs_rel16_lo = 253;
 constexpr std::uint32_t relocation_addr16_lo = 4;
@@ -506,6 +508,7 @@ void apply_relocations(
             std::uint32_t symbol_value = 0;
             std::string relocation_symbol;
             bool symbol_belongs_to_current_module = symbol_index == 0U;
+            bool relocation_symbol_is_tls = symbol_index == 0U;
             if (symbol_index != 0)
             {
                 const std::size_t symbol_offset =
@@ -525,6 +528,7 @@ void apply_relocations(
                 relocation_symbol = name;
                 const std::uint8_t binding = symbols[symbol_offset + 12] >> 4U;
                 const std::uint8_t symbol_type = symbols[symbol_offset + 12] & 0x0FU;
+                relocation_symbol_is_tls = symbol_type == symbol_type_tls;
                 const std::uint32_t symbol_entry_value = read32_be(symbols, symbol_offset + 4);
                 const bool zero_valued_weak_absolute =
                     symbol_section == symbol_section_absolute && binding == symbol_binding_weak &&
@@ -602,10 +606,10 @@ void apply_relocations(
             switch (type)
             {
             case relocation_dtpmod32:
-                if (!symbol_belongs_to_current_module)
+                if (!symbol_belongs_to_current_module || !relocation_symbol_is_tls)
                 {
                     throw std::invalid_argument(
-                        "RPX R_PPC_DTPMOD32 references a symbol outside the loaded RPX TLS module");
+                        "RPX R_PPC_DTPMOD32 requires a TLS symbol in the loaded RPX module");
                 }
                 if (patch_offset > target.size() || 4 > target.size() - patch_offset)
                 {
@@ -622,6 +626,24 @@ void apply_relocations(
                     standalone_rpx_tls_module_id >> 8U);
                 target[patch_offset + 3] = static_cast<std::uint8_t>(
                     standalone_rpx_tls_module_id);
+                break;
+            case relocation_dtprel32:
+                if (!symbol_belongs_to_current_module || !relocation_symbol_is_tls)
+                {
+                    throw std::invalid_argument(
+                        "RPX R_PPC_DTPREL32 requires a TLS symbol in the loaded RPX module");
+                }
+                if (patch_offset > target.size() || 4 > target.size() - patch_offset)
+                {
+                    throw std::invalid_argument(
+                        "RPX R_PPC_DTPREL32 relocation is outside its target section");
+                }
+                // For a TLS symbol, st_value is its offset in the module's TLS block.
+                // DTPREL32 stores that offset plus the explicit RELA addend.
+                target[patch_offset] = static_cast<std::uint8_t>(value >> 24U);
+                target[patch_offset + 1] = static_cast<std::uint8_t>(value >> 16U);
+                target[patch_offset + 2] = static_cast<std::uint8_t>(value >> 8U);
+                target[patch_offset + 3] = static_cast<std::uint8_t>(value);
                 break;
             case relocation_addr32:
                 if (patch_offset > target.size() || 4 > target.size() - patch_offset)

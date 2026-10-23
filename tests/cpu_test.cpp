@@ -10640,7 +10640,7 @@ void rpx_loader_tests()
     assert(unregistered_data_core.memory.read32_be(0x0200000CU) == imported_data_slot);
     assert(unregistered_data_core.memory.read32_be(imported_data_slot) == fallback_import_address);
 
-    RpxRelocationSymbol tls_symbol{"tls_symbol", 4U, 1U, 1U, 1U, 0x12345678};
+    RpxRelocationSymbol tls_symbol{"tls_symbol", 4U, 1U, 6U, 1U, 0x12345678};
     RpxRelocationOptions tls_module_id_relocation{};
     tls_module_id_relocation.type = 68U;
     const auto tls_module_id_file = make_minimal_compressed_rpx(
@@ -10662,10 +10662,36 @@ void rpx_loader_tests()
     {
         external_tls_module_rejected =
             std::string(error.what()).find(
-                "R_PPC_DTPMOD32 references a symbol outside the loaded RPX TLS module") !=
+                "R_PPC_DTPMOD32 requires a TLS symbol in the loaded RPX module") !=
             std::string::npos;
     }
     assert(external_tls_module_rejected);
+
+    RpxRelocationOptions tls_offset_relocation{};
+    tls_offset_relocation.type = 78U;
+    const auto tls_offset_file = make_minimal_compressed_rpx(
+        0x02000000U, 16U, tls_symbol, tls_offset_relocation);
+    EspressoCore tls_offset_core(0x1000U);
+    static_cast<void>(load_rpx32_powerpc(tls_offset_core, tls_offset_file));
+    assert(tls_offset_core.memory.read32_be(0x0200000CU) == 0x1234567CU);
+
+    const auto external_tls_offset_file = make_minimal_compressed_rpx(
+        0x02000000U, 16U, {}, tls_offset_relocation);
+    EspressoCore external_tls_offset_core(0x1000U);
+    bool external_tls_offset_rejected = false;
+    try
+    {
+        static_cast<void>(load_rpx32_powerpc(
+            external_tls_offset_core, external_tls_offset_file));
+    }
+    catch (const std::invalid_argument& error)
+    {
+        external_tls_offset_rejected =
+            std::string(error.what()).find(
+                "R_PPC_DTPREL32 requires a TLS symbol in the loaded RPX module") !=
+            std::string::npos;
+    }
+    assert(external_tls_offset_rejected);
 
     RpxRelocationOptions unsupported_relocation{};
     unsupported_relocation.type = 69U;
