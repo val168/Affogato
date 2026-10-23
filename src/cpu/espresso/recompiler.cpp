@@ -247,6 +247,63 @@ extern "C" std::uint64_t native_load_double(
     }
 }
 
+extern "C" std::uint32_t native_store_single(
+    NativeExecutionContext* context,
+    const CpuState* state,
+    std::uint32_t address,
+    std::uint32_t fp_register,
+    std::uint32_t instruction_index) noexcept
+{
+    try
+    {
+        ++context->memory_access_calls;
+        if (instruction_index >= context->memory_records.size())
+        {
+            context->failed = true;
+            context->failed_address = address;
+            context->failed_width = 4U;
+            context->failed_flags = 1U;
+            context->failed_instruction_index = instruction_index;
+            return 0U;
+        }
+        if (context->memory->has_write_watchpoint())
+        {
+            context->memory->set_current_guest_cia(
+                context->block_cia + instruction_index * 4U);
+        }
+        NativeMemoryRecord& record = context->memory_records[instruction_index];
+        record.address = address;
+        record.indexed = false;
+        record.fp_value = state->fpr[fp_register];
+        const float single_value = static_cast<float>(
+            std::bit_cast<double>(record.fp_value));
+        record.value = std::bit_cast<std::uint32_t>(single_value);
+        context->memory->write32_be(address, record.value);
+        return record.value;
+    }
+    catch (...)
+    {
+        context->failed = true;
+        context->failed_address = address;
+        context->failed_width = 4U;
+        context->failed_flags = 1U;
+        context->failed_instruction_index = instruction_index;
+        context->exception = std::current_exception();
+        try
+        {
+            std::rethrow_exception(context->exception);
+        }
+        catch (const GuestMemoryFault&)
+        {
+            context->guest_memory_fault = true;
+        }
+        catch (...)
+        {
+        }
+        return 0U;
+    }
+}
+
 extern "C" std::uint64_t native_load_single(
     NativeExecutionContext* context,
     std::uint32_t address,
@@ -370,6 +427,7 @@ struct BlockCode
     case Opcode::store_word:
     case Opcode::store_byte:
     case Opcode::store_halfword:
+    case Opcode::store_single:
     case Opcode::load_word_indexed:
     case Opcode::load_byte_zero_indexed:
     case Opcode::load_halfword_zero_indexed:
@@ -442,6 +500,7 @@ struct BlockCode
     case Opcode::store_word: return "stw";
     case Opcode::store_byte: return "stb";
     case Opcode::store_halfword: return "sth";
+    case Opcode::store_single: return "stfs";
     case Opcode::load_word_indexed: return "lwzx";
     case Opcode::load_byte_zero_indexed: return "lbzx";
     case Opcode::load_halfword_zero_indexed: return "lhzx";
@@ -472,6 +531,7 @@ struct BlockCode
     case Opcode::load_halfword_algebraic:
     case Opcode::load_single:
     case Opcode::load_double:
+    case Opcode::store_single:
     case Opcode::store_word:
     case Opcode::store_byte:
     case Opcode::store_halfword:
@@ -513,7 +573,8 @@ struct BlockCode
 {
     return opcode == Opcode::store_word || opcode == Opcode::store_byte ||
         opcode == Opcode::store_halfword || opcode == Opcode::store_word_indexed ||
-        opcode == Opcode::store_byte_indexed || opcode == Opcode::store_halfword_indexed;
+        opcode == Opcode::store_byte_indexed || opcode == Opcode::store_halfword_indexed ||
+        opcode == Opcode::store_single;
 }
 
 [[nodiscard]] bool is_indexed_memory(Opcode opcode) noexcept
@@ -1560,6 +1621,7 @@ struct Recompiler::Impl
             case Opcode::store_word:
             case Opcode::store_byte:
             case Opcode::store_halfword:
+            case Opcode::store_single:
             case Opcode::load_word_indexed:
             case Opcode::load_byte_zero_indexed:
             case Opcode::load_halfword_zero_indexed:
@@ -1570,6 +1632,7 @@ struct Recompiler::Impl
             {
                 const bool indexed = is_indexed_memory(insn.opcode);
                 const bool store = is_memory_store(insn.opcode);
+                const bool single_store = insn.opcode == Opcode::store_single;
                 const bool sign_extend =
                     insn.opcode == Opcode::load_halfword_algebraic ||
                     insn.opcode == Opcode::load_halfword_algebraic_indexed;
@@ -1606,7 +1669,14 @@ struct Recompiler::Impl
                 x86::Gp stored_value = compiler.new_gp32("stored");
                 if (store)
                 {
-                    compiler.mov(stored_value, read_guest_gpr(insn.destination));
+                    if (single_store)
+                    {
+                        compiler.mov(stored_value, imm(0U));
+                    }
+                    else
+                    {
+                        compiler.mov(stored_value, read_guest_gpr(insn.destination));
+                    }
                 }
                 else
                 {
@@ -1617,18 +1687,35 @@ struct Recompiler::Impl
                 auto* invoke = static_cast<InvokeNode*>(nullptr);
                 const std::uint32_t flags = (store ? 1U : 0U) |
                     (sign_extend ? 2U : 0U) | (indexed ? 4U : 0U);
-                const auto helper_address = static_cast<std::uint64_t>(
-                    reinterpret_cast<std::uintptr_t>(&native_memory_access));
-                compiler.invoke(Out(invoke), helper_address,
-                    FuncSignature::build<std::uint32_t, NativeExecutionContext*,
-                        std::uint32_t, std::uint32_t, std::uint32_t,
-                        std::uint32_t, std::uint32_t>(CallConvId::kCDecl));
-                invoke->set_arg(0, context);
-                invoke->set_arg(1, address);
-                invoke->set_arg(2, stored_value);
-                invoke->set_arg(3, imm(width));
-                invoke->set_arg(4, imm(flags));
-                invoke->set_arg(5, imm(static_cast<std::uint32_t>(index)));
+                if (single_store)
+                {
+                    const auto helper_address = static_cast<std::uint64_t>(
+                        reinterpret_cast<std::uintptr_t>(&native_store_single));
+                    compiler.invoke(Out(invoke), helper_address,
+                        FuncSignature::build<std::uint32_t, NativeExecutionContext*,
+                            CpuState*, std::uint32_t, std::uint32_t,
+                            std::uint32_t>(CallConvId::kCDecl));
+                    invoke->set_arg(0, context);
+                    invoke->set_arg(1, state);
+                    invoke->set_arg(2, address);
+                    invoke->set_arg(3, imm(insn.fp_register));
+                    invoke->set_arg(4, imm(static_cast<std::uint32_t>(index)));
+                }
+                else
+                {
+                    const auto helper_address = static_cast<std::uint64_t>(
+                        reinterpret_cast<std::uintptr_t>(&native_memory_access));
+                    compiler.invoke(Out(invoke), helper_address,
+                        FuncSignature::build<std::uint32_t, NativeExecutionContext*,
+                            std::uint32_t, std::uint32_t, std::uint32_t,
+                            std::uint32_t, std::uint32_t>(CallConvId::kCDecl));
+                    invoke->set_arg(0, context);
+                    invoke->set_arg(1, address);
+                    invoke->set_arg(2, stored_value);
+                    invoke->set_arg(3, imm(width));
+                    invoke->set_arg(4, imm(flags));
+                    invoke->set_arg(5, imm(static_cast<std::uint32_t>(index)));
+                }
                 x86::Gp value = compiler.new_gp32("loaded");
                 invoke->set_ret(0, value);
 
@@ -2125,6 +2212,14 @@ RunResult Recompiler::run(EspressoCore& core, std::size_t max_steps)
                 entry.has_fp_destination = true;
                 entry.fp_destination_register = insn.fp_register;
                 entry.fp_destination_value = record.fp_value;
+            }
+            else if (insn.opcode == Opcode::store_single)
+            {
+                entry.has_fp_source = true;
+                entry.fp_source_register = insn.fp_register;
+                entry.fp_source_value = record.fp_value;
+                entry.has_stored_single_value = true;
+                entry.stored_single_value = record.value;
             }
             else if (is_memory_store(insn.opcode))
             {

@@ -17,6 +17,7 @@
 - Native JIT `fneg` now toggles only the PS0 sign bit; PS1 and FPSCR are preserved, including for signaling-NaN payloads. Differential tests cover all source/destination pairs and confirm the generated path stays native.
 - Native JIT `fabs` now clears only PS0 bit 63 using a host bit operation; PS1, FPSCR, NaN payloads, and signaling state are preserved. Differential tests cover all 1,024 source/destination pairs.
 - The post-`fabs` Release runs retain the known stop and instruction totals. WWHD has 1,425,360 interpreter fallbacks (4,655,179 native); BOTW has 157,057 fallbacks (703,116 native). Both builds passed CTest 2/2.
+- Native JIT `stfs` now converts the source PS0 using the existing host binary32 conversion path and writes exactly four big-endian bytes through guest memory. Differential tests cover finite values, infinities, NaNs, state preservation, write faults, and the stored-value history. The same game runs retain their prior stops/counts; WWHD fallbacks fell by 127,192 to 1,298,168, BOTW by 121,690 to 35,392. The `stfs` fallback is no longer in either top-opcode list. Guest wall-time varied, so no runtime speedup is claimed.
 - After native `fmr`, the same Release game runs retained their stops and instruction counts while WWHD interpreter fallbacks decreased from 1,562,434 to 1,463,750 (native 4,616,789), and BOTW fallbacks decreased from 157,400 to 157,082 (native 703,091). This is a clear fallback-count improvement; wall-clock timings are not compared here because the latest runs were concurrent.
 - After native `fneg`, both game checkpoints remain unchanged; WWHD now has 1,442,626 interpreter fallbacks (4,637,913 native), and BOTW has 157,062 fallbacks (703,111 native). Relative to the prior `fmr` run, this removed another 21,124 WWHD and 20 BOTW fallbacks. Guest runtime remained roughly 1.0–1.1 s in these concurrent runs.
 - The null-target investigation found the watched global `0x10208B64` is cleared by a single guest bulk-zero operation, and WUT confirms `OSThread::specific` begins at `+0x57C`, matching the existing HLE. The guest path then resolves a non-null TSS object and reaches virtual method `0x0276058C`; the callback field is still written as zero by the guest caller. This narrows the cause to that guest virtual-method path, not the thread-specific HLE offset; no target was fabricated.
@@ -78,6 +79,7 @@
 - `66a1be0` - `jit: emit native fmr`
 - `6f79073` - `jit: emit native fneg`
 - `66a1be0` - `jit: emit native fmr`
+- `bb80810` - `jit: emit native fabs`
 - `8fadbcb` - `jit: emit native mtgqr`
 - `c678494` - `jit: report interpreter fallback hot spots`
 - `f60e130` - `jit: emit native rlwinm instructions` (pushed HEAD before this `lfd` iteration)
