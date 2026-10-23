@@ -11,6 +11,7 @@
 - Native JIT `mcrxr` copies XER[SO,OV,CA] into the selected CR field and clears the transferred XER summary bits. Differential tests cover all eight destination fields, multiple SO/OV/CA combinations, and unrelated low XER bits. Both games retain their checkpoints; this instruction is not reached in either current startup run.
 - Native JIT `mfxer` now copies the complete XER word into any GPR; differential tests cover all destination GPRs and representative XER patterns. Both game checkpoints and aggregate instruction/fallback counts are unchanged.
 - Native JIT `mtxer` now writes the selected GPR value to XER; differential tests cover all 32 source registers and varied 32-bit values. Both game checkpoints and aggregate counters remain unchanged.
+- Native JIT `mfgqr` now reads all eight quantization registers directly into any GPR; differential tests cover all eight GQR indices and all 32 destinations. This extends native coverage for paired-single/quantized operations without changing their semantics.
 - The null-target investigation found the watched global `0x10208B64` is cleared by a single guest bulk-zero operation, and WUT confirms `OSThread::specific` begins at `+0x57C`, matching the existing HLE. The guest path then resolves a non-null TSS object and reaches virtual method `0x0276058C`; the callback field is still written as zero by the guest caller. This narrows the cause to that guest virtual-method path, not the thread-specific HLE offset; no target was fabricated.
 - Latest JIT run after native `lfs`: 4,158,093 native instructions, 1,922,446 interpreter fallbacks, 22,956 compiled blocks, 1,882,460 block-cache hits. Release guest time across three runs: 1.148/1.146/1.182 s versus 1.322/1.257/1.359 s before `lfs`; medians 1.148 s versus 1.322 s (13.2% lower guest time). Host total medians were 1.340 s versus 1.511 s. The 175,096 `lfs` fallbacks now execute natively. Remaining top fallbacks: `fmadd` 149,463; `stfs` 127,192; `stwu` 107,842; `fmr` 98,684; `stfd` 97,997; `cmpwi` 94,017; `slw` 87,439.
 - No unimplemented HLE was reached. `GX2InitTextureRegs` ran 13 times, along with the sampler initialization and existing GX2 state HLEs.
@@ -64,6 +65,7 @@
 - `efa5370` - `jit: emit native mtcrf`
 - `4195aaa` - `jit: emit native mcrxr`
 - `a2ec04b` - `jit: emit native mfxer`
+- `74875b0` - `jit: emit native mtxer`
 - `c678494` - `jit: report interpreter fallback hot spots`
 - `f60e130` - `jit: emit native rlwinm instructions` (pushed HEAD before this `lfd` iteration)
 - `1a2a49f` - `jit: emit native lfd loads`
