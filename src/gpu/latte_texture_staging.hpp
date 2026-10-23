@@ -35,6 +35,7 @@ stage_linear_rgba8_texture(
     constexpr std::uint32_t gx2_linear_aligned_tile_mode = 1U;
     constexpr std::uint32_t gx2_unorm_r8_format = 0x01U;
     constexpr std::uint32_t gx2_unorm_rg8_format = 0x07U;
+    constexpr std::uint32_t gx2_unorm_rgb565_format = 0x08U;
     constexpr std::uint32_t gx2_unorm_rgba8_format = 0x1AU;
     constexpr std::uint32_t gx2_unorm_numeric_format = 0U;
     constexpr std::uint32_t rgba8_bytes_per_pixel = 4U;
@@ -42,19 +43,28 @@ stage_linear_rgba8_texture(
     constexpr std::uint8_t one_selector = 5U;
 
     std::uint32_t source_channels = 0U;
+    std::uint32_t source_bytes_per_pixel = 0U;
     std::uint32_t expected_endian_swap = 0U;
+    const bool packed_rgb565 = descriptor.format == gx2_unorm_rgb565_format;
     switch (descriptor.format)
     {
     case gx2_unorm_r8_format:
         source_channels = 1U;
+        source_bytes_per_pixel = 1U;
         expected_endian_swap = 0U;
         break;
     case gx2_unorm_rg8_format:
         source_channels = 2U;
+        source_bytes_per_pixel = 2U;
+        expected_endian_swap = 1U;
+        break;
+    case gx2_unorm_rgb565_format:
+        source_bytes_per_pixel = 2U;
         expected_endian_swap = 1U;
         break;
     case gx2_unorm_rgba8_format:
         source_channels = 4U;
+        source_bytes_per_pixel = 4U;
         expected_endian_swap = 2U;
         break;
     default:
@@ -62,7 +72,7 @@ stage_linear_rgba8_texture(
     }
     if (descriptor.dimension != gx2_2d_dimension ||
         descriptor.tile_mode != gx2_linear_aligned_tile_mode ||
-        descriptor.depth_or_layers != 1U || source_channels == 0U ||
+        descriptor.depth_or_layers != 1U || source_bytes_per_pixel == 0U ||
         descriptor.numeric_format != gx2_unorm_numeric_format ||
         descriptor.endian_swap != expected_endian_swap || descriptor.force_degamma ||
         descriptor.base_level != 0U || descriptor.last_level != 0U ||
@@ -74,7 +84,7 @@ stage_linear_rgba8_texture(
     }
 
     const std::uint64_t source_row_bytes =
-        static_cast<std::uint64_t>(descriptor.pitch_pixels) * source_channels;
+        static_cast<std::uint64_t>(descriptor.pitch_pixels) * source_bytes_per_pixel;
     const std::uint64_t required_source_bytes = source_row_bytes * descriptor.height;
     const std::uint64_t output_bytes =
         static_cast<std::uint64_t>(descriptor.width) * descriptor.height *
@@ -112,15 +122,32 @@ stage_linear_rgba8_texture(
         for (std::uint32_t x = 0U; x < descriptor.width; ++x)
         {
             const std::size_t source_offset = source_row +
-                static_cast<std::size_t>(x) * source_channels;
+                static_cast<std::size_t>(x) * source_bytes_per_pixel;
             const std::size_t destination_offset = destination_row +
                 static_cast<std::size_t>(x) * rgba8_bytes_per_pixel;
             const std::uint8_t* source = guest_bytes.data() + source_offset;
-            const std::array<std::uint8_t, 4U> logical_rgba{
-                source[0U],
-                static_cast<std::uint8_t>(source_channels >= 2U ? source[1U] : 0U),
-                static_cast<std::uint8_t>(source_channels == 4U ? source[2U] : 0U),
-                static_cast<std::uint8_t>(source_channels == 4U ? source[3U] : 0xFFU)};
+            std::array<std::uint8_t, 4U> logical_rgba{};
+            if (packed_rgb565)
+            {
+                const std::uint32_t packed =
+                    (static_cast<std::uint32_t>(source[0U]) << 8U) | source[1U];
+                const std::uint32_t red = (packed >> 11U) & 0x1FU;
+                const std::uint32_t green = (packed >> 5U) & 0x3FU;
+                const std::uint32_t blue = packed & 0x1FU;
+                logical_rgba = {
+                    static_cast<std::uint8_t>((red << 3U) | (red >> 2U)),
+                    static_cast<std::uint8_t>((green << 2U) | (green >> 4U)),
+                    static_cast<std::uint8_t>((blue << 3U) | (blue >> 2U)),
+                    0xFFU};
+            }
+            else
+            {
+                logical_rgba = {
+                    source[0U],
+                    static_cast<std::uint8_t>(source_channels >= 2U ? source[1U] : 0U),
+                    static_cast<std::uint8_t>(source_channels == 4U ? source[2U] : 0U),
+                    static_cast<std::uint8_t>(source_channels == 4U ? source[3U] : 0xFFU)};
+            }
             for (std::size_t component = 0U; component < rgba8_bytes_per_pixel; ++component)
             {
                 const std::uint8_t selector = descriptor.component_selectors[component];

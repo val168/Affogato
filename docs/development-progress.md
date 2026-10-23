@@ -20,7 +20,7 @@
 - Added checked Latte texture-word decoding into a typed descriptor: dimensions, encoded pitch, tile mode/type, hardware format, guest image/mipmap addresses, view levels/slices, numeric/endian modes, degamma, and component selectors. Invalid resource types, >32-bit addresses, reserved selectors, and invalid format fields are rejected. This is descriptor interpretation only; tiled guest memory is not yet uploaded to Vulkan.
 - Added typed sampler decoding for wrap/filter modes, anisotropy, border/depth state, signed fixed-point LOD bias, and word-2 flags. Ambiguous overlapping word-0 bits remain available through raw words rather than being guessed.
 - Corrected `GX2Set*Texture` to read `GX2Surface.mipmaps` from offset `0x2C`, not `mipmapSize` at `0x28`. A missing mip pointer still aliases the base image even when the size field is nonzero.
-- Added: a CPU-side texture staging conversion for single-layer 2D UNORM R8, R8_G8, and R8_G8_B8_A8 in linear-aligned layout. Guest pitch and component selectors are honored; missing channels expand to zero with alpha one. Format-appropriate Latte endian metadata is validated while the byte-ordered guest snapshot is kept intact. Tiled, compressed, mipmapped, array, and non-UNORM formats are explicitly rejected rather than misread.
+- Added: a CPU-side texture staging conversion for single-layer 2D UNORM R8, R8_G8, R5_G6_B5, and R8_G8_B8_A8 in linear-aligned layout. Guest pitch and component selectors are honored; missing channels expand to zero with alpha one. RGB565 is unpacked from big-endian 16-bit guest data and expanded to 8-bit channels. Format-appropriate Latte endian metadata is validated while the byte-ordered guest snapshot is kept intact. Tiled, compressed, mipmapped, array, and non-UNORM formats are explicitly rejected rather than misread.
 - Actual guest rendering/presentation is not yet confirmed; command submission, shader execution, and framebuffer presentation remain incomplete.
 
 ## Completed commits
@@ -39,12 +39,14 @@
 - `a6a7b7c` - `gpu: stage linear RGBA8 Latte textures`
 - `82688dc` - `gpu: stage linear R8 and RG8 textures`
 - `20a972c` - `gpu: honor Latte texture endian modes`
+- `2b76180` - `gpu: honor Latte texture endian modes`
+- `466d43b` - `gpu: stage linear RGB565 Latte textures`
 
 ## Current test status
 
 - Debug build: `build/debug-win-native`, Ninja; build is current.
-- CTest: 2/2 passed after linear R8, RG8, and RGBA8 staging, swizzle, and layout-rejection tests.
-- Latest WWHD diagnostic after staging changes: 6,080,538 instructions; stop remains at CIA 0 with null `bcctr` target (`CTR=0`); the staging helper does not affect this guest path. Latest run: RPX load 193 ms; guest execution 5,103 ms.
+- CTest: 2/2 passed after linear R8, RG8, RGB565, and RGBA8 staging, swizzle, and layout-rejection tests.
+- Latest WWHD diagnostic after staging changes: 6,080,538 instructions; stop remains at CIA 0 with null `bcctr` target (`CTR=0`); the staging helper does not affect this guest path. Latest run: RPX load 189 ms; guest execution 5,314 ms.
 
 ## Prioritized queue
 

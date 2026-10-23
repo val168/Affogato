@@ -21880,6 +21880,19 @@ void latte_texture_staging_tests()
         1U, 2U, 0U, 255U, 3U, 4U, 0U, 255U,
         5U, 6U, 0U, 255U, 7U, 8U, 0U, 255U}));
 
+    descriptor.format = 0x08U; // GX2 UNORM R5_G6_B5.
+    descriptor.endian_swap = 1U;
+    descriptor.component_selectors = {0U, 1U, 2U, 3U};
+    const std::array<std::uint8_t, 12U> rgb565_bytes{
+        0xF8U, 0x00U, 0x07U, 0xE0U, 0xAAU, 0xBBU,
+        0x00U, 0x1FU, 0xFFU, 0xFFU, 0xCCU, 0xDDU};
+    const auto staged_rgb565 = affogato::gpu::stage_linear_rgba8_texture(
+        descriptor, rgb565_bytes);
+    assert(staged_rgb565.has_value());
+    assert((staged_rgb565->pixels == std::vector<std::uint8_t>{
+        255U, 0U, 0U, 255U, 0U, 255U, 0U, 255U,
+        0U, 0U, 255U, 255U, 255U, 255U, 255U, 255U}));
+
     descriptor.format = 0x1AU;
     descriptor.endian_swap = 2U;
     descriptor.component_selectors = {0U, 1U, 2U, 3U};
