@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -27,6 +28,8 @@ struct GuestMemoryWriteWatchEvent
     std::uint32_t watched_address{};
     std::size_t watched_width{};
     std::uint64_t watched_value{};
+    std::array<std::uint32_t, 32U> gpr_snapshot{};
+    bool has_gpr_snapshot{};
 };
 
 class GuestMemoryFault : public std::out_of_range
@@ -76,6 +79,12 @@ public:
         validate_access(address, width, GuestMemoryAccess::read);
         write_watchpoint_ = std::pair{address, width};
         write_watch_events_.clear();
+    }
+
+    void set_write_watch_gpr_source(
+        const std::array<std::uint32_t, 32U>* registers) noexcept
+    {
+        write_watch_gpr_source_ = registers;
     }
 
     [[nodiscard]] bool has_write_watchpoint() const noexcept
@@ -514,9 +523,19 @@ private:
         {
             write_watch_events_.erase(write_watch_events_.begin());
         }
-        write_watch_events_.push_back({
-            current_guest_cia_, address, width, watched_address,
-            watched_width, watched_value});
+        GuestMemoryWriteWatchEvent event{};
+        event.writer_cia = current_guest_cia_;
+        event.access_address = address;
+        event.access_width = width;
+        event.watched_address = watched_address;
+        event.watched_width = watched_width;
+        event.watched_value = watched_value;
+        if (write_watch_gpr_source_ != nullptr)
+        {
+            event.gpr_snapshot = *write_watch_gpr_source_;
+            event.has_gpr_snapshot = true;
+        }
+        write_watch_events_.push_back(event);
     }
 
     [[nodiscard]] bool is_flat_range(
@@ -716,6 +735,7 @@ private:
     std::unordered_map<std::uint32_t, std::uint64_t> sparse_page_write_generations_;
     std::uint64_t write_generation_{};
     std::optional<std::pair<std::uint32_t, std::size_t>> write_watchpoint_;
+    const std::array<std::uint32_t, 32U>* write_watch_gpr_source_{};
     std::vector<GuestMemoryWriteWatchEvent> write_watch_events_;
     std::uint32_t current_guest_cia_{};
 };

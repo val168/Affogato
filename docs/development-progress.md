@@ -7,6 +7,11 @@
 - Latest JIT run after native `lfs`: 4,158,093 native instructions, 1,922,446 interpreter fallbacks, 22,956 compiled blocks, 1,882,460 block-cache hits. Release guest time across three runs: 1.148/1.146/1.182 s versus 1.322/1.257/1.359 s before `lfs`; medians 1.148 s versus 1.322 s (13.2% lower guest time). Host total medians were 1.340 s versus 1.511 s. The 175,096 `lfs` fallbacks now execute natively. Remaining top fallbacks: `fmadd` 149,463; `stfs` 127,192; `stwu` 107,842; `fmr` 98,684; `stfd` 97,997; `cmpwi` 94,017; `slw` 87,439.
 - No unimplemented HLE was reached. `GX2InitTextureRegs` ran 13 times, along with the sampler initialization and existing GX2 state HLEs.
 - A filtered `coreinit::MEMGetBaseHeapHandle` trace captured all four startup calls: types 1, 8, and 0 return the configured MEM2, foreground, and MEM1 handles respectively. The 25 observed `MEMAllocFromDefaultHeap` calls all returned nonzero addresses. This does not explain the later null member pointer and is evidence against changing these HLE results speculatively.
+- The write-watch now snapshots guest GPRs at each matching store. At `0x02785EC4`, the guest stores r3=0 into object+0x10 after calling `0x027538C0`; at the earlier `0x02785D14` initialization store, r3 is the object+0x1C pointer. This is a genuine guest helper return of zero, not an HLE memory side effect. Static helper code reads the still-zero global at `0x10208B64` on one branch; its intended initialization path remains unidentified.
+
+## Secondary BOTW checkpoint
+
+- `U-King.rpx` is present at the local test path, but the current loader rejects it before guest execution with `RPX section overlaps the reserved HLE import address range`. This is a separate loader/address-allocation issue; it has not been changed as part of the WWHD investigation.
 
 ## Graphics checkpoint
 
@@ -56,19 +61,22 @@
 - `79fa40a` - `debug: print full recent HLE trace`
 - `9c8742e` - `debug: retain a wider PPC trace`
 - `0d7ef50` - `debug: watch guest memory writes`
-- pending - `debug: dump guest memory in RPX diagnostics`
+- `50c38dd` - `debug: dump guest memory in RPX diagnostics`
+- `75ef1ec` - `debug: filter recent HLE call trace`
+- pending - `debug: capture GPRs at watched guest writes`
 
 ## Current test status
 
 - Debug and Release CMake/Ninja builds completed; CTest passed 2/2 in both configurations. The opt-in hidden-window Vulkan RGBA8 upload smoke test passed in Debug and Release on the NVIDIA GeForce RTX 5070 Laptop GPU without validation warnings. Debug and Release WWHD remain at 6,080,538 instructions and the same null `bcctr` target. Release RPX load was 91 ms; guest execution was 1.134 s in the latest run.
 - Native `lfs` interpreter/JIT differential tests cover signed zero, finite values, a single subnormal, infinities, qNaN/sNaN, literal-zero `rA`, PS0/PS1 behavior, history, and transactional 4-byte memory faults. Native `lfd` tests cover raw big-endian values, literal-zero `rA`, PS1 preservation, and transactional 8-byte faults.
-- RPX diagnostics capture and print the latest 512 HLE calls and 64 PPC instructions. `--trace-hle <library::symbol>` filters the bounded trace to one exact HLE symbol, useful for startup calls evicted by later activity. `--watch-write <guest-address>` opts into a bounded watch of a four-byte word, reporting overlapping writes, writer CIA, resulting big-endian word, and local decoded code context. `--dump-memory` provides bounded post-run BE-word inspection. All are diagnostic-only and disabled unless requested. The current slot receives two explicit zero stores; no HLE is adjacent to the null `bcctr`.
+- RPX diagnostics capture and print the latest 512 HLE calls and 64 PPC instructions. `--trace-hle <library::symbol>` filters the bounded trace to one exact HLE symbol. `--watch-write <guest-address>` opts into a bounded watch of a four-byte word, reporting overlapping writes, writer CIA, resulting big-endian word, local decoded code context, and all 32 GPRs at each matching write. `--dump-memory` provides bounded post-run BE-word inspection. All are diagnostic-only and disabled unless requested.
 
 ## Prioritized queue
 
-1. Use `--trace-hle coreinit::MEMGetBaseHeapHandle` and allocator-symbol filters to inspect startup heap calls and correlate their actual arguments/results with the guest object created around `0x02785D14`/`0x02785EC4`.
+1. Trace the guest caller/callee path into `0x027538C0`, especially the branch using global `0x10208B64`, and identify which guest initialization is expected to populate that context.
 2. Determine whether the null indirect callback is caused by a missing guest initialization path or an incorrect runtime/HLE result; do not fabricate a callback or turn address zero into a valid call.
 3. Audit actual guest shader, draw, and scan-buffer producers; the current WWHD run stops before any draw or texture-binding HLE is observed.
 4. Connect binding-time/command-ordered guest snapshots to the Vulkan texture uploader only when a correct guest use point is available; do not assume a bind-time snapshot remains valid through later writes.
 5. Add shader resource descriptors, shader translation, draw submission, and guest framebuffer presentation in independently testable steps. Do not present the clear-test window as game output.
 6. Revisit measured JIT fallbacks only with a repeatable Release benchmark: native `fmr`, `stfs`, and `stwu` prototypes each passed targeted differential checks but regressed full WWHD timing, so they were discarded.
+7. Diagnose BOTW's section/import-range collision before treating it as a valid CPU regression target.

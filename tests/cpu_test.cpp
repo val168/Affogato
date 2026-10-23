@@ -1076,8 +1076,11 @@ void guest_memory_tests()
     }
 
     GuestMemory watched_memory(0x100U);
+    std::array<std::uint32_t, 32U> watched_gprs{};
+    watched_gprs[3] = 0x12345678U;
     watched_memory.write32_be(0x20U, 0U);
     watched_memory.set_write_watchpoint(0x21U, 2U);
+    watched_memory.set_write_watch_gpr_source(&watched_gprs);
     watched_memory.write8(0x1FU, 0xFFU); // Outside the watched range.
     watched_memory.set_current_guest_cia(0x1234U);
     watched_memory.write32_be(0x20U, 0xAABBCCDDU);
@@ -1094,6 +1097,8 @@ void guest_memory_tests()
     assert(watched_writes[0].watched_address == 0x21U);
     assert(watched_writes[0].watched_width == 2U);
     assert(watched_writes[0].watched_value == 0xBBCCU);
+    assert(watched_writes[0].has_gpr_snapshot);
+    assert(watched_writes[0].gpr_snapshot[3] == 0x12345678U);
     assert(watched_writes[1].access_address == 0x21U);
     assert(watched_writes[1].writer_cia == 0x1238U);
     assert(watched_writes[1].watched_value == 0x1234U);

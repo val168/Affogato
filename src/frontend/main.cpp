@@ -488,6 +488,8 @@ int run_rpx_diagnostic(int argc, char* argv[])
     {
         emulator.core().memory.set_write_watchpoint(
             *watched_guest_write_address, sizeof(std::uint32_t));
+        emulator.core().memory.set_write_watch_gpr_source(
+            &emulator.core().state.gpr);
     }
     emulator.core().hle.set_recent_call_trace_enabled(true);
     if (hle_trace_filter.has_value())
@@ -578,6 +580,21 @@ int run_rpx_diagnostic(int argc, char* argv[])
                       << event.access_address << "+0x" << event.access_width
                       << " -> watched value 0x" << event.watched_value
                       << std::dec << '\n';
+            if (event.has_gpr_snapshot)
+            {
+                std::cout << "    GPRs at write:";
+                for (std::size_t reg = 0U; reg < event.gpr_snapshot.size(); ++reg)
+                {
+                    if ((reg % 4U) == 0U)
+                    {
+                        std::cout << '\n';
+                    }
+                    std::cout << "      r" << reg << "=0x" << std::hex
+                              << std::uppercase << event.gpr_snapshot[reg]
+                              << std::dec;
+                }
+                std::cout << '\n';
+            }
             for (std::int32_t offset = -32; offset <= 32; offset += 4)
             {
                 const std::uint32_t cia = event.writer_cia +
