@@ -106,6 +106,14 @@ namespace
            (static_cast<std::uint32_t>(source_b) << 11U) | (592U << 1U);
 }
 
+[[nodiscard]] constexpr std::uint32_t ps_merge00_form(
+    std::uint8_t destination, std::uint8_t source_a, std::uint8_t source_b)
+{
+    return (4U << 26U) | (static_cast<std::uint32_t>(destination) << 21U) |
+           (static_cast<std::uint32_t>(source_a) << 16U) |
+           (static_cast<std::uint32_t>(source_b) << 11U) | (528U << 1U);
+}
+
 [[nodiscard]] constexpr std::uint32_t fctiwz_form(
     std::uint8_t destination, std::uint8_t source)
 {
@@ -1668,6 +1676,76 @@ void recompiler_ps_merge10_differential_tests()
     {
         assert(history.opcode_name == "ps_merge10");
     }
+}
+
+void recompiler_ps_merge00_differential_tests()
+{
+    constexpr std::uint32_t start = 0x100U;
+    std::array<std::uint32_t, 32U> program{};
+    program[0] = ps_merge00_form(1U, 1U, 1U);
+    program[1] = ps_merge00_form(2U, 2U, 3U);
+    program[2] = ps_merge00_form(4U, 5U, 4U);
+    for (std::uint32_t index = 3U; index < program.size(); ++index)
+    {
+        const std::uint8_t source_a = static_cast<std::uint8_t>((index * 7U + 2U) % 32U);
+        const std::uint8_t source_b = static_cast<std::uint8_t>((index * 13U + 9U) % 32U);
+        std::uint8_t destination = static_cast<std::uint8_t>((index * 11U + 6U) % 32U);
+        if (destination == 1U)
+            destination = 0U;
+        program[index] = ps_merge00_form(destination, source_a, source_b);
+    }
+
+    EspressoCore interpreted(0x1000U);
+    EspressoCore compiled(0x1000U);
+    for (EspressoCore* core : {&interpreted, &compiled})
+    {
+        for (std::size_t index = 0U; index < program.size(); ++index)
+        {
+            core->memory.write32_be(
+                start + static_cast<std::uint32_t>(index * 4U), program[index]);
+        }
+        core->state.cia = start;
+        for (std::uint32_t reg = 0U; reg < core->state.fpr.size(); ++reg)
+        {
+            core->state.fpr[reg] = 0x3FF0000000000000ULL +
+                static_cast<std::uint64_t>(reg) * 0x0001000000000001ULL;
+            core->state.fpr_ps1[reg] = 0xBFF0000000000000ULL ^
+                (static_cast<std::uint64_t>(reg) * 0x0101010101010101ULL);
+        }
+        core->state.fpr[1] = 0x7FF0123456789ABCULL;
+        core->state.fpr_ps1[1] = 0xFFF8123456789ABCULL;
+        core->state.fpr[5] = 0x8000000000000000ULL;
+        core->state.fpr_ps1[5] = 0x0000000000000001ULL;
+        core->state.cr = 0xA5C39E71U;
+        core->state.xer = 0x87654321U;
+        core->state.lr = 0xABCDEF00U;
+        core->state.ctr = 0xFEDCBA98U;
+        core->state.fpscr = 0x89ABCDEFU;
+    }
+
+    const std::uint64_t expected_alias_ps0 = interpreted.state.fpr[1];
+    const std::uint64_t expected_alias_ps1 = interpreted.state.fpr[1];
+    const RunResult oracle = interpreted.run(program.size());
+    Recompiler recompiler;
+    const RunResult actual = recompiler.run(compiled, program.size());
+    assert(actual.reason == oracle.reason);
+    assert(actual.steps == oracle.steps && actual.steps == program.size());
+    assert(actual.cia == oracle.cia);
+    assert(compiled.state.gpr == interpreted.state.gpr);
+    assert(compiled.state.fpr == interpreted.state.fpr);
+    assert(compiled.state.fpr_ps1 == interpreted.state.fpr_ps1);
+    assert(compiled.state.fpr[1] == expected_alias_ps0);
+    assert(compiled.state.fpr_ps1[1] == expected_alias_ps1);
+    assert(compiled.state.cr == interpreted.state.cr);
+    assert(compiled.state.xer == interpreted.state.xer);
+    assert(compiled.state.lr == interpreted.state.lr);
+    assert(compiled.state.ctr == interpreted.state.ctr);
+    assert(compiled.state.fpscr == interpreted.state.fpscr);
+    assert(recompiler.statistics().native_instructions == program.size());
+    assert(recompiler.statistics().interpreter_fallbacks == 0U);
+    assert(actual.instruction_history.size() == program.size());
+    for (const InstructionHistoryEntry& history : actual.instruction_history)
+        assert(history.opcode_name == "ps_merge00");
 }
 
 void recompiler_stfs_differential_tests()
@@ -3403,6 +3481,7 @@ int main()
     recompiler_fctiwz_differential_tests();
     recompiler_fabs_differential_tests();
     recompiler_ps_merge10_differential_tests();
+    recompiler_ps_merge00_differential_tests();
     recompiler_stfs_differential_tests();
     recompiler_stfsu_differential_tests();
     recompiler_stfd_differential_tests();

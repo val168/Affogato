@@ -613,6 +613,7 @@ struct BlockCode
     case Opcode::floating_move_register:
     case Opcode::floating_negate:
     case Opcode::floating_absolute_value:
+    case Opcode::paired_single_merge00:
     case Opcode::paired_single_merge10:
     case Opcode::instruction_sync:
     case Opcode::shift_left_word:
@@ -677,6 +678,7 @@ struct BlockCode
     case Opcode::subtract_from_carrying: return "subfc";
     case Opcode::subtract_from_extended: return "subfe";
     case Opcode::rotate_left_word_and_mask_insert: return "rlwimi";
+    case Opcode::paired_single_merge00: return "ps_merge00";
     case Opcode::paired_single_merge10: return "ps_merge10";
     case Opcode::instruction_sync: return "isync";
     case Opcode::bitwise_or: return "or";
@@ -2092,20 +2094,24 @@ struct Recompiler::Impl
                 invoke->set_arg(4, imm(static_cast<std::uint32_t>(index)));
                 break;
             }
+            case Opcode::paired_single_merge00:
             case Opcode::paired_single_merge10:
             {
                 // Snapshot both lanes before either destination lane is
                 // written; frD may alias either or both sources.
-                x86::Gp source_a_ps1 = compiler.new_gp64("ps_merge10_a_ps1");
-                x86::Gp source_b_ps0 = compiler.new_gp64("ps_merge10_b_ps0");
-                compiler.mov(source_a_ps1, x86::qword_ptr(state,
-                    static_cast<std::int32_t>(offsetof(CpuState, fpr_ps1) +
+                x86::Gp source_a_lane = compiler.new_gp64("ps_merge_a_lane");
+                x86::Gp source_b_ps0 = compiler.new_gp64("ps_merge_b_ps0");
+                const std::size_t source_a_offset =
+                    insn.opcode == Opcode::paired_single_merge10
+                        ? offsetof(CpuState, fpr_ps1) : offsetof(CpuState, fpr);
+                compiler.mov(source_a_lane, x86::qword_ptr(state,
+                    static_cast<std::int32_t>(source_a_offset +
                         sizeof(std::uint64_t) * insn.fp_source_a)));
                 compiler.mov(source_b_ps0, x86::qword_ptr(state,
                     static_cast<std::int32_t>(fpr_offset(insn.fp_source_b))));
                 compiler.mov(x86::qword_ptr(state,
                     static_cast<std::int32_t>(fpr_offset(insn.fp_register))),
-                    source_a_ps1);
+                    source_a_lane);
                 compiler.mov(x86::qword_ptr(state,
                     static_cast<std::int32_t>(offsetof(CpuState, fpr_ps1) +
                         sizeof(std::uint64_t) * insn.fp_register)),
