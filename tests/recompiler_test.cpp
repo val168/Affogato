@@ -389,6 +389,75 @@ void recompiler_subfic_differential_test()
     }
 }
 
+void recompiler_subfc_differential_test()
+{
+    struct Case
+    {
+        std::uint32_t minuend;
+        std::uint32_t subtrahend;
+        std::uint8_t base;
+        std::uint8_t source;
+        std::uint8_t destination;
+        bool record;
+        std::uint32_t initial_xer;
+        std::uint32_t initial_cr;
+    };
+    constexpr std::array cases{
+        Case{5U, 5U, 4U, 3U, 2U, false, 0xA5A5A5A5U, 0x13579BDFU},
+        Case{6U, 5U, 4U, 3U, 2U, false, 0x85A5A5A5U, 0xA5C36E91U},
+        Case{5U, 6U, 4U, 3U, 2U, true, 0x25A5A5A5U, 0xA5C36E91U},
+        Case{0U, 0xFFFFFFFFU, 4U, 3U, 3U, false, 0x80000001U, 0x12345678U},
+        Case{0xFFFFFFFFU, 0U, 4U, 3U, 4U, true, 0x20000005U, 0xA5C36E91U},
+        Case{0x80000000U, 0x80000000U, 7U, 7U, 7U, true, 0x80000000U, 0x87654321U},
+        Case{0xFFFFFFFFU, 0x7FFFFFFFU, 4U, 3U, 5U, true, 0x60000000U, 0xFFFFFFFFU},
+    };
+
+    for (const Case& test : cases)
+    {
+        EspressoCore interpreted(0x1000U);
+        EspressoCore compiled(0x1000U);
+        const std::uint32_t instruction = x_form(
+            test.destination, test.base, test.source, 8U, test.record);
+        for (EspressoCore* core : {&interpreted, &compiled})
+        {
+            core->memory.write32_be(0x100U, instruction);
+            core->state.cia = 0x100U;
+            core->state.gpr.fill(0x10203040U);
+            core->state.gpr[test.base] = test.subtrahend;
+            core->state.gpr[test.source] = test.minuend;
+            core->state.xer = test.initial_xer;
+            core->state.cr = test.initial_cr;
+            core->state.lr = 0x12345678U;
+            core->state.ctr = 0x87654321U;
+            core->state.fpscr = 0x89ABCDEFU;
+        }
+
+        const RunResult oracle = interpreted.run(1U);
+        Recompiler recompiler;
+        const RunResult actual = recompiler.run(compiled, 1U);
+        assert(actual.reason == oracle.reason);
+        assert(actual.steps == oracle.steps && actual.steps == 1U);
+        assert(actual.cia == oracle.cia);
+        assert(compiled.state.gpr == interpreted.state.gpr);
+        assert(compiled.state.cr == interpreted.state.cr);
+        assert(compiled.state.xer == interpreted.state.xer);
+        assert(compiled.state.lr == interpreted.state.lr);
+        assert(compiled.state.ctr == interpreted.state.ctr);
+        assert(compiled.state.fpscr == interpreted.state.fpscr);
+        assert(compiled.state.gpr[test.destination] ==
+            static_cast<std::uint32_t>(test.minuend - test.subtrahend));
+        assert(((compiled.state.xer & 0x20000000U) != 0U) ==
+            (test.minuend >= test.subtrahend));
+        assert((compiled.state.xer & ~0x20000000U) ==
+            (test.initial_xer & ~0x20000000U));
+        assert(recompiler.statistics().native_instructions == 1U);
+        assert(recompiler.statistics().interpreter_fallbacks == 0U);
+        assert(!actual.instruction_history.empty());
+        assert(actual.instruction_history.back().opcode_name ==
+            (test.record ? "subfc." : "subfc"));
+    }
+}
+
 void recompiler_addic_differential_test()
 {
     struct Case
@@ -2447,6 +2516,7 @@ int main()
     recompiler_cmpw_differential_test();
     recompiler_fcmpu_differential_test();
     recompiler_subfic_differential_test();
+    recompiler_subfc_differential_test();
     recompiler_addic_differential_test();
     recompiler_destination_aliases_second_source_test();
     recompiler_logical_differential_test();

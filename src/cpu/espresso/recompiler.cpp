@@ -23,6 +23,8 @@ namespace affogato::cpu::espresso
 namespace
 {
 
+constexpr std::uint32_t xer_carry_mask = 0x20000000U;
+
 struct NativeMemoryRecord
 {
     std::uint32_t address{};
@@ -434,6 +436,10 @@ struct BlockCode
     {
         return true;
     }
+    if (insn.opcode == Opcode::subtract_from_carrying)
+    {
+        return true;
+    }
     if ((insn.opcode == Opcode::shift_left_word ||
          insn.opcode == Opcode::shift_right_word) && insn.record)
     {
@@ -459,6 +465,7 @@ struct BlockCode
     case Opcode::xor_immediate_shifted:
     case Opcode::add:
     case Opcode::subtract_from:
+    case Opcode::subtract_from_carrying:
     case Opcode::bitwise_or:
     case Opcode::bitwise_and:
     case Opcode::bitwise_xor:
@@ -538,6 +545,7 @@ struct BlockCode
     case Opcode::xor_immediate_shifted: return "xoris";
     case Opcode::add: return "add";
     case Opcode::subtract_from: return "subf";
+    case Opcode::subtract_from_carrying: return "subfc";
     case Opcode::bitwise_or: return "or";
     case Opcode::bitwise_and: return "and";
     case Opcode::bitwise_xor: return "xor";
@@ -1238,6 +1246,68 @@ struct Recompiler::Impl
                         compiler.sub(lhs, source_a);
                         write_guest_gpr(insn.destination, lhs);
                     }
+                }
+                break;
+            }
+            case Opcode::subtract_from_carrying:
+            {
+                // PPC subfc computes rB-rA and sets CA when that unsigned
+                // subtraction does not borrow. Capture both operands before
+                // writing rD so all destination aliases remain well-defined.
+                x86::Gp minuend = read_guest_gpr(insn.source);
+                x86::Gp subtrahend = read_guest_gpr(insn.base);
+                x86::Gp result = compiler.new_gp32("subfc_result");
+                compiler.mov(result, minuend);
+                compiler.sub(result, subtrahend);
+
+                x86::Gp carry = compiler.new_gp32("subfc_carry");
+                compiler.mov(carry, imm(0U));
+                compiler.setae(carry.r8());
+                constexpr std::size_t xer_offset = offsetof(CpuState, xer);
+                x86::Gp xer = compiler.new_gp32("subfc_xer");
+                compiler.mov(xer, x86::dword_ptr(
+                    state, static_cast<std::int32_t>(xer_offset)));
+                compiler.and_(xer, imm(~xer_carry_mask));
+                compiler.shl(carry, imm(29U));
+                compiler.or_(xer, carry);
+                compiler.mov(x86::dword_ptr(
+                    state, static_cast<std::int32_t>(xer_offset)), xer);
+                write_guest_gpr(insn.destination, result);
+
+                if (insn.record)
+                {
+                    compiler.test(result, result);
+                    x86::Gp field = compiler.new_gp32("subfc_cr0_field");
+                    x86::Gp less = compiler.new_gp32("subfc_cr0_lt");
+                    x86::Gp greater = compiler.new_gp32("subfc_cr0_gt");
+                    x86::Gp equal = compiler.new_gp32("subfc_cr0_eq");
+                    compiler.mov(less, imm(0U));
+                    compiler.setl(less.r8());
+                    compiler.mov(greater, imm(0U));
+                    compiler.setg(greater.r8());
+                    compiler.mov(equal, imm(0U));
+                    compiler.sete(equal.r8());
+                    compiler.shl(less, imm(3U));
+                    compiler.shl(greater, imm(2U));
+                    compiler.shl(equal, imm(1U));
+                    compiler.or_(less, greater);
+                    compiler.or_(less, equal);
+
+                    x86::Gp xer_so = compiler.new_gp32("subfc_xer_so");
+                    compiler.mov(xer_so, x86::dword_ptr(
+                        state, static_cast<std::int32_t>(xer_offset)));
+                    compiler.shr(xer_so, imm(31U));
+                    compiler.or_(less, xer_so);
+                    compiler.mov(field, less);
+                    compiler.shl(field, imm(28U));
+
+                    x86::Gp cr = compiler.new_gp32("subfc_cr");
+                    compiler.mov(cr, x86::dword_ptr(
+                        state, static_cast<std::int32_t>(offsetof(CpuState, cr))));
+                    compiler.and_(cr, imm(0x0FFFFFFFU));
+                    compiler.or_(cr, field);
+                    compiler.mov(x86::dword_ptr(
+                        state, static_cast<std::int32_t>(offsetof(CpuState, cr))), cr);
                 }
                 break;
             }
