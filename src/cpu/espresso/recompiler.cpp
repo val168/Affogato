@@ -622,6 +622,7 @@ struct BlockCode
     case Opcode::rotate_left_word_and_mask_insert:
     case Opcode::load_word_zero:
     case Opcode::load_byte_zero:
+    case Opcode::load_byte_update:
     case Opcode::load_halfword_zero:
     case Opcode::load_halfword_algebraic:
     case Opcode::load_single:
@@ -709,6 +710,7 @@ struct BlockCode
     case Opcode::count_leading_zeros: return "cntlzw";
     case Opcode::load_word_zero: return "lwz";
     case Opcode::load_byte_zero: return "lbz";
+    case Opcode::load_byte_update: return "lbzu";
     case Opcode::load_halfword_zero: return "lhz";
     case Opcode::load_halfword_algebraic: return "lha";
     case Opcode::load_single: return "lfs";
@@ -746,6 +748,7 @@ struct BlockCode
     {
     case Opcode::load_word_zero:
     case Opcode::load_byte_zero:
+    case Opcode::load_byte_update:
     case Opcode::load_halfword_zero:
     case Opcode::load_halfword_algebraic:
     case Opcode::load_single:
@@ -775,6 +778,7 @@ struct BlockCode
     switch (opcode)
     {
     case Opcode::load_byte_zero:
+    case Opcode::load_byte_update:
     case Opcode::store_byte:
     case Opcode::load_byte_zero_indexed:
     case Opcode::store_byte_indexed:
@@ -2206,6 +2210,7 @@ struct Recompiler::Impl
             }
             case Opcode::load_word_zero:
             case Opcode::load_byte_zero:
+            case Opcode::load_byte_update:
             case Opcode::load_halfword_zero:
             case Opcode::load_halfword_algebraic:
             case Opcode::store_word:
@@ -2225,10 +2230,14 @@ struct Recompiler::Impl
             {
                 const bool indexed = is_indexed_memory(insn.opcode);
                 const bool store = is_memory_store(insn.opcode);
+                const bool destination_was_cached =
+                    !store && guest_gpr_initialized[insn.destination];
                 const bool single_store = insn.opcode == Opcode::store_single ||
                     insn.opcode == Opcode::store_single_update;
                 const bool double_store = insn.opcode == Opcode::store_double;
-                const bool update_base = insn.opcode == Opcode::store_word_update ||
+                const bool update_base = insn.opcode == Opcode::load_byte_update ||
+                    insn.opcode == Opcode::load_word_update ||
+                    insn.opcode == Opcode::store_word_update ||
                     insn.opcode == Opcode::store_single_update;
                 const bool sign_extend =
                     insn.opcode == Opcode::load_halfword_algebraic ||
@@ -2340,6 +2349,10 @@ struct Recompiler::Impl
                 if (!store)
                 {
                     write_guest_gpr(insn.destination, value);
+                    if (update_base)
+                    {
+                        write_guest_gpr(insn.base, address);
+                    }
                 }
                 else
                 {
@@ -2374,6 +2387,15 @@ struct Recompiler::Impl
                 compiler.bind(fault);
                 compiler.mov(x86::dword_ptr(state, static_cast<std::int32_t>(
                     offsetof(CpuState, cia))), imm(cia));
+                if (!store && !destination_was_cached)
+                {
+                    // The load destination is only assigned on the success
+                    // edge. If the helper faults, initialize its cached host
+                    // register from the architectural pre-instruction value
+                    // before flushing the block's dirty GPRs.
+                    compiler.mov(guest_gprs[insn.destination], x86::dword_ptr(
+                        state, static_cast<std::int32_t>(gpr_offset(insn.destination))));
+                }
                 flush_guest_gprs();
                 x86::Gp executed = compiler.new_gp32("completed_count");
                 compiler.mov(executed, imm(static_cast<std::uint32_t>(index)));
