@@ -10,6 +10,7 @@
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <iostream>
 #include <limits>
 #include <optional>
 #include <set>
@@ -325,6 +326,93 @@ void signal_guest_os_event(EspressoCore& core, std::uint32_t event)
     // With no waiters, both Cafe event modes retain the signalled value until
     // a waiter consumes it (auto mode) or OSResetEvent clears it (manual mode).
     core.memory.write32_be(event + os_event_value_offset, 1U);
+}
+
+void report_guest_message(EspressoCore& core)
+{
+    constexpr std::size_t maximum_format_size = 4096U;
+    constexpr std::size_t maximum_output_size = 16384U;
+    const auto read_guest_string = [&](std::uint32_t address,
+                                       std::size_t maximum_size,
+                                       std::string_view description) {
+        if (address == 0U)
+        {
+            throw HleExecutionError("OSReport received a null " +
+                                    std::string(description) + " pointer");
+        }
+
+        std::string result;
+        result.reserve(std::min<std::size_t>(maximum_size, 256U));
+        for (std::size_t index = 0U; index < maximum_size; ++index)
+        {
+            const std::uint64_t current =
+                static_cast<std::uint64_t>(address) + index;
+            if (current >= (std::uint64_t{1} << 32U))
+            {
+                throw HleExecutionError("OSReport guest string wraps address space");
+            }
+
+            char character = '\0';
+            try
+            {
+                character = static_cast<char>(core.memory.read8(
+                    static_cast<std::uint32_t>(current)));
+            }
+            catch (const GuestMemoryFault&)
+            {
+                throw HleExecutionError("OSReport guest string is outside mapped memory");
+            }
+            if (character == '\0')
+            {
+                return result;
+            }
+            result.push_back(character);
+        }
+        throw HleExecutionError("OSReport guest string exceeds diagnostic size limit");
+    };
+
+    const std::string format = read_guest_string(
+        core.state.gpr[3], maximum_format_size, "format");
+    std::string output;
+    output.reserve(format.size());
+    std::uint32_t next_argument = 4U;
+    for (std::size_t index = 0U; index < format.size(); ++index)
+    {
+        if (format[index] != '%')
+        {
+            output.push_back(format[index]);
+        }
+        else if (++index < format.size() && format[index] == '%')
+        {
+            output.push_back('%');
+        }
+        else if (index < format.size() && format[index] == 's')
+        {
+            if (next_argument >= 11U)
+            {
+                throw HleExecutionError(
+                    "OSReport format requires stack-passed arguments, which are not implemented");
+            }
+            output += read_guest_string(
+                core.state.gpr[next_argument++], maximum_output_size,
+                "string argument");
+        }
+        else
+        {
+            throw HleExecutionError(
+                "OSReport encountered an unsupported format conversion");
+        }
+
+        if (output.size() > maximum_output_size)
+        {
+            throw HleExecutionError("OSReport output exceeds diagnostic size limit");
+        }
+    }
+
+    // OSReport is a diagnostic side effect with a void ABI; do not modify PPC
+    // argument registers or invent a status return.
+    std::cout.write(output.data(), static_cast<std::streamsize>(output.size()));
+    std::cout.flush();
 }
 
 [[nodiscard]] bool send_guest_message(
@@ -3375,6 +3463,12 @@ void register_coreinit_hle(HleDispatcher& dispatcher)
         "OSSignalEvent",
         [](EspressoCore& core) {
             signal_guest_os_event(core, core.state.gpr[3]);
+        });
+    dispatcher.register_function(
+        "coreinit",
+        "OSReport",
+        [](EspressoCore& core) {
+            report_guest_message(core);
         });
     dispatcher.register_function(
         "coreinit",

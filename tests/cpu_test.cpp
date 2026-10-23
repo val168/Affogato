@@ -26,6 +26,7 @@
 #include <iterator>
 #include <optional>
 #include <span>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -15524,6 +15525,57 @@ void os_signal_event_hle_tests()
            std::string::npos);
 }
 
+void os_report_hle_tests()
+{
+    constexpr std::uint32_t format = 0x1000U;
+    constexpr std::uint32_t argument = 0x1100U;
+    constexpr std::uint32_t return_address = 0x02760C40U;
+
+    EspressoCore core(0x4000U);
+    register_coreinit_hle(core.hle);
+    const std::uint32_t report = core.hle.bind_import("coreinit", "OSReport");
+    core.memory.write_bytes(format, std::array<std::uint8_t, 4>{'%', 's', 0, 0});
+    core.memory.write_bytes(argument, std::array<std::uint8_t, 12>{
+        '0', '0', '0', '0', '0', '0', '0', '8', '\n', 0, 0, 0});
+    core.state.gpr[3] = format;
+    core.state.gpr[4] = argument;
+    for (std::uint32_t reg = 5U; reg < core.state.gpr.size(); ++reg)
+    {
+        core.state.gpr[reg] = 0xA5000000U + reg;
+    }
+    core.state.lr = return_address;
+    const auto gprs_before = core.state.gpr;
+    core.state.cia = report;
+
+    std::ostringstream output;
+    std::streambuf* original_output = std::cout.rdbuf(output.rdbuf());
+    const RunResult result = core.run(1U);
+    std::cout.rdbuf(original_output);
+
+    assert(result.reason == StopReason::instruction_limit);
+    assert(result.steps == 1U);
+    assert(core.state.cia == return_address);
+    assert(core.state.gpr == gprs_before);
+    assert(output.str() == "00000008\n");
+
+    core.memory.write_bytes(format, std::array<std::uint8_t, 4>{'%', '%', '!', 0});
+    core.state.cia = report;
+    std::ostringstream escaped_output;
+    original_output = std::cout.rdbuf(escaped_output.rdbuf());
+    const RunResult escaped = core.run(1U);
+    std::cout.rdbuf(original_output);
+    assert(escaped.reason == StopReason::instruction_limit);
+    assert(escaped_output.str() == "%!");
+
+    core.memory.write_bytes(format, std::array<std::uint8_t, 4>{'%', 'd', 0, 0});
+    core.state.cia = report;
+    const RunResult unsupported = core.run(1U);
+    assert(unsupported.reason == StopReason::hle_error);
+    assert(unsupported.steps == 0U);
+    assert(unsupported.detail.find("unsupported format conversion") !=
+           std::string::npos);
+}
+
 void os_send_message_hle_tests()
 {
     constexpr std::uint32_t queue = 0x1000U;
@@ -30231,6 +30283,7 @@ int main(int argc, char* argv[])
     os_init_message_queue_hle_tests();
     os_init_event_hle_tests();
     os_signal_event_hle_tests();
+    os_report_hle_tests();
     os_send_message_hle_tests();
     os_receive_message_hle_tests();
     mem_get_base_heap_handle_hle_tests();
