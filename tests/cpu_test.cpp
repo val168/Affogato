@@ -21629,6 +21629,7 @@ void gx2_set_sampler_border_color_hle_tests()
 void gx2_register_state_tests()
 {
     using affogato::gpu::Gx2RegisterState;
+    using affogato::gpu::LatteSamplerWords;
     using affogato::gpu::LatteTextureResourceWords;
 
     constexpr std::array<Gx2Command, 4U> commands{{
@@ -21764,6 +21765,58 @@ void gx2_register_state_tests()
     invalid_words = decoded_words;
     invalid_words[1] &= ~(0x3FU << 26U); // Invalid hardware format zero.
     assert(!affogato::gpu::decode_latte_texture_resource(invalid_words));
+
+    constexpr LatteSamplerWords sampler_descriptor_words{
+        (2U) | (6U << 3U) | (7U << 6U) |
+            (1U << 9U) | (3U << 12U) | (2U << 15U) | (1U << 17U) |
+            (4U << 19U) | (3U << 22U) | (1U << 24U) | (1U << 25U) |
+            (6U << 26U),
+        256U | (768U << 10U) | (0xF80U << 20U),
+        0xABCU | (1U << 13U) | (1U << 14U) | (0x2AU << 22U) |
+            (1U << 31U)};
+    const auto sampler_descriptor =
+        affogato::gpu::decode_latte_sampler(sampler_descriptor_words);
+    assert(sampler_descriptor.has_value());
+    assert(sampler_descriptor->raw_words == sampler_descriptor_words);
+    assert((sampler_descriptor->wrap_modes ==
+            std::array<std::uint8_t, 3U>{2U, 6U, 7U}));
+    assert(sampler_descriptor->mag_filter == 1U);
+    assert(sampler_descriptor->min_filter == 3U);
+    assert(sampler_descriptor->z_filter == 2U);
+    assert(sampler_descriptor->mip_filter == 1U);
+    assert(sampler_descriptor->max_anisotropy == 4U);
+    assert(sampler_descriptor->border_color_type == 3U);
+    assert(sampler_descriptor->point_sampling_clamp);
+    assert(sampler_descriptor->texture_array_override);
+    assert(sampler_descriptor->depth_compare == 6U);
+    assert(sampler_descriptor->min_lod_fixed == 256U);
+    assert(sampler_descriptor->max_lod_fixed == 768U);
+    assert(sampler_descriptor->lod_bias_fixed == -128);
+    assert(sampler_descriptor->secondary_lod_bias_fixed == 0xABCU);
+    assert(sampler_descriptor->force_degamma);
+    assert(sampler_descriptor->high_precision_filter);
+    assert(sampler_descriptor->anisotropy_bias == 0x2AU);
+    assert(sampler_descriptor->sampler_type);
+
+    Gx2RegisterState sampler_state;
+    std::array<Gx2Command, 3U> sampler_commands{};
+    for (std::size_t index = 0U; index < sampler_descriptor_words.size(); ++index)
+    {
+        sampler_commands[index] = {
+            Gx2CommandType::set_shader_sampler,
+            0x0003C1B0U + static_cast<std::uint32_t>(index * 4U),
+            sampler_descriptor_words[index]};
+    }
+    sampler_state.apply(sampler_commands);
+    assert(sampler_state.sampler_descriptor(Gx2ShaderStage::geometry, 0U) ==
+           sampler_descriptor);
+
+    auto invalid_sampler_words = sampler_descriptor_words;
+    invalid_sampler_words[0] = (invalid_sampler_words[0] & ~(7U << 9U)) | (7U << 9U);
+    assert(!affogato::gpu::decode_latte_sampler(invalid_sampler_words));
+    invalid_sampler_words = sampler_descriptor_words;
+    invalid_sampler_words[0] = (invalid_sampler_words[0] & ~(3U << 15U)) | (3U << 15U);
+    assert(!affogato::gpu::decode_latte_sampler(invalid_sampler_words));
 }
 
 void gx2_set_tv_buffer_hle_tests()

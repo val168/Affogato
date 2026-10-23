@@ -8,7 +8,6 @@ namespace affogato::gpu
 {
 
 using LatteTextureResourceWords = std::array<std::uint32_t, 7U>;
-using LatteSamplerWords = std::array<std::uint32_t, 3U>;
 
 struct LatteTextureResourceDescriptor
 {

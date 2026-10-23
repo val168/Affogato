@@ -1,6 +1,7 @@
 #pragma once
 
 #include "cpu/espresso/gx2_hle.hpp"
+#include "gpu/latte_sampler.hpp"
 #include "gpu/latte_texture_resource.hpp"
 
 #include <array>
@@ -127,6 +128,14 @@ public:
     {
         const auto words = texture_resource(stage, unit);
         return words ? decode_latte_texture_resource(*words) : std::nullopt;
+    }
+
+    [[nodiscard]] std::optional<LatteSamplerDescriptor> sampler_descriptor(
+        Gx2ShaderStage stage,
+        std::uint32_t unit) const
+    {
+        const auto words = sampler(stage, unit);
+        return words ? decode_latte_sampler(*words) : std::nullopt;
     }
 
     [[nodiscard]] std::size_t size() const noexcept
