@@ -48,6 +48,14 @@ namespace
            static_cast<std::uint16_t>(displacement);
 }
 
+[[nodiscard]] constexpr std::uint32_t lfs_form(
+    std::uint8_t destination, std::uint8_t base, std::int16_t displacement)
+{
+    return (48U << 26U) | (static_cast<std::uint32_t>(destination) << 21U) |
+           (static_cast<std::uint32_t>(base) << 16U) |
+           static_cast<std::uint16_t>(displacement);
+}
+
 
 void recompiler_differential_arithmetic_test()
 {
@@ -332,6 +340,97 @@ void recompiler_lfd_differential_tests()
     assert(!fault.instruction_history.empty());
     assert(!fault.instruction_history.back().completed);
     assert(fault.instruction_history.back().opcode_name == "lfd");
+}
+
+void recompiler_lfs_differential_tests()
+{
+    constexpr std::uint32_t start = 0x100U;
+    constexpr std::uint32_t data = 0x300U;
+    constexpr std::uint8_t destination = 6U;
+    constexpr std::uint64_t ps1_sentinel = 0xDEADBEEF01234567ULL;
+    constexpr std::array<std::uint32_t, 9U> single_patterns{
+        0x00000000U, 0x80000000U, 0x3FC00000U, 0xC2F68000U,
+        0x00000001U, 0x7F800000U, 0xFF800000U, 0x7FC12345U,
+        0x7F812345U};
+
+    for (const std::uint32_t pattern : single_patterns)
+    {
+        EspressoCore interpreted(0x1000U);
+        EspressoCore compiled(0x1000U);
+        for (EspressoCore* core : {&interpreted, &compiled})
+        {
+            core->memory.write32_be(start, lfs_form(destination, 4U, 8));
+            core->memory.write32_be(data, pattern);
+            core->state.cia = start;
+            core->state.gpr[4] = data - 8U;
+            core->state.gpr[0] = 0xDEADBEEFU;
+            core->state.fpr[destination] = 0xA5A5A5A5A5A5A5A5ULL;
+            core->state.fpr_ps1[destination] = ps1_sentinel;
+            core->state.cr = 0x76543210U;
+            core->state.xer = 0xE0000000U;
+            core->state.fpscr = 0x12345678U;
+        }
+
+        const RunResult oracle = interpreted.run(1U);
+        Recompiler recompiler;
+        const RunResult actual = recompiler.run(compiled, 1U);
+        assert(actual.steps == oracle.steps && actual.steps == 1U);
+        assert(actual.cia == oracle.cia);
+        assert(compiled.state.gpr == interpreted.state.gpr);
+        assert(compiled.state.fpr == interpreted.state.fpr);
+        assert(compiled.state.fpr_ps1 == interpreted.state.fpr_ps1);
+        assert(compiled.state.cr == interpreted.state.cr);
+        assert(compiled.state.xer == interpreted.state.xer);
+        assert(compiled.state.fpscr == interpreted.state.fpscr);
+        assert(compiled.state.fpr[destination] == compiled.state.fpr_ps1[destination]);
+        assert(compiled.state.gpr[0] == 0xDEADBEEFU);
+        assert(recompiler.statistics().native_instructions == 1U);
+        assert(recompiler.statistics().interpreter_fallbacks == 0U);
+        assert(!actual.instruction_history.empty());
+        const InstructionHistoryEntry& history = actual.instruction_history.back();
+        assert(history.completed && history.has_effective_address);
+        assert(history.effective_address == data);
+        assert(history.has_fp_destination);
+        assert(history.fp_destination_register == destination);
+        assert(history.fp_destination_value == compiled.state.fpr[destination]);
+        assert(format_instruction_history(actual).find("lfs") != std::string::npos);
+    }
+
+    // D-form rA=0 means a literal zero base, independently of GPR0.
+    EspressoCore zero_base_interpreted(0x1000U);
+    EspressoCore zero_base_compiled(0x1000U);
+    for (EspressoCore* core : {&zero_base_interpreted, &zero_base_compiled})
+    {
+        core->memory.write32_be(start, lfs_form(destination, 0U, 0x180));
+        core->memory.write32_be(0x180U, 0x3F800000U);
+        core->state.cia = start;
+        core->state.gpr[0] = 0x400U;
+    }
+    static_cast<void>(zero_base_interpreted.run(1U));
+    Recompiler zero_base_recompiler;
+    const RunResult zero_base_actual = zero_base_recompiler.run(zero_base_compiled, 1U);
+    assert(zero_base_actual.steps == 1U);
+    assert(zero_base_compiled.state.fpr == zero_base_interpreted.state.fpr);
+    assert(zero_base_compiled.state.fpr_ps1 == zero_base_interpreted.state.fpr_ps1);
+    assert(zero_base_compiled.state.fpr[destination] == 0x3FF0000000000000ULL);
+    assert(zero_base_compiled.state.fpr_ps1[destination] == 0x3FF0000000000000ULL);
+
+    EspressoCore faulting(0x1000U);
+    faulting.memory.write32_be(start, lfs_form(destination, 4U, 8));
+    faulting.state.cia = start;
+    faulting.state.gpr[4] = 0x1000U;
+    faulting.state.fpr[destination] = 0xA5A5A5A5A5A5A5A5ULL;
+    faulting.state.fpr_ps1[destination] = ps1_sentinel;
+    Recompiler fault_recompiler;
+    const RunResult fault = fault_recompiler.run(faulting, 1U);
+    assert(fault.reason == StopReason::memory_fault);
+    assert(fault.detail.find("read 4 byte(s) at guest address 0x00001008") !=
+           std::string::npos);
+    assert(faulting.state.fpr[destination] == 0xA5A5A5A5A5A5A5A5ULL);
+    assert(faulting.state.fpr_ps1[destination] == ps1_sentinel);
+    assert(!fault.instruction_history.empty());
+    assert(!fault.instruction_history.back().completed);
+    assert(fault.instruction_history.back().opcode_name == "lfs");
 }
 
 
@@ -773,6 +872,7 @@ int main()
     recompiler_condition_bit_differential_tests();
     recompiler_rlwinm_differential_tests();
     recompiler_lfd_differential_tests();
+    recompiler_lfs_differential_tests();
     recompiler_step_budget_test();
     recompiler_recent_history_window_test();
     recompiler_branch_test();

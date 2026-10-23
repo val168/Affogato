@@ -3,8 +3,8 @@
 ## WWHD checkpoint
 
 - RPX: `cking.rpx`; entry point `0x028EA9E0`; 24 sections.
-- Latest confirmed run: 6,080,538 guest instructions; stop CIA `0x00000000`; GPR3 `0`; stop is an unsupported fetch of `0x46524D48` after `bcctr` loaded CTR from a null callback field. The wider trace shows both the thread-specific candidate and the global object's `+0x10` candidate are null. `0x46524D48` is the synthetic `FRMH` header mirrored at low address zero by the MEM1 alias, so this is a null indirect call obscured by the current flat memory map, not a missing PPC opcode. The caller's object owner is still unidentified; do not synthesize a target.
-- Latest JIT run after native `lfd`: 3,982,997 native instructions, 2,097,542 interpreter fallbacks, 25,966 compiled blocks, 1,877,543 block-cache hits; guest execution 5.125 s. Debug-only timing measured 3.601 s compiling blocks and 0.131 s executing native blocks, confirming compilation dominates this cold RPX run. `rlwinm`'s 360,245 and `lfd`'s 364,827 observed fallbacks now execute natively. Remaining top fallbacks: `lfs` 175,096; `fmadd` 149,463; `stfs` 127,192; `stwu` 107,842; `fmr` 98,684; `stfd` 97,997.
+- Latest confirmed run: 6,080,538 guest instructions; stop CIA `0x00000000`; GPR3 `0`; stop is an unsupported fetch of `0x46524D48` after `bcctr` loads CTR from zero. The trace identifies a global object at `0x06E4F660` obtained through `0x101F8C2C`, whose `+0x10` field is null; subsequent indirect-pointer loads also resolve to zero. `0x46524D48` is the synthetic `FRMH` header mirrored at low address zero by the MEM1 alias, so this is a null indirect call obscured by the current flat memory map, not a missing PPC opcode. The caller's object owner is still unidentified; do not synthesize a target.
+- Latest JIT run after native `lfs`: 4,158,093 native instructions, 1,922,446 interpreter fallbacks, 22,956 compiled blocks, 1,882,460 block-cache hits. Release guest time across three runs: 1.148/1.146/1.182 s versus 1.322/1.257/1.359 s before `lfs`; medians 1.148 s versus 1.322 s (13.2% lower guest time). Host total medians were 1.340 s versus 1.511 s. The 175,096 `lfs` fallbacks now execute natively. Remaining top fallbacks: `fmadd` 149,463; `stfs` 127,192; `stwu` 107,842; `fmr` 98,684; `stfd` 97,997; `cmpwi` 94,017; `slw` 87,439.
 - No unimplemented HLE was reached. `GX2InitTextureRegs` ran 13 times, along with the sampler initialization and existing GX2 state HLEs.
 
 ## Graphics checkpoint
@@ -47,18 +47,18 @@
 - `c678494` - `jit: report interpreter fallback hot spots`
 - `f60e130` - `jit: emit native rlwinm instructions` (pushed HEAD before this `lfd` iteration)
 - `1a2a49f` - `jit: emit native lfd loads`
-- `c389065` - `jit: report compile and execution timings`
+- `a34c5c0` - `jit: report compile and execution timings`
+- pending - `jit: emit native lfs loads`
 
 ## Current test status
 
-- Debug build: `build/debug-win-native`, Ninja; build is current.
-- Both freshly rebuilt Debug test executables passed (the MSYS `ctest` wrapper currently mangles Windows paths in this shell, so executables were run directly).
-- Native CR-logical, `rlwinm`, and `lfd` interpreter/JIT differential tests pass, including lfd big-endian raw values, rA=0, PS1 preservation, and transactional memory-fault handling. A trial native `lfs` emitter passed semantic tests but was removed: controlled cold-run timings were inconclusive/slower, so it remains an interpreter fallback pending a compilation strategy. Latest WWHD diagnostic: 6,080,538 instructions; stop remains at CIA 0 with null `bcctr` target (`CTR=0`). Current run: RPX load 207 ms; guest execution 5,125 ms.
+- Debug and Release CMake/Ninja builds completed; CTest passed 2/2 in both configurations. Debug WWHD remains at 6,080,538 instructions and the same null `bcctr` target; Release reaches the same state. Release RPX load is about 90 ms; guest execution is about 1.15 s after native `lfs`.
+- Native `lfs` interpreter/JIT differential tests cover signed zero, finite values, a single subnormal, infinities, qNaN/sNaN, literal-zero `rA`, PS0/PS1 behavior, history, and transactional 4-byte memory faults. Native `lfd` tests cover raw big-endian values, literal-zero `rA`, PS1 preservation, and transactional 8-byte faults.
 
 ## Prioritized queue
 
-1. Trace the null `bcctr` caller/object owner further; current evidence shows zero thread-specific and global candidate pointers. Check guest-side initialization and relevant HLE state; do not fabricate a callback.
+1. Trace the null `bcctr` caller/object owner further; current trace identifies global object `0x06E4F660` and its null `+0x10` field. Check guest-side initialization and relevant HLE state; do not fabricate a callback.
 2. Add a Vulkan image-upload path for the already-supported linear RGBA8 staging representation, with resource lifetime/synchronization tests and no claim that current WWHD has submitted a draw.
 3. Audit actual guest shader, draw, and scan-buffer producers; the current WWHD run stops before any draw or texture-binding HLE is observed.
 4. Add real render submission and guest framebuffer presentation only after command and resource state are available; do not present the clear-test window as game output.
-5. Address measured cold compilation cost (3.6 s versus 0.13 s native execution) before adding more native coverage; measure whether hot-block/lazy compilation can avoid compiling cold blocks without losing throughput. Keep `lfs` fallback until that strategy is tested. Then evaluate `fmadd` and store/update forms.
+5. Address measured cold compilation cost (3.7 s versus 0.15 s native execution in Debug) before broad native coverage; measure whether hot-block/lazy compilation can avoid compiling cold blocks without losing throughput. Then evaluate `fmadd` and store/update forms, measuring Debug and Release separately.
