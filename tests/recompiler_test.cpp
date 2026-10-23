@@ -1085,6 +1085,67 @@ void recompiler_mtgqr_differential_tests()
     }
 }
 
+void recompiler_fmr_differential_tests()
+{
+    constexpr std::uint32_t start = 0x100U;
+    constexpr std::array<std::uint64_t, 32U> source_values = [] {
+        std::array<std::uint64_t, 32U> values{};
+        for (std::size_t i = 0U; i < values.size(); ++i)
+        {
+            values[i] = 0xFFF0000000000000ULL | (i * 0x102030405ULL);
+        }
+        values[0] = 0x8000000000000000ULL;
+        values[1] = 0xFFF8123456789ABCULL;
+        values[2] = 0xFFF0123456789ABCULL;
+        return values;
+    }();
+    constexpr std::uint64_t ps1_sentinel = 0xDEADBEEF01234567ULL;
+
+    for (std::uint8_t source = 0U; source < 32U; ++source)
+    {
+        for (std::uint8_t destination = 0U; destination < 32U; ++destination)
+        {
+            EspressoCore interpreted(0x1000U);
+            EspressoCore compiled(0x1000U);
+            const std::uint32_t instruction =
+                (63U << 26U) | (static_cast<std::uint32_t>(destination) << 21U) |
+                (static_cast<std::uint32_t>(source) << 11U) | (72U << 1U);
+            for (EspressoCore* core : {&interpreted, &compiled})
+            {
+                core->memory.write32_be(start, instruction);
+                core->state.cia = start;
+                core->state.fpr.fill(0xA5A5A5A5A5A5A5A5ULL);
+                core->state.fpr_ps1.fill(ps1_sentinel);
+                core->state.fpr[source] = source_values[source];
+                core->state.cr = 0xA5C39E71U;
+                core->state.xer = 0x76543210U;
+                core->state.lr = 0xABCDEF00U;
+                core->state.ctr = 0xFEDCBA98U;
+                core->state.fpscr = 0x89ABCDEFU;
+            }
+
+            const RunResult oracle = interpreted.run(1U);
+            Recompiler recompiler;
+            const RunResult actual = recompiler.run(compiled, 1U);
+            assert(actual.reason == oracle.reason);
+            assert(actual.steps == oracle.steps && actual.steps == 1U);
+            assert(actual.cia == oracle.cia);
+            assert(compiled.state.fpr == interpreted.state.fpr);
+            assert(compiled.state.fpr_ps1 == interpreted.state.fpr_ps1);
+            assert(compiled.state.fpr[destination] == source_values[source]);
+            assert(compiled.state.fpr_ps1[destination] == ps1_sentinel);
+            assert(compiled.state.cr == interpreted.state.cr);
+            assert(compiled.state.xer == interpreted.state.xer);
+            assert(compiled.state.lr == interpreted.state.lr);
+            assert(compiled.state.ctr == interpreted.state.ctr);
+            assert(compiled.state.fpscr == interpreted.state.fpscr);
+            assert(recompiler.statistics().native_instructions == 1U);
+            assert(recompiler.statistics().interpreter_fallbacks == 0U);
+            assert(actual.instruction_history.back().opcode_name == "fmr");
+        }
+    }
+}
+
 void recompiler_rlwinm_differential_tests()
 {
     constexpr std::uint32_t start = 0x100U;
@@ -1790,6 +1851,7 @@ int main()
     recompiler_mtxer_differential_tests();
     recompiler_mfgqr_differential_tests();
     recompiler_mtgqr_differential_tests();
+    recompiler_fmr_differential_tests();
     recompiler_rlwinm_differential_tests();
     recompiler_lfd_differential_tests();
     recompiler_lfs_differential_tests();
