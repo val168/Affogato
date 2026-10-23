@@ -33,11 +33,19 @@ struct NativeMemoryRecord
     bool indexed{};
 };
 
+struct NativeFpCompareRecord
+{
+    std::uint64_t a_raw{};
+    std::uint64_t b_raw{};
+    std::uint8_t result{};
+};
+
 struct NativeExecutionContext
 {
     GuestMemory* memory{};
     std::uint32_t block_cia{};
     std::array<NativeMemoryRecord, 64> memory_records{};
+    std::array<NativeFpCompareRecord, 64> fp_compare_records{};
     std::uint64_t memory_access_calls{};
     bool failed{};
     bool guest_memory_fault{};
@@ -52,6 +60,51 @@ struct NativeExecutionContext
 static_assert(std::is_standard_layout_v<NativeExecutionContext>);
 
 using NativeBlock = std::uint32_t (*)(CpuState*, NativeExecutionContext*);
+
+extern "C" void native_raise_fpscr_snan(CpuState* state) noexcept
+{
+    constexpr std::uint32_t implemented_invalid_masks =
+        fpscr::vxsnan_mask | fpscr::vxzdz_mask | fpscr::vximz_mask |
+        fpscr::vxidi_mask | fpscr::vxisi_mask | fpscr::vxcvi_mask |
+        fpscr::vxvc_mask | fpscr::vxsqrt_mask | fpscr::vxsoft_mask;
+    state->fpscr |= fpscr::vxsnan_mask | fpscr::fx_mask;
+    state->fpscr &= ~(fpscr::vx_mask | fpscr::fex_mask);
+    if ((state->fpscr & implemented_invalid_masks) != 0U)
+    {
+        state->fpscr |= fpscr::vx_mask;
+    }
+    const bool enabled_exception =
+        ((state->fpscr & fpscr::vx_mask) != 0U &&
+         (state->fpscr & fpscr::ve_mask) != 0U) ||
+        ((state->fpscr & fpscr::zx_mask) != 0U &&
+         (state->fpscr & fpscr::ze_mask) != 0U) ||
+        ((state->fpscr & fpscr::ox_mask) != 0U &&
+         (state->fpscr & fpscr::oe_mask) != 0U) ||
+        ((state->fpscr & fpscr::ux_mask) != 0U &&
+         (state->fpscr & fpscr::ue_mask) != 0U) ||
+        ((state->fpscr & fpscr::xx_mask) != 0U &&
+         (state->fpscr & fpscr::xe_mask) != 0U);
+    if (enabled_exception)
+    {
+        state->fpscr |= fpscr::fex_mask;
+    }
+}
+
+extern "C" void native_raise_fpscr_snan_if_present(
+    CpuState* state, std::uint64_t a_raw, std::uint64_t b_raw) noexcept
+{
+    constexpr std::uint64_t exponent_mask = 0x7FF0000000000000ULL;
+    constexpr std::uint64_t fraction_mask = 0x000FFFFFFFFFFFFFULL;
+    constexpr std::uint64_t quiet_bit = 0x0008000000000000ULL;
+    const auto is_signaling_nan = [&](std::uint64_t value) {
+        return (value & exponent_mask) == exponent_mask &&
+            (value & fraction_mask) != 0U && (value & quiet_bit) == 0U;
+    };
+    if (is_signaling_nan(a_raw) || is_signaling_nan(b_raw))
+    {
+        native_raise_fpscr_snan(state);
+    }
+}
 
 extern "C" std::uint32_t native_memory_access(
     NativeExecutionContext* context,
@@ -277,6 +330,7 @@ struct BlockCode
     case Opcode::compare_signed_immediate:
     case Opcode::compare_signed_register:
     case Opcode::compare_unsigned_register:
+    case Opcode::floating_compare_unordered:
     case Opcode::branch:
     case Opcode::conditional_branch:
     case Opcode::conditional_branch_to_link_register:
@@ -335,6 +389,7 @@ struct BlockCode
     case Opcode::compare_signed_immediate: return "cmpwi";
     case Opcode::compare_signed_register: return "cmpw";
     case Opcode::compare_unsigned_register: return "cmplw";
+    case Opcode::floating_compare_unordered: return "fcmpu";
     case Opcode::branch: return "b";
     case Opcode::conditional_branch: return "bc";
     case Opcode::conditional_branch_to_link_register: return "bclr";
@@ -772,6 +827,93 @@ struct Recompiler::Impl
                 compiler.or_(cr, less);
                 compiler.mov(x86::dword_ptr(
                     state, static_cast<std::int32_t>(offsetof(CpuState, cr))), cr);
+                break;
+            }
+            case Opcode::floating_compare_unordered:
+            {
+                const std::uint32_t compare_record_offset = static_cast<std::uint32_t>(
+                    offsetof(NativeExecutionContext, fp_compare_records) +
+                    index * sizeof(NativeFpCompareRecord));
+                x86::Gp a_raw = compiler.new_gp64("fcmpu_a_raw");
+                x86::Gp b_raw = compiler.new_gp64("fcmpu_b_raw");
+                compiler.mov(a_raw, x86::qword_ptr(
+                    state, static_cast<std::int32_t>(fpr_offset(insn.fp_compare_a))));
+                compiler.mov(b_raw, x86::qword_ptr(
+                    state, static_cast<std::int32_t>(fpr_offset(insn.fp_compare_b))));
+
+                x86::Vec a = compiler.new_xmm("fcmpu_a");
+                x86::Vec b = compiler.new_xmm("fcmpu_b");
+                compiler.movq(a, a_raw);
+                compiler.movq(b, b_raw);
+                compiler.ucomisd(a, b);
+
+                x86::Gp less = compiler.new_gp32("fcmpu_less");
+                x86::Gp greater = compiler.new_gp32("fcmpu_greater");
+                x86::Gp equal = compiler.new_gp32("fcmpu_equal");
+                x86::Gp unordered = compiler.new_gp32("fcmpu_unordered");
+                x86::Gp comparison = compiler.new_gp32("fcmpu_result");
+                compiler.mov(less, imm(0));
+                compiler.setb(less.r8());
+                compiler.mov(greater, imm(0));
+                compiler.seta(greater.r8());
+                compiler.mov(equal, imm(0));
+                compiler.sete(equal.r8());
+                compiler.mov(unordered, imm(0));
+                compiler.setp(unordered.r8());
+
+                compiler.mov(comparison, imm(0));
+                compiler.shl(less, imm(3U));
+                compiler.shl(greater, imm(2U));
+                compiler.shl(equal, imm(1U));
+                compiler.or_(comparison, less);
+                compiler.or_(comparison, greater);
+                compiler.or_(comparison, equal);
+
+                Label ordered = compiler.new_label();
+                compiler.test(unordered, unordered);
+                compiler.jz(ordered);
+                compiler.mov(comparison, imm(1U));
+                auto* invoke_snan = static_cast<InvokeNode*>(nullptr);
+                const auto snan_helper = static_cast<std::uint64_t>(
+                    reinterpret_cast<std::uintptr_t>(&native_raise_fpscr_snan_if_present));
+                compiler.invoke(Out(invoke_snan), snan_helper,
+                    FuncSignature::build<void, CpuState*, std::uint64_t, std::uint64_t>(
+                        CallConvId::kCDecl));
+                invoke_snan->set_arg(0, state);
+                invoke_snan->set_arg(1, a_raw);
+                invoke_snan->set_arg(2, b_raw);
+                compiler.bind(ordered);
+
+                const std::uint32_t cr_shift =
+                    (7U - insn.cr_field) * 4U;
+                x86::Gp cr = compiler.new_gp32("fcmpu_cr");
+                compiler.mov(cr, x86::dword_ptr(
+                    state, static_cast<std::int32_t>(offsetof(CpuState, cr))));
+                compiler.and_(cr, imm(~(0xFU << cr_shift)));
+                x86::Gp cr_bits = compiler.new_gp32("fcmpu_cr_bits");
+                compiler.mov(cr_bits, comparison);
+                compiler.shl(cr_bits, imm(cr_shift));
+                compiler.or_(cr, cr_bits);
+                compiler.mov(x86::dword_ptr(
+                    state, static_cast<std::int32_t>(offsetof(CpuState, cr))), cr);
+
+                x86::Gp fpscr = compiler.new_gp32("fcmpu_fpscr");
+                compiler.mov(fpscr, x86::dword_ptr(
+                    state, static_cast<std::int32_t>(offsetof(CpuState, fpscr))));
+                compiler.and_(fpscr, imm(~fpscr::fpcc_mask));
+                x86::Gp fpcc = compiler.new_gp32("fcmpu_fpcc");
+                compiler.mov(fpcc, comparison);
+                compiler.shl(fpcc, imm(12U));
+                compiler.or_(fpscr, fpcc);
+                compiler.mov(x86::dword_ptr(
+                    state, static_cast<std::int32_t>(offsetof(CpuState, fpscr))), fpscr);
+                compiler.mov(x86::qword_ptr(context, static_cast<std::int32_t>(
+                    compare_record_offset + offsetof(NativeFpCompareRecord, a_raw))), a_raw);
+                compiler.mov(x86::qword_ptr(context, static_cast<std::int32_t>(
+                    compare_record_offset + offsetof(NativeFpCompareRecord, b_raw))), b_raw);
+                compiler.mov(x86::byte_ptr(context, static_cast<std::int32_t>(
+                    compare_record_offset + offsetof(NativeFpCompareRecord, result))),
+                    comparison.r8());
                 break;
             }
             case Opcode::condition_bit_and:
@@ -1651,6 +1793,20 @@ RunResult Recompiler::run(EspressoCore& core, std::size_t max_steps)
         {
             const std::uint32_t cia = block->address + static_cast<std::uint32_t>(i * 4U);
             const DecodedInstruction& insn = block->instructions[i];
+            if (insn.opcode == Opcode::floating_compare_unordered)
+            {
+                InstructionHistoryEntry entry = native_history(insn, cia);
+                const NativeFpCompareRecord& record = context.fp_compare_records[i];
+                entry.has_fp_compare = true;
+                entry.fp_compare_cr_field = insn.cr_field;
+                entry.fp_compare_a_register = insn.fp_compare_a;
+                entry.fp_compare_b_register = insn.fp_compare_b;
+                entry.fp_compare_a_raw = record.a_raw;
+                entry.fp_compare_b_raw = record.b_raw;
+                entry.fp_compare_result = record.result;
+                core.append_instruction_history(std::move(entry));
+                continue;
+            }
             if (!is_memory_instruction(insn.opcode))
             {
                 core.append_instruction_history(native_history(insn, cia));

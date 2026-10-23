@@ -224,6 +224,79 @@ void recompiler_cmpw_differential_test()
     assert(recompiler.statistics().interpreter_fallbacks == 0U);
 }
 
+void recompiler_fcmpu_differential_test()
+{
+    const auto encode_fcmpu = [](std::uint8_t cr_field, std::uint8_t fr_a,
+                                 std::uint8_t fr_b) {
+        return 0xFC000000U |
+            (static_cast<std::uint32_t>(cr_field) << 23U) |
+            (static_cast<std::uint32_t>(fr_a) << 16U) |
+            (static_cast<std::uint32_t>(fr_b) << 11U);
+    };
+    struct Case
+    {
+        std::uint64_t a;
+        std::uint64_t b;
+        std::uint8_t cr_field;
+        bool enable_invalid;
+    };
+    constexpr std::array cases{
+        Case{0x3FF0000000000000ULL, 0x4000000000000000ULL, 0U, false},
+        Case{0x4000000000000000ULL, 0x3FF0000000000000ULL, 1U, false},
+        Case{0x3FF0000000000000ULL, 0x3FF0000000000000ULL, 2U, false},
+        Case{0x0000000000000000ULL, 0x8000000000000000ULL, 3U, false},
+        Case{0x7FF8000000000001ULL, 0x3FF0000000000000ULL, 4U, false},
+        Case{0x3FF0000000000000ULL, 0x7FF0000000000001ULL, 5U, false},
+        Case{0x7FF0000000000001ULL, 0x3FF0000000000000ULL, 6U, false},
+        Case{0x3FF0000000000000ULL, 0xFFF0000000000001ULL, 7U, true},
+    };
+
+    for (const Case& test : cases)
+    {
+        EspressoCore interpreted(0x1000U);
+        EspressoCore compiled(0x1000U);
+        for (EspressoCore* core : {&interpreted, &compiled})
+        {
+            core->memory.write32_be(0x100U, encode_fcmpu(test.cr_field, 1U, 31U));
+            core->state.cia = 0x100U;
+            core->state.fpr[1] = test.a;
+            core->state.fpr[31] = test.b;
+            core->state.fpr_ps1[1] = 0xDEADBEEF01234567ULL;
+            core->state.fpr_ps1[31] = 0xBAD0BAD0BAD0BAD0ULL;
+            core->state.cr = 0xA5C36E91U;
+            core->state.xer = 0x80000000U;
+            core->state.fpscr = 0x0000A025U |
+                (test.enable_invalid ? fpscr::ve_mask : 0U);
+            core->state.lr = 0x12345678U;
+            core->state.ctr = 0x87654321U;
+        }
+
+        const RunResult oracle = interpreted.run(1U);
+        Recompiler recompiler;
+        const RunResult actual = recompiler.run(compiled, 1U);
+        assert(actual.reason == oracle.reason);
+        assert(actual.steps == oracle.steps && actual.steps == 1U);
+        assert(actual.cia == oracle.cia);
+        assert(compiled.state.gpr == interpreted.state.gpr);
+        assert(compiled.state.fpr == interpreted.state.fpr);
+        assert(compiled.state.fpr_ps1 == interpreted.state.fpr_ps1);
+        assert(compiled.state.cr == interpreted.state.cr);
+        assert(compiled.state.fpscr == interpreted.state.fpscr);
+        assert(compiled.state.xer == interpreted.state.xer);
+        assert(compiled.state.lr == interpreted.state.lr);
+        assert(compiled.state.ctr == interpreted.state.ctr);
+        assert(recompiler.statistics().native_instructions == 1U);
+        assert(recompiler.statistics().interpreter_fallbacks == 0U);
+        assert(!actual.instruction_history.empty());
+        const InstructionHistoryEntry& history = actual.instruction_history.back();
+        assert(history.opcode_name == "fcmpu");
+        assert(history.has_fp_compare);
+        assert(history.fp_compare_cr_field == test.cr_field);
+        assert(history.fp_compare_a_raw == test.a);
+        assert(history.fp_compare_b_raw == test.b);
+    }
+}
+
 void recompiler_destination_aliases_second_source_test()
 {
     constexpr std::uint32_t start = 0x100U;
@@ -1023,6 +1096,7 @@ int main()
     recompiler_differential_arithmetic_test();
     recompiler_cmpwi_differential_test();
     recompiler_cmpw_differential_test();
+    recompiler_fcmpu_differential_test();
     recompiler_destination_aliases_second_source_test();
     recompiler_logical_differential_test();
     recompiler_condition_bit_differential_tests();
