@@ -162,6 +162,15 @@ namespace
         static_cast<std::uint16_t>(displacement);
 }
 
+[[nodiscard]] constexpr std::uint32_t stmw_form(
+    std::uint8_t first_source, std::uint8_t base, std::int16_t displacement)
+{
+    return (47U << 26U) |
+        (static_cast<std::uint32_t>(first_source) << 21U) |
+        (static_cast<std::uint32_t>(base) << 16U) |
+        static_cast<std::uint16_t>(displacement);
+}
+
 
 void recompiler_differential_arithmetic_test()
 {
@@ -3092,6 +3101,129 @@ void recompiler_lmw_differential_tests()
     assert(!actual_fault.instruction_history.back().completed);
 }
 
+void recompiler_stmw_differential_tests()
+{
+    struct Case
+    {
+        std::uint8_t first_source;
+        std::uint8_t base_register;
+        std::uint32_t base_value;
+        std::int16_t displacement;
+    };
+    constexpr std::uint32_t start = 0x100U;
+    constexpr std::array cases{
+        Case{29U, 6U, 0x300U, -4},
+        Case{4U, 4U, 0x300U, 8}, // EA snapshots the old rA before its range store.
+    };
+
+    for (const Case& test : cases)
+    {
+        EspressoCore interpreted(0x1000U);
+        EspressoCore compiled(0x1000U);
+        const std::uint32_t instruction = stmw_form(
+            test.first_source, test.base_register, test.displacement);
+        const std::uint32_t address = test.base_value +
+            static_cast<std::uint32_t>(test.displacement);
+        for (EspressoCore* core : {&interpreted, &compiled})
+        {
+            core->memory.write32_be(start, instruction);
+            core->state.cia = start;
+            core->state.gpr.fill(0xDEADBEEFU);
+            core->state.gpr[test.base_register] = test.base_value;
+            core->state.cr = 0xA5C39E71U;
+            core->state.xer = 0x87654321U;
+            core->state.lr = 0xABCDEF00U;
+            core->state.ctr = 0xFEDCBA98U;
+            core->state.fpscr = 0x89ABCDEFU;
+        }
+        const auto gprs_before = interpreted.state.gpr;
+        const RunResult oracle = interpreted.run(1U);
+        Recompiler recompiler;
+        const RunResult actual = recompiler.run(compiled, 1U);
+        assert(actual.reason == oracle.reason && actual.steps == oracle.steps);
+        assert(actual.steps == 1U && actual.cia == oracle.cia);
+        assert(compiled.state.gpr == gprs_before);
+        assert(compiled.state.gpr == interpreted.state.gpr);
+        assert(compiled.state.fpr == interpreted.state.fpr);
+        assert(compiled.state.fpr_ps1 == interpreted.state.fpr_ps1);
+        assert(compiled.state.cr == interpreted.state.cr);
+        assert(compiled.state.xer == interpreted.state.xer);
+        assert(compiled.state.lr == interpreted.state.lr);
+        assert(compiled.state.ctr == interpreted.state.ctr);
+        assert(compiled.state.fpscr == interpreted.state.fpscr);
+        for (std::uint32_t reg = test.first_source; reg < 32U; ++reg)
+        {
+            const std::uint32_t stored = gprs_before[reg];
+            const std::uint32_t stored_address =
+                address + (reg - test.first_source) * 4U;
+            assert(compiled.memory.read32_be(stored_address) == stored);
+        }
+        assert(recompiler.statistics().native_instructions == 1U);
+        assert(recompiler.statistics().interpreter_fallbacks == 0U);
+        const InstructionHistoryEntry& history = actual.instruction_history.back();
+        assert(history.opcode_name == "stmw" && history.completed);
+        assert(history.has_register_range &&
+            history.range_first_register == test.first_source &&
+            history.range_last_register == 31U);
+        assert(history.has_effective_address && history.effective_address == address);
+    }
+
+    EspressoCore interpreted_fault(0x1000U);
+    EspressoCore compiled_fault(0x1000U);
+    for (EspressoCore* core : {&interpreted_fault, &compiled_fault})
+    {
+        core->memory.write32_be(start, stmw_form(29U, 6U, 0));
+        core->state.cia = start;
+        core->state.gpr[6] = 0xFF8U;
+        core->state.gpr[29] = 0x11223344U;
+        core->state.gpr[30] = 0x55667788U;
+        core->state.gpr[31] = 0x99AABBCCU;
+    }
+    compiled_fault.memory.set_write_watchpoint(0xFF8U, 8U);
+    const RunResult oracle_fault = interpreted_fault.run(1U);
+    Recompiler fault_recompiler;
+    const RunResult actual_fault = fault_recompiler.run(compiled_fault, 1U);
+    assert(actual_fault.reason == oracle_fault.reason);
+    assert(actual_fault.reason == StopReason::memory_fault);
+    assert(actual_fault.detail.find("write 4 byte(s)") != std::string::npos);
+    assert(actual_fault.detail.find("0x00001000") != std::string::npos);
+    assert(compiled_fault.memory.read32_be(0xFF8U) == 0x11223344U);
+    assert(compiled_fault.memory.read32_be(0xFFCU) == 0x55667788U);
+    assert(compiled_fault.memory.read32_be(0xFF8U) ==
+        interpreted_fault.memory.read32_be(0xFF8U));
+    assert(compiled_fault.memory.read32_be(0xFFCU) ==
+        interpreted_fault.memory.read32_be(0xFFCU));
+    const auto writes = compiled_fault.memory.write_watch_events_snapshot();
+    assert(writes.size() == 2U); // The fault path did not replay prior stores.
+    assert(writes[0].writer_cia == start && writes[1].writer_cia == start);
+    assert(!actual_fault.instruction_history.empty());
+    assert(actual_fault.instruction_history.back().opcode_name == "stmw");
+    assert(actual_fault.instruction_history.back().has_register_range);
+    assert(!actual_fault.instruction_history.back().completed);
+
+    EspressoCore interpreted_code(0x1000U);
+    EspressoCore compiled_code(0x1000U);
+    constexpr std::uint32_t replacement_addi = 0x38600009U;
+    for (EspressoCore* core : {&interpreted_code, &compiled_code})
+    {
+        core->memory.write32_be(start, stmw_form(31U, 6U, 4));
+        core->memory.write32_be(start + 4U, 0x38600001U);
+        core->state.cia = start;
+        core->state.gpr[6] = start;
+        core->state.gpr[31] = replacement_addi;
+    }
+    const RunResult code_oracle = interpreted_code.run(2U);
+    Recompiler code_recompiler;
+    const RunResult code_actual = code_recompiler.run(compiled_code, 2U);
+    assert(code_actual.reason == code_oracle.reason);
+    assert(code_actual.steps == 2U && code_actual.steps == code_oracle.steps);
+    assert(compiled_code.state.gpr == interpreted_code.state.gpr);
+    assert(compiled_code.state.gpr[3] == 9U);
+    assert(compiled_code.memory.read32_be(start + 4U) == replacement_addi);
+    assert(code_recompiler.statistics().native_instructions == 2U);
+    assert(code_recompiler.statistics().interpreter_fallbacks == 0U);
+}
+
 void recompiler_dcbst_differential_tests()
 {
     struct Case
@@ -3605,6 +3737,7 @@ int main()
     recompiler_lbzu_differential_tests();
     recompiler_lwzu_differential_tests();
     recompiler_lmw_differential_tests();
+    recompiler_stmw_differential_tests();
     recompiler_dcbst_differential_tests();
     recompiler_dcbf_differential_tests();
     recompiler_branch_test();

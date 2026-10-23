@@ -367,6 +367,64 @@ extern "C" void native_load_multiple_words(
     }
 }
 
+extern "C" void native_store_multiple_words(
+    NativeExecutionContext* context,
+    CpuState* state,
+    std::uint32_t address,
+    std::uint32_t first_register,
+    std::uint32_t instruction_index) noexcept
+{
+    if (instruction_index >= context->memory_records.size())
+    {
+        context->failed = true;
+        context->failed_address = address;
+        context->failed_width = sizeof(std::uint32_t);
+        context->failed_flags = 1U;
+        context->failed_instruction_index = instruction_index;
+        return;
+    }
+
+    NativeMemoryRecord& record = context->memory_records[instruction_index];
+    record.address = address;
+    record.value = 0U;
+    record.indexed = false;
+    for (std::uint32_t reg = first_register; reg < state->gpr.size(); ++reg)
+    {
+        ++context->memory_access_calls;
+        if (context->memory->has_write_watchpoint())
+        {
+            context->memory->set_current_guest_cia(
+                context->block_cia + instruction_index * 4U);
+        }
+        try
+        {
+            context->memory->write32_be(address, state->gpr[reg]);
+        }
+        catch (...)
+        {
+            context->failed = true;
+            context->failed_address = address;
+            context->failed_width = sizeof(std::uint32_t);
+            context->failed_flags = 1U;
+            context->failed_instruction_index = instruction_index;
+            context->exception = std::current_exception();
+            try
+            {
+                std::rethrow_exception(context->exception);
+            }
+            catch (const GuestMemoryFault&)
+            {
+                context->guest_memory_fault = true;
+            }
+            catch (...)
+            {
+            }
+            return;
+        }
+        address += sizeof(std::uint32_t);
+    }
+}
+
 extern "C" std::uint64_t native_load_double(
     NativeExecutionContext* context,
     std::uint32_t address,
@@ -675,6 +733,7 @@ struct BlockCode
     case Opcode::rotate_left_word_and_mask_insert:
     case Opcode::load_word_zero:
     case Opcode::load_multiple_word:
+    case Opcode::store_multiple_word:
     case Opcode::load_word_update:
     case Opcode::load_byte_zero:
     case Opcode::load_byte_update:
@@ -768,6 +827,7 @@ struct BlockCode
     case Opcode::count_leading_zeros: return "cntlzw";
     case Opcode::load_word_zero: return "lwz";
     case Opcode::load_multiple_word: return "lmw";
+    case Opcode::store_multiple_word: return "stmw";
     case Opcode::load_word_update: return "lwzu";
     case Opcode::load_byte_zero: return "lbz";
     case Opcode::load_byte_update: return "lbzu";
@@ -810,6 +870,7 @@ struct BlockCode
     {
     case Opcode::load_word_zero:
     case Opcode::load_multiple_word:
+    case Opcode::store_multiple_word:
     case Opcode::load_word_update:
     case Opcode::load_byte_zero:
     case Opcode::load_byte_update:
@@ -2227,6 +2288,88 @@ struct Recompiler::Impl
                 compiler.bind(completed);
                 break;
             }
+            case Opcode::store_multiple_word:
+            {
+                const std::size_t record_base = offsetof(NativeExecutionContext,
+                    memory_records) + index * sizeof(NativeMemoryRecord);
+                const std::uint32_t cia = block.address +
+                    static_cast<std::uint32_t>(index * 4U);
+                const std::uint32_t byte_count =
+                    static_cast<std::uint32_t>(32U - insn.source) * 4U;
+                x86::Gp address = compiler.new_gp32("stmw_address");
+                if (insn.base == 0U)
+                {
+                    compiler.mov(address, imm(0U));
+                }
+                else
+                {
+                    compiler.mov(address, read_guest_gpr(insn.base));
+                }
+                compiler.add(address, imm(static_cast<std::uint32_t>(insn.immediate)));
+                compiler.mov(x86::dword_ptr(context, static_cast<std::int32_t>(
+                    record_base + offsetof(NativeMemoryRecord, address))), address);
+                compiler.mov(x86::dword_ptr(context, static_cast<std::int32_t>(
+                    record_base + offsetof(NativeMemoryRecord, base_value))), address);
+                compiler.mov(x86::dword_ptr(context, static_cast<std::int32_t>(
+                    offsetof(NativeExecutionContext, fault_cia))), imm(cia));
+
+                // The helper reads the source range from CpuState and writes
+                // stores sequentially, preserving partial stores on a fault.
+                flush_guest_gprs();
+                auto* invoke = static_cast<InvokeNode*>(nullptr);
+                const auto helper_address = static_cast<std::uint64_t>(
+                    reinterpret_cast<std::uintptr_t>(&native_store_multiple_words));
+                compiler.invoke(Out(invoke), helper_address,
+                    FuncSignature::build<void, NativeExecutionContext*, CpuState*,
+                        std::uint32_t, std::uint32_t, std::uint32_t>(CallConvId::kCDecl));
+                invoke->set_arg(0, context);
+                invoke->set_arg(1, state);
+                invoke->set_arg(2, address);
+                invoke->set_arg(3, imm(insn.source));
+                invoke->set_arg(4, imm(static_cast<std::uint32_t>(index)));
+
+                guest_gpr_initialized.fill(false);
+                x86::Gp failed = compiler.new_gp32("stmw_failed");
+                compiler.mov(failed, x86::byte_ptr(context, static_cast<std::int32_t>(
+                    offsetof(NativeExecutionContext, failed))));
+                compiler.test(failed, failed);
+                Label fault = compiler.new_label();
+                compiler.jnz(fault);
+
+                // A store into already translated code requires leaving this
+                // block so its next dispatch validates the changed page.
+                Label store_is_safe = compiler.new_label();
+                Label self_modifying = compiler.new_label();
+                compiler.cmp(address, imm(0xFFFFFFFFU - byte_count + 1U));
+                compiler.ja(self_modifying);
+                const std::uint32_t block_end = block.address +
+                    static_cast<std::uint32_t>(block.words.size() * sizeof(std::uint32_t));
+                compiler.cmp(address, imm(block_end));
+                compiler.jae(store_is_safe);
+                x86::Gp store_end = compiler.new_gp32("stmw_end");
+                compiler.mov(store_end, address);
+                compiler.add(store_end, imm(byte_count));
+                compiler.cmp(store_end, imm(block.address));
+                compiler.jbe(store_is_safe);
+                compiler.jmp(self_modifying);
+
+                compiler.bind(fault);
+                compiler.mov(x86::dword_ptr(state, static_cast<std::int32_t>(
+                    offsetof(CpuState, cia))), imm(cia));
+                x86::Gp fault_executed = compiler.new_gp32("stmw_fault_count");
+                compiler.mov(fault_executed, imm(static_cast<std::uint32_t>(index)));
+                compiler.ret(fault_executed);
+
+                compiler.bind(self_modifying);
+                compiler.mov(x86::dword_ptr(state, static_cast<std::int32_t>(
+                    offsetof(CpuState, cia))), imm(cia + 4U));
+                x86::Gp completed_executed = compiler.new_gp32("stmw_completed_count");
+                compiler.mov(completed_executed,
+                    imm(static_cast<std::uint32_t>(index + 1U)));
+                compiler.ret(completed_executed);
+                compiler.bind(store_is_safe);
+                break;
+            }
             case Opcode::load_single:
             {
                 const std::size_t record_base = offsetof(NativeExecutionContext, memory_records) +
@@ -2976,10 +3119,12 @@ RunResult Recompiler::run(EspressoCore& core, std::size_t max_steps)
             entry.completed = true;
             entry.has_effective_address = true;
             entry.effective_address = record.address;
-            if (insn.opcode == Opcode::load_multiple_word)
+            if (insn.opcode == Opcode::load_multiple_word ||
+                insn.opcode == Opcode::store_multiple_word)
             {
                 entry.has_register_range = true;
-                entry.range_first_register = insn.destination;
+                entry.range_first_register = insn.opcode == Opcode::load_multiple_word
+                    ? insn.destination : insn.source;
                 entry.range_last_register = 31U;
                 entry.memory_base_register = insn.base;
                 entry.memory_displacement = insn.immediate;
@@ -3085,7 +3230,31 @@ RunResult Recompiler::run(EspressoCore& core, std::size_t max_steps)
             try
             {
                 if (context.guest_memory_fault)
+                {
+                    const DecodedInstruction& faulting_instruction =
+                        block->instructions[context.failed_instruction_index];
+                    if (faulting_instruction.opcode == Opcode::store_multiple_word)
+                    {
+                        InstructionHistoryEntry entry{};
+                        entry.cia = block->address + static_cast<std::uint32_t>(
+                            context.failed_instruction_index * 4U);
+                        entry.instruction_word = faulting_instruction.raw;
+                        entry.has_instruction_word = true;
+                        entry.opcode_name = "stmw";
+                        entry.completed = false;
+                        entry.has_effective_address = true;
+                        entry.effective_address = context.memory_records[
+                            context.failed_instruction_index].address;
+                        entry.has_register_range = true;
+                        entry.range_first_register = faulting_instruction.source;
+                        entry.range_last_register = 31U;
+                        entry.memory_base_register = faulting_instruction.base;
+                        entry.memory_displacement = faulting_instruction.immediate;
+                        core.append_instruction_history(std::move(entry));
+                        std::rethrow_exception(context.exception);
+                    }
                     static_cast<void>(core.step());
+                }
                 else if (context.exception)
                     std::rethrow_exception(context.exception);
                 result.reason = StopReason::hle_error;
