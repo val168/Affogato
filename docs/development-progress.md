@@ -29,6 +29,7 @@
 - Native JIT `subfe` consumes the pre-instruction XER.CA, computes the two-stage unsigned borrow/no-borrow result, updates only CA, and supports record-form CR0/SO. Differential cases cover both CA inputs, underflow/edge values, register aliases, Rc, and preservation of the remaining architectural state. WWHD remains at 6,080,538 with the same null-CTR stop; `subfe`'s 30,275 fallbacks are now native (764,428 total fallbacks). BOTW remains at 860,172 and the same stop with 24,252 fallbacks.
 - Native JIT `rlwimi` now rotates the source, merges the selected wraparound mask into the old destination, and handles Rc/CR0. A 32-instruction differential block covers all shift values, varied wrapping/nonwrapping masks, aliases, record forms, and the known `0x53CC3632` example. WWHD remains at 6,080,538 with the null-CTR stop; fallbacks fell by 29,758 to 734,670. BOTW remains at 860,172 with the same stop and 24,252 fallbacks.
 - Native JIT `ps_merge10` snapshots source A.PS1 and source B.PS0, then writes destination PS0/PS1 as raw 64-bit lanes. Differential coverage includes 32 chained merges, all-source aliasing, destination/source aliases, signaling-NaN payloads, and signed zero. WWHD remains at 6,080,538 and the same null-CTR stop; fallbacks fell by 42,609 to 692,061. BOTW remains at 860,172 and the same stop; fallbacks are 23,948.
+- Native JIT `isync` is a compiled no-op that terminates its block, forcing the dispatcher to resolve the following guest PC again after synchronous prior effects. This preserves the emulator's current instruction-fetch synchronization model and avoids carrying cached instructions across the barrier. A differential sequence checks the two-block boundary and architectural state. WWHD remains at 6,080,538 with the same null-CTR stop; fallbacks fell by 25,753 to 666,308. BOTW remains at 860,172 with the same stop and 23,800 fallbacks.
 - After native `fmr`, the same Release game runs retained their stops and instruction counts while WWHD interpreter fallbacks decreased from 1,562,434 to 1,463,750 (native 4,616,789), and BOTW fallbacks decreased from 157,400 to 157,082 (native 703,091). This is a clear fallback-count improvement; wall-clock timings are not compared here because the latest runs were concurrent.
 - After native `fneg`, both game checkpoints remain unchanged; WWHD now has 1,442,626 interpreter fallbacks (4,637,913 native), and BOTW has 157,062 fallbacks (703,111 native). Relative to the prior `fmr` run, this removed another 21,124 WWHD and 20 BOTW fallbacks. Guest runtime remained roughly 1.0–1.1 s in these concurrent runs.
 - The null-target investigation found the watched global `0x10208B64` is cleared by a single guest bulk-zero operation, and WUT confirms `OSThread::specific` begins at `+0x57C`, matching the existing HLE. The guest path then resolves a non-null TSS object and reaches virtual method `0x0276058C`; the callback field is still written as zero by the guest caller. This narrows the cause to that guest virtual-method path, not the thread-specific HLE offset; no target was fabricated.
@@ -101,7 +102,8 @@
 - `a507e57` - `jit: emit native subfc`
 - `d32a56d` - `jit: emit native subfe`
 - `6e128a9` - `jit: emit native rlwimi`
-- pending - `jit: emit native ps_merge10`
+- `38f2d85` - `jit: emit native ps_merge10`
+- pending - `jit: preserve isync block boundary in JIT`
 - `2a3e1b6` - `jit: emit native stwu stores`
 - `8fadbcb` - `jit: emit native mtgqr`
 - `c678494` - `jit: report interpreter fallback hot spots`

@@ -2335,6 +2335,53 @@ void recompiler_recent_history_window_test()
     }
 }
 
+void recompiler_isync_boundary_differential_test()
+{
+    constexpr std::uint32_t start = 0x100U;
+    constexpr std::array<std::uint32_t, 3U> program{
+        0x38600007U, // addi r3,r0,7
+        0x4C00012CU, // isync
+        0x38830005U, // addi r4,r3,5
+    };
+    EspressoCore interpreted(0x1000U);
+    EspressoCore compiled(0x1000U);
+    for (EspressoCore* core : {&interpreted, &compiled})
+    {
+        for (std::size_t index = 0U; index < program.size(); ++index)
+        {
+            core->memory.write32_be(
+                start + static_cast<std::uint32_t>(index * 4U), program[index]);
+        }
+        core->state.cia = start;
+        core->state.cr = 0xA5C39E71U;
+        core->state.xer = 0x87654321U;
+        core->state.lr = 0xABCDEF00U;
+        core->state.ctr = 0xFEDCBA98U;
+        core->state.fpscr = 0x89ABCDEFU;
+    }
+
+    const RunResult oracle = interpreted.run(program.size());
+    Recompiler recompiler;
+    const RunResult actual = recompiler.run(compiled, program.size());
+    assert(actual.reason == oracle.reason);
+    assert(actual.steps == oracle.steps && actual.steps == program.size());
+    assert(actual.cia == oracle.cia);
+    assert(compiled.state.gpr == interpreted.state.gpr);
+    assert(compiled.state.cr == interpreted.state.cr);
+    assert(compiled.state.xer == interpreted.state.xer);
+    assert(compiled.state.lr == interpreted.state.lr);
+    assert(compiled.state.ctr == interpreted.state.ctr);
+    assert(compiled.state.fpscr == interpreted.state.fpscr);
+    assert(compiled.state.gpr[3] == 7U && compiled.state.gpr[4] == 12U);
+    assert(recompiler.statistics().native_instructions == program.size());
+    assert(recompiler.statistics().interpreter_fallbacks == 0U);
+    assert(recompiler.statistics().compiled_blocks == 2U);
+    assert(actual.instruction_history.size() == program.size());
+    assert(actual.instruction_history[0].opcode_name == "addi");
+    assert(actual.instruction_history[1].opcode_name == "isync");
+    assert(actual.instruction_history[2].opcode_name == "addi");
+}
+
 void recompiler_branch_test()
 {
     EspressoCore core(0x1000U);
@@ -2784,6 +2831,7 @@ int main()
     recompiler_lfs_differential_tests();
     recompiler_step_budget_test();
     recompiler_recent_history_window_test();
+    recompiler_isync_boundary_differential_test();
     recompiler_branch_test();
     recompiler_fast_lookup_cache_test();
     recompiler_conditional_branch_tests();

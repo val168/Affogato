@@ -501,6 +501,7 @@ struct BlockCode
     case Opcode::floating_negate:
     case Opcode::floating_absolute_value:
     case Opcode::paired_single_merge10:
+    case Opcode::instruction_sync:
     case Opcode::shift_left_word:
     case Opcode::shift_right_word:
     case Opcode::arithmetic_shift_right_immediate:
@@ -559,6 +560,7 @@ struct BlockCode
     case Opcode::subtract_from_extended: return "subfe";
     case Opcode::rotate_left_word_and_mask_insert: return "rlwimi";
     case Opcode::paired_single_merge10: return "ps_merge10";
+    case Opcode::instruction_sync: return "isync";
     case Opcode::bitwise_or: return "or";
     case Opcode::bitwise_and: return "and";
     case Opcode::bitwise_xor: return "xor";
@@ -1766,6 +1768,11 @@ struct Recompiler::Impl
                 }
                 break;
             }
+            case Opcode::instruction_sync:
+                // Guest memory writes and instruction fetch are synchronous
+                // on this core. Block construction terminates at isync so
+                // subsequent instructions are resolved from current memory.
+                break;
             case Opcode::branch:
             {
                 if (insn.link)
@@ -2484,7 +2491,8 @@ RunResult Recompiler::run(EspressoCore& core, std::size_t max_steps)
                         }
                         candidate.words.push_back(word);
                         candidate.instructions.push_back(decoded);
-                        if (decoded.opcode == Opcode::branch ||
+                        if (decoded.opcode == Opcode::instruction_sync ||
+                            decoded.opcode == Opcode::branch ||
                             decoded.opcode == Opcode::conditional_branch ||
                             decoded.opcode == Opcode::conditional_branch_to_link_register ||
                             decoded.opcode == Opcode::conditional_branch_to_count_register)
