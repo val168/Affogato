@@ -3560,6 +3560,143 @@ void recompiler_psq_st_differential_tests()
     assert(fault_stats.native_instructions == 0U);
 }
 
+void recompiler_psq_l_differential_tests()
+{
+    const auto encode_psq_l = [](
+        std::uint8_t destination, std::uint8_t base, std::int16_t displacement,
+        bool single_element, std::uint8_t gqr) {
+        return (56U << 26U) |
+            (static_cast<std::uint32_t>(destination) << 21U) |
+            (static_cast<std::uint32_t>(base) << 16U) |
+            (static_cast<std::uint32_t>(single_element) << 15U) |
+            (static_cast<std::uint32_t>(gqr & 0x7U) << 12U) |
+            (static_cast<std::uint16_t>(displacement) & 0x0FFFU);
+    };
+    const auto double_bits = [](double value) { return std::bit_cast<std::uint64_t>(value); };
+    constexpr std::uint32_t start = 0x100U;
+
+    // Float32 lanes are widened to doubles; W=1 reads one lane and supplies
+    // the architectural constant 1.0 in PS1.
+    EspressoCore interpreted(0x1000U);
+    EspressoCore compiled(0x1000U);
+    for (EspressoCore* core : {&interpreted, &compiled})
+    {
+        core->state.gpr[0] = 0xDEADBEEFU;
+        core->state.gqr[0] = 0U;
+        core->state.fpr[7] = 0xAAAAAAAAAAAAAAAAULL;
+        core->state.fpr_ps1[7] = 0xBBBBBBBBBBBBBBBBULL;
+        core->memory.write32_be(0x20U, std::bit_cast<std::uint32_t>(-3.25F));
+        core->memory.write32_be(0x24U, std::bit_cast<std::uint32_t>(8.5F));
+    }
+    interpreted.memory.write32_be(start, encode_psq_l(7U, 0U, 0x20, false, 0U));
+    compiled.memory.write32_be(start, encode_psq_l(7U, 0U, 0x20, false, 0U));
+    interpreted.state.cia = start;
+    compiled.state.cia = start;
+    const RunResult oracle = interpreted.run(1U);
+    Recompiler recompiler;
+    const RunResult actual = recompiler.run(compiled, 1U);
+    assert(actual.reason == oracle.reason && actual.steps == oracle.steps);
+    assert(actual.steps == 1U);
+    assert(compiled.state.fpr[7] == double_bits(-3.25));
+    assert(compiled.state.fpr_ps1[7] == double_bits(8.5));
+    assert(compiled.state.gpr == interpreted.state.gpr);
+    assert(compiled.state.cr == interpreted.state.cr && compiled.state.xer == interpreted.state.xer);
+    assert(recompiler.statistics().native_instructions == 1U);
+    assert(recompiler.statistics().interpreter_fallbacks == 0U);
+    const InstructionHistoryEntry& history = actual.instruction_history.back();
+    assert(history.opcode_name == "psq_l" && history.completed);
+    assert(history.has_effective_address && history.effective_address == 0x20U);
+    assert(history.has_paired_fp_state && history.paired_fp_destination_register == 7U);
+    assert(history.paired_fp_destination_ps0 == double_bits(-3.25));
+    assert(history.paired_fp_destination_ps1 == double_bits(8.5));
+
+    EspressoCore scalar_interpreted(0x1000U);
+    EspressoCore scalar_compiled(0x1000U);
+    for (EspressoCore* core : {&scalar_interpreted, &scalar_compiled})
+    {
+        core->state.gpr[4] = 0x300U;
+        core->state.gqr[2] = (6U << 16U) | (1U << 24U); // S8, load scale +1.
+        core->state.fpr[3] = 0x123456789ABCDEF0ULL;
+        core->state.fpr_ps1[3] = 0x0FEDCBA987654321ULL;
+        core->memory.write8(0x302U, 0xFEU);
+        core->memory.write8(0x303U, 0x7FU);
+    }
+    scalar_interpreted.memory.write32_be(start, encode_psq_l(3U, 4U, 2, false, 2U));
+    scalar_compiled.memory.write32_be(start, encode_psq_l(3U, 4U, 2, false, 2U));
+    scalar_interpreted.state.cia = start;
+    scalar_compiled.state.cia = start;
+    const RunResult scalar_oracle = scalar_interpreted.run(1U);
+    Recompiler scalar_recompiler;
+    const RunResult scalar_actual = scalar_recompiler.run(scalar_compiled, 1U);
+    assert(scalar_actual.reason == scalar_oracle.reason && scalar_actual.steps == 1U);
+    assert(scalar_compiled.state.fpr[3] == double_bits(-1.0));
+    assert(scalar_compiled.state.fpr_ps1[3] == double_bits(63.5));
+    assert(scalar_recompiler.statistics().native_instructions == 1U);
+
+    EspressoCore w_interpreted(0x1000U);
+    EspressoCore w_compiled(0x1000U);
+    for (EspressoCore* core : {&w_interpreted, &w_compiled})
+    {
+        core->state.gpr[5] = 0x180U;
+        core->state.gqr[1] = (5U << 16U) | (0x3FU << 24U); // U16, scale -1.
+        core->memory.write16_be(0x184U, 0x1234U);
+    }
+    w_interpreted.memory.write32_be(start, encode_psq_l(8U, 5U, 4, true, 1U));
+    w_compiled.memory.write32_be(start, encode_psq_l(8U, 5U, 4, true, 1U));
+    w_interpreted.state.cia = start;
+    w_compiled.state.cia = start;
+    const RunResult w_oracle = w_interpreted.run(1U);
+    Recompiler w_recompiler;
+    const RunResult w_actual = w_recompiler.run(w_compiled, 1U);
+    assert(w_actual.reason == w_oracle.reason && w_actual.steps == 1U);
+    assert(w_compiled.state.fpr[8] == double_bits(9320.0F));
+    assert(w_compiled.state.fpr_ps1[8] == double_bits(1.0));
+    assert(w_recompiler.statistics().native_instructions == 1U);
+
+    // If lane 1 faults, PS0 from lane 0 must not be committed.
+    EspressoCore fault_interpreted(0x1000U);
+    EspressoCore fault_compiled(0x1000U);
+    for (EspressoCore* core : {&fault_interpreted, &fault_compiled})
+    {
+        core->memory.map_region(0x2000U, 4U);
+        core->memory.write32_be(0x2000U, std::bit_cast<std::uint32_t>(5.0F));
+        core->state.gqr[0] = 0U;
+        core->state.fpr[2] = 0x1111222233334444ULL;
+        core->state.fpr_ps1[2] = 0x5555666677778888ULL;
+        core->state.gpr[6] = 0x2000U;
+    }
+    fault_interpreted.memory.write32_be(start, encode_psq_l(2U, 6U, 0, false, 0U));
+    fault_compiled.memory.write32_be(start, encode_psq_l(2U, 6U, 0, false, 0U));
+    fault_interpreted.state.cia = start;
+    fault_compiled.state.cia = start;
+    const auto fault_oracle = fault_interpreted.run(1U);
+    Recompiler fault_recompiler;
+    const auto fault_actual = fault_recompiler.run(fault_compiled, 1U);
+    assert(fault_actual.reason == fault_oracle.reason);
+    assert(fault_actual.detail.find("read 4 byte(s) at guest address 0x00002004") !=
+        std::string::npos);
+    assert(fault_compiled.state.fpr[2] == 0x1111222233334444ULL);
+    assert(fault_compiled.state.fpr_ps1[2] == 0x5555666677778888ULL);
+    assert(fault_compiled.state.cia == start);
+    assert(!fault_actual.instruction_history.back().completed);
+    assert(fault_recompiler.statistics().native_instructions == 0U);
+
+    EspressoCore reserved(0x1000U);
+    reserved.state.gqr[0] = 1U << 16U;
+    reserved.state.gpr[4] = 0x20U;
+    reserved.state.fpr[1] = 0x1122334455667788ULL;
+    reserved.state.fpr_ps1[1] = 0x8877665544332211ULL;
+    reserved.memory.write32_be(start, encode_psq_l(1U, 4U, 0, true, 0U));
+    reserved.state.cia = start;
+    Recompiler reserved_recompiler;
+    const RunResult reserved_result = reserved_recompiler.run(reserved, 1U);
+    assert(reserved_result.reason == StopReason::unsupported_instruction);
+    assert(reserved.state.fpr[1] == 0x1122334455667788ULL);
+    assert(reserved.state.fpr_ps1[1] == 0x8877665544332211ULL);
+    assert(!reserved_result.instruction_history.back().completed);
+    assert(reserved_recompiler.statistics().native_instructions == 0U);
+}
+
 void recompiler_memory_tests()
 {
     EspressoCore watched_store(0x1000U);
@@ -3902,6 +4039,7 @@ int main()
     recompiler_dcbst_differential_tests();
     recompiler_dcbf_differential_tests();
     recompiler_psq_st_differential_tests();
+    recompiler_psq_l_differential_tests();
     recompiler_branch_test();
     recompiler_fast_lookup_cache_test();
     recompiler_conditional_branch_tests();
