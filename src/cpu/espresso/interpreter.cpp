@@ -839,6 +839,7 @@ void add_history_source(
          instruction.opcode == Opcode::subtract_from_minus_one_extended ||
          instruction.opcode == Opcode::subtract_from_zero_extended ||
          instruction.opcode == Opcode::count_leading_zeros ||
+         instruction.opcode == Opcode::add_immediate_carry ||
          instruction.opcode == Opcode::negate ||
          instruction.opcode == Opcode::extend_sign_byte ||
          instruction.opcode == Opcode::extend_sign_halfword ||
@@ -869,7 +870,8 @@ void add_history_source(
     {
         entry.opcode_name += '.';
     }
-    if (instruction.opcode == Opcode::multiply_low_immediate)
+    if (instruction.opcode == Opcode::multiply_low_immediate ||
+        instruction.opcode == Opcode::add_immediate_carry)
     {
         entry.has_immediate = true;
         entry.immediate = instruction.immediate;

@@ -318,6 +318,7 @@ struct BlockCode
     {
     case Opcode::addi:
     case Opcode::addis:
+    case Opcode::add_immediate_carry:
     case Opcode::subtract_from_immediate_carry:
     case Opcode::ori:
     case Opcode::or_immediate_shifted:
@@ -378,6 +379,7 @@ struct BlockCode
     {
     case Opcode::addi: return "addi";
     case Opcode::addis: return "addis";
+    case Opcode::add_immediate_carry: return "addic";
     case Opcode::subtract_from_immediate_carry: return "subfic";
     case Opcode::ori: return "ori";
     case Opcode::or_immediate_shifted: return "oris";
@@ -536,6 +538,7 @@ struct BlockCode
     // per-instruction snapshots are emitted into the JIT context, retain the
     // exact native trace identity without reporting potentially stale values.
     if (insn.opcode == Opcode::addi || insn.opcode == Opcode::addis ||
+        insn.opcode == Opcode::add_immediate_carry ||
         insn.opcode == Opcode::subtract_from_immediate_carry ||
         insn.opcode == Opcode::ori || insn.opcode == Opcode::or_immediate_shifted ||
         insn.opcode == Opcode::xor_immediate ||
@@ -722,6 +725,31 @@ struct Recompiler::Impl
                 compiler.setae(carry.r8());
                 compiler.shl(carry, imm(29U));
                 x86::Gp xer = compiler.new_gp32("subfic_xer");
+                compiler.mov(xer, x86::dword_ptr(
+                    state, static_cast<std::int32_t>(offsetof(CpuState, xer))));
+                compiler.and_(xer, imm(~0x20000000U));
+                compiler.or_(xer, carry);
+                compiler.mov(x86::dword_ptr(
+                    state, static_cast<std::int32_t>(offsetof(CpuState, xer))), xer);
+                write_guest_gpr(insn.destination, result);
+                break;
+            }
+            case Opcode::add_immediate_carry:
+            {
+                const x86::Gp source = read_guest_gpr(insn.base);
+                x86::Gp result = source;
+                if (insn.destination != insn.base)
+                {
+                    result = compiler.new_gp32("addic_result");
+                    compiler.mov(result, source);
+                }
+                compiler.add(result, imm(immediate_value(insn)));
+
+                x86::Gp carry = compiler.new_gp32("addic_carry");
+                compiler.mov(carry, imm(0U));
+                compiler.setb(carry.r8());
+                compiler.shl(carry, imm(29U));
+                x86::Gp xer = compiler.new_gp32("addic_xer");
                 compiler.mov(xer, x86::dword_ptr(
                     state, static_cast<std::int32_t>(offsetof(CpuState, xer))));
                 compiler.and_(xer, imm(~0x20000000U));
