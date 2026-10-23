@@ -15641,6 +15641,38 @@ void os_get_mem_bound_hle_tests()
            std::string::npos);
 }
 
+void os_is_enabled_overlay_arena_hle_tests()
+{
+    constexpr std::uint32_t return_address = 0x02760C80U;
+    EspressoCore core(0x1000U);
+    register_coreinit_hle(core.hle);
+    const std::uint32_t query =
+        core.hle.bind_import("coreinit", "OSIsEnabledOverlayArena");
+    for (std::uint32_t reg = 3U; reg < core.state.gpr.size(); ++reg)
+    {
+        core.state.gpr[reg] = 0xA5000000U + reg;
+    }
+    core.state.cr = 0x12345678U;
+    core.state.xer = 0x87654321U;
+    core.state.lr = return_address;
+    const auto gprs_before = core.state.gpr;
+    const std::uint32_t cr_before = core.state.cr;
+    const std::uint32_t xer_before = core.state.xer;
+    core.state.cia = query;
+
+    const RunResult result = core.run(1U);
+    assert(result.reason == StopReason::instruction_limit);
+    assert(result.steps == 1U);
+    assert(core.state.cia == return_address);
+    assert(core.state.gpr[3] == 0U);
+    for (std::uint32_t reg = 4U; reg < core.state.gpr.size(); ++reg)
+    {
+        assert(core.state.gpr[reg] == gprs_before[reg]);
+    }
+    assert(core.state.cr == cr_before);
+    assert(core.state.xer == xer_before);
+}
+
 void os_send_message_hle_tests()
 {
     constexpr std::uint32_t queue = 0x1000U;
@@ -30350,6 +30382,7 @@ int main(int argc, char* argv[])
     os_signal_event_hle_tests();
     os_report_hle_tests();
     os_get_mem_bound_hle_tests();
+    os_is_enabled_overlay_arena_hle_tests();
     os_send_message_hle_tests();
     os_receive_message_hle_tests();
     mem_get_base_heap_handle_hle_tests();

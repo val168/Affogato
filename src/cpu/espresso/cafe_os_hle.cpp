@@ -1904,6 +1904,14 @@ void register_coreinit_hle(HleDispatcher& dispatcher)
         });
     dispatcher.register_function(
         "coreinit",
+        "OSIsEnabledOverlayArena",
+        [](EspressoCore& core) {
+            // Affogato does not expose Cafe's application overlay arena. Since
+            // no enable path exists, its architectural enabled state is false.
+            core.state.gpr[3] = 0U;
+        });
+    dispatcher.register_function(
+        "coreinit",
         "OSGetSystemTime",
         [](EspressoCore& core) {
             const auto address = core.hle.bind_data_import(
