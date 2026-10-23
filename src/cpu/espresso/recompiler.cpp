@@ -340,6 +340,7 @@ struct BlockCode
     case Opcode::bitwise_xor:
     case Opcode::move_condition_register_field:
     case Opcode::move_from_condition_register:
+    case Opcode::move_to_condition_register_fields:
     case Opcode::compare_signed_immediate:
     case Opcode::compare_signed_register:
     case Opcode::compare_unsigned_register:
@@ -407,6 +408,7 @@ struct BlockCode
     case Opcode::floating_compare_unordered: return "fcmpu";
     case Opcode::move_condition_register_field: return "mcrf";
     case Opcode::move_from_condition_register: return "mfcr";
+    case Opcode::move_to_condition_register_fields: return "mtcrf";
     case Opcode::branch: return "b";
     case Opcode::conditional_branch: return "bc";
     case Opcode::conditional_branch_to_link_register: return "bclr";
@@ -1073,6 +1075,32 @@ struct Recompiler::Impl
                 compiler.mov(value, x86::dword_ptr(
                     state, static_cast<std::int32_t>(offsetof(CpuState, cr))));
                 write_guest_gpr(insn.destination, value);
+                break;
+            }
+            case Opcode::move_to_condition_register_fields:
+            {
+                std::uint32_t cr_mask = 0U;
+                for (std::uint32_t field_index = 0U; field_index < 8U; ++field_index)
+                {
+                    if ((insn.cr_field_mask & (1U << (7U - field_index))) != 0U)
+                    {
+                        cr_mask |= 0xFU << (28U - 4U * field_index);
+                    }
+                }
+
+                if (cr_mask != 0U)
+                {
+                    x86::Gp value = compiler.new_gp32("mtcrf_value");
+                    compiler.mov(value, read_guest_gpr(insn.destination));
+                    compiler.and_(value, imm(cr_mask));
+                    x86::Gp cr = compiler.new_gp32("mtcrf_cr");
+                    compiler.mov(cr, x86::dword_ptr(
+                        state, static_cast<std::int32_t>(offsetof(CpuState, cr))));
+                    compiler.and_(cr, imm(~cr_mask));
+                    compiler.or_(cr, value);
+                    compiler.mov(x86::dword_ptr(
+                        state, static_cast<std::int32_t>(offsetof(CpuState, cr))), cr);
+                }
                 break;
             }
             case Opcode::condition_bit_and:
