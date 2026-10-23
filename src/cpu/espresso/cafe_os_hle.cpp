@@ -101,6 +101,8 @@ constexpr std::uint32_t mem1_base_heap_index = 0U;
 constexpr std::uint32_t foreground_base_heap_index = 8U;
 constexpr std::uint32_t mem1_alias_base = 0xF4000000U;
 constexpr std::uint32_t mem1_size = 0x02000000U;
+constexpr std::uint32_t overlay_arena_base = 0xA0000000U;
+constexpr std::uint32_t overlay_arena_size = 448U * 1024U * 1024U;
 constexpr std::uint32_t mem2_expanded_heap_tag = 0x45585048U; // EXPH
 constexpr std::uint32_t mem2_expanded_heap_header_size = 0x54U;
 constexpr std::uint32_t mem2_expanded_heap_block_header_size = 0x14U;
@@ -1906,9 +1908,69 @@ void register_coreinit_hle(HleDispatcher& dispatcher)
         "coreinit",
         "OSIsEnabledOverlayArena",
         [](EspressoCore& core) {
-            // Affogato does not expose Cafe's application overlay arena. Since
-            // no enable path exists, its architectural enabled state is false.
-            core.state.gpr[3] = 0U;
+            core.state.gpr[3] = core.overlay_arena_enabled ? 1U : 0U;
+        });
+    dispatcher.register_function(
+        "coreinit",
+        "OSEnableOverlayArena",
+        [](EspressoCore& core) {
+            const std::uint32_t address_output = core.state.gpr[4];
+            const std::uint32_t size_output = core.state.gpr[5];
+            if (address_output == 0U || size_output == 0U ||
+                (static_cast<std::uint64_t>(address_output) + sizeof(std::uint32_t) >
+                 size_output &&
+                 static_cast<std::uint64_t>(size_output) + sizeof(std::uint32_t) >
+                 address_output))
+            {
+                throw HleExecutionError(
+                    "OSEnableOverlayArena received null or overlapping output pointers");
+            }
+
+            try
+            {
+                core.memory.validate_write_range(
+                    address_output, sizeof(std::uint32_t));
+                core.memory.validate_write_range(
+                    size_output, sizeof(std::uint32_t));
+            }
+            catch (const GuestMemoryFault&)
+            {
+                throw HleExecutionError(
+                    "OSEnableOverlayArena output pointer is outside writable guest memory");
+            }
+
+            if (!core.overlay_arena_enabled)
+            {
+                bool overlay_range_already_mapped = true;
+                try
+                {
+                    core.memory.validate_write_range(
+                        overlay_arena_base, overlay_arena_size);
+                }
+                catch (const GuestMemoryFault&)
+                {
+                    overlay_range_already_mapped = false;
+                }
+
+                if (!overlay_range_already_mapped)
+                {
+                    try
+                    {
+                        core.memory.map_region(
+                            overlay_arena_base, overlay_arena_size);
+                    }
+                    catch (const std::exception& error)
+                    {
+                        throw HleExecutionError(
+                            "OSEnableOverlayArena could not map the overlay range: " +
+                            std::string(error.what()));
+                    }
+                }
+                core.overlay_arena_enabled = true;
+            }
+
+            core.memory.write32_be(address_output, overlay_arena_base);
+            core.memory.write32_be(size_output, overlay_arena_size);
         });
     dispatcher.register_function(
         "coreinit",

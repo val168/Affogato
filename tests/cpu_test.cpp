@@ -15644,10 +15644,16 @@ void os_get_mem_bound_hle_tests()
 void os_is_enabled_overlay_arena_hle_tests()
 {
     constexpr std::uint32_t return_address = 0x02760C80U;
+    constexpr std::uint32_t overlay_begin = 0xA0000000U;
+    constexpr std::uint32_t overlay_size = 448U * 1024U * 1024U;
+    constexpr std::uint32_t address_output = 0x100U;
+    constexpr std::uint32_t size_output = 0x104U;
     EspressoCore core(0x1000U);
     register_coreinit_hle(core.hle);
     const std::uint32_t query =
         core.hle.bind_import("coreinit", "OSIsEnabledOverlayArena");
+    const std::uint32_t enable =
+        core.hle.bind_import("coreinit", "OSEnableOverlayArena");
     for (std::uint32_t reg = 3U; reg < core.state.gpr.size(); ++reg)
     {
         core.state.gpr[reg] = 0xA5000000U + reg;
@@ -15671,6 +15677,25 @@ void os_is_enabled_overlay_arena_hle_tests()
     }
     assert(core.state.cr == cr_before);
     assert(core.state.xer == xer_before);
+
+    core.state.gpr[3] = 1U;
+    core.state.gpr[4] = address_output;
+    core.state.gpr[5] = size_output;
+    core.state.cia = enable;
+    const RunResult enabled = core.run(1U);
+    assert(enabled.reason == StopReason::instruction_limit);
+    assert(enabled.steps == 1U);
+    assert(core.state.cia == return_address);
+    assert(core.memory.read32_be(address_output) == overlay_begin);
+    assert(core.memory.read32_be(size_output) == overlay_size);
+    assert(core.memory.read8(overlay_begin) == 0U);
+    core.memory.write8(overlay_begin, 0x5AU);
+    assert(core.memory.read8(overlay_begin) == 0x5AU);
+
+    core.state.gpr[3] = 0xDEADBEEFU;
+    core.state.cia = query;
+    assert(core.step() == StepResult::executed);
+    assert(core.state.gpr[3] == 1U);
 }
 
 void os_send_message_hle_tests()

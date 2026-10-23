@@ -11,7 +11,7 @@
 
 ## Secondary BOTW checkpoint
 
-- The loader relocates its HLE data/import windows when an RPX section overlaps the defaults (`a9e1130`). It handles `R_PPC_DTPMOD32` as module 1 and `R_PPC_DTPREL32` as the TLS symbol's module-relative offset (`fc8714a`, `a5f3ed2`). Latest BOTW run: entry `0x03AB62AC`, 26 sections, 858,013 guest instructions, stop CIA `0x0FF001A0`, GPR3 `1`, GPR4 `0`, GPR5 `1`; next blocker is `coreinit::OSEnableOverlayArena`. `OSGetMemBound(type=2)` returns the modeled synthetic MEM2 heap range through validated guest output pointers; OSReport printed the observed `00000008` message; and the overlay-arena query correctly reports disabled before the guest attempts to enable it. `OSSignalEvent` handled the 256 observed no-waiter signals by setting guest event state. This remains startup/runtime progress, not evidence of game rendering.
+- The loader relocates its HLE data/import windows when an RPX section overlaps the defaults (`a9e1130`). It handles `R_PPC_DTPMOD32` as module 1 and `R_PPC_DTPREL32` as the TLS symbol's module-relative offset (`fc8714a`, `a5f3ed2`). Latest BOTW run: entry `0x03AB62AC`, 26 sections, 860,172 guest instructions, stop CIA `0`, GPR3 `0`, GPR4 `4,194,304`, GPR5 `64`; stop is the known unsupported fetch `0x46524D48` after a null `bcctr`, not a decoded instruction. `OSEnableOverlayArena` mapped and exposed the guest overlay range at `0xA0000000` (448 MiB); execution then reached the same low-address FRMH/null-indirect-call failure already seen in WWHD. OSGetMemBound, OSReport and OSSignalEvent behavior is covered in prior entries. This remains startup/runtime progress, not evidence of game rendering.
 
 ## Graphics checkpoint
 
@@ -72,17 +72,18 @@
 - `6edcb72` - `hle: implement coreinit OSSignalEvent`
 - `33080db` - `hle: implement coreinit OSReport`
 - `a34912f` - `hle: implement coreinit OSGetMemBound`
-- pending - `hle: implement coreinit OSIsEnabledOverlayArena`
+- `5278234` - `hle: implement coreinit OSIsEnabledOverlayArena`
+- pending - `hle: implement coreinit OSEnableOverlayArena`
 
 ## Current test status
 
-- Debug and Release CMake/Ninja builds completed; CTest passed 2/2 in both configurations. Added OSEvent initialization/signal validation and fault tests, reservation-pair tests, bounded OSReport `%s`/`%%` formatting tests, OSGetMemBound MEM1/MEM2 output/validation tests, and overlay-query state tests. The opt-in hidden-window Vulkan RGBA8 upload smoke test passed in Debug and Release on the NVIDIA GeForce RTX 5070 Laptop GPU without validation warnings. WWHD remains at 6,080,538 instructions and the same null `bcctr` target. BOTW passes OSReport, OSGetMemBound, and 256 no-waiter OSSignalEvent calls before OSEnableOverlayArena.
+- Debug and Release CMake/Ninja builds completed; CTest passed 2/2 in both configurations. Added OSEvent initialization/signal validation and fault tests, reservation-pair tests, bounded OSReport `%s`/`%%` formatting tests, OSGetMemBound MEM1/MEM2 output/validation tests, and overlay arena mapping/state tests. The opt-in hidden-window Vulkan RGBA8 upload smoke test passed in Debug and Release on the NVIDIA GeForce RTX 5070 Laptop GPU without validation warnings. WWHD remains at 6,080,538 instructions and the same null `bcctr` target. BOTW enabled the 448 MiB overlay mapping and reaches the same null indirect-call signature.
 - Native `lfs` interpreter/JIT differential tests cover signed zero, finite values, a single subnormal, infinities, qNaN/sNaN, literal-zero `rA`, PS0/PS1 behavior, history, and transactional 4-byte memory faults. Native `lfd` tests cover raw big-endian values, literal-zero `rA`, PS1 preservation, and transactional 8-byte faults.
 - RPX diagnostics capture and print the latest 512 HLE calls and 64 PPC instructions. `--trace-hle <library::symbol>` filters the bounded trace to one exact HLE symbol. `--watch-write <guest-address>` opts into a bounded watch of a four-byte word, reporting overlapping writes, writer CIA, resulting big-endian word, local decoded code context, and all 32 GPRs at each matching write. `--dump-memory` provides bounded post-run BE-word inspection. All are diagnostic-only and disabled unless requested.
 
 ## Prioritized queue
 
-1. Investigate the contract and minimum truthful model for `OSEnableOverlayArena`; do not report it enabled unless a usable overlay address range is actually configured.
+1. Determine whether the shared `0x46524D48` fetch in BOTW and WWHD is caused by a missing guest initialization path or an incorrect runtime/HLE result; do not fabricate a callback or turn address zero into a valid call.
 2. Determine whether the WWHD null indirect callback is caused by a missing guest initialization path or an incorrect runtime/HLE result; do not fabricate a callback or turn address zero into a valid call.
 3. Audit actual guest shader, draw, and scan-buffer producers; the current WWHD run stops before any draw or texture-binding HLE is observed.
 4. Connect binding-time/command-ordered guest snapshots to the Vulkan texture uploader only when a correct guest use point is available; do not assume a bind-time snapshot remains valid through later writes.
