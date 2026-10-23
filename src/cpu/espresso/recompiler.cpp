@@ -934,6 +934,10 @@ struct BlockCode
     {
         return true;
     }
+    if (insn.opcode == Opcode::negate && insn.record)
+    {
+        return true;
+    }
     if (insn.opcode == Opcode::subtract_from_carrying)
     {
         return true;
@@ -964,6 +968,7 @@ struct BlockCode
     case Opcode::addi:
     case Opcode::addis:
     case Opcode::multiply_low_immediate:
+    case Opcode::negate:
     case Opcode::add_immediate_carry:
     case Opcode::subtract_from_immediate_carry:
     case Opcode::ori:
@@ -1061,6 +1066,7 @@ struct BlockCode
     case Opcode::addi: return "addi";
     case Opcode::addis: return "addis";
     case Opcode::multiply_low_immediate: return "mulli";
+    case Opcode::negate: return "neg";
     case Opcode::add_immediate_carry: return "addic";
     case Opcode::subtract_from_immediate_carry: return "subfic";
     case Opcode::ori: return "ori";
@@ -1662,6 +1668,46 @@ struct Recompiler::Impl
                 compiler.mov(x86::dword_ptr(context, static_cast<std::int32_t>(
                     record_base + offsetof(NativeMulliRecord, result))), result);
                 write_guest_gpr(insn.destination, result);
+                break;
+            }
+            case Opcode::negate:
+            {
+                x86::Gp result = compiler.new_gp32("neg_result");
+                compiler.mov(result, read_guest_gpr(insn.source));
+                compiler.neg(result);
+                write_guest_gpr(insn.destination, result);
+                if (insn.record)
+                {
+                    compiler.test(result, result);
+                    x86::Gp less = compiler.new_gp32("neg_cr0_lt");
+                    x86::Gp greater = compiler.new_gp32("neg_cr0_gt");
+                    x86::Gp equal = compiler.new_gp32("neg_cr0_eq");
+                    compiler.mov(less, imm(0U));
+                    compiler.setl(less.r8());
+                    compiler.mov(greater, imm(0U));
+                    compiler.setg(greater.r8());
+                    compiler.mov(equal, imm(0U));
+                    compiler.sete(equal.r8());
+                    compiler.shl(less, imm(3U));
+                    compiler.shl(greater, imm(2U));
+                    compiler.shl(equal, imm(1U));
+                    compiler.or_(less, greater);
+                    compiler.or_(less, equal);
+
+                    x86::Gp xer_so = compiler.new_gp32("neg_cr0_so");
+                    compiler.mov(xer_so, x86::dword_ptr(
+                        state, static_cast<std::int32_t>(offsetof(CpuState, xer))));
+                    compiler.shr(xer_so, imm(31U));
+                    compiler.or_(less, xer_so);
+                    compiler.shl(less, imm(28U));
+                    x86::Gp cr = compiler.new_gp32("neg_cr0");
+                    compiler.mov(cr, x86::dword_ptr(
+                        state, static_cast<std::int32_t>(offsetof(CpuState, cr))));
+                    compiler.and_(cr, imm(0x0FFFFFFFU));
+                    compiler.or_(cr, less);
+                    compiler.mov(x86::dword_ptr(
+                        state, static_cast<std::int32_t>(offsetof(CpuState, cr))), cr);
+                }
                 break;
             }
             case Opcode::add_immediate_carry:

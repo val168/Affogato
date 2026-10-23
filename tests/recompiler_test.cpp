@@ -279,6 +279,47 @@ void recompiler_mulli_differential_test()
     assert(history.destination_value == 0U);
 }
 
+void recompiler_neg_differential_test()
+{
+    constexpr std::uint32_t start = 0x100U;
+    const std::array<std::uint32_t, 3U> program{
+        x_form(3U, 3U, 0U, 104U),       // destination aliases source; INT_MIN wraps.
+        x_form(5U, 4U, 0U, 104U, true), // record -1, with SO already sticky.
+        x_form(7U, 0U, 0U, 104U, true), // GPR0 is the real source; result is zero.
+    };
+    EspressoCore interpreted(0x1000U);
+    EspressoCore compiled(0x1000U);
+    for (EspressoCore* core : {&interpreted, &compiled})
+    {
+        for (std::size_t index = 0; index < program.size(); ++index)
+        {
+            core->memory.write32_be(start + static_cast<std::uint32_t>(index * 4U),
+                                    program[index]);
+        }
+        core->state.cia = start;
+        core->state.gpr[0] = 0U;
+        core->state.gpr[3] = 0x80000000U;
+        core->state.gpr[4] = 1U;
+        core->state.cr = 0xA1B2C3D4U;
+        core->state.xer = 0xD2345678U;
+    }
+    const RunResult oracle = interpreted.run(program.size());
+    Recompiler recompiler;
+    const RunResult actual = recompiler.run(compiled, program.size());
+    assert(actual.reason == oracle.reason && actual.steps == program.size());
+    assert(actual.cia == oracle.cia);
+    assert(compiled.state.gpr == interpreted.state.gpr);
+    assert(compiled.state.gpr[3] == 0x80000000U);
+    assert(compiled.state.gpr[5] == 0xFFFFFFFFU);
+    assert(compiled.state.gpr[7] == 0U);
+    assert(compiled.state.cr == interpreted.state.cr);
+    assert((compiled.state.cr >> 28U) == 3U); // EQ plus the existing XER.SO.
+    assert(compiled.state.xer == interpreted.state.xer);
+    assert(recompiler.statistics().native_instructions == program.size());
+    assert(recompiler.statistics().interpreter_fallbacks == 0U);
+    assert(actual.instruction_history.back().opcode_name == "neg.");
+}
+
 void recompiler_cmpwi_differential_test()
 {
     constexpr std::uint32_t start = 0x100U;
@@ -4054,6 +4095,7 @@ int main()
     assert(std::string(opcode_mnemonic(Opcode::floating_multiply_add_double)) == "fmadd");
     recompiler_differential_arithmetic_test();
     recompiler_mulli_differential_test();
+    recompiler_neg_differential_test();
     recompiler_cmpwi_differential_test();
     recompiler_cmplwi_differential_test();
     recompiler_cmpw_differential_test();
