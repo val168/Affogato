@@ -26,6 +26,7 @@ struct NativeMemoryRecord
 {
     std::uint32_t address{};
     std::uint32_t value{};
+    std::uint64_t fp_value{};
     std::uint32_t base_value{};
     std::uint32_t index_value{};
     bool indexed{};
@@ -141,6 +142,51 @@ extern "C" std::uint32_t native_memory_access(
     }
 }
 
+extern "C" std::uint64_t native_load_double(
+    NativeExecutionContext* context,
+    std::uint32_t address,
+    std::uint32_t instruction_index) noexcept
+{
+    try
+    {
+        ++context->memory_access_calls;
+        if (instruction_index >= context->memory_records.size())
+        {
+            context->failed = true;
+            context->failed_address = address;
+            context->failed_width = 8U;
+            context->failed_instruction_index = instruction_index;
+            return 0U;
+        }
+        NativeMemoryRecord& record = context->memory_records[instruction_index];
+        record.address = address;
+        record.indexed = false;
+        record.fp_value = context->memory->read64_be(address);
+        return record.fp_value;
+    }
+    catch (...)
+    {
+        context->failed = true;
+        context->failed_address = address;
+        context->failed_width = 8U;
+        context->failed_flags = 0U;
+        context->failed_instruction_index = instruction_index;
+        context->exception = std::current_exception();
+        try
+        {
+            std::rethrow_exception(context->exception);
+        }
+        catch (const GuestMemoryFault&)
+        {
+            context->guest_memory_fault = true;
+        }
+        catch (...)
+        {
+        }
+        return 0U;
+    }
+}
+
 struct BlockCode
 {
     std::uint32_t address{};
@@ -152,6 +198,11 @@ struct BlockCode
 [[nodiscard]] constexpr std::size_t gpr_offset(std::uint8_t reg) noexcept
 {
     return offsetof(CpuState, gpr) + sizeof(std::uint32_t) * reg;
+}
+
+[[nodiscard]] constexpr std::size_t fpr_offset(std::uint8_t reg) noexcept
+{
+    return offsetof(CpuState, fpr) + sizeof(std::uint64_t) * reg;
 }
 
 [[nodiscard]] bool is_native_instruction(const DecodedInstruction& insn) noexcept
@@ -181,6 +232,7 @@ struct BlockCode
     case Opcode::load_byte_zero:
     case Opcode::load_halfword_zero:
     case Opcode::load_halfword_algebraic:
+    case Opcode::load_double:
     case Opcode::store_word:
     case Opcode::store_byte:
     case Opcode::store_halfword:
@@ -234,6 +286,7 @@ struct BlockCode
     case Opcode::load_byte_zero: return "lbz";
     case Opcode::load_halfword_zero: return "lhz";
     case Opcode::load_halfword_algebraic: return "lha";
+    case Opcode::load_double: return "lfd";
     case Opcode::store_word: return "stw";
     case Opcode::store_byte: return "stb";
     case Opcode::store_halfword: return "sth";
@@ -265,6 +318,7 @@ struct BlockCode
     case Opcode::load_byte_zero:
     case Opcode::load_halfword_zero:
     case Opcode::load_halfword_algebraic:
+    case Opcode::load_double:
     case Opcode::store_word:
     case Opcode::store_byte:
     case Opcode::store_halfword:
@@ -841,6 +895,59 @@ struct Recompiler::Impl
                 }
                 break;
             }
+            case Opcode::load_double:
+            {
+                const std::size_t record_base = offsetof(NativeExecutionContext, memory_records) +
+                    index * sizeof(NativeMemoryRecord);
+                const std::uint32_t cia = block.address +
+                    static_cast<std::uint32_t>(index * 4U);
+                x86::Gp address = compiler.new_gp32("lfd_address");
+                if (insn.base == 0U)
+                {
+                    compiler.mov(address, imm(0U));
+                }
+                else
+                {
+                    compiler.mov(address, read_guest_gpr(insn.base));
+                    compiler.mov(x86::dword_ptr(context, static_cast<std::int32_t>(
+                        record_base + offsetof(NativeMemoryRecord, base_value))), address);
+                }
+                compiler.add(address, imm(static_cast<std::uint32_t>(insn.immediate)));
+                compiler.mov(x86::dword_ptr(context, static_cast<std::int32_t>(
+                    offsetof(NativeExecutionContext, fault_cia))), imm(cia));
+
+                auto* invoke = static_cast<InvokeNode*>(nullptr);
+                const auto helper_address = static_cast<std::uint64_t>(
+                    reinterpret_cast<std::uintptr_t>(&native_load_double));
+                compiler.invoke(Out(invoke), helper_address,
+                    FuncSignature::build<std::uint64_t, NativeExecutionContext*,
+                        std::uint32_t, std::uint32_t>(CallConvId::kCDecl));
+                invoke->set_arg(0, context);
+                invoke->set_arg(1, address);
+                invoke->set_arg(2, imm(static_cast<std::uint32_t>(index)));
+                x86::Gp value = compiler.new_gp64("lfd_value");
+                invoke->set_ret(0, value);
+
+                x86::Gp failed = compiler.new_gp32("lfd_failed");
+                compiler.mov(failed, x86::byte_ptr(context, static_cast<std::int32_t>(
+                    offsetof(NativeExecutionContext, failed))));
+                compiler.test(failed, failed);
+                Label fault = compiler.new_label();
+                Label completed = compiler.new_label();
+                compiler.jnz(fault);
+                compiler.mov(x86::qword_ptr(state, static_cast<std::int32_t>(
+                    fpr_offset(insn.fp_register))), value);
+                compiler.jmp(completed);
+                compiler.bind(fault);
+                compiler.mov(x86::dword_ptr(state, static_cast<std::int32_t>(
+                    offsetof(CpuState, cia))), imm(cia));
+                flush_guest_gprs();
+                x86::Gp executed = compiler.new_gp32("lfd_completed_count");
+                compiler.mov(executed, imm(static_cast<std::uint32_t>(index)));
+                compiler.ret(executed);
+                compiler.bind(completed);
+                break;
+            }
             case Opcode::load_word_zero:
             case Opcode::load_byte_zero:
             case Opcode::load_halfword_zero:
@@ -1355,7 +1462,13 @@ RunResult Recompiler::run(EspressoCore& core, std::size_t max_steps)
                 entry.has_immediate = true;
                 entry.immediate = insn.immediate;
             }
-            if (is_memory_store(insn.opcode))
+            if (insn.opcode == Opcode::load_double)
+            {
+                entry.has_fp_destination = true;
+                entry.fp_destination_register = insn.fp_register;
+                entry.fp_destination_value = record.fp_value;
+            }
+            else if (is_memory_store(insn.opcode))
             {
                 entry.source_registers[entry.source_count] = insn.destination;
                 entry.source_values[entry.source_count++] = record.value;

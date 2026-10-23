@@ -4,7 +4,7 @@
 
 - RPX: `cking.rpx`; entry point `0x028EA9E0`; 24 sections.
 - Latest confirmed run: 6,080,538 guest instructions; stop CIA `0x00000000`; GPR3 `0`; stop is an unsupported fetch of `0x46524D48` after `bcctr` loaded CTR from a null callback field. The wider trace shows both the thread-specific candidate and the global object's `+0x10` candidate are null. `0x46524D48` is the synthetic `FRMH` header mirrored at low address zero by the MEM1 alias, so this is a null indirect call obscured by the current flat memory map, not a missing PPC opcode. The caller's object owner is still unidentified; do not synthesize a target.
-- Latest JIT run after native `rlwinm`: 3,618,170 native instructions, 2,462,369 interpreter fallbacks, 25,964 compiled blocks, 1,909,003 block-cache hits; guest execution 5.138 s. `rlwinm`'s previous 360,245 fallbacks are now native. Remaining top fallbacks: `lfd` 364,827; `lfs` 175,096; `fmadd` 149,463; `stfs` 127,192; `stwu` 107,842; `fmr` 98,684; `stfd` 97,997.
+- Latest JIT run after native `lfd`: 3,982,997 native instructions, 2,097,542 interpreter fallbacks, 25,966 compiled blocks, 1,877,543 block-cache hits; two guest runs measured 4.892 s and 4.881 s. `rlwinm`'s 360,245 and `lfd`'s 364,827 observed fallbacks now execute natively. Remaining top fallbacks: `lfs` 175,096; `fmadd` 149,463; `stfs` 127,192; `stwu` 107,842; `fmr` 98,684; `stfd` 97,997.
 - No unimplemented HLE was reached. `GX2InitTextureRegs` ran 13 times, along with the sampler initialization and existing GX2 state HLEs.
 
 ## Graphics checkpoint
@@ -45,13 +45,14 @@
 - `adbdc10` - `gpu: correct Latte 2D dimension handling`
 - `08225b2` - `jit: add native emission for CR logical operations`
 - `c678494` - `jit: report interpreter fallback hot spots`
-- `8ac29a7` - `jit: emit native rlwinm instructions`
+- `f60e130` - `jit: emit native rlwinm instructions` (pushed HEAD before this `lfd` iteration)
+- `ac4cd76` - `jit: emit native lfd loads`
 
 ## Current test status
 
 - Debug build: `build/debug-win-native`, Ninja; build is current.
 - Both freshly rebuilt Debug test executables passed (the MSYS `ctest` wrapper currently mangles Windows paths in this shell, so executables were run directly).
-- Native CR-logical and `rlwinm` interpreter/JIT differential tests pass. Latest WWHD diagnostic: 6,080,538 instructions; stop remains at CIA 0 with null `bcctr` target (`CTR=0`). RPX load 188 ms; guest execution 5,138 ms.
+- Native CR-logical, `rlwinm`, and `lfd` interpreter/JIT differential tests pass, including lfd big-endian raw values, rA=0, PS1 preservation, and transactional memory-fault handling. Latest WWHD diagnostic: 6,080,538 instructions; stop remains at CIA 0 with null `bcctr` target (`CTR=0`). RPX load 185–192 ms; guest execution 4,881–4,892 ms.
 
 ## Prioritized queue
 

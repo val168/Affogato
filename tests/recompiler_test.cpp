@@ -40,6 +40,15 @@ namespace
            (static_cast<std::uint32_t>(end) << 1U) | (record ? 1U : 0U);
 }
 
+[[nodiscard]] constexpr std::uint32_t lfd_form(
+    std::uint8_t destination, std::uint8_t base, std::int16_t displacement)
+{
+    return (50U << 26U) | (static_cast<std::uint32_t>(destination) << 21U) |
+           (static_cast<std::uint32_t>(base) << 16U) |
+           static_cast<std::uint16_t>(displacement);
+}
+
+
 void recompiler_differential_arithmetic_test()
 {
     EspressoCore interpreted(0x1000U);
@@ -256,6 +265,75 @@ void recompiler_rlwinm_differential_tests()
         }
     }
 }
+
+void recompiler_lfd_differential_tests()
+{
+    constexpr std::uint32_t start = 0x100U;
+    constexpr std::uint64_t ps1_sentinel = 0xDEADBEEF01234567ULL;
+    constexpr std::array<std::uint64_t, 4U> patterns{
+        0U, 0x8000000000000000ULL, 0x3FF0000000000000ULL,
+        0xFFF8123456789ABCULL};
+    for (std::size_t test_index = 0; test_index < patterns.size(); ++test_index)
+    {
+        EspressoCore interpreted(0x1000U);
+        EspressoCore compiled(0x1000U);
+        const std::uint8_t destination = 5U;
+        const std::uint8_t base = test_index == 1U ? 0U : 4U;
+        const std::int16_t displacement = test_index == 1U ? 0x80 : 0x18;
+        const std::uint32_t address = base == 0U
+            ? static_cast<std::uint32_t>(displacement)
+            : 0x218U;
+        for (EspressoCore* core : {&interpreted, &compiled})
+        {
+            core->memory.write32_be(start, lfd_form(destination, base, displacement));
+            core->memory.write64_be(address, patterns[test_index]);
+            core->state.cia = start;
+            core->state.gpr[0] = 0x400U;
+            core->state.gpr[4] = 0x200U;
+            core->state.fpr[destination] = 0xA5A5A5A5A5A5A5A5ULL;
+            core->state.fpr_ps1[destination] = ps1_sentinel;
+            core->state.cr = 0x76543210U;
+            core->state.xer = 0xE0000000U;
+            core->state.fpscr = 0x12345678U;
+        }
+
+        const RunResult oracle = interpreted.run(1U);
+        Recompiler recompiler;
+        const RunResult actual = recompiler.run(compiled, 1U);
+        assert(actual.steps == oracle.steps && actual.steps == 1U);
+        assert(actual.cia == oracle.cia);
+        assert(compiled.state.gpr == interpreted.state.gpr);
+        assert(compiled.state.fpr == interpreted.state.fpr);
+        assert(compiled.state.fpr_ps1 == interpreted.state.fpr_ps1);
+        assert(compiled.state.cr == interpreted.state.cr);
+        assert(compiled.state.xer == interpreted.state.xer);
+        assert(compiled.state.fpscr == interpreted.state.fpscr);
+        assert(compiled.state.fpr[destination] == patterns[test_index]);
+        assert(compiled.state.fpr_ps1[destination] == ps1_sentinel);
+        assert(recompiler.statistics().native_instructions == 1U);
+        assert(recompiler.statistics().interpreter_fallbacks == 0U);
+        const std::string history = format_instruction_history(actual);
+        assert(history.find("lfd") != std::string::npos);
+    }
+
+    EspressoCore faulting(0x1000U);
+    faulting.memory.write32_be(start, lfd_form(5U, 4U, 8));
+    faulting.state.cia = start;
+    faulting.state.gpr[4] = 0x1000U;
+    faulting.state.fpr[5] = 0xA5A5A5A5A5A5A5A5ULL;
+    faulting.state.fpr_ps1[5] = ps1_sentinel;
+    Recompiler recompiler;
+    const RunResult fault = recompiler.run(faulting, 1U);
+    assert(fault.reason == StopReason::memory_fault);
+    assert(fault.detail.find("read 8 byte(s) at guest address 0x00001008") !=
+           std::string::npos);
+    assert(faulting.state.fpr[5] == 0xA5A5A5A5A5A5A5A5ULL);
+    assert(faulting.state.fpr_ps1[5] == ps1_sentinel);
+    assert(!fault.instruction_history.empty());
+    assert(!fault.instruction_history.back().completed);
+    assert(fault.instruction_history.back().opcode_name == "lfd");
+}
+
 
 void recompiler_step_budget_test()
 {
@@ -694,6 +772,7 @@ int main()
     recompiler_logical_differential_test();
     recompiler_condition_bit_differential_tests();
     recompiler_rlwinm_differential_tests();
+    recompiler_lfd_differential_tests();
     recompiler_step_budget_test();
     recompiler_recent_history_window_test();
     recompiler_branch_test();
