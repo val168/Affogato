@@ -1075,6 +1075,32 @@ void guest_memory_tests()
     {
     }
 
+    GuestMemory watched_memory(0x100U);
+    watched_memory.write32_be(0x20U, 0U);
+    watched_memory.set_write_watchpoint(0x21U, 2U);
+    watched_memory.write8(0x1FU, 0xFFU); // Outside the watched range.
+    watched_memory.set_current_guest_cia(0x1234U);
+    watched_memory.write32_be(0x20U, 0xAABBCCDDU);
+    watched_memory.set_current_guest_cia(0x1238U);
+    watched_memory.write_bytes(0x21U,
+        std::array<std::uint8_t, 2U>{0x12U, 0x34U});
+    watched_memory.set_current_guest_cia(0x123CU);
+    watched_memory.fill_bytes(0x21U, 1U, 0x56U);
+    const auto watched_writes = watched_memory.write_watch_events_snapshot();
+    assert(watched_writes.size() == 3U);
+    assert(watched_writes[0].access_address == 0x20U);
+    assert(watched_writes[0].writer_cia == 0x1234U);
+    assert(watched_writes[0].access_width == 4U);
+    assert(watched_writes[0].watched_address == 0x21U);
+    assert(watched_writes[0].watched_width == 2U);
+    assert(watched_writes[0].watched_value == 0xBBCCU);
+    assert(watched_writes[1].access_address == 0x21U);
+    assert(watched_writes[1].writer_cia == 0x1238U);
+    assert(watched_writes[1].watched_value == 0x1234U);
+    assert(watched_writes[2].access_address == 0x21U);
+    assert(watched_writes[2].writer_cia == 0x123CU);
+    assert(watched_writes[2].watched_value == 0x5634U);
+
     memory.map_region(0xC0000000U, 0x20);
     memory.write32_be(0xC0000018U, 0x03F00024U);
     assert(memory.read32_be(0xC0000018U) == 0x03F00024U);
@@ -1200,6 +1226,21 @@ void interpreter_tests()
     assert(ring_result.instruction_history.back().cia ==
            (ring_instruction_count - 1U) * 4U);
     assert(ring_core.state.gpr[3] == ring_instruction_count);
+
+    EspressoCore watched_store_core(0x1000U);
+    watched_store_core.memory.write32_be(0x100U, 0x90A40000U); // stw r5, 0(r4)
+    watched_store_core.state.cia = 0x100U;
+    watched_store_core.state.gpr[4] = 0x200U;
+    watched_store_core.state.gpr[5] = 0xAABBCCDDU;
+    watched_store_core.memory.set_write_watchpoint(0x200U, 4U);
+    const RunResult watched_store_result = watched_store_core.run(1U);
+    assert(watched_store_result.steps == 1U);
+    const auto watched_store_events =
+        watched_store_core.memory.write_watch_events_snapshot();
+    assert(watched_store_events.size() == 1U);
+    assert(watched_store_events[0].writer_cia == 0x100U);
+    assert(watched_store_events[0].access_address == 0x200U);
+    assert(watched_store_events[0].watched_value == 0xAABBCCDDU);
 
     EspressoCore fault_core(0x1000U);
     fault_core.memory.write32_be(0, 0x80640000U); // lwz r3, 0(r4)

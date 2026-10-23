@@ -2340,6 +2340,10 @@ std::string format_instruction_history(const RunResult& result)
 StepResult EspressoCore::step()
 {
     const std::uint32_t cia = state.cia;
+    if (memory.has_write_watchpoint())
+    {
+        memory.set_current_guest_cia(cia);
+    }
     current_instruction_word_fetched_ = false;
     has_pending_history_entry_ = false;
     switch (hle.dispatch(*this, cia))

@@ -36,6 +36,7 @@ struct NativeMemoryRecord
 struct NativeExecutionContext
 {
     GuestMemory* memory{};
+    std::uint32_t block_cia{};
     std::array<NativeMemoryRecord, 64> memory_records{};
     std::uint64_t memory_access_calls{};
     bool failed{};
@@ -73,6 +74,11 @@ extern "C" std::uint32_t native_memory_access(
             return 0U;
         }
         NativeMemoryRecord& record = context->memory_records[instruction_index];
+        if (context->memory->has_write_watchpoint())
+        {
+            context->memory->set_current_guest_cia(
+                context->block_cia + instruction_index * 4U);
+        }
         record.address = address;
         record.indexed = (flags & 4U) != 0U;
         record.value = value;
@@ -1534,6 +1540,7 @@ RunResult Recompiler::run(EspressoCore& core, std::size_t max_steps)
 
         NativeExecutionContext context{};
         context.memory = &core.memory;
+        context.block_cia = block->address;
 #ifndef NDEBUG
         const auto native_start = std::chrono::steady_clock::now();
 #endif

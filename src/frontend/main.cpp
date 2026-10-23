@@ -374,12 +374,14 @@ int run_rpx_diagnostic(int argc, char* argv[])
     if (argc < 3)
     {
         std::cerr << "Usage: AffogatoFrontend.exe --run-rpx <file.rpx> "
-                     "[--recompiler] [--limit <instructions>]\n";
+                     "[--recompiler] [--limit <instructions>] "
+                     "[--watch-write <guest-address>]\n";
         return 2;
     }
 
     affogato::ExecutionMode mode = affogato::ExecutionMode::interpreter;
     std::size_t instruction_limit = 5'000'000'000ULL;
+    std::optional<std::uint32_t> watched_guest_write_address;
     for (int index = 3; index < argc; ++index)
     {
         const std::string_view argument(argv[index]);
@@ -395,6 +397,20 @@ int run_rpx_diagnostic(int argc, char* argv[])
                 throw std::invalid_argument("--limit must be in [1, SIZE_MAX]");
             }
             instruction_limit = static_cast<std::size_t>(parsed);
+        }
+        else if (argument == "--watch-write" && index + 1 < argc)
+        {
+            const std::string_view address_text(argv[++index]);
+            std::size_t parsed_length = 0U;
+            const unsigned long long parsed =
+                std::stoull(std::string(address_text), &parsed_length, 0);
+            if (parsed_length != address_text.size() ||
+                parsed > std::numeric_limits<std::uint32_t>::max())
+            {
+                throw std::invalid_argument(
+                    "--watch-write requires a 32-bit guest address");
+            }
+            watched_guest_write_address = static_cast<std::uint32_t>(parsed);
         }
         else
         {
@@ -431,6 +447,11 @@ int run_rpx_diagnostic(int argc, char* argv[])
     const auto load_start = std::chrono::steady_clock::now();
     const auto image = emulator.load_rpx(
         bytes, path.parent_path().parent_path() / "content");
+    if (watched_guest_write_address.has_value())
+    {
+        emulator.core().memory.set_write_watchpoint(
+            *watched_guest_write_address, sizeof(std::uint32_t));
+    }
     emulator.core().hle.set_recent_call_trace_enabled(true);
     const auto load_end = std::chrono::steady_clock::now();
     const auto load_time = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -502,6 +523,45 @@ int run_rpx_diagnostic(int argc, char* argv[])
                   << emulator.core().state.gpr[reg] << std::dec;
     }
     std::cout << '\n';
+    if (watched_guest_write_address.has_value())
+    {
+        const auto watched_writes =
+            emulator.core().memory.write_watch_events_snapshot();
+        std::cout << "Guest-memory write watch at 0x" << std::hex
+                  << std::uppercase << *watched_guest_write_address << std::dec
+                  << ": " << watched_writes.size() << " overlapping write(s)\n";
+        for (const auto& event : watched_writes)
+        {
+            std::cout << "  CIA 0x" << std::hex << std::uppercase
+                      << event.writer_cia << " access 0x"
+                      << event.access_address << "+0x" << event.access_width
+                      << " -> watched value 0x" << event.watched_value
+                      << std::dec << '\n';
+            for (std::int32_t offset = -32; offset <= 32; offset += 4)
+            {
+                const std::uint32_t cia = event.writer_cia +
+                    static_cast<std::uint32_t>(offset);
+                try
+                {
+                    const std::uint32_t word =
+                        emulator.core().memory.read32_be(cia);
+                    const auto instruction =
+                        affogato::cpu::espresso::decode(word);
+                    std::cout << "    0x" << std::hex << std::uppercase << cia
+                              << (cia == event.writer_cia ? " * " : "   ")
+                              << "0x" << word << ' '
+                              << affogato::cpu::espresso::opcode_mnemonic(
+                                     instruction.opcode)
+                              << std::dec << '\n';
+                }
+                catch (const std::exception&)
+                {
+                    std::cout << "    0x" << std::hex << std::uppercase << cia
+                              << "   <unmapped>" << std::dec << '\n';
+                }
+            }
+        }
+    }
     if (result.execution.hle_call == "coreinit::OSReceiveMessage")
     {
         const std::uint32_t queue = emulator.core().state.gpr[3];

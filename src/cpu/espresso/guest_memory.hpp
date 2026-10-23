@@ -3,9 +3,11 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace affogato::cpu::espresso
@@ -15,6 +17,16 @@ enum class GuestMemoryAccess
 {
     read,
     write,
+};
+
+struct GuestMemoryWriteWatchEvent
+{
+    std::uint32_t writer_cia{};
+    std::uint32_t access_address{};
+    std::size_t access_width{};
+    std::uint32_t watched_address{};
+    std::size_t watched_width{};
+    std::uint64_t watched_value{};
 };
 
 class GuestMemoryFault : public std::out_of_range
@@ -53,6 +65,33 @@ public:
     [[nodiscard]] std::uint64_t write_generation() const noexcept
     {
         return write_generation_;
+    }
+
+    void set_write_watchpoint(std::uint32_t address, std::size_t width)
+    {
+        if (width == 0U || width > sizeof(std::uint64_t))
+        {
+            throw std::invalid_argument("guest memory watch width must be in [1, 8]");
+        }
+        validate_access(address, width, GuestMemoryAccess::read);
+        write_watchpoint_ = std::pair{address, width};
+        write_watch_events_.clear();
+    }
+
+    [[nodiscard]] bool has_write_watchpoint() const noexcept
+    {
+        return write_watchpoint_.has_value();
+    }
+
+    void set_current_guest_cia(std::uint32_t cia) noexcept
+    {
+        current_guest_cia_ = cia;
+    }
+
+    [[nodiscard]] std::vector<GuestMemoryWriteWatchEvent>
+    write_watch_events_snapshot() const
+    {
+        return write_watch_events_;
     }
 
     [[nodiscard]] std::uint64_t page_write_generation(
@@ -172,12 +211,14 @@ public:
             bytes_[address] = value;
             ++write_generation_;
             mark_page_written(address / guest_page_size);
+            record_write_watch_event(address, 1U);
             return;
         }
         validate_access(address, 1, GuestMemoryAccess::write);
         storage_from(address)[0] = value;
         ++write_generation_;
         mark_page_written(address / guest_page_size);
+        record_write_watch_event(address, 1U);
     }
 
     void write_bytes(std::uint32_t address, std::span<const std::uint8_t> values)
@@ -198,6 +239,7 @@ public:
         {
             ++write_generation_;
             mark_pages_written(address, values.size());
+            record_write_watch_event(address, values.size());
         }
     }
 
@@ -252,6 +294,7 @@ public:
         }
         ++write_generation_;
         mark_pages_written(address, length);
+        record_write_watch_event(address, length);
     }
 
     void zero_fill(std::uint32_t address, std::size_t length)
@@ -345,6 +388,7 @@ public:
             bytes_[address + 1U] = static_cast<std::uint8_t>(value);
             ++write_generation_;
             mark_pages_written(address, sizeof(std::uint16_t));
+            record_write_watch_event(address, sizeof(std::uint16_t));
             return;
         }
         validate_access(address, sizeof(std::uint16_t), GuestMemoryAccess::write);
@@ -361,6 +405,7 @@ public:
         }
         ++write_generation_;
         mark_pages_written(address, sizeof(std::uint16_t));
+        record_write_watch_event(address, sizeof(std::uint16_t));
     }
 
     void write32_be(std::uint32_t address, std::uint32_t value)
@@ -373,6 +418,7 @@ public:
             bytes_[address + 3U] = static_cast<std::uint8_t>(value);
             ++write_generation_;
             mark_pages_written(address, sizeof(std::uint32_t));
+            record_write_watch_event(address, sizeof(std::uint32_t));
             return;
         }
         validate_access(address, sizeof(std::uint32_t), GuestMemoryAccess::write);
@@ -385,6 +431,7 @@ public:
             first_segment[3] = static_cast<std::uint8_t>(value);
             ++write_generation_;
             mark_pages_written(address, sizeof(std::uint32_t));
+            record_write_watch_event(address, sizeof(std::uint32_t));
             return;
         }
         for (std::uint32_t byte = 0; byte < sizeof(std::uint32_t); ++byte)
@@ -395,6 +442,7 @@ public:
         }
         ++write_generation_;
         mark_pages_written(address, sizeof(std::uint32_t));
+        record_write_watch_event(address, sizeof(std::uint32_t));
     }
 
     void write64_be(std::uint32_t address, std::uint64_t value)
@@ -408,6 +456,7 @@ public:
             }
             ++write_generation_;
             mark_pages_written(address, sizeof(std::uint64_t));
+            record_write_watch_event(address, sizeof(std::uint64_t));
             return;
         }
         validate_access(address, sizeof(std::uint64_t), GuestMemoryAccess::write);
@@ -421,6 +470,7 @@ public:
             }
             ++write_generation_;
             mark_pages_written(address, sizeof(std::uint64_t));
+            record_write_watch_event(address, sizeof(std::uint64_t));
             return;
         }
         for (std::uint32_t byte = 0; byte < sizeof(std::uint64_t); ++byte)
@@ -431,10 +481,43 @@ public:
         }
         ++write_generation_;
         mark_pages_written(address, sizeof(std::uint64_t));
+        record_write_watch_event(address, sizeof(std::uint64_t));
     }
 
 private:
     static constexpr std::uint32_t guest_page_size = 0x1000U;
+    static constexpr std::size_t write_watch_event_capacity = 256U;
+
+    void record_write_watch_event(std::uint32_t address, std::size_t width)
+    {
+        if (!write_watchpoint_.has_value())
+        {
+            return;
+        }
+
+        const auto [watched_address, watched_width] = *write_watchpoint_;
+        const std::uint64_t access_end = static_cast<std::uint64_t>(address) + width;
+        const std::uint64_t watched_end =
+            static_cast<std::uint64_t>(watched_address) + watched_width;
+        if (address >= watched_end || watched_address >= access_end)
+        {
+            return;
+        }
+
+        std::uint64_t watched_value = 0U;
+        for (std::size_t byte = 0U; byte < watched_width; ++byte)
+        {
+            watched_value = (watched_value << 8U) |
+                read8(watched_address + static_cast<std::uint32_t>(byte));
+        }
+        if (write_watch_events_.size() == write_watch_event_capacity)
+        {
+            write_watch_events_.erase(write_watch_events_.begin());
+        }
+        write_watch_events_.push_back({
+            current_guest_cia_, address, width, watched_address,
+            watched_width, watched_value});
+    }
 
     [[nodiscard]] bool is_flat_range(
         std::uint32_t address, std::size_t width) const noexcept
@@ -632,6 +715,9 @@ private:
     std::vector<std::uint64_t> flat_page_write_generations_;
     std::unordered_map<std::uint32_t, std::uint64_t> sparse_page_write_generations_;
     std::uint64_t write_generation_{};
+    std::optional<std::pair<std::uint32_t, std::size_t>> write_watchpoint_;
+    std::vector<GuestMemoryWriteWatchEvent> write_watch_events_;
+    std::uint32_t current_guest_cia_{};
 };
 
 }

@@ -592,6 +592,23 @@ void recompiler_interpreter_fallback_test()
 
 void recompiler_memory_tests()
 {
+    EspressoCore watched_store(0x1000U);
+    watched_store.memory.write32_be(0x100U, 0x90A40000U); // stw r5, 0(r4)
+    watched_store.state.cia = 0x100U;
+    watched_store.state.gpr[4] = 0x200U;
+    watched_store.state.gpr[5] = 0xAABBCCDDU;
+    watched_store.memory.set_write_watchpoint(0x200U, 4U);
+    Recompiler watched_store_recompiler;
+    const RunResult watched_store_result = watched_store_recompiler.run(
+        watched_store, 1U);
+    assert(watched_store_result.steps == 1U);
+    const auto watched_store_events =
+        watched_store.memory.write_watch_events_snapshot();
+    assert(watched_store_events.size() == 1U);
+    assert(watched_store_events[0].writer_cia == 0x100U);
+    assert(watched_store_events[0].access_address == 0x200U);
+    assert(watched_store_events[0].watched_value == 0xAABBCCDDU);
+
     EspressoCore interpreted(0x1000U);
     EspressoCore compiled(0x1000U);
     const std::array<std::uint32_t, 7> program{
