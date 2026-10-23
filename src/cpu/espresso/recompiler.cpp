@@ -275,6 +275,8 @@ struct BlockCode
     case Opcode::bitwise_and:
     case Opcode::bitwise_xor:
     case Opcode::compare_signed_immediate:
+    case Opcode::compare_signed_register:
+    case Opcode::compare_unsigned_register:
     case Opcode::branch:
     case Opcode::conditional_branch:
     case Opcode::conditional_branch_to_link_register:
@@ -331,6 +333,8 @@ struct BlockCode
     case Opcode::bitwise_and: return "and";
     case Opcode::bitwise_xor: return "xor";
     case Opcode::compare_signed_immediate: return "cmpwi";
+    case Opcode::compare_signed_register: return "cmpw";
+    case Opcode::compare_unsigned_register: return "cmplw";
     case Opcode::branch: return "b";
     case Opcode::conditional_branch: return "bc";
     case Opcode::conditional_branch_to_link_register: return "bclr";
@@ -705,9 +709,20 @@ struct Recompiler::Impl
                 break;
             }
             case Opcode::compare_signed_immediate:
+            case Opcode::compare_signed_register:
+            case Opcode::compare_unsigned_register:
             {
                 x86::Gp lhs = read_guest_gpr(insn.base);
-                compiler.cmp(lhs, imm(static_cast<std::uint32_t>(insn.immediate)));
+                if (insn.opcode == Opcode::compare_signed_immediate)
+                {
+                    compiler.cmp(lhs, imm(static_cast<std::uint32_t>(insn.immediate)));
+                }
+                else
+                {
+                    compiler.cmp(lhs, read_guest_gpr(insn.source));
+                }
+                const bool signed_compare =
+                    insn.opcode != Opcode::compare_unsigned_register;
 
                 // SETcc writes only the low byte, so zero-extend each result
                 // before combining the PPC LT/GT/EQ bits.
@@ -715,9 +730,11 @@ struct Recompiler::Impl
                 x86::Gp greater = compiler.new_gp32("cmp_greater");
                 x86::Gp equal = compiler.new_gp32("cmp_equal");
                 compiler.mov(less, imm(0));
-                compiler.setl(less.r8());
+                if (signed_compare) compiler.setl(less.r8());
+                else compiler.setb(less.r8());
                 compiler.mov(greater, imm(0));
-                compiler.setg(greater.r8());
+                if (signed_compare) compiler.setg(greater.r8());
+                else compiler.seta(greater.r8());
                 compiler.mov(equal, imm(0));
                 compiler.sete(equal.r8());
 
