@@ -547,7 +547,7 @@ int run_rpx_diagnostic(int argc, char* argv[])
         std::cout << "  " << statistic.name << ": " << statistic.calls << '\n';
     }
     const auto recent_hle_calls = emulator.core().hle.recent_call_trace_snapshot();
-    constexpr std::size_t recent_hle_display_count = 16U;
+    constexpr std::size_t recent_hle_display_count = 64U;
     const std::size_t first_recent_hle = recent_hle_calls.size() > recent_hle_display_count
         ? recent_hle_calls.size() - recent_hle_display_count
         : 0U;

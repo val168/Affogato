@@ -51,13 +51,14 @@
 - `a34c5c0` - `jit: report compile and execution timings`
 - `35de871` - `jit: emit native lfs loads`
 - `e1e3744` - `debug: trace recent HLE calls in RPX diagnostics`
-- pending - `gpu: upload staged RGBA8 textures to Vulkan`
+- `10f2751` - `gpu: upload staged RGBA8 textures to Vulkan`
+- pending - `debug: print full recent HLE trace`
 
 ## Current test status
 
 - Debug and Release CMake/Ninja builds completed; CTest passed 2/2 in both configurations. The opt-in hidden-window Vulkan RGBA8 upload smoke test passed in Debug and Release on the NVIDIA GeForce RTX 5070 Laptop GPU without validation warnings. Debug and Release WWHD remain at 6,080,538 instructions and the same null `bcctr` target. Release RPX load was 91 ms; guest execution was 1.134 s in the latest run.
 - Native `lfs` interpreter/JIT differential tests cover signed zero, finite values, a single subnormal, infinities, qNaN/sNaN, literal-zero `rA`, PS0/PS1 behavior, history, and transactional 4-byte memory faults. Native `lfd` tests cover raw big-endian values, literal-zero `rA`, PS1 preservation, and transactional 8-byte faults.
-- RPX diagnostics capture the latest 64 HLE calls (guest arguments, resulting GPR3-r8, call/return addresses and completion) and print the last 16. Tracing is opt-in and enabled only by `--run-rpx`; ordinary frontend execution does not pay the per-HLE recording cost. Calls immediately before the current stop are GX2 surface/sampler initialization and size queries; there is no HLE adjacent to the null `bcctr`.
+- RPX diagnostics capture and print the latest 64 HLE calls (guest arguments, resulting GPR3-r8, call/return addresses and completion). Tracing is opt-in and enabled only by `--run-rpx`; ordinary frontend execution does not pay the per-HLE recording cost. Calls immediately before the current stop are GX2 surface/sampler initialization and size queries; there is no HLE adjacent to the null `bcctr`.
 
 ## Prioritized queue
 
