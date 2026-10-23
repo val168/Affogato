@@ -355,6 +355,7 @@ struct BlockCode
     case Opcode::move_from_count_register:
     case Opcode::move_to_count_register:
     case Opcode::move_from_xer:
+    case Opcode::move_to_xer:
     case Opcode::load_word_zero:
     case Opcode::load_byte_zero:
     case Opcode::load_halfword_zero:
@@ -421,6 +422,7 @@ struct BlockCode
     case Opcode::move_from_count_register: return "mfctr";
     case Opcode::move_to_count_register: return "mtctr";
     case Opcode::move_from_xer: return "mfxer";
+    case Opcode::move_to_xer: return "mtxer";
     case Opcode::load_word_zero: return "lwz";
     case Opcode::load_byte_zero: return "lbz";
     case Opcode::load_halfword_zero: return "lhz";
@@ -1365,12 +1367,14 @@ struct Recompiler::Impl
             case Opcode::move_from_xer:
             case Opcode::move_to_link_register:
             case Opcode::move_to_count_register:
+            case Opcode::move_to_xer:
             {
                 const std::size_t special_offset =
                     insn.opcode == Opcode::move_from_link_register ||
                     insn.opcode == Opcode::move_to_link_register
                     ? offsetof(CpuState, lr)
-                    : insn.opcode == Opcode::move_from_xer
+                    : insn.opcode == Opcode::move_from_xer ||
+                      insn.opcode == Opcode::move_to_xer
                         ? offsetof(CpuState, xer)
                         : offsetof(CpuState, ctr);
                 if (insn.opcode == Opcode::move_from_link_register ||

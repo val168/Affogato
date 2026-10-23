@@ -10,6 +10,7 @@
 - Native JIT `mtcrf` updates only mask-selected CR fields from the source GPR. Differential tests exercise all 256 field masks, including `rS=r0`, and compare all relevant state against the interpreter. Debug and Release CTest pass; WWHD/BOTW stop states and aggregate counters remain unchanged, so this is JIT coverage rather than a measured workload speedup.
 - Native JIT `mcrxr` copies XER[SO,OV,CA] into the selected CR field and clears the transferred XER summary bits. Differential tests cover all eight destination fields, multiple SO/OV/CA combinations, and unrelated low XER bits. Both games retain their checkpoints; this instruction is not reached in either current startup run.
 - Native JIT `mfxer` now copies the complete XER word into any GPR; differential tests cover all destination GPRs and representative XER patterns. Both game checkpoints and aggregate instruction/fallback counts are unchanged.
+- Native JIT `mtxer` now writes the selected GPR value to XER; differential tests cover all 32 source registers and varied 32-bit values. Both game checkpoints and aggregate counters remain unchanged.
 - The null-target investigation found the watched global `0x10208B64` is cleared by a single guest bulk-zero operation, and WUT confirms `OSThread::specific` begins at `+0x57C`, matching the existing HLE. The guest path then resolves a non-null TSS object and reaches virtual method `0x0276058C`; the callback field is still written as zero by the guest caller. This narrows the cause to that guest virtual-method path, not the thread-specific HLE offset; no target was fabricated.
 - Latest JIT run after native `lfs`: 4,158,093 native instructions, 1,922,446 interpreter fallbacks, 22,956 compiled blocks, 1,882,460 block-cache hits. Release guest time across three runs: 1.148/1.146/1.182 s versus 1.322/1.257/1.359 s before `lfs`; medians 1.148 s versus 1.322 s (13.2% lower guest time). Host total medians were 1.340 s versus 1.511 s. The 175,096 `lfs` fallbacks now execute natively. Remaining top fallbacks: `fmadd` 149,463; `stfs` 127,192; `stwu` 107,842; `fmr` 98,684; `stfd` 97,997; `cmpwi` 94,017; `slw` 87,439.
 - No unimplemented HLE was reached. `GX2InitTextureRegs` ran 13 times, along with the sampler initialization and existing GX2 state HLEs.
@@ -62,6 +63,7 @@
 - `341805a` - `jit: emit native mfcr`
 - `efa5370` - `jit: emit native mtcrf`
 - `4195aaa` - `jit: emit native mcrxr`
+- `a2ec04b` - `jit: emit native mfxer`
 - `c678494` - `jit: report interpreter fallback hot spots`
 - `f60e130` - `jit: emit native rlwinm instructions` (pushed HEAD before this `lfd` iteration)
 - `1a2a49f` - `jit: emit native lfd loads`
@@ -95,7 +97,7 @@
 
 ## Current test status
 
-- Debug and Release builds completed. Native Windows CTest passed 2/2 in both configurations. Differential tests cover `cmpwi`, `cmpw`, `cmplw`, `fcmpu`, `subfic`, `addic`/`addic.`, `mcrf`, `mfcr`, `mtcrf` (all 256 masks), `mcrxr`, `mfxer`, and record-form logical OR/AND/XOR; the direct lookup cache has a two-block loop test and existing self-modifying-code invalidation coverage. Latest WWHD/BOTW counters and stops are recorded above. Neither game showed a semantic regression. Timings remain observations only. Earlier OSEvent, reservation, OSReport, OSGetMemBound, overlay arena, Vulkan upload, and texture-staging tests remain covered as documented above.
+- Debug and Release builds completed. Native Windows CTest passed 2/2 in both configurations. Differential tests cover `cmpwi`, `cmpw`, `cmplw`, `fcmpu`, `subfic`, `addic`/`addic.`, `mcrf`, `mfcr`, `mtcrf` (all 256 masks), `mcrxr`, `mfxer`, `mtxer`, and record-form logical OR/AND/XOR; the direct lookup cache has a two-block loop test and existing self-modifying-code invalidation coverage. Latest WWHD/BOTW counters and stops are recorded above. Neither game showed a semantic regression. Timings remain observations only. Earlier OSEvent, reservation, OSReport, OSGetMemBound, overlay arena, Vulkan upload, and texture-staging tests remain covered as documented above.
 - Native `lfs` interpreter/JIT differential tests cover signed zero, finite values, a single subnormal, infinities, qNaN/sNaN, literal-zero `rA`, PS0/PS1 behavior, history, and transactional 4-byte memory faults. Native `lfd` tests cover raw big-endian values, literal-zero `rA`, PS1 preservation, and transactional 8-byte faults.
 - RPX diagnostics capture and print the latest 512 HLE calls and 64 PPC instructions. `--trace-hle <library::symbol>` filters the bounded trace to one exact HLE symbol. `--watch-write <guest-address>` opts into a bounded watch of a four-byte word, reporting overlapping writes, writer CIA, resulting big-endian word, local decoded code context, and all 32 GPRs at each matching write. `--dump-memory` provides bounded post-run BE-word inspection. All are diagnostic-only and disabled unless requested.
 
