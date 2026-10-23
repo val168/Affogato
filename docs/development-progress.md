@@ -11,7 +11,7 @@
 
 ## Secondary BOTW checkpoint
 
-- The loader relocates its HLE data/import windows when an RPX section overlaps the defaults (`a9e1130`). It handles `R_PPC_DTPMOD32` as module 1 and `R_PPC_DTPREL32` as the TLS symbol's module-relative offset (`fc8714a`, `a5f3ed2`). Latest BOTW run: entry `0x03AB62AC`, 26 sections, 540,444 guest instructions, stop CIA `0x0FF002B8`, GPR3 `0x104DED54`; the next blocker is unimplemented `coreinit::OSSignalEvent(event=0x104DED54)`. The `lwarx` at `0x0346C38C` and paired `stwcx.` at `0x0346C390` both execute successfully; the atomic sequence now advances through event initialization/signaling setup. This remains startup/runtime progress, not evidence of game rendering.
+- The loader relocates its HLE data/import windows when an RPX section overlaps the defaults (`a9e1130`). It handles `R_PPC_DTPMOD32` as module 1 and `R_PPC_DTPREL32` as the TLS symbol's module-relative offset (`fc8714a`, `a5f3ed2`). Latest BOTW run: entry `0x03AB62AC`, 26 sections, 844,455 guest instructions, stop CIA `0x0FF00270`, GPR3 `0x10245588`; the next blocker is `coreinit::OSReport`. The observed diagnostic is `OSReport("%s", "00000008\\n")`, not a status-returning operation. `OSSignalEvent` handles the 256 observed no-waiter signals by setting guest event state; it reports an HLE error if a nonempty waiter queue requires the not-yet-modeled scheduler wake path. This remains startup/runtime progress, not evidence of game rendering.
 
 ## Graphics checkpoint
 
@@ -68,19 +68,21 @@
 - `fc8714a` - `loader: implement PPC TLS module ID relocation`
 - `a5f3ed2` - `loader: implement PPC TLS symbol offset relocation`
 - `5d3387b` - `hle: implement coreinit OSInitEvent`
-- pending - `cpu: implement lwarx and stwcx.`
+- `5798d18` - `cpu: implement lwarx and stwcx.`
+- pending - `hle: implement coreinit OSSignalEvent`
 
 ## Current test status
 
-- Debug and Release CMake/Ninja builds completed; CTest passed 2/2 in both configurations. Added OSEvent layout/reset/validation/fault tests and reservation-pair tests covering successful and failed stores, CR0/SO, aliases, and memory faults. The opt-in hidden-window Vulkan RGBA8 upload smoke test passed in Debug and Release on the NVIDIA GeForce RTX 5070 Laptop GPU without validation warnings. WWHD remains at 6,080,538 instructions and the same null `bcctr` target. BOTW passes `OSInitEvent` and its `lwarx`/`stwcx.` sequence, then reaches `OSSignalEvent`.
+- Debug and Release CMake/Ninja builds completed; CTest passed 2/2 in both configurations. Added OSEvent initialization/signal validation and fault tests, plus reservation-pair tests covering successful and failed stores, CR0/SO, aliases, and memory faults. The opt-in hidden-window Vulkan RGBA8 upload smoke test passed in Debug and Release on the NVIDIA GeForce RTX 5070 Laptop GPU without validation warnings. WWHD remains at 6,080,538 instructions and the same null `bcctr` target. BOTW passes `OSInitEvent`, its `lwarx`/`stwcx.` sequence, and 256 `OSSignalEvent` calls before diagnostic-only `OSReport`.
 - Native `lfs` interpreter/JIT differential tests cover signed zero, finite values, a single subnormal, infinities, qNaN/sNaN, literal-zero `rA`, PS0/PS1 behavior, history, and transactional 4-byte memory faults. Native `lfd` tests cover raw big-endian values, literal-zero `rA`, PS1 preservation, and transactional 8-byte faults.
 - RPX diagnostics capture and print the latest 512 HLE calls and 64 PPC instructions. `--trace-hle <library::symbol>` filters the bounded trace to one exact HLE symbol. `--watch-write <guest-address>` opts into a bounded watch of a four-byte word, reporting overlapping writes, writer CIA, resulting big-endian word, local decoded code context, and all 32 GPRs at each matching write. `--dump-memory` provides bounded post-run BE-word inspection. All are diagnostic-only and disabled unless requested.
 
 ## Prioritized queue
 
-1. Implement `coreinit::OSSignalEvent` with guest event-state updates and correct waiter wakeup behavior supported by Affogato's scheduler; do not fake success if a required scheduling behavior is not modeled.
-2. Determine whether the WWHD null indirect callback is caused by a missing guest initialization path or an incorrect runtime/HLE result; do not fabricate a callback or turn address zero into a valid call.
-3. Audit actual guest shader, draw, and scan-buffer producers; the current WWHD run stops before any draw or texture-binding HLE is observed.
-4. Connect binding-time/command-ordered guest snapshots to the Vulkan texture uploader only when a correct guest use point is available; do not assume a bind-time snapshot remains valid through later writes.
-5. Add shader resource descriptors, shader translation, draw submission, and guest framebuffer presentation in independently testable steps. Do not present the clear-test window as game output.
-6. Revisit measured JIT fallbacks only with a repeatable Release benchmark: native `fmr`, `stfs`, and `stwu` prototypes each passed targeted differential checks but regressed full WWHD timing, so they were discarded.
+1. Implement `coreinit::OSReport` with bounded guest-format reads, starting with the observed `%s` call; keep the message visible and do not swallow the diagnostic.
+2. Follow the BOTW diagnostic (`00000008`) to the next guest operation and determine whether it reveals a missing runtime dependency.
+3. Determine whether the WWHD null indirect callback is caused by a missing guest initialization path or an incorrect runtime/HLE result; do not fabricate a callback or turn address zero into a valid call.
+4. Audit actual guest shader, draw, and scan-buffer producers; the current WWHD run stops before any draw or texture-binding HLE is observed.
+5. Connect binding-time/command-ordered guest snapshots to the Vulkan texture uploader only when a correct guest use point is available; do not assume a bind-time snapshot remains valid through later writes.
+6. Add shader resource descriptors, shader translation, draw submission, and guest framebuffer presentation in independently testable steps. Do not present the clear-test window as game output.
+7. Revisit measured JIT fallbacks only with a repeatable Release benchmark: native `fmr`, `stfs`, and `stwu` prototypes each passed targeted differential checks but regressed full WWHD timing, so they were discarded.

@@ -277,6 +277,56 @@ void initialize_guest_os_event(
     memory.write32_be(event + os_event_mode_offset, mode);
 }
 
+void signal_guest_os_event(EspressoCore& core, std::uint32_t event)
+{
+    constexpr std::uint64_t guest_address_space_end = std::uint64_t{1} << 32U;
+    if (event == 0U)
+    {
+        throw HleExecutionError("OSSignalEvent received null OSEvent pointer");
+    }
+    if (static_cast<std::uint64_t>(event) + os_event_size > guest_address_space_end)
+    {
+        throw HleExecutionError("OSSignalEvent OSEvent address wraps guest address space");
+    }
+
+    std::array<std::uint8_t, os_event_size> snapshot{};
+    try
+    {
+        core.memory.read_bytes(event, snapshot);
+        core.memory.validate_write_range(event, os_event_size);
+    }
+    catch (const GuestMemoryFault&)
+    {
+        throw HleExecutionError("OSSignalEvent OSEvent is outside mapped writable memory");
+    }
+
+    if (core.memory.read32_be(event) != os_event_tag)
+    {
+        throw HleExecutionError("OSSignalEvent pointer is not an initialized OSEvent");
+    }
+    const std::uint32_t mode = core.memory.read32_be(event + os_event_mode_offset);
+    if (mode != os_event_mode_manual && mode != os_event_mode_auto)
+    {
+        throw HleExecutionError("OSSignalEvent OSEvent has an invalid mode");
+    }
+    const std::uint32_t wait_queue = event + os_event_queue_offset;
+    const std::uint32_t head = core.memory.read32_be(
+        wait_queue + os_thread_queue_head_offset);
+    const std::uint32_t tail = core.memory.read32_be(
+        wait_queue + os_thread_queue_tail_offset);
+    if (head != 0U || tail != 0U)
+    {
+        // Waking a nonempty Cafe thread queue requires queue unlinking and
+        // scheduler integration; fail explicitly until that path is modeled.
+        throw HleExecutionError(
+            "OSSignalEvent cannot wake queued threads: guest wait-queue scheduling is not implemented");
+    }
+
+    // With no waiters, both Cafe event modes retain the signalled value until
+    // a waiter consumes it (auto mode) or OSResetEvent clears it (manual mode).
+    core.memory.write32_be(event + os_event_value_offset, 1U);
+}
+
 [[nodiscard]] bool send_guest_message(
     EspressoCore& core,
     std::uint32_t queue,
@@ -3319,6 +3369,12 @@ void register_coreinit_hle(HleDispatcher& dispatcher)
             }
 
             initialize_guest_os_event(core.memory, event, initial_value, mode);
+        });
+    dispatcher.register_function(
+        "coreinit",
+        "OSSignalEvent",
+        [](EspressoCore& core) {
+            signal_guest_os_event(core, core.state.gpr[3]);
         });
     dispatcher.register_function(
         "coreinit",

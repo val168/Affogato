@@ -15428,6 +15428,102 @@ void os_init_event_hle_tests()
     }
 }
 
+void os_signal_event_hle_tests()
+{
+    constexpr std::uint32_t event = 0x1000U;
+    constexpr std::uint32_t event_size = 0x24U;
+    constexpr std::uint32_t event_tag = 0x65566E54U;
+    constexpr std::uint32_t return_address = 0x02760BE0U;
+    constexpr std::uint8_t sentinel = 0x5AU;
+
+    EspressoCore core(0x4000U);
+    register_coreinit_hle(core.hle);
+    const std::uint32_t signal = core.hle.bind_import("coreinit", "OSSignalEvent");
+    core.memory.fill_bytes(event, event_size, sentinel);
+    core.memory.write32_be(event, event_tag);
+    core.memory.write32_be(event + 4U, 0x12345678U);
+    core.memory.write32_be(event + 8U, 0xCAFEBABEU);
+    core.memory.write32_be(event + 0x0CU, 0U);
+    core.memory.write32_be(event + 0x10U, 0U);
+    core.memory.write32_be(event + 0x14U, 0U);
+    core.memory.write32_be(event + 0x18U, event);
+    core.memory.write32_be(event + 0x1CU, 0xAABBCCDDU);
+    core.memory.write32_be(event + 0x20U, 0U); // manual-reset mode
+
+    core.state.gpr[3] = event;
+    for (std::uint32_t reg = 4U; reg < core.state.gpr.size(); ++reg)
+    {
+        core.state.gpr[reg] = 0xA5000000U + reg;
+    }
+    core.state.cr = 0x12345678U;
+    core.state.xer = 0x87654321U;
+    core.state.lr = return_address;
+    const auto gpr_before = core.state.gpr;
+    const std::uint32_t cr_before = core.state.cr;
+    const std::uint32_t xer_before = core.state.xer;
+    core.state.cia = signal;
+    const RunResult signalled = core.run(1U);
+    assert(signalled.reason == StopReason::instruction_limit);
+    assert(signalled.steps == 1U);
+    assert(core.state.cia == return_address);
+    assert(core.state.gpr == gpr_before);
+    assert(core.state.cr == cr_before);
+    assert(core.state.xer == xer_before);
+    assert(core.memory.read32_be(event + 0x0CU) == 1U);
+    assert(core.memory.read32_be(event + 0x10U) == 0U);
+    assert(core.memory.read32_be(event + 0x14U) == 0U);
+    assert(core.memory.read32_be(event + 0x18U) == event);
+    assert(core.memory.read32_be(event + 0x1CU) == 0xAABBCCDDU);
+    assert(core.memory.read32_be(event + 0x20U) == 0U);
+
+    // Auto-reset events also retain their signalled value while nobody is
+    // waiting; the mode affects consumption by a waiter, not this call.
+    core.memory.write32_be(event + 0x20U, 1U);
+    core.memory.write32_be(event + 0x0CU, 0U);
+    core.state.cia = signal;
+    assert(core.step() == StepResult::executed);
+    assert(core.memory.read32_be(event + 0x0CU) == 1U);
+    assert(core.memory.read32_be(event + 0x20U) == 1U);
+
+    const auto expect_error = [&](std::uint32_t pointer,
+                                  const std::string& detail,
+                                  std::uint32_t head,
+                                  std::uint32_t tag,
+                                  std::uint32_t mode) {
+        core.memory.fill_bytes(event, event_size, sentinel);
+        core.memory.write32_be(event, tag);
+        core.memory.write32_be(event + 0x14U, head);
+        core.memory.write32_be(event + 0x20U, mode);
+        std::array<std::uint8_t, event_size> before{};
+        core.memory.read_bytes(event, before);
+        core.state.cia = signal;
+        core.state.lr = return_address;
+        core.state.gpr[3] = pointer;
+        const RunResult result = core.run(1U);
+        assert(result.reason == StopReason::hle_error);
+        assert(result.steps == 0U);
+        assert(result.detail.find(detail) != std::string::npos);
+        std::array<std::uint8_t, event_size> after{};
+        core.memory.read_bytes(event, after);
+        assert(after == before);
+    };
+    expect_error(0U, "null OSEvent pointer", 0U, event_tag, 0U);
+    expect_error(0xFFFFFFF0U, "wraps guest address space", 0U, event_tag, 0U);
+    expect_error(event, "cannot wake queued threads", 0x2000U, event_tag, 0U);
+    expect_error(event, "not an initialized OSEvent", 0U, 0U, 0U);
+    expect_error(event, "invalid mode", 0U, event_tag, 2U);
+
+    EspressoCore unmapped(0x1000U);
+    register_coreinit_hle(unmapped.hle);
+    unmapped.state.cia = unmapped.hle.bind_import("coreinit", "OSSignalEvent");
+    unmapped.state.lr = return_address;
+    unmapped.state.gpr[3] = 0x2000U;
+    const RunResult unmapped_error = unmapped.run(1U);
+    assert(unmapped_error.reason == StopReason::hle_error);
+    assert(unmapped_error.detail.find("outside mapped writable memory") !=
+           std::string::npos);
+}
+
 void os_send_message_hle_tests()
 {
     constexpr std::uint32_t queue = 0x1000U;
@@ -30134,6 +30230,7 @@ int main(int argc, char* argv[])
     os_get_thread_priority_hle_tests();
     os_init_message_queue_hle_tests();
     os_init_event_hle_tests();
+    os_signal_event_hle_tests();
     os_send_message_hle_tests();
     os_receive_message_hle_tests();
     mem_get_base_heap_handle_hle_tests();
