@@ -34,6 +34,12 @@ namespace
            (static_cast<std::uint32_t>(field_mask) << 12U) | (144U << 1U);
 }
 
+[[nodiscard]] constexpr std::uint32_t mcrxr_form(std::uint8_t destination)
+{
+    return (31U << 26U) | (static_cast<std::uint32_t>(destination) << 23U) |
+           (512U << 1U);
+}
+
 [[nodiscard]] constexpr std::uint32_t cmpwi_form(
     std::uint8_t cr_field, std::uint8_t ra, std::int16_t immediate)
 {
@@ -816,6 +822,62 @@ void recompiler_mtcrf_differential_tests()
     }
 }
 
+void recompiler_mcrxr_differential_tests()
+{
+    constexpr std::uint32_t start = 0x100U;
+    constexpr std::array<std::uint32_t, 8U> xer_values{
+        0x00000000U, 0x80000001U, 0x40000002U, 0x20000004U,
+        0xE0000010U, 0xA5C39E71U, 0x5A3C618EU, 0xFFFFFFFFU};
+    constexpr std::array<std::uint32_t, 3U> cr_values{
+        0U, 0xFFFFFFFFU, 0xA5C39E71U};
+
+    for (std::uint8_t destination = 0U; destination < 8U; ++destination)
+    {
+        for (std::size_t pattern = 0U; pattern < xer_values.size(); ++pattern)
+        {
+            EspressoCore interpreted(0x1000U);
+            EspressoCore compiled(0x1000U);
+            const std::uint32_t instruction = mcrxr_form(destination);
+            const std::uint32_t initial_cr = cr_values[pattern % cr_values.size()];
+            for (EspressoCore* core : {&interpreted, &compiled})
+            {
+                core->memory.write32_be(start, instruction);
+                core->state.cia = start;
+                core->state.cr = initial_cr;
+                core->state.xer = xer_values[pattern];
+                core->state.gpr.fill(0xDEADBEEFU);
+                core->state.lr = 0xABCDEF00U;
+                core->state.ctr = 0x76543210U;
+                core->state.fpscr = 0x89ABCDEFU;
+            }
+
+            const RunResult oracle = interpreted.run(1U);
+            Recompiler recompiler;
+            const RunResult actual = recompiler.run(compiled, 1U);
+            assert(actual.reason == oracle.reason);
+            assert(actual.steps == oracle.steps && actual.steps == 1U);
+            assert(actual.cia == oracle.cia);
+            assert(compiled.state.cr == interpreted.state.cr);
+            assert(compiled.state.gpr == interpreted.state.gpr);
+            assert(compiled.state.xer == interpreted.state.xer);
+            assert(compiled.state.lr == interpreted.state.lr);
+            assert(compiled.state.ctr == interpreted.state.ctr);
+            assert(compiled.state.fpscr == interpreted.state.fpscr);
+
+            const std::uint32_t shift = (7U - destination) * 4U;
+            const std::uint32_t field_mask = 0xFU << shift;
+            const std::uint32_t expected_cr =
+                (initial_cr & ~field_mask) |
+                (((xer_values[pattern] >> 28U) & 0xFU) << shift);
+            assert(compiled.state.cr == expected_cr);
+            assert(compiled.state.xer == (xer_values[pattern] & 0x0FFFFFFFU));
+            assert(recompiler.statistics().native_instructions == 1U);
+            assert(recompiler.statistics().interpreter_fallbacks == 0U);
+            assert(actual.instruction_history.back().opcode_name == "mcrxr");
+        }
+    }
+}
+
 void recompiler_rlwinm_differential_tests()
 {
     constexpr std::uint32_t start = 0x100U;
@@ -1516,6 +1578,7 @@ int main()
     recompiler_mcrf_differential_tests();
     recompiler_mfcr_differential_tests();
     recompiler_mtcrf_differential_tests();
+    recompiler_mcrxr_differential_tests();
     recompiler_rlwinm_differential_tests();
     recompiler_lfd_differential_tests();
     recompiler_lfs_differential_tests();

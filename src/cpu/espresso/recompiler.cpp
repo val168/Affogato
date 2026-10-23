@@ -341,6 +341,7 @@ struct BlockCode
     case Opcode::move_condition_register_field:
     case Opcode::move_from_condition_register:
     case Opcode::move_to_condition_register_fields:
+    case Opcode::move_condition_register_from_xer:
     case Opcode::compare_signed_immediate:
     case Opcode::compare_signed_register:
     case Opcode::compare_unsigned_register:
@@ -409,6 +410,7 @@ struct BlockCode
     case Opcode::move_condition_register_field: return "mcrf";
     case Opcode::move_from_condition_register: return "mfcr";
     case Opcode::move_to_condition_register_fields: return "mtcrf";
+    case Opcode::move_condition_register_from_xer: return "mcrxr";
     case Opcode::branch: return "b";
     case Opcode::conditional_branch: return "bc";
     case Opcode::conditional_branch_to_link_register: return "bclr";
@@ -1101,6 +1103,36 @@ struct Recompiler::Impl
                     compiler.mov(x86::dword_ptr(
                         state, static_cast<std::int32_t>(offsetof(CpuState, cr))), cr);
                 }
+                break;
+            }
+            case Opcode::move_condition_register_from_xer:
+            {
+                constexpr std::uint32_t xer_offset = offsetof(CpuState, xer);
+                constexpr std::uint32_t cr_offset = offsetof(CpuState, cr);
+                const std::uint32_t destination_shift =
+                    (7U - insn.cr_field) * 4U;
+                const std::uint32_t field_mask = 0xFU << destination_shift;
+
+                x86::Gp value = compiler.new_gp32("mcrxr_value");
+                compiler.mov(value, x86::dword_ptr(
+                    state, static_cast<std::int32_t>(xer_offset)));
+                compiler.shr(value, imm(28U));
+                compiler.shl(value, imm(destination_shift));
+
+                x86::Gp cr = compiler.new_gp32("mcrxr_cr");
+                compiler.mov(cr, x86::dword_ptr(
+                    state, static_cast<std::int32_t>(cr_offset)));
+                compiler.and_(cr, imm(~field_mask));
+                compiler.or_(cr, value);
+                compiler.mov(x86::dword_ptr(
+                    state, static_cast<std::int32_t>(cr_offset)), cr);
+
+                x86::Gp xer = compiler.new_gp32("mcrxr_xer");
+                compiler.mov(xer, x86::dword_ptr(
+                    state, static_cast<std::int32_t>(xer_offset)));
+                compiler.and_(xer, imm(0x0FFFFFFFU));
+                compiler.mov(x86::dword_ptr(
+                    state, static_cast<std::int32_t>(xer_offset)), xer);
                 break;
             }
             case Opcode::condition_bit_and:
