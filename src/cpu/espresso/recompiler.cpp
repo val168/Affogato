@@ -339,6 +339,7 @@ struct BlockCode
     case Opcode::bitwise_and:
     case Opcode::bitwise_xor:
     case Opcode::move_condition_register_field:
+    case Opcode::move_from_condition_register:
     case Opcode::compare_signed_immediate:
     case Opcode::compare_signed_register:
     case Opcode::compare_unsigned_register:
@@ -405,6 +406,7 @@ struct BlockCode
     case Opcode::compare_unsigned_register: return "cmplw";
     case Opcode::floating_compare_unordered: return "fcmpu";
     case Opcode::move_condition_register_field: return "mcrf";
+    case Opcode::move_from_condition_register: return "mfcr";
     case Opcode::branch: return "b";
     case Opcode::conditional_branch: return "bc";
     case Opcode::conditional_branch_to_link_register: return "bclr";
@@ -1063,6 +1065,14 @@ struct Recompiler::Impl
                 compiler.or_(cr, field_value);
                 compiler.mov(x86::dword_ptr(
                     state, static_cast<std::int32_t>(cr_offset)), cr);
+                break;
+            }
+            case Opcode::move_from_condition_register:
+            {
+                x86::Gp value = compiler.new_gp32("mfcr_value");
+                compiler.mov(value, x86::dword_ptr(
+                    state, static_cast<std::int32_t>(offsetof(CpuState, cr))));
+                write_guest_gpr(insn.destination, value);
                 break;
             }
             case Opcode::condition_bit_and:
