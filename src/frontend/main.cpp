@@ -431,6 +431,7 @@ int run_rpx_diagnostic(int argc, char* argv[])
     const auto load_start = std::chrono::steady_clock::now();
     const auto image = emulator.load_rpx(
         bytes, path.parent_path().parent_path() / "content");
+    emulator.core().hle.set_recent_call_trace_enabled(true);
     const auto load_end = std::chrono::steady_clock::now();
     const auto load_time = std::chrono::duration_cast<std::chrono::milliseconds>(
         load_end - load_start);
@@ -544,6 +545,31 @@ int run_rpx_diagnostic(int argc, char* argv[])
     for (const auto& statistic : result.hle_call_statistics)
     {
         std::cout << "  " << statistic.name << ": " << statistic.calls << '\n';
+    }
+    const auto recent_hle_calls = emulator.core().hle.recent_call_trace_snapshot();
+    constexpr std::size_t recent_hle_display_count = 16U;
+    const std::size_t first_recent_hle = recent_hle_calls.size() > recent_hle_display_count
+        ? recent_hle_calls.size() - recent_hle_display_count
+        : 0U;
+    std::cout << "Recent HLE calls (oldest first):\n";
+    for (std::size_t index = first_recent_hle; index < recent_hle_calls.size(); ++index)
+    {
+        const auto& call = recent_hle_calls[index];
+        std::cout << "  0x" << std::hex << std::uppercase << call.import_address
+                  << " " << call.name << " args=";
+        for (std::size_t argument = 0U; argument < call.arguments.size(); ++argument)
+        {
+            std::cout << (argument == 0U ? "(" : ",") << "r"
+                      << (argument + 3U) << "=0x" << call.arguments[argument];
+        }
+        std::cout << ") ->";
+        for (std::size_t result = 0U; result < call.results.size(); ++result)
+        {
+            std::cout << " r" << (result + 3U) << "=0x" << call.results[result];
+        }
+        std::cout << (call.completed ? " [returned]" :
+                      call.implemented ? " [interrupted]" : " [unimplemented]")
+                  << std::dec << '\n';
     }
     return 0;
 }

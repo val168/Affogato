@@ -3,7 +3,7 @@
 ## WWHD checkpoint
 
 - RPX: `cking.rpx`; entry point `0x028EA9E0`; 24 sections.
-- Latest confirmed run: 6,080,538 guest instructions; stop CIA `0x00000000`; GPR3 `0`; stop is an unsupported fetch of `0x46524D48` after `bcctr` loads CTR from zero. The trace identifies a global object at `0x06E4F660` obtained through `0x101F8C2C`, whose `+0x10` field is null; subsequent indirect-pointer loads also resolve to zero. `0x46524D48` is the synthetic `FRMH` header mirrored at low address zero by the MEM1 alias, so this is a null indirect call obscured by the current flat memory map, not a missing PPC opcode. The caller's object owner is still unidentified; do not synthesize a target.
+- Latest confirmed run: 6,080,538 guest instructions; stop CIA `0x00000000`; GPR3 `0`; LR `0x027B6844`; CTR `0`; stop is an unsupported fetch of `0x46524D48` after `bcctr` loads CTR from zero. The trace identifies a global object at `0x06E4F660` obtained through `0x101F8C2C`, whose `+0x10` field is null; subsequent indirect-pointer loads also resolve to zero. `0x46524D48` is the synthetic `FRMH` header mirrored at low address zero by the MEM1 alias, so this is a null indirect call obscured by the current flat memory map, not a missing PPC opcode. The caller's object owner is still unidentified; do not synthesize a target.
 - Latest JIT run after native `lfs`: 4,158,093 native instructions, 1,922,446 interpreter fallbacks, 22,956 compiled blocks, 1,882,460 block-cache hits. Release guest time across three runs: 1.148/1.146/1.182 s versus 1.322/1.257/1.359 s before `lfs`; medians 1.148 s versus 1.322 s (13.2% lower guest time). Host total medians were 1.340 s versus 1.511 s. The 175,096 `lfs` fallbacks now execute natively. Remaining top fallbacks: `fmadd` 149,463; `stfs` 127,192; `stwu` 107,842; `fmr` 98,684; `stfd` 97,997; `cmpwi` 94,017; `slw` 87,439.
 - No unimplemented HLE was reached. `GX2InitTextureRegs` ran 13 times, along with the sampler initialization and existing GX2 state HLEs.
 
@@ -49,11 +49,13 @@
 - `1a2a49f` - `jit: emit native lfd loads`
 - `a34c5c0` - `jit: report compile and execution timings`
 - pending - `jit: emit native lfs loads`
+- pending - `debug: trace recent HLE calls in RPX diagnostics`
 
 ## Current test status
 
 - Debug and Release CMake/Ninja builds completed; CTest passed 2/2 in both configurations. Debug WWHD remains at 6,080,538 instructions and the same null `bcctr` target; Release reaches the same state. Release RPX load is about 90 ms; guest execution is about 1.15 s after native `lfs`.
 - Native `lfs` interpreter/JIT differential tests cover signed zero, finite values, a single subnormal, infinities, qNaN/sNaN, literal-zero `rA`, PS0/PS1 behavior, history, and transactional 4-byte memory faults. Native `lfd` tests cover raw big-endian values, literal-zero `rA`, PS1 preservation, and transactional 8-byte faults.
+- RPX diagnostics capture the latest 64 HLE calls (guest arguments, resulting GPR3-r8, call/return addresses and completion) and print the last 16. Tracing is opt-in and enabled only by `--run-rpx`; ordinary frontend execution does not pay the per-HLE recording cost. Calls immediately before the current stop are GX2 surface/sampler initialization and size queries; there is no HLE adjacent to the null `bcctr`.
 
 ## Prioritized queue
 

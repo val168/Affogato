@@ -10876,6 +10876,8 @@ void hle_dispatch_tests()
 {
     EspressoCore core(0x100);
     register_coreinit_hle(core.hle);
+    assert(core.hle.recent_call_trace_snapshot().empty());
+    core.hle.set_recent_call_trace_enabled(true);
 
     const auto iob = core.hle.bind_data_import("coreinit", "_iob", core.memory);
     const auto iob_lock = core.hle.bind_data_import("coreinit", "_iob_lock", core.memory);
@@ -11003,6 +11005,7 @@ void hle_dispatch_tests()
 
     EspressoCore thread_core(0x2000U);
     register_coreinit_hle(thread_core.hle);
+    thread_core.hle.set_recent_call_trace_enabled(true);
     thread_core.configure_guest_heap(0x100U, 0x1000U);
     constexpr std::uint32_t stack_start = 0x1800U;
     constexpr std::uint32_t stack_end = 0x800U;
@@ -11095,6 +11098,19 @@ void hle_dispatch_tests()
         });
     assert(unimplemented_count != calls_after_unimplemented.end());
     assert(unimplemented_count->calls == 1U);
+
+    const auto recent_calls = thread_core.hle.recent_call_trace_snapshot();
+    assert(recent_calls.size() >= 2U);
+    const HleCallTraceEntry& set_trace = recent_calls[recent_calls.size() - 2U];
+    assert(set_trace.name == "coreinit::OSSetThreadSpecific");
+    assert(set_trace.implemented && set_trace.completed);
+    assert(set_trace.arguments[0] == 16U);
+    assert(set_trace.arguments[1] == 0xFFFFFFFFU);
+    assert(set_trace.results[0] == 16U);
+    const HleCallTraceEntry& missing_trace = recent_calls.back();
+    assert(missing_trace.name == "gx2::GX2UnimplementedForStatisticsTest");
+    assert(!missing_trace.implemented && !missing_trace.completed);
+    assert(missing_trace.import_address == unknown_gx2_import);
 }
 
 void nn_olv_hle_tests()

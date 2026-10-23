@@ -47,6 +47,11 @@ public:
         std::size_t max_steps = 1'000'000,
         ExecutionMode mode = ExecutionMode::interpreter);
 
+    [[nodiscard]] cpu::espresso::EspressoCore& core() noexcept
+    {
+        return core_;
+    }
+
     [[nodiscard]] const cpu::espresso::EspressoCore& core() const noexcept
     {
         return core_;

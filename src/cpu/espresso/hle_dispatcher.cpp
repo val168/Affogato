@@ -137,8 +137,28 @@ HleDispatchResult HleDispatcher::dispatch(EspressoCore& core, std::uint32_t addr
 
     const BoundImport& binding = imported->second;
     ++call_counts_[binding.name];
+    HleCallTraceEntry* trace = nullptr;
+    if (recent_call_trace_enabled_)
+    {
+        trace = &recent_calls_[next_recent_call_];
+        *trace = {};
+        trace->import_address = address;
+        trace->return_address = core.state.lr;
+        trace->name = binding.name.first + "::" + binding.name.second;
+        for (std::size_t index = 0U; index < trace->arguments.size(); ++index)
+        {
+            trace->arguments[index] = core.state.gpr[index + 3U];
+        }
+        trace->implemented = static_cast<bool>(binding.handler);
+    }
     if (!binding.handler)
     {
+        if (trace != nullptr)
+        {
+            trace->results = trace->arguments;
+            next_recent_call_ = (next_recent_call_ + 1U) % trace_capacity;
+            recent_call_count_ = std::min(recent_call_count_ + 1U, trace_capacity);
+        }
         last_unimplemented_call_ = binding.name.first + "::" + binding.name.second;
         return HleDispatchResult::unimplemented;
     }
@@ -151,6 +171,16 @@ HleDispatchResult HleDispatcher::dispatch(EspressoCore& core, std::uint32_t addr
     if (core.current_thread_address == previous_thread)
     {
         core.state.cia = return_address;
+    }
+    if (trace != nullptr)
+    {
+        for (std::size_t index = 0U; index < trace->results.size(); ++index)
+        {
+            trace->results[index] = core.state.gpr[index + 3U];
+        }
+        trace->completed = true;
+        next_recent_call_ = (next_recent_call_ + 1U) % trace_capacity;
+        recent_call_count_ = std::min(recent_call_count_ + 1U, trace_capacity);
     }
     last_unimplemented_call_.clear();
     return HleDispatchResult::executed;
@@ -165,6 +195,30 @@ std::vector<HleCallStatistic> HleDispatcher::call_statistics_snapshot() const
         result.push_back({name.first + "::" + name.second, calls});
     }
     return result;
+}
+
+std::vector<HleCallTraceEntry> HleDispatcher::recent_call_trace_snapshot() const
+{
+    std::vector<HleCallTraceEntry> result;
+    result.reserve(recent_call_count_);
+    const std::size_t first = (next_recent_call_ + trace_capacity - recent_call_count_) %
+        trace_capacity;
+    for (std::size_t index = 0U; index < recent_call_count_; ++index)
+    {
+        result.push_back(recent_calls_[(first + index) % trace_capacity]);
+    }
+    return result;
+}
+
+void HleDispatcher::set_recent_call_trace_enabled(bool enabled) noexcept
+{
+    recent_call_trace_enabled_ = enabled;
+    if (enabled)
+    {
+        recent_calls_ = {};
+        recent_call_count_ = 0U;
+        next_recent_call_ = 0U;
+    }
 }
 
 }
