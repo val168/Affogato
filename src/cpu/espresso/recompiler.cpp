@@ -7,6 +7,7 @@
 #include <array>
 #include <bit>
 #include <chrono>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
@@ -42,12 +43,22 @@ struct NativeFpCompareRecord
     std::uint8_t result{};
 };
 
+struct NativeFpIntegerConversionRecord
+{
+    std::uint64_t source_raw{};
+    std::uint32_t integer_bits{};
+    std::uint64_t encoded_raw{};
+    bool invalid{};
+    bool write_suppressed{};
+};
+
 struct NativeExecutionContext
 {
     GuestMemory* memory{};
     std::uint32_t block_cia{};
     std::array<NativeMemoryRecord, 64> memory_records{};
     std::array<NativeFpCompareRecord, 64> fp_compare_records{};
+    std::array<NativeFpIntegerConversionRecord, 64> fp_integer_conversion_records{};
     std::uint64_t memory_access_calls{};
     bool failed{};
     bool guest_memory_fault{};
@@ -63,13 +74,12 @@ static_assert(std::is_standard_layout_v<NativeExecutionContext>);
 
 using NativeBlock = std::uint32_t (*)(CpuState*, NativeExecutionContext*);
 
-extern "C" void native_raise_fpscr_snan(CpuState* state) noexcept
+void native_update_fpscr_summaries(CpuState* state) noexcept
 {
     constexpr std::uint32_t implemented_invalid_masks =
         fpscr::vxsnan_mask | fpscr::vxzdz_mask | fpscr::vximz_mask |
         fpscr::vxidi_mask | fpscr::vxisi_mask | fpscr::vxcvi_mask |
         fpscr::vxvc_mask | fpscr::vxsqrt_mask | fpscr::vxsoft_mask;
-    state->fpscr |= fpscr::vxsnan_mask | fpscr::fx_mask;
     state->fpscr &= ~(fpscr::vx_mask | fpscr::fex_mask);
     if ((state->fpscr & implemented_invalid_masks) != 0U)
     {
@@ -92,6 +102,18 @@ extern "C" void native_raise_fpscr_snan(CpuState* state) noexcept
     }
 }
 
+extern "C" void native_raise_fpscr_exception(
+    CpuState* state, std::uint32_t subexception) noexcept
+{
+    state->fpscr |= subexception | fpscr::fx_mask;
+    native_update_fpscr_summaries(state);
+}
+
+extern "C" void native_raise_fpscr_snan(CpuState* state) noexcept
+{
+    native_raise_fpscr_exception(state, fpscr::vxsnan_mask);
+}
+
 extern "C" void native_raise_fpscr_snan_if_present(
     CpuState* state, std::uint64_t a_raw, std::uint64_t b_raw) noexcept
 {
@@ -105,6 +127,95 @@ extern "C" void native_raise_fpscr_snan_if_present(
     if (is_signaling_nan(a_raw) || is_signaling_nan(b_raw))
     {
         native_raise_fpscr_snan(state);
+    }
+}
+
+extern "C" void native_fctiwz(
+    NativeExecutionContext* context,
+    CpuState* state,
+    std::uint32_t destination,
+    std::uint32_t source_register,
+    std::uint32_t instruction_index) noexcept
+{
+    constexpr std::uint64_t exponent_mask = 0x7FF0000000000000ULL;
+    constexpr std::uint64_t fraction_mask = 0x000FFFFFFFFFFFFFULL;
+    constexpr std::uint64_t quiet_nan_mask = 0x0008000000000000ULL;
+    constexpr std::uint64_t sign_mask = 0x8000000000000000ULL;
+    constexpr std::uint64_t integer_encoding_prefix = 0xFFF8000000000000ULL;
+    constexpr double minimum_signed_word = -2147483648.0;
+    constexpr double one_past_maximum_signed_word = 2147483648.0;
+
+    const std::uint64_t source_raw = state->fpr[source_register];
+    const double source = std::bit_cast<double>(source_raw);
+    const bool is_nan = (source_raw & exponent_mask) == exponent_mask &&
+        (source_raw & fraction_mask) != 0U;
+    const bool is_signaling_nan = is_nan && (source_raw & quiet_nan_mask) == 0U;
+    std::uint32_t integer_bits = 0x80000000U;
+    bool invalid = false;
+    bool inexact = false;
+
+    if (is_nan)
+    {
+        invalid = true;
+        native_raise_fpscr_exception(state, fpscr::vxcvi_mask);
+        if (is_signaling_nan)
+        {
+            native_raise_fpscr_exception(state, fpscr::vxsnan_mask);
+        }
+    }
+    else
+    {
+        const double rounded = std::trunc(source);
+        if (rounded >= one_past_maximum_signed_word)
+        {
+            invalid = true;
+            integer_bits = 0x7FFFFFFFU;
+        }
+        else if (rounded < minimum_signed_word)
+        {
+            invalid = true;
+            integer_bits = 0x80000000U;
+        }
+        else
+        {
+            integer_bits = std::bit_cast<std::uint32_t>(
+                static_cast<std::int32_t>(rounded));
+            inexact = rounded != source;
+        }
+
+        if (invalid)
+        {
+            native_raise_fpscr_exception(state, fpscr::vxcvi_mask);
+        }
+    }
+
+    state->fpscr &= ~(fpscr::fi_mask | fpscr::fr_mask);
+    if (!invalid && inexact)
+    {
+        state->fpscr |= fpscr::fi_mask | fpscr::xx_mask | fpscr::fx_mask;
+    }
+    native_update_fpscr_summaries(state);
+
+    const std::uint64_t encoded = integer_encoding_prefix | integer_bits |
+        (integer_bits == 0U && (source_raw & sign_mask) != 0U
+            ? 0x0000000100000000ULL
+            : 0U);
+    const bool write_suppressed = invalid &&
+        (state->fpscr & fpscr::ve_mask) != 0U;
+    if (!write_suppressed)
+    {
+        state->fpr[destination] = encoded;
+    }
+
+    if (instruction_index < context->fp_integer_conversion_records.size())
+    {
+        NativeFpIntegerConversionRecord& record =
+            context->fp_integer_conversion_records[instruction_index];
+        record.source_raw = source_raw;
+        record.integer_bits = integer_bits;
+        record.encoded_raw = encoded;
+        record.invalid = invalid;
+        record.write_suppressed = write_suppressed;
     }
 }
 
@@ -485,6 +596,7 @@ struct BlockCode
     case Opcode::compare_signed_register:
     case Opcode::compare_unsigned_register:
     case Opcode::floating_compare_unordered:
+    case Opcode::floating_convert_to_integer_word_zero:
     case Opcode::branch:
     case Opcode::conditional_branch:
     case Opcode::conditional_branch_to_link_register:
@@ -587,6 +699,7 @@ struct BlockCode
     case Opcode::floating_move_register: return "fmr";
     case Opcode::floating_negate: return "fneg";
     case Opcode::floating_absolute_value: return "fabs";
+    case Opcode::floating_convert_to_integer_word_zero: return "fctiwz";
     case Opcode::shift_left_word: return "slw";
     case Opcode::shift_right_word: return "srw";
     case Opcode::arithmetic_shift_right_immediate: return "srawi";
@@ -1939,6 +2052,21 @@ struct Recompiler::Impl
                     state, static_cast<std::int32_t>(fpr_offset(insn.fp_register))), value);
                 break;
             }
+            case Opcode::floating_convert_to_integer_word_zero:
+            {
+                auto* invoke = static_cast<InvokeNode*>(nullptr);
+                const auto helper_address = static_cast<std::uint64_t>(
+                    reinterpret_cast<std::uintptr_t>(&native_fctiwz));
+                compiler.invoke(Out(invoke), helper_address,
+                    FuncSignature::build<void, NativeExecutionContext*, CpuState*,
+                        std::uint32_t, std::uint32_t, std::uint32_t>(CallConvId::kCDecl));
+                invoke->set_arg(0, context);
+                invoke->set_arg(1, state);
+                invoke->set_arg(2, imm(insn.fp_register));
+                invoke->set_arg(3, imm(insn.fp_source_b));
+                invoke->set_arg(4, imm(static_cast<std::uint32_t>(index)));
+                break;
+            }
             case Opcode::paired_single_merge10:
             {
                 // Snapshot both lanes before either destination lane is
@@ -2635,6 +2763,22 @@ RunResult Recompiler::run(EspressoCore& core, std::size_t max_steps)
         {
             const std::uint32_t cia = block->address + static_cast<std::uint32_t>(i * 4U);
             const DecodedInstruction& insn = block->instructions[i];
+            if (insn.opcode == Opcode::floating_convert_to_integer_word_zero)
+            {
+                InstructionHistoryEntry entry = native_history(insn, cia);
+                const NativeFpIntegerConversionRecord& record =
+                    context.fp_integer_conversion_records[i];
+                entry.has_fp_integer_conversion = true;
+                entry.fp_integer_conversion_source = insn.fp_source_b;
+                entry.fp_integer_conversion_source_raw = record.source_raw;
+                entry.fp_integer_conversion_destination = insn.fp_register;
+                entry.fp_integer_conversion_result = record.integer_bits;
+                entry.fp_integer_conversion_encoded_raw = record.encoded_raw;
+                entry.fp_integer_conversion_invalid = record.invalid;
+                entry.fp_integer_conversion_write_suppressed = record.write_suppressed;
+                core.append_instruction_history(std::move(entry));
+                continue;
+            }
             if (insn.opcode == Opcode::floating_compare_unordered)
             {
                 InstructionHistoryEntry entry = native_history(insn, cia);

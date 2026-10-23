@@ -99,6 +99,13 @@ namespace
            (static_cast<std::uint32_t>(source_b) << 11U) | (592U << 1U);
 }
 
+[[nodiscard]] constexpr std::uint32_t fctiwz_form(
+    std::uint8_t destination, std::uint8_t source)
+{
+    return (63U << 26U) | (static_cast<std::uint32_t>(destination) << 21U) |
+        (static_cast<std::uint32_t>(source) << 11U) | (15U << 1U);
+}
+
 [[nodiscard]] constexpr std::uint32_t lfd_form(
     std::uint8_t destination, std::uint8_t base, std::int16_t displacement)
 {
@@ -1370,6 +1377,82 @@ void recompiler_fneg_differential_tests()
             assert(recompiler.statistics().interpreter_fallbacks == 0U);
             assert(actual.instruction_history.back().opcode_name == "fneg");
         }
+    }
+}
+
+void recompiler_fctiwz_differential_tests()
+{
+    struct Case
+    {
+        std::uint64_t source_raw;
+        std::uint32_t initial_fpscr;
+        std::uint8_t destination;
+        std::uint8_t source;
+    };
+    constexpr std::uint32_t start = 0x100U;
+    constexpr std::uint64_t destination_sentinel = 0x123456789ABCDEF0ULL;
+    constexpr std::uint64_t ps1_sentinel = 0xDEADBEEF01234567ULL;
+    constexpr std::array cases{
+        Case{0x0000000000000000ULL, 0x0001F000U, 2U, 1U}, // +0
+        Case{0x8000000000000000ULL, 0x0001F000U, 2U, 1U}, // -0 marker
+        Case{0x4008000000000000ULL, 0x0001F000U, 2U, 1U}, // 3.0
+        Case{0x400F333333333333ULL, 0x0001F000U, 2U, 1U}, // 3.9
+        Case{0xC00F333333333333ULL, 0x0001F000U, 2U, 1U}, // -3.9
+        Case{0x3FE0000000000000ULL, 0x0001F000U, 2U, 1U}, // +0.5
+        Case{0xBFE0000000000000ULL, 0x0001F000U, 2U, 1U}, // -0.5 marker
+        Case{0x41DFFFFFFFC00000ULL, 0x0001F000U, 2U, 1U}, // INT32_MAX
+        Case{0xC1E0000000000000ULL, 0x0001F000U, 2U, 1U}, // INT32_MIN
+        Case{0x41E0000000000000ULL, 0x0001F000U, 2U, 1U}, // +overflow
+        Case{0x7FF0000000000000ULL, 0x0001F000U, 2U, 1U}, // +infinity
+        Case{0x7FF8123456789ABCULL, 0x0001F000U, 2U, 1U}, // qNaN
+        Case{0x7FF0123456789ABCULL, 0x0001F000U, 2U, 1U}, // sNaN
+        Case{0x7FF0123456789ABCULL, 0x0001F200U, 2U, 1U}, // sNaN, VE
+        Case{0x41E0000000000000ULL, 0x0001F200U, 2U, 1U}, // overflow, VE
+        Case{0xC00F333333333333ULL, 0x0201F000U, 1U, 1U}, // alias, sticky XX
+    };
+
+    for (const Case& test : cases)
+    {
+        EspressoCore interpreted(0x1000U);
+        EspressoCore compiled(0x1000U);
+        const std::uint32_t instruction = fctiwz_form(
+            test.destination, test.source);
+        for (EspressoCore* core : {&interpreted, &compiled})
+        {
+            core->memory.write32_be(start, instruction);
+            core->state.cia = start;
+            core->state.fpr.fill(destination_sentinel);
+            core->state.fpr_ps1.fill(ps1_sentinel);
+            core->state.fpr[test.source] = test.source_raw;
+            core->state.gpr.fill(0xA5A5A5A5U);
+            core->state.cr = 0xA5C39E71U;
+            core->state.xer = 0x76543210U;
+            core->state.lr = 0xABCDEF00U;
+            core->state.ctr = 0xFEDCBA98U;
+            core->state.fpscr = test.initial_fpscr;
+        }
+
+        const RunResult oracle = interpreted.run(1U);
+        Recompiler recompiler;
+        const RunResult actual = recompiler.run(compiled, 1U);
+        assert(actual.reason == oracle.reason);
+        assert(actual.steps == oracle.steps && actual.steps == 1U);
+        assert(actual.cia == oracle.cia);
+        assert(compiled.state.gpr == interpreted.state.gpr);
+        assert(compiled.state.fpr == interpreted.state.fpr);
+        assert(compiled.state.fpr_ps1 == interpreted.state.fpr_ps1);
+        assert(compiled.state.cr == interpreted.state.cr);
+        assert(compiled.state.xer == interpreted.state.xer);
+        assert(compiled.state.lr == interpreted.state.lr);
+        assert(compiled.state.ctr == interpreted.state.ctr);
+        assert(compiled.state.fpscr == interpreted.state.fpscr);
+        assert(recompiler.statistics().native_instructions == 1U);
+        assert(recompiler.statistics().interpreter_fallbacks == 0U);
+        const InstructionHistoryEntry& history = actual.instruction_history.back();
+        assert(history.opcode_name == "fctiwz");
+        assert(history.has_fp_integer_conversion);
+        assert(history.fp_integer_conversion_source_raw == test.source_raw);
+        assert(history.fp_integer_conversion_destination == test.destination);
     }
 }
 
@@ -2816,6 +2899,7 @@ int main()
     recompiler_mtgqr_differential_tests();
     recompiler_fmr_differential_tests();
     recompiler_fneg_differential_tests();
+    recompiler_fctiwz_differential_tests();
     recompiler_fabs_differential_tests();
     recompiler_ps_merge10_differential_tests();
     recompiler_stfs_differential_tests();
