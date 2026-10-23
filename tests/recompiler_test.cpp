@@ -1620,6 +1620,73 @@ void recompiler_srawi_differential_tests()
     }
 }
 
+void recompiler_cntlzw_differential_tests()
+{
+    constexpr std::uint32_t start = 0x100U;
+    constexpr std::array<std::array<std::uint8_t, 2U>, 3U> registers{{
+        {{3U, 4U}}, {{3U, 3U}}, {{0U, 0U}}}};
+    constexpr std::array<std::uint32_t, 36U> inputs = [] {
+        std::array<std::uint32_t, 36U> values{};
+        for (std::size_t bit = 0U; bit < 32U; ++bit)
+        {
+            values[bit + 1U] = std::uint32_t{1U} << bit;
+        }
+        values[33] = 0xFFFFFFFFU;
+        values[34] = 0xA5C39E71U;
+        values[35] = 0x00010000U;
+        return values;
+    }();
+
+    for (const std::uint32_t input : inputs)
+    {
+        for (std::size_t pattern = 0U; pattern < registers.size(); ++pattern)
+        {
+            for (const bool record : {false, true})
+            {
+                EspressoCore interpreted(0x1000U);
+                EspressoCore compiled(0x1000U);
+                const auto [source, destination] = registers[pattern];
+                const std::uint32_t initial_cr = 0xA5C39E71U;
+                const std::uint32_t initial_xer = pattern == 0U
+                    ? 0x87654321U : 0x07654321U;
+                const std::uint32_t instruction = x_form(
+                    source, destination, 0U, 26U, record);
+                for (EspressoCore* core : {&interpreted, &compiled})
+                {
+                    core->memory.write32_be(start, instruction);
+                    core->state.cia = start;
+                    core->state.gpr.fill(0xDEADBEEFU);
+                    core->state.gpr[source] = input;
+                    core->state.cr = initial_cr;
+                    core->state.xer = initial_xer;
+                    core->state.lr = 0xABCDEF00U;
+                    core->state.ctr = 0xFEDCBA98U;
+                    core->state.fpscr = 0x89ABCDEFU;
+                }
+
+                const RunResult oracle = interpreted.run(1U);
+                Recompiler recompiler;
+                const RunResult actual = recompiler.run(compiled, 1U);
+                assert(actual.reason == oracle.reason);
+                assert(actual.steps == oracle.steps && actual.steps == 1U);
+                assert(actual.cia == oracle.cia);
+                assert(compiled.state.gpr == interpreted.state.gpr);
+                assert(compiled.state.gpr[destination] == static_cast<std::uint32_t>(
+                    std::countl_zero(input)));
+                assert(compiled.state.cr == interpreted.state.cr);
+                assert(compiled.state.xer == initial_xer);
+                assert(compiled.state.lr == interpreted.state.lr);
+                assert(compiled.state.ctr == interpreted.state.ctr);
+                assert(compiled.state.fpscr == interpreted.state.fpscr);
+                assert(recompiler.statistics().native_instructions == 1U);
+                assert(recompiler.statistics().interpreter_fallbacks == 0U);
+                assert(actual.instruction_history.back().opcode_name ==
+                    (record ? "cntlzw." : "cntlzw"));
+            }
+        }
+    }
+}
+
 void recompiler_rlwinm_differential_tests()
 {
     constexpr std::uint32_t start = 0x100U;
@@ -2333,6 +2400,7 @@ int main()
     recompiler_slw_differential_tests();
     recompiler_srw_differential_tests();
     recompiler_srawi_differential_tests();
+    recompiler_cntlzw_differential_tests();
     recompiler_rlwinm_differential_tests();
     recompiler_lfd_differential_tests();
     recompiler_lfs_differential_tests();

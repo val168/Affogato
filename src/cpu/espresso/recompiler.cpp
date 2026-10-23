@@ -389,6 +389,10 @@ struct BlockCode
     {
         return true;
     }
+    if (insn.opcode == Opcode::count_leading_zeros && insn.record)
+    {
+        return true;
+    }
     switch (insn.opcode)
     {
     case Opcode::addi:
@@ -430,6 +434,7 @@ struct BlockCode
     case Opcode::shift_left_word:
     case Opcode::shift_right_word:
     case Opcode::arithmetic_shift_right_immediate:
+    case Opcode::count_leading_zeros:
     case Opcode::load_word_zero:
     case Opcode::load_byte_zero:
     case Opcode::load_halfword_zero:
@@ -507,6 +512,7 @@ struct BlockCode
     case Opcode::shift_left_word: return "slw";
     case Opcode::shift_right_word: return "srw";
     case Opcode::arithmetic_shift_right_immediate: return "srawi";
+    case Opcode::count_leading_zeros: return "cntlzw";
     case Opcode::load_word_zero: return "lwz";
     case Opcode::load_byte_zero: return "lbz";
     case Opcode::load_halfword_zero: return "lhz";
@@ -963,6 +969,54 @@ struct Recompiler::Impl
                     compiler.or_(less, xer_so);
                     compiler.shl(less, imm(28U));
                     x86::Gp cr = compiler.new_gp32("srawi_cr0");
+                    compiler.mov(cr, x86::dword_ptr(
+                        state, static_cast<std::int32_t>(offsetof(CpuState, cr))));
+                    compiler.and_(cr, imm(0x0FFFFFFFU));
+                    compiler.or_(cr, less);
+                    compiler.mov(x86::dword_ptr(
+                        state, static_cast<std::int32_t>(offsetof(CpuState, cr))), cr);
+                }
+                break;
+            }
+            case Opcode::count_leading_zeros:
+            {
+                x86::Gp source = read_guest_gpr(insn.source);
+                x86::Gp result = compiler.new_gp32("cntlzw_result");
+                Label zero_source = compiler.new_label();
+                Label count_done = compiler.new_label();
+                compiler.test(source, source);
+                compiler.jz(zero_source);
+                compiler.bsr(result, source);
+                compiler.xor_(result, imm(31U));
+                compiler.jmp(count_done);
+                compiler.bind(zero_source);
+                compiler.mov(result, imm(32U));
+                compiler.bind(count_done);
+                write_guest_gpr(insn.destination, result);
+                if (insn.record)
+                {
+                    compiler.test(result, result);
+                    x86::Gp less = compiler.new_gp32("cntlzw_cr0_lt");
+                    x86::Gp greater = compiler.new_gp32("cntlzw_cr0_gt");
+                    x86::Gp equal = compiler.new_gp32("cntlzw_cr0_eq");
+                    compiler.mov(less, imm(0U));
+                    compiler.setl(less.r8());
+                    compiler.mov(greater, imm(0U));
+                    compiler.setg(greater.r8());
+                    compiler.mov(equal, imm(0U));
+                    compiler.sete(equal.r8());
+                    compiler.shl(less, imm(3U));
+                    compiler.shl(greater, imm(2U));
+                    compiler.shl(equal, imm(1U));
+                    compiler.or_(less, greater);
+                    compiler.or_(less, equal);
+                    x86::Gp xer_so = compiler.new_gp32("cntlzw_cr0_so");
+                    compiler.mov(xer_so, x86::dword_ptr(
+                        state, static_cast<std::int32_t>(offsetof(CpuState, xer))));
+                    compiler.shr(xer_so, imm(31U));
+                    compiler.or_(less, xer_so);
+                    compiler.shl(less, imm(28U));
+                    x86::Gp cr = compiler.new_gp32("cntlzw_cr0");
                     compiler.mov(cr, x86::dword_ptr(
                         state, static_cast<std::int32_t>(offsetof(CpuState, cr))));
                     compiler.and_(cr, imm(0x0FFFFFFFU));
