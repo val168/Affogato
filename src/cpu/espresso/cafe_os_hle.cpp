@@ -415,6 +415,60 @@ void report_guest_message(EspressoCore& core)
     std::cout.flush();
 }
 
+void get_guest_memory_bounds(EspressoCore& core)
+{
+    constexpr std::uint32_t memory_type_mem1 = 1U;
+    constexpr std::uint32_t memory_type_mem2 = 2U;
+    const std::uint32_t type = core.state.gpr[3];
+    std::uint32_t begin = 0U;
+    std::uint32_t end = 0U;
+
+    if (type == memory_type_mem1 &&
+        core.base_heap_handles[mem1_base_heap_index] == mem1_alias_base)
+    {
+        begin = mem1_alias_base;
+        end = mem1_alias_base + mem1_size;
+    }
+    else if (type == memory_type_mem2 &&
+             core.mem2_heap_region_begin < core.mem2_heap_region_end)
+    {
+        // The current runtime models MEM2 as the loader-selected synthetic
+        // heap region rather than the console's complete physical RAM map.
+        begin = core.mem2_heap_region_begin;
+        end = core.mem2_heap_region_end;
+    }
+    else
+    {
+        core.state.gpr[3] = std::numeric_limits<std::uint32_t>::max();
+        return;
+    }
+
+    const std::uint32_t address_output = core.state.gpr[4];
+    const std::uint32_t size_output = core.state.gpr[5];
+    if (address_output == 0U || size_output == 0U ||
+        (static_cast<std::uint64_t>(address_output) + sizeof(std::uint32_t) >
+         size_output &&
+         static_cast<std::uint64_t>(size_output) + sizeof(std::uint32_t) >
+         address_output))
+    {
+        throw HleExecutionError("OSGetMemBound received null or overlapping output pointers");
+    }
+
+    try
+    {
+        core.memory.validate_write_range(address_output, sizeof(std::uint32_t));
+        core.memory.validate_write_range(size_output, sizeof(std::uint32_t));
+    }
+    catch (const GuestMemoryFault&)
+    {
+        throw HleExecutionError("OSGetMemBound output pointer is outside writable guest memory");
+    }
+
+    core.memory.write32_be(address_output, begin);
+    core.memory.write32_be(size_output, end - begin);
+    core.state.gpr[3] = 0U;
+}
+
 [[nodiscard]] bool send_guest_message(
     EspressoCore& core,
     std::uint32_t queue,
@@ -1841,6 +1895,12 @@ void register_coreinit_hle(HleDispatcher& dispatcher)
                     "OSGetSystemInfo internal data is not registered");
             }
             core.state.gpr[3] = *address;
+        });
+    dispatcher.register_function(
+        "coreinit",
+        "OSGetMemBound",
+        [](EspressoCore& core) {
+            get_guest_memory_bounds(core);
         });
     dispatcher.register_function(
         "coreinit",

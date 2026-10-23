@@ -15576,6 +15576,71 @@ void os_report_hle_tests()
            std::string::npos);
 }
 
+void os_get_mem_bound_hle_tests()
+{
+    constexpr std::uint32_t address_output = 0x1000U;
+    constexpr std::uint32_t size_output = 0x1004U;
+    constexpr std::uint32_t return_address = 0x02760C60U;
+    constexpr std::uint32_t mem1_alias = 0xF4000000U;
+
+    EspressoCore core(0x4000U);
+    register_coreinit_hle(core.hle);
+    const std::uint32_t get_bounds = core.hle.bind_import("coreinit", "OSGetMemBound");
+    core.base_heap_handles[0] = mem1_alias;
+    core.mem2_heap_region_begin = 0x2000U;
+    core.mem2_heap_region_end = 0x3000U;
+    core.state.gpr[4] = address_output;
+    core.state.gpr[5] = size_output;
+    core.state.lr = return_address;
+
+    core.state.gpr[3] = 2U; // OS_MEM2: expose Affogato's modeled heap bounds.
+    core.state.cia = get_bounds;
+    assert(core.step() == StepResult::executed);
+    assert(core.state.gpr[3] == 0U);
+    assert(core.state.cia == return_address);
+    assert(core.memory.read32_be(address_output) == 0x2000U);
+    assert(core.memory.read32_be(size_output) == 0x1000U);
+
+    core.state.gpr[3] = 1U; // OS_MEM1: current 32 MiB Cafe alias.
+    core.state.gpr[4] = address_output + 8U;
+    core.state.gpr[5] = size_output + 8U;
+    core.state.cia = get_bounds;
+    assert(core.step() == StepResult::executed);
+    assert(core.state.gpr[3] == 0U);
+    assert(core.memory.read32_be(address_output + 8U) == mem1_alias);
+    assert(core.memory.read32_be(size_output + 8U) == 0x02000000U);
+
+    core.memory.write32_be(address_output, 0xAABBCCDDU);
+    core.memory.write32_be(size_output, 0x11223344U);
+    core.state.gpr[3] = 3U;
+    core.state.gpr[4] = address_output;
+    core.state.gpr[5] = size_output;
+    core.state.cia = get_bounds;
+    assert(core.step() == StepResult::executed);
+    assert(core.state.gpr[3] == 0xFFFFFFFFU);
+    assert(core.memory.read32_be(address_output) == 0xAABBCCDDU);
+    assert(core.memory.read32_be(size_output) == 0x11223344U);
+
+    core.state.gpr[3] = 2U;
+    core.state.gpr[4] = 0x3FFEU;
+    core.state.gpr[5] = size_output;
+    core.state.cia = get_bounds;
+    const RunResult invalid_output = core.run(1U);
+    assert(invalid_output.reason == StopReason::hle_error);
+    assert(invalid_output.steps == 0U);
+    assert(invalid_output.detail.find("outside writable guest memory") !=
+           std::string::npos);
+    assert(core.memory.read32_be(address_output) == 0xAABBCCDDU);
+
+    core.state.gpr[4] = address_output;
+    core.state.gpr[5] = address_output + 2U;
+    core.state.cia = get_bounds;
+    const RunResult overlapping_output = core.run(1U);
+    assert(overlapping_output.reason == StopReason::hle_error);
+    assert(overlapping_output.detail.find("overlapping output pointers") !=
+           std::string::npos);
+}
+
 void os_send_message_hle_tests()
 {
     constexpr std::uint32_t queue = 0x1000U;
@@ -30284,6 +30349,7 @@ int main(int argc, char* argv[])
     os_init_event_hle_tests();
     os_signal_event_hle_tests();
     os_report_hle_tests();
+    os_get_mem_bound_hle_tests();
     os_send_message_hle_tests();
     os_receive_message_hle_tests();
     mem_get_base_heap_handle_hle_tests();

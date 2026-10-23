@@ -11,7 +11,7 @@
 
 ## Secondary BOTW checkpoint
 
-- The loader relocates its HLE data/import windows when an RPX section overlaps the defaults (`a9e1130`). It handles `R_PPC_DTPMOD32` as module 1 and `R_PPC_DTPREL32` as the TLS symbol's module-relative offset (`fc8714a`, `a5f3ed2`). Latest BOTW run: entry `0x03AB62AC`, 26 sections, 844,654 guest instructions, stop CIA `0x0FF0004C`, GPR3 `2`, GPR4 `0x100FEF50`, GPR5 `0x100FEF54`; the next blocker is `coreinit::OSGetMemBound`. The observed `OSReport("%s", "00000008\\n")` now emits the guest diagnostic and returns with its void ABI. `OSSignalEvent` handles the 256 observed no-waiter signals by setting guest event state; it reports an HLE error if a nonempty waiter queue requires the not-yet-modeled scheduler wake path. This remains startup/runtime progress, not evidence of game rendering.
+- The loader relocates its HLE data/import windows when an RPX section overlaps the defaults (`a9e1130`). It handles `R_PPC_DTPMOD32` as module 1 and `R_PPC_DTPREL32` as the TLS symbol's module-relative offset (`fc8714a`, `a5f3ed2`). Latest BOTW run: entry `0x03AB62AC`, 26 sections, 857,991 guest instructions, stop CIA `0x0FF0019C`, GPR3 `0x104CF188`, GPR4 `0`, GPR5 `1`; next blocker is `coreinit::OSIsEnabledOverlayArena`. `OSGetMemBound(type=2)` now returns the modeled synthetic MEM2 heap range through validated guest output pointers; OSReport printed the observed `00000008` message and returned. `OSSignalEvent` handled the 256 observed no-waiter signals by setting guest event state. This remains startup/runtime progress, not evidence of game rendering.
 
 ## Graphics checkpoint
 
@@ -70,7 +70,8 @@
 - `5d3387b` - `hle: implement coreinit OSInitEvent`
 - `5798d18` - `cpu: implement lwarx and stwcx.`
 - `6edcb72` - `hle: implement coreinit OSSignalEvent`
-- pending - `hle: implement coreinit OSReport`
+- `33080db` - `hle: implement coreinit OSReport`
+- pending - `hle: implement coreinit OSGetMemBound`
 
 ## Current test status
 
