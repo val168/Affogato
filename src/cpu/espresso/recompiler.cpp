@@ -380,7 +380,8 @@ struct BlockCode
     {
         return true;
     }
-    if (insn.opcode == Opcode::shift_left_word && insn.record)
+    if ((insn.opcode == Opcode::shift_left_word ||
+         insn.opcode == Opcode::shift_right_word) && insn.record)
     {
         return true;
     }
@@ -423,6 +424,7 @@ struct BlockCode
     case Opcode::floating_negate:
     case Opcode::floating_absolute_value:
     case Opcode::shift_left_word:
+    case Opcode::shift_right_word:
     case Opcode::load_word_zero:
     case Opcode::load_byte_zero:
     case Opcode::load_halfword_zero:
@@ -498,6 +500,7 @@ struct BlockCode
     case Opcode::floating_negate: return "fneg";
     case Opcode::floating_absolute_value: return "fabs";
     case Opcode::shift_left_word: return "slw";
+    case Opcode::shift_right_word: return "srw";
     case Opcode::load_word_zero: return "lwz";
     case Opcode::load_byte_zero: return "lbz";
     case Opcode::load_halfword_zero: return "lhz";
@@ -836,6 +839,7 @@ struct Recompiler::Impl
                 break;
             }
             case Opcode::shift_left_word:
+            case Opcode::shift_right_word:
             {
                 x86::Gp shift = compiler.new_gp32("slw_shift");
                 compiler.mov(shift, read_guest_gpr(insn.base));
@@ -847,7 +851,14 @@ struct Recompiler::Impl
                 Label shift_done = compiler.new_label();
                 compiler.test(shift, imm(0x20U));
                 compiler.jnz(zero_result);
-                compiler.shl(result, shift);
+                if (insn.opcode == Opcode::shift_left_word)
+                {
+                    compiler.shl(result, shift);
+                }
+                else
+                {
+                    compiler.shr(result, shift);
+                }
                 compiler.jmp(shift_done);
                 compiler.bind(zero_result);
                 compiler.mov(result, imm(0U));
