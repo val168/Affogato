@@ -19,6 +19,16 @@ namespace
            (static_cast<std::uint32_t>(xo) << 1U);
 }
 
+[[nodiscard]] constexpr std::uint32_t cr_form(
+    std::uint8_t destination, std::uint8_t source_a,
+    std::uint8_t source_b, std::uint16_t xo)
+{
+    return (19U << 26U) | (static_cast<std::uint32_t>(destination) << 21U) |
+           (static_cast<std::uint32_t>(source_a) << 16U) |
+           (static_cast<std::uint32_t>(source_b) << 11U) |
+           (static_cast<std::uint32_t>(xo) << 1U);
+}
+
 void recompiler_differential_arithmetic_test()
 {
     EspressoCore interpreted(0x1000U);
@@ -128,6 +138,52 @@ void recompiler_logical_differential_test()
     assert(compiled.state.gpr == interpreted.state.gpr);
     assert(compiled.state.gpr[4] == 0x0000BBFD);
     assert(recompiler.statistics().native_instructions == program.size());
+}
+
+void recompiler_condition_bit_differential_tests()
+{
+    constexpr std::array<std::uint16_t, 8U> xos{
+        257U, 129U, 449U, 417U, 33U, 193U, 225U, 289U};
+    constexpr std::uint32_t start = 0x100U;
+    for (const std::uint16_t xo : xos)
+    {
+        for (std::uint8_t destination : {std::uint8_t{2U}, std::uint8_t{0U}})
+        {
+            for (std::uint32_t input_bits = 0U; input_bits < 4U; ++input_bits)
+            {
+                EspressoCore interpreted(0x1000U);
+                EspressoCore compiled(0x1000U);
+                const std::uint8_t source_a = 0U;
+                const std::uint8_t source_b = 1U;
+                const std::uint32_t instruction = cr_form(
+                    destination, source_a, source_b, xo);
+                for (EspressoCore* core : {&interpreted, &compiled})
+                {
+                    core->memory.write32_be(start, instruction);
+                    core->state.cia = start;
+                    core->state.cr = 0xA5A5A5A5U &
+                        ~(1U << 31U) & ~(1U << 30U) & ~(1U << (31U - destination));
+                    if ((input_bits & 1U) != 0U)
+                    {
+                        core->state.cr |= 1U << 31U;
+                    }
+                    if ((input_bits & 2U) != 0U)
+                    {
+                        core->state.cr |= 1U << 30U;
+                    }
+                }
+
+                const RunResult oracle = interpreted.run(1U);
+                Recompiler recompiler;
+                const RunResult actual = recompiler.run(compiled, 1U);
+                assert(actual.steps == oracle.steps);
+                assert(actual.cia == oracle.cia);
+                assert(compiled.state.cr == interpreted.state.cr);
+                assert(recompiler.statistics().native_instructions == 1U);
+                assert(recompiler.statistics().interpreter_fallbacks == 0U);
+            }
+        }
+    }
 }
 
 void recompiler_step_budget_test()
@@ -564,6 +620,7 @@ int main()
     recompiler_differential_arithmetic_test();
     recompiler_destination_aliases_second_source_test();
     recompiler_logical_differential_test();
+    recompiler_condition_bit_differential_tests();
     recompiler_step_budget_test();
     recompiler_recent_history_window_test();
     recompiler_branch_test();

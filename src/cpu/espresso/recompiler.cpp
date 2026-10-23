@@ -191,6 +191,14 @@ struct BlockCode
     case Opcode::store_word_indexed:
     case Opcode::store_byte_indexed:
     case Opcode::store_halfword_indexed:
+    case Opcode::condition_bit_and:
+    case Opcode::condition_bit_and_complement:
+    case Opcode::condition_bit_or:
+    case Opcode::condition_bit_or_complement:
+    case Opcode::condition_bit_nor:
+    case Opcode::condition_bit_xor:
+    case Opcode::condition_bit_nand:
+    case Opcode::condition_bit_equivalence:
         return !insn.record;
     default:
         return false;
@@ -234,6 +242,14 @@ struct BlockCode
     case Opcode::store_word_indexed: return "stwx";
     case Opcode::store_byte_indexed: return "stbx";
     case Opcode::store_halfword_indexed: return "sthx";
+    case Opcode::condition_bit_and: return "crand";
+    case Opcode::condition_bit_and_complement: return "crandc";
+    case Opcode::condition_bit_or: return "cror";
+    case Opcode::condition_bit_or_complement: return "crorc";
+    case Opcode::condition_bit_nor: return "crnor";
+    case Opcode::condition_bit_xor: return "crxor";
+    case Opcode::condition_bit_nand: return "crnand";
+    case Opcode::condition_bit_equivalence: return "creqv";
     default: return "<native>";
     }
 }
@@ -566,6 +582,76 @@ struct Recompiler::Impl
                         write_guest_gpr(insn.destination, lhs);
                     }
                 }
+                break;
+            }
+            case Opcode::condition_bit_and:
+            case Opcode::condition_bit_and_complement:
+            case Opcode::condition_bit_or:
+            case Opcode::condition_bit_or_complement:
+            case Opcode::condition_bit_nor:
+            case Opcode::condition_bit_xor:
+            case Opcode::condition_bit_nand:
+            case Opcode::condition_bit_equivalence:
+            {
+                constexpr std::size_t cr_offset = offsetof(CpuState, cr);
+                x86::Gp cr = compiler.new_gp32("cr");
+                compiler.mov(cr, x86::dword_ptr(
+                    state, static_cast<std::int32_t>(cr_offset)));
+                x86::Gp lhs = compiler.new_gp32("cr_lhs");
+                compiler.mov(lhs, cr);
+                compiler.shr(lhs, imm(31U - insn.cr_source_a_bit));
+                compiler.and_(lhs, imm(1U));
+                x86::Gp rhs = compiler.new_gp32("cr_rhs");
+                compiler.mov(rhs, cr);
+                compiler.shr(rhs, imm(31U - insn.cr_source_b_bit));
+                compiler.and_(rhs, imm(1U));
+
+                if (insn.opcode == Opcode::condition_bit_and ||
+                    insn.opcode == Opcode::condition_bit_and_complement ||
+                    insn.opcode == Opcode::condition_bit_nand)
+                {
+                    if (insn.opcode == Opcode::condition_bit_and_complement)
+                    {
+                        compiler.xor_(rhs, imm(1U));
+                    }
+                    compiler.and_(lhs, rhs);
+                    if (insn.opcode == Opcode::condition_bit_nand)
+                    {
+                        compiler.xor_(lhs, imm(1U));
+                    }
+                }
+                else if (insn.opcode == Opcode::condition_bit_or ||
+                         insn.opcode == Opcode::condition_bit_or_complement ||
+                         insn.opcode == Opcode::condition_bit_nor)
+                {
+                    if (insn.opcode == Opcode::condition_bit_or_complement)
+                    {
+                        compiler.xor_(rhs, imm(1U));
+                    }
+                    compiler.or_(lhs, rhs);
+                    if (insn.opcode == Opcode::condition_bit_nor)
+                    {
+                        compiler.xor_(lhs, imm(1U));
+                    }
+                }
+                else
+                {
+                    compiler.xor_(lhs, rhs);
+                    if (insn.opcode == Opcode::condition_bit_equivalence)
+                    {
+                        compiler.xor_(lhs, imm(1U));
+                    }
+                }
+
+                constexpr std::size_t cr_bit_count = 32U;
+                const std::uint32_t destination_shift =
+                    static_cast<std::uint32_t>(cr_bit_count - 1U - insn.cr_destination_bit);
+                const std::uint32_t destination_mask = 1U << destination_shift;
+                compiler.and_(cr, imm(~destination_mask));
+                compiler.shl(lhs, imm(destination_shift));
+                compiler.or_(cr, lhs);
+                compiler.mov(x86::dword_ptr(
+                    state, static_cast<std::int32_t>(cr_offset)), cr);
                 break;
             }
             case Opcode::branch:
