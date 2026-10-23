@@ -69,6 +69,12 @@ struct NativePsqLoadRecord
     std::uint32_t gqr{};
 };
 
+struct NativeMulliRecord
+{
+    std::uint32_t source_value{};
+    std::uint32_t result{};
+};
+
 struct NativeExecutionContext
 {
     GuestMemory* memory{};
@@ -78,6 +84,7 @@ struct NativeExecutionContext
     std::array<NativeFpIntegerConversionRecord, 64> fp_integer_conversion_records{};
     std::array<NativePsqStoreRecord, 64> psq_store_records{};
     std::array<NativePsqLoadRecord, 64> psq_load_records{};
+    std::array<NativeMulliRecord, 64> mulli_records{};
     std::uint64_t memory_access_calls{};
     bool failed{};
     bool guest_memory_fault{};
@@ -955,6 +962,7 @@ struct BlockCode
     {
     case Opcode::addi:
     case Opcode::addis:
+    case Opcode::multiply_low_immediate:
     case Opcode::add_immediate_carry:
     case Opcode::subtract_from_immediate_carry:
     case Opcode::ori:
@@ -1050,6 +1058,7 @@ struct BlockCode
     {
     case Opcode::addi: return "addi";
     case Opcode::addis: return "addis";
+    case Opcode::multiply_low_immediate: return "mulli";
     case Opcode::add_immediate_carry: return "addic";
     case Opcode::subtract_from_immediate_carry: return "subfic";
     case Opcode::ori: return "ori";
@@ -1265,6 +1274,7 @@ struct BlockCode
     // per-instruction snapshots are emitted into the JIT context, retain the
     // exact native trace identity without reporting potentially stale values.
     if (insn.opcode == Opcode::addi || insn.opcode == Opcode::addis ||
+        insn.opcode == Opcode::multiply_low_immediate ||
         insn.opcode == Opcode::add_immediate_carry ||
         insn.opcode == Opcode::subtract_from_immediate_carry ||
         insn.opcode == Opcode::ori || insn.opcode == Opcode::or_immediate_shifted ||
@@ -1635,6 +1645,20 @@ struct Recompiler::Impl
                     compiler.mov(x86::dword_ptr(
                         state, static_cast<std::int32_t>(offsetof(CpuState, cr))), cr);
                 }
+                break;
+            }
+            case Opcode::multiply_low_immediate:
+            {
+                const std::size_t record_base = offsetof(NativeExecutionContext, mulli_records) +
+                    index * sizeof(NativeMulliRecord);
+                x86::Gp source = read_guest_gpr(insn.base);
+                compiler.mov(x86::dword_ptr(context, static_cast<std::int32_t>(
+                    record_base + offsetof(NativeMulliRecord, source_value))), source);
+                x86::Gp result = compiler.new_gp32("mulli_result");
+                compiler.imul(result, source, imm(insn.immediate));
+                compiler.mov(x86::dword_ptr(context, static_cast<std::int32_t>(
+                    record_base + offsetof(NativeMulliRecord, result))), result);
+                write_guest_gpr(insn.destination, result);
                 break;
             }
             case Opcode::add_immediate_carry:
@@ -3503,6 +3527,19 @@ RunResult Recompiler::run(EspressoCore& core, std::size_t max_steps)
                 entry.fp_compare_a_raw = record.a_raw;
                 entry.fp_compare_b_raw = record.b_raw;
                 entry.fp_compare_result = record.result;
+                core.append_instruction_history(std::move(entry));
+                continue;
+            }
+            if (insn.opcode == Opcode::multiply_low_immediate)
+            {
+                InstructionHistoryEntry entry = native_history(insn, cia);
+                const NativeMulliRecord& record = context.mulli_records[i];
+                entry.source_registers[0] = insn.base;
+                entry.source_values[0] = record.source_value;
+                entry.source_count = 1U;
+                entry.has_destination = true;
+                entry.destination_register = insn.destination;
+                entry.destination_value = record.result;
                 core.append_instruction_history(std::move(entry));
                 continue;
             }

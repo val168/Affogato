@@ -2,6 +2,7 @@
 
 ## WWHD checkpoint
 
+- Latest dual-game Release regression after native `mulli`: WWHD remains at 6,080,538 instructions, stop CIA `0`, GPR3/4/5 `0/512/256`, unsupported null-target fetch `0x46524D48`; 5,514,107 native instructions, 566,432 interpreter fallbacks, 14,064 compiled blocks. BOTW remains at 860,172 instructions, stop CIA `0`, GPR3/4/5 `0/4,194,304/64`, same unsupported fetch; 856,340 native instructions, 3,833 fallbacks, 18,110 blocks. Both checkpoints are unchanged; no wall-time speedup is claimed.
 - RPX: `cking.rpx`; entry point `0x028EA9E0`; 24 sections.
 - Latest dual-game Release regression after native `psq_l`: WWHD remains at 6,080,538 instructions, stop CIA `0`, GPR3/4/5 `0/512/256`, unsupported null-target fetch `0x46524D48`; 5,513,259 native instructions, 567,280 interpreter fallbacks, 14,074 compiled blocks. BOTW remains at 860,172 instructions, stop CIA `0`, GPR3/4/5 `0/4,194,304/64`, same unsupported fetch; 856,271 native instructions, 3,902 fallbacks, 18,115 blocks. BOTW `psq_l` no longer appears in fallback leaders; no wall-time speedup is claimed.
 - Latest dual-game Release regression after native `lmw`: WWHD entry `0x028EA9E0`, 24 sections, 6,080,538 instructions, stop CIA `0`, GPR3/4/5 `0/512/256`, unsupported null-target fetch `0x46524D48`; 5,484,109 native instructions, 596,430 fallbacks, 14,228 blocks. BOTW entry `0x03AB62AC`, 26 sections, 860,172 instructions, stop CIA `0`, GPR3/4/5 `0/4,194,304/64`, same unsupported null-target fetch; 853,277 native instructions, 6,896 fallbacks, 18,732 blocks. Both execution checkpoints match their pre-change results; no wall-time comparison is claimed.
@@ -74,6 +75,7 @@
 
 ## Completed commits
 
+- `c9989c5` - `jit: emit native mulli`
 - `90ab0b0` - `gx2: implement sampler border type`
 - `31c2058` - `gx2: implement pixel texture binding`
 - `c89a6d5` - `gx2: add vertex and geometry texture binding`
@@ -128,7 +130,7 @@
 - `829df30` - `jit: emit native lmw`
 - `01f2797` - `jit: emit native stmw`
 - `4e39a32` - `jit: emit native psq_st`
-- `a0fb923` - `jit: emit native psq_l`
+- `1e2a47b` - `jit: emit native psq_l`
 - `2a3e1b6` - `jit: emit native stwu stores`
 - `8fadbcb` - `jit: emit native mtgqr`
 - `c678494` - `jit: report interpreter fallback hot spots`
@@ -168,6 +170,7 @@
 - Native `lfs` interpreter/JIT differential tests cover signed zero, finite values, a single subnormal, infinities, qNaN/sNaN, literal-zero `rA`, PS0/PS1 behavior, history, and transactional 4-byte memory faults. Native `lfd` tests cover raw big-endian values, literal-zero `rA`, PS1 preservation, and transactional 8-byte faults.
 - Native JIT `psq_st` now mirrors the interpreter's existing GQR type/scale conversion, integer saturation/truncation, big-endian lane stores, W=1 behavior, and complete-range validation. Runtime reserved GQR types and integer NaN conversion return to the interpreter's unsupported path without writing memory. Differential tests cover float pairs, scaled U8, saturated S16, history, state preservation, unsupported fallback, and transactional pair faults. Debug/Release builds and CTest pass; WWHD/BOTW checkpoints remain unchanged, while BOTW's 796 `psq_st` fallbacks are now native.
 - Native JIT `psq_l` now handles float32, unsigned/signed 8/16-bit GQR lanes, signed load scales, and W=1's PS1 constant. It commits both destination lanes only after every requested guest read succeeds; reserved load types return to the interpreter's unsupported path. Differential tests cover BE float pairs, scaled signed integer values, W=1, history, reserved GQR fallback, and a second-lane fault preserving both FPR lanes. Debug/Release CTest pass; checkpoints are unchanged and BOTW's 229 `psq_l` fallbacks are now native.
+- Native JIT `mulli` now uses a 32-bit low-product lowering while preserving actual GPR0 as the RA source, modulo-32-bit results, destination aliasing, and source/immediate/result history. Differential tests cover negative operands, product wrap, RA=0, zero immediate, and untouched CR/XER. Debug and Release CTest pass; both game checkpoints and stop reasons remain unchanged, and BOTW no longer lists `mulli` among its fallback leaders.
 - RPX diagnostics capture and print the latest 512 HLE calls and 64 PPC instructions. `--trace-hle <library::symbol>` filters the bounded trace to one exact HLE symbol. `--watch-write <guest-address>` opts into a bounded watch of a four-byte word, reporting overlapping writes, writer CIA, resulting big-endian word, local decoded code context, and all 32 GPRs at each matching write. `--dump-memory` provides bounded post-run BE-word inspection. All are diagnostic-only and disabled unless requested.
 
 ## Prioritized queue

@@ -221,6 +221,64 @@ void recompiler_differential_arithmetic_test()
     assert(recompiler.statistics().cache_hits >= 1U);
 }
 
+void recompiler_mulli_differential_test()
+{
+    const auto encode_mulli = [](std::uint8_t destination, std::uint8_t base,
+                                 std::int16_t immediate) {
+        return (7U << 26U) |
+            (static_cast<std::uint32_t>(destination) << 21U) |
+            (static_cast<std::uint32_t>(base) << 16U) |
+            static_cast<std::uint16_t>(immediate);
+    };
+    constexpr std::uint32_t start = 0x100U;
+    const std::array<std::uint32_t, 4U> program{
+        encode_mulli(4U, 4U, -3), // destination aliases RA; -2 * -3 = 6.
+        encode_mulli(6U, 5U, 3),  // low word of a signed product wraps modulo 2^32.
+        encode_mulli(7U, 0U, -1), // RA=0 reads GPR0; no zero-base special case.
+        encode_mulli(9U, 8U, 0),
+    };
+    EspressoCore interpreted(0x1000U);
+    EspressoCore compiled(0x1000U);
+    for (EspressoCore* core : {&interpreted, &compiled})
+    {
+        for (std::size_t index = 0; index < program.size(); ++index)
+        {
+            core->memory.write32_be(start + static_cast<std::uint32_t>(index * 4U),
+                                    program[index]);
+        }
+        core->state.cia = start;
+        core->state.gpr[0] = 0x80000000U;
+        core->state.gpr[4] = 0xFFFFFFFEU;
+        core->state.gpr[5] = 0x7FFFFFFFU;
+        core->state.gpr[8] = 0x12345678U;
+        core->state.cr = 0xA1B2C3D4U;
+        core->state.xer = 0xD2345678U;
+    }
+    const std::uint32_t cr_before = interpreted.state.cr;
+    const std::uint32_t xer_before = interpreted.state.xer;
+    const RunResult oracle = interpreted.run(program.size());
+    Recompiler recompiler;
+    const RunResult actual = recompiler.run(compiled, program.size());
+    assert(actual.reason == oracle.reason && actual.steps == program.size());
+    assert(actual.cia == oracle.cia);
+    assert(compiled.state.gpr == interpreted.state.gpr);
+    assert(compiled.state.gpr[4] == 6U);
+    assert(compiled.state.gpr[6] == 0x7FFFFFFDU);
+    assert(compiled.state.gpr[7] == 0x80000000U);
+    assert(compiled.state.gpr[9] == 0U);
+    assert(compiled.state.cr == cr_before && compiled.state.xer == xer_before);
+    assert(compiled.memory.write_generation() == interpreted.memory.write_generation());
+    assert(recompiler.statistics().native_instructions == program.size());
+    assert(recompiler.statistics().interpreter_fallbacks == 0U);
+    const InstructionHistoryEntry& history = actual.instruction_history.back();
+    assert(history.opcode_name == "mulli" && history.completed);
+    assert(history.source_count == 1U && history.source_registers[0] == 8U);
+    assert(history.source_values[0] == 0x12345678U);
+    assert(history.has_immediate && history.immediate == 0);
+    assert(history.has_destination && history.destination_register == 9U);
+    assert(history.destination_value == 0U);
+}
+
 void recompiler_cmpwi_differential_test()
 {
     constexpr std::uint32_t start = 0x100U;
@@ -3991,6 +4049,7 @@ int main()
 {
     assert(std::string(opcode_mnemonic(Opcode::floating_multiply_add_double)) == "fmadd");
     recompiler_differential_arithmetic_test();
+    recompiler_mulli_differential_test();
     recompiler_cmpwi_differential_test();
     recompiler_cmplwi_differential_test();
     recompiler_cmpw_differential_test();
