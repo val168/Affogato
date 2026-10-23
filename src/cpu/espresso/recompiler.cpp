@@ -593,6 +593,7 @@ struct BlockCode
     case Opcode::move_to_condition_register_fields:
     case Opcode::move_condition_register_from_xer:
     case Opcode::compare_signed_immediate:
+    case Opcode::compare_unsigned_immediate:
     case Opcode::compare_signed_register:
     case Opcode::compare_unsigned_register:
     case Opcode::floating_compare_unordered:
@@ -677,6 +678,7 @@ struct BlockCode
     case Opcode::bitwise_and: return "and";
     case Opcode::bitwise_xor: return "xor";
     case Opcode::compare_signed_immediate: return "cmpwi";
+    case Opcode::compare_unsigned_immediate: return "cmplwi";
     case Opcode::compare_signed_register: return "cmpw";
     case Opcode::compare_unsigned_register: return "cmplw";
     case Opcode::floating_compare_unordered: return "fcmpu";
@@ -1511,11 +1513,13 @@ struct Recompiler::Impl
                 break;
             }
             case Opcode::compare_signed_immediate:
+            case Opcode::compare_unsigned_immediate:
             case Opcode::compare_signed_register:
             case Opcode::compare_unsigned_register:
             {
                 x86::Gp lhs = read_guest_gpr(insn.base);
-                if (insn.opcode == Opcode::compare_signed_immediate)
+                if (insn.opcode == Opcode::compare_signed_immediate ||
+                    insn.opcode == Opcode::compare_unsigned_immediate)
                 {
                     compiler.cmp(lhs, imm(static_cast<std::uint32_t>(insn.immediate)));
                 }
@@ -1524,7 +1528,8 @@ struct Recompiler::Impl
                     compiler.cmp(lhs, read_guest_gpr(insn.source));
                 }
                 const bool signed_compare =
-                    insn.opcode != Opcode::compare_unsigned_register;
+                    insn.opcode == Opcode::compare_signed_immediate ||
+                    insn.opcode == Opcode::compare_signed_register;
 
                 // SETcc writes only the low byte, so zero-extend each result
                 // before combining the PPC LT/GT/EQ bits.
