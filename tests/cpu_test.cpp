@@ -21629,6 +21629,7 @@ void gx2_set_sampler_border_color_hle_tests()
 void gx2_register_state_tests()
 {
     using affogato::gpu::Gx2RegisterState;
+    using affogato::gpu::LatteTextureResourceWords;
 
     constexpr std::array<Gx2Command, 4U> commands{{
         {Gx2CommandType::set_context_register, 0x0000A400U, 0x3F800000U},
@@ -21705,6 +21706,64 @@ void gx2_register_state_tests()
         texture_words[6]};
     bindings.apply(std::span<const Gx2Command>(&overwrite_with_context, 1U));
     assert(!bindings.texture_resource(Gx2ShaderStage::vertex, 0U));
+
+    constexpr LatteTextureResourceWords decoded_words{
+        (1U << 0U) | (4U << 3U) | (7U << 8U) | (63U << 19U),
+        (31U << 0U) | (0x1AU << 26U),
+        0x00123456U,
+        0x00654321U,
+        (1U << 19U) | (2U << 22U) | (3U << 25U) | (2U << 12U),
+        3U,
+        2U << 30U};
+    const auto descriptor = affogato::gpu::decode_latte_texture_resource(decoded_words);
+    assert(descriptor.has_value());
+    assert(descriptor->raw_words == decoded_words);
+    assert(descriptor->dimension == 1U);
+    assert(descriptor->tile_mode == 4U);
+    assert(!descriptor->depth_tile);
+    assert(descriptor->pitch_pixels == 64U);
+    assert(descriptor->width == 64U);
+    assert(descriptor->height == 32U);
+    assert(descriptor->depth_or_layers == 1U);
+    assert(descriptor->format == 0x1AU);
+    assert(descriptor->image_address == 0x12345600U);
+    assert(descriptor->mipmap_address == 0x65432100U);
+    assert(descriptor->endian_swap == 2U);
+    assert((descriptor->component_selectors ==
+            std::array<std::uint8_t, 4U>{0U, 1U, 2U, 3U}));
+    assert(descriptor->last_level == 3U);
+
+    Gx2RegisterState descriptor_state;
+    std::array<Gx2Command, 7U> descriptor_commands{};
+    for (std::size_t index = 0U; index < decoded_words.size(); ++index)
+    {
+        descriptor_commands[index] = {
+            Gx2CommandType::set_shader_resource,
+            0x00038000U + static_cast<std::uint32_t>(index * 4U),
+            decoded_words[index]};
+    }
+    descriptor_state.apply(descriptor_commands);
+    assert(descriptor_state.texture_descriptor(Gx2ShaderStage::pixel, 0U) ==
+           descriptor);
+
+    auto cubemap_words = decoded_words;
+    cubemap_words[0] = (cubemap_words[0] & ~7U) | 3U;
+    cubemap_words[1] = (cubemap_words[1] & ~(0x1FFFU << 13U)) | (5U << 13U);
+    assert(affogato::gpu::decode_latte_texture_resource(
+               cubemap_words)->depth_or_layers == 36U);
+
+    auto invalid_words = decoded_words;
+    invalid_words[6] = 1U << 30U; // Not a valid texture resource.
+    assert(!affogato::gpu::decode_latte_texture_resource(invalid_words));
+    invalid_words = decoded_words;
+    invalid_words[2] = 0x01000000U; // Address exceeds the 32-bit guest range.
+    assert(!affogato::gpu::decode_latte_texture_resource(invalid_words));
+    invalid_words = decoded_words;
+    invalid_words[4] |= 6U << 16U; // Reserved component selector.
+    assert(!affogato::gpu::decode_latte_texture_resource(invalid_words));
+    invalid_words = decoded_words;
+    invalid_words[1] &= ~(0x3FU << 26U); // Invalid hardware format zero.
+    assert(!affogato::gpu::decode_latte_texture_resource(invalid_words));
 }
 
 void gx2_set_tv_buffer_hle_tests()

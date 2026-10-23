@@ -1,6 +1,7 @@
 #pragma once
 
 #include "cpu/espresso/gx2_hle.hpp"
+#include "gpu/latte_texture_resource.hpp"
 
 #include <array>
 #include <cstddef>
@@ -19,9 +20,6 @@ enum class Gx2ShaderStage
     geometry,
     compute,
 };
-
-using LatteTextureResourceWords = std::array<std::uint32_t, 7U>;
-using LatteSamplerWords = std::array<std::uint32_t, 3U>;
 
 // CPU-side shadow of Latte register writes consumed by the GPU backend.
 // It intentionally stores raw register words; decoding into Vulkan objects
@@ -122,6 +120,13 @@ public:
             result[index] = found->second.value;
         }
         return result;
+    }
+
+    [[nodiscard]] std::optional<LatteTextureResourceDescriptor>
+    texture_descriptor(Gx2ShaderStage stage, std::uint32_t unit) const
+    {
+        const auto words = texture_resource(stage, unit);
+        return words ? decode_latte_texture_resource(*words) : std::nullopt;
     }
 
     [[nodiscard]] std::size_t size() const noexcept
