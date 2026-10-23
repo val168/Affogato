@@ -21658,6 +21658,53 @@ void gx2_register_state_tests()
     assert(state.read(0x00038000U) == 0x12345678U);
     assert(state.read(0x0003C000U) == 0xAABBCCDDU);
     assert(!state.read(0x0003C004U).has_value());
+
+    using affogato::gpu::Gx2ShaderStage;
+    constexpr std::array<std::uint32_t, 7U> texture_words{
+        0x00000101U, 0x00000202U, 0x00000303U, 0x00000404U,
+        0x00000505U, 0x00000606U, 0x00000707U};
+    constexpr std::array<std::uint32_t, 3U> sampler_words{
+        0x00000011U, 0x00000022U, 0x00000033U};
+    std::vector<Gx2Command> binding_commands;
+    constexpr std::uint32_t vertex_resource_base = 0x00039180U;
+    constexpr std::uint32_t geometry_sampler_base = 0x0003C1B0U;
+    for (std::size_t index = 0U; index < texture_words.size(); ++index)
+    {
+        binding_commands.push_back({
+            Gx2CommandType::set_shader_resource,
+            vertex_resource_base + static_cast<std::uint32_t>(index * 4U),
+            texture_words[index]});
+    }
+    for (std::size_t index = 0U; index < sampler_words.size(); ++index)
+    {
+        binding_commands.push_back({
+            Gx2CommandType::set_shader_sampler,
+            geometry_sampler_base + static_cast<std::uint32_t>(index * 4U),
+            sampler_words[index]});
+    }
+
+    Gx2RegisterState bindings;
+    assert(!bindings.texture_resource(Gx2ShaderStage::vertex, 0U));
+    bindings.apply(std::span<const Gx2Command>(binding_commands).first(6U));
+    assert(!bindings.texture_resource(Gx2ShaderStage::vertex, 0U));
+    bindings.apply(std::span<const Gx2Command>(binding_commands).subspan(6U));
+    assert(bindings.texture_resource(Gx2ShaderStage::vertex, 0U) == texture_words);
+    assert(bindings.texture_resource(Gx2ShaderStage::compute, 0U) == texture_words);
+    assert(!bindings.texture_resource(Gx2ShaderStage::pixel, 0U));
+    assert(!bindings.texture_resource(Gx2ShaderStage::geometry, 0U));
+    assert(bindings.sampler(Gx2ShaderStage::geometry, 0U) == sampler_words);
+    assert(!bindings.sampler(Gx2ShaderStage::compute, 0U));
+    assert(!bindings.texture_resource(Gx2ShaderStage::vertex, 16U));
+    assert(!bindings.sampler(Gx2ShaderStage::pixel, 16U));
+
+    // A different command class at one word must not make a resource appear
+    // complete, even if every address has a value in the raw register shadow.
+    const Gx2Command overwrite_with_context{
+        Gx2CommandType::set_context_register,
+        vertex_resource_base + 6U * 4U,
+        texture_words[6]};
+    bindings.apply(std::span<const Gx2Command>(&overwrite_with_context, 1U));
+    assert(!bindings.texture_resource(Gx2ShaderStage::vertex, 0U));
 }
 
 void gx2_set_tv_buffer_hle_tests()

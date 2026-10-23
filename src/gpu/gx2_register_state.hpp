@@ -2,14 +2,26 @@
 
 #include "cpu/espresso/gx2_hle.hpp"
 
-#include <cstdint>
+#include <array>
 #include <cstddef>
+#include <cstdint>
 #include <optional>
 #include <span>
 #include <unordered_map>
 
 namespace affogato::gpu
 {
+
+enum class Gx2ShaderStage
+{
+    pixel,
+    vertex,
+    geometry,
+    compute,
+};
+
+using LatteTextureResourceWords = std::array<std::uint32_t, 7U>;
+using LatteSamplerWords = std::array<std::uint32_t, 3U>;
 
 // CPU-side shadow of Latte register writes consumed by the GPU backend.
 // It intentionally stores raw register words; decoding into Vulkan objects
@@ -21,7 +33,7 @@ public:
     {
         for (const cpu::espresso::Gx2Command& command : commands)
         {
-            registers_[command.register_address] = command.value;
+            registers_[command.register_address] = {command.type, command.value};
         }
     }
 
@@ -33,7 +45,83 @@ public:
         {
             return std::nullopt;
         }
-        return it->second;
+        return it->second.value;
+    }
+
+    // Return a binding only after all words have arrived. Compute resources
+    // share Cafe's vertex-stage resource register bank.
+    [[nodiscard]] std::optional<LatteTextureResourceWords> texture_resource(
+        Gx2ShaderStage stage,
+        std::uint32_t unit) const
+    {
+        constexpr std::uint32_t words_per_resource = 7U;
+        constexpr std::uint32_t max_units = 16U;
+        if (unit >= max_units)
+        {
+            return std::nullopt;
+        }
+
+        std::uint32_t base{};
+        switch (stage)
+        {
+        case Gx2ShaderStage::pixel: base = 0x00038000U; break;
+        case Gx2ShaderStage::vertex:
+        case Gx2ShaderStage::compute: base = 0x00039180U; break;
+        case Gx2ShaderStage::geometry: base = 0x0003A4C0U; break;
+        default: return std::nullopt;
+        }
+
+        LatteTextureResourceWords result{};
+        const std::uint32_t first =
+            base + unit * words_per_resource * sizeof(std::uint32_t);
+        for (std::uint32_t index = 0U; index < words_per_resource; ++index)
+        {
+            const auto found = registers_.find(first + index * sizeof(std::uint32_t));
+            if (found == registers_.end() ||
+                found->second.type != cpu::espresso::Gx2CommandType::set_shader_resource)
+            {
+                return std::nullopt;
+            }
+            result[index] = found->second.value;
+        }
+        return result;
+    }
+
+    [[nodiscard]] std::optional<LatteSamplerWords> sampler(
+        Gx2ShaderStage stage,
+        std::uint32_t unit) const
+    {
+        constexpr std::uint32_t words_per_sampler = 3U;
+        constexpr std::uint32_t max_units = 16U;
+        if (unit >= max_units)
+        {
+            return std::nullopt;
+        }
+
+        std::uint32_t base{};
+        switch (stage)
+        {
+        case Gx2ShaderStage::pixel: base = 0x0003C000U; break;
+        case Gx2ShaderStage::vertex:
+        case Gx2ShaderStage::compute: base = 0x0003C0D8U; break;
+        case Gx2ShaderStage::geometry: base = 0x0003C1B0U; break;
+        default: return std::nullopt;
+        }
+
+        LatteSamplerWords result{};
+        const std::uint32_t first =
+            base + unit * words_per_sampler * sizeof(std::uint32_t);
+        for (std::uint32_t index = 0U; index < words_per_sampler; ++index)
+        {
+            const auto found = registers_.find(first + index * sizeof(std::uint32_t));
+            if (found == registers_.end() ||
+                found->second.type != cpu::espresso::Gx2CommandType::set_shader_sampler)
+            {
+                return std::nullopt;
+            }
+            result[index] = found->second.value;
+        }
+        return result;
     }
 
     [[nodiscard]] std::size_t size() const noexcept
@@ -42,7 +130,13 @@ public:
     }
 
 private:
-    std::unordered_map<std::uint32_t, std::uint32_t> registers_;
+    struct RegisterValue
+    {
+        cpu::espresso::Gx2CommandType type{};
+        std::uint32_t value{};
+    };
+
+    std::unordered_map<std::uint32_t, RegisterValue> registers_;
 };
 
 }
