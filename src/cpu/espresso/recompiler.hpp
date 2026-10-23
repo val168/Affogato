@@ -17,6 +17,7 @@ struct RecompilerStatistics
     std::uint64_t native_execution_time_ns{};
     std::uint64_t compiled_blocks{};
     std::uint64_t cache_hits{};
+    std::uint64_t fast_lookup_hits{};
     std::uint64_t last_block_cache_hits{};
     std::uint64_t block_lookup_misses{};
     std::uint64_t dispatcher_entries{};

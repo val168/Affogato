@@ -272,6 +272,7 @@ std::string format_result(const affogato::EmulatorRunResult& result)
              << "\nInterpreter fallbacks: " << result.recompiler_statistics.interpreter_fallbacks
              << "\nCompiled blocks: " << result.recompiler_statistics.compiled_blocks
              << "\nBlock-cache hits: " << result.recompiler_statistics.cache_hits
+             << "\nFast lookup hits: " << result.recompiler_statistics.fast_lookup_hits
              << "\nJIT compilation time: "
              << result.recompiler_statistics.compilation_time_ns / 1'000'000U << " ms"
              << "\nNative block execution time: "
@@ -348,6 +349,7 @@ std::string format_progress(
              << "\nInterpreter fallbacks: " << result.recompiler_statistics.interpreter_fallbacks
              << "\nCompiled blocks: " << result.recompiler_statistics.compiled_blocks
              << "\nBlock-cache hits: " << result.recompiler_statistics.cache_hits
+             << "\nFast lookup hits: " << result.recompiler_statistics.fast_lookup_hits
              << "\nJIT compilation time: "
              << result.recompiler_statistics.compilation_time_ns / 1'000'000U << " ms"
              << "\nNative block execution time: "

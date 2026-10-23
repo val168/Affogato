@@ -497,6 +497,8 @@ struct BlockCode
 
 struct Recompiler::Impl
 {
+    static constexpr std::size_t fast_lookup_cache_size = 16'384U;
+
     struct CacheEntry
     {
         BlockCode block;
@@ -508,8 +510,15 @@ struct Recompiler::Impl
         bool spans_two_pages{};
     };
 
+    struct FastLookupEntry
+    {
+        std::uint32_t address{};
+        CacheEntry* entry{};
+    };
+
     asmjit::JitRuntime runtime;
     std::unordered_map<std::uint32_t, CacheEntry> cache;
+    std::array<FastLookupEntry, fast_lookup_cache_size> fast_lookup_cache{};
     CacheEntry* last_cache_entry{};
     std::uint32_t last_cache_address{};
     RecompilerStatistics stats{};
@@ -549,6 +558,7 @@ struct Recompiler::Impl
     {
         last_cache_entry = nullptr;
         last_cache_address = 0U;
+        fast_lookup_cache = {};
         for (auto& [address, entry] : cache)
         {
             static_cast<void>(address);
@@ -1398,6 +1408,8 @@ RunResult Recompiler::run(EspressoCore& core, std::size_t max_steps)
         BlockCode* block = nullptr;
         try
         {
+            Impl::FastLookupEntry& fast_entry = impl_->fast_lookup_cache[
+                (start >> 2U) & (Impl::fast_lookup_cache_size - 1U)];
             if (impl_->last_cache_entry != nullptr &&
                 impl_->last_cache_address == start &&
                 impl_->last_cache_entry->memory_owner == &core.memory &&
@@ -1407,6 +1419,16 @@ RunResult Recompiler::run(EspressoCore& core, std::size_t max_steps)
                 ++impl_->stats.cache_hits;
                 ++impl_->stats.last_block_cache_hits;
                 block = &impl_->last_cache_entry->block;
+            }
+            else if (fast_entry.address == start && fast_entry.entry != nullptr &&
+                fast_entry.entry->memory_owner == &core.memory &&
+                Impl::code_page_generations_match(*fast_entry.entry, core.memory))
+            {
+                ++impl_->stats.cache_hits;
+                ++impl_->stats.fast_lookup_hits;
+                block = &fast_entry.entry->block;
+                impl_->last_cache_entry = fast_entry.entry;
+                impl_->last_cache_address = start;
             }
             else
             {
@@ -1427,6 +1449,11 @@ RunResult Recompiler::run(EspressoCore& core, std::size_t max_steps)
                     }
                     if (!valid)
                     {
+                        if (fast_entry.address == start &&
+                            fast_entry.entry == &found->second)
+                        {
+                            fast_entry = {};
+                        }
                         if (impl_->last_cache_entry == &found->second)
                         {
                             impl_->last_cache_entry = nullptr;
@@ -1449,6 +1476,7 @@ RunResult Recompiler::run(EspressoCore& core, std::size_t max_steps)
                     block = &found->second.block;
                     impl_->last_cache_entry = &found->second;
                     impl_->last_cache_address = start;
+                    fast_entry = {start, &found->second};
                 }
                 else
                 {
@@ -1513,6 +1541,7 @@ RunResult Recompiler::run(EspressoCore& core, std::size_t max_steps)
                         block = &inserted->second.block;
                         impl_->last_cache_entry = &inserted->second;
                         impl_->last_cache_address = start;
+                        fast_entry = {start, &inserted->second};
                     }
                 }
             }

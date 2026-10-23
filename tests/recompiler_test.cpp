@@ -621,6 +621,24 @@ void recompiler_branch_test()
     assert(core.state.lr == 0x104U);
 }
 
+void recompiler_fast_lookup_cache_test()
+{
+    EspressoCore core(0x1000U);
+    core.memory.write32_be(0x100U, 0x48000021U); // b 0x120
+    core.memory.write32_be(0x120U, 0x4BFFFFE0U); // b 0x100
+    core.state.cia = 0x100U;
+
+    Recompiler recompiler;
+    const RunResult result = recompiler.run(core, 4U);
+
+    assert(result.steps == 4U);
+    assert(result.reason == StopReason::instruction_limit);
+    assert(result.cia == 0x100U);
+    assert(recompiler.statistics().compiled_blocks == 2U);
+    assert(recompiler.statistics().fast_lookup_hits == 2U);
+    assert(recompiler.statistics().cache_hits == 2U);
+}
+
 void recompiler_conditional_branch_tests()
 {
     const auto compare_run = [](std::uint32_t word, std::uint32_t cr,
@@ -1014,6 +1032,7 @@ int main()
     recompiler_step_budget_test();
     recompiler_recent_history_window_test();
     recompiler_branch_test();
+    recompiler_fast_lookup_cache_test();
     recompiler_conditional_branch_tests();
     recompiler_special_register_move_tests();
     recompiler_interpreter_fallback_test();
