@@ -878,6 +878,52 @@ void recompiler_mcrxr_differential_tests()
     }
 }
 
+void recompiler_mfxer_differential_tests()
+{
+    constexpr std::uint32_t start = 0x100U;
+    constexpr std::array<std::uint32_t, 4U> xer_values{
+        0U, 0xE0000000U, 0xA5C39E71U, 0xFFFFFFFFU};
+
+    for (std::uint8_t destination = 0U; destination < 32U; ++destination)
+    {
+        for (const std::uint32_t initial_xer : xer_values)
+        {
+            EspressoCore interpreted(0x1000U);
+            EspressoCore compiled(0x1000U);
+            const std::uint32_t instruction = x_form(destination, 1U, 0U, 339U);
+            for (EspressoCore* core : {&interpreted, &compiled})
+            {
+                core->memory.write32_be(start, instruction);
+                core->state.cia = start;
+                core->state.gpr.fill(0xDEADBEEFU);
+                core->state.gpr[destination] = 0x12345678U;
+                core->state.cr = 0xA5C39E71U;
+                core->state.xer = initial_xer;
+                core->state.lr = 0xABCDEF00U;
+                core->state.ctr = 0x76543210U;
+                core->state.fpscr = 0x89ABCDEFU;
+            }
+
+            const RunResult oracle = interpreted.run(1U);
+            Recompiler recompiler;
+            const RunResult actual = recompiler.run(compiled, 1U);
+            assert(actual.reason == oracle.reason);
+            assert(actual.steps == oracle.steps && actual.steps == 1U);
+            assert(actual.cia == oracle.cia);
+            assert(compiled.state.gpr == interpreted.state.gpr);
+            assert(compiled.state.gpr[destination] == initial_xer);
+            assert(compiled.state.cr == interpreted.state.cr);
+            assert(compiled.state.xer == initial_xer);
+            assert(compiled.state.lr == interpreted.state.lr);
+            assert(compiled.state.ctr == interpreted.state.ctr);
+            assert(compiled.state.fpscr == interpreted.state.fpscr);
+            assert(recompiler.statistics().native_instructions == 1U);
+            assert(recompiler.statistics().interpreter_fallbacks == 0U);
+            assert(actual.instruction_history.back().opcode_name == "mfxer");
+        }
+    }
+}
+
 void recompiler_rlwinm_differential_tests()
 {
     constexpr std::uint32_t start = 0x100U;
@@ -1579,6 +1625,7 @@ int main()
     recompiler_mfcr_differential_tests();
     recompiler_mtcrf_differential_tests();
     recompiler_mcrxr_differential_tests();
+    recompiler_mfxer_differential_tests();
     recompiler_rlwinm_differential_tests();
     recompiler_lfd_differential_tests();
     recompiler_lfs_differential_tests();

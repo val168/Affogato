@@ -354,6 +354,7 @@ struct BlockCode
     case Opcode::move_to_link_register:
     case Opcode::move_from_count_register:
     case Opcode::move_to_count_register:
+    case Opcode::move_from_xer:
     case Opcode::load_word_zero:
     case Opcode::load_byte_zero:
     case Opcode::load_halfword_zero:
@@ -419,6 +420,7 @@ struct BlockCode
     case Opcode::move_to_link_register: return "mtlr";
     case Opcode::move_from_count_register: return "mfctr";
     case Opcode::move_to_count_register: return "mtctr";
+    case Opcode::move_from_xer: return "mfxer";
     case Opcode::load_word_zero: return "lwz";
     case Opcode::load_byte_zero: return "lbz";
     case Opcode::load_halfword_zero: return "lhz";
@@ -1360,6 +1362,7 @@ struct Recompiler::Impl
             }
             case Opcode::move_from_link_register:
             case Opcode::move_from_count_register:
+            case Opcode::move_from_xer:
             case Opcode::move_to_link_register:
             case Opcode::move_to_count_register:
             {
@@ -1367,9 +1370,12 @@ struct Recompiler::Impl
                     insn.opcode == Opcode::move_from_link_register ||
                     insn.opcode == Opcode::move_to_link_register
                     ? offsetof(CpuState, lr)
-                    : offsetof(CpuState, ctr);
+                    : insn.opcode == Opcode::move_from_xer
+                        ? offsetof(CpuState, xer)
+                        : offsetof(CpuState, ctr);
                 if (insn.opcode == Opcode::move_from_link_register ||
-                    insn.opcode == Opcode::move_from_count_register)
+                    insn.opcode == Opcode::move_from_count_register ||
+                    insn.opcode == Opcode::move_from_xer)
                 {
                     x86::Gp value = compiler.new_gp32("special");
                     compiler.mov(value, x86::dword_ptr(
