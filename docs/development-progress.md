@@ -4,7 +4,7 @@
 
 - RPX: `cking.rpx`; entry point `0x028EA9E0`; 24 sections.
 - Latest confirmed run: 6,080,538 guest instructions; stop CIA `0x00000000`; GPR3 `0`; stop is an unsupported fetch of `0x46524D48` after `bcctr` loaded CTR from a null callback field. The wider trace shows both the thread-specific candidate and the global object's `+0x10` candidate are null. `0x46524D48` is the synthetic `FRMH` header mirrored at low address zero by the MEM1 alias, so this is a null indirect call obscured by the current flat memory map, not a missing PPC opcode. The caller's object owner is still unidentified; do not synthesize a target.
-- JIT run: 3,257,921 native instructions, 2,822,618 interpreter fallbacks, 26,091 compiled blocks, 1,892,364 block-cache hits; guest execution about 4.35 s.
+- JIT run: 3,257,921 native instructions, 2,822,618 interpreter fallbacks, 26,091 compiled blocks, 1,892,364 block-cache hits; latest guest execution about 5.03 s.
 - No unimplemented HLE was reached. `GX2InitTextureRegs` ran 13 times, along with the sampler initialization and existing GX2 state HLEs.
 
 ## Graphics checkpoint
@@ -13,13 +13,14 @@
 - Implemented: pixel texture binding, including Latte resource-word construction and a logical shader-resource command stream (`31c2058`).
 - Implemented: shared binding logic for vertex and geometry texture stages, with stage-specific register bases and independent binding state (`c89a6d5`).
 - Implemented: three-word sampler binding for pixel, vertex, and geometry stages, with independent per-unit state (`40b1425`).
-- Implemented this iteration: compute texture and sampler APIs route to the vertex resource banks, matching Cafe's GX2 behavior.
+- Implemented: compute texture and sampler APIs route to the vertex resource banks, matching Cafe's GX2 behavior.
 - Implemented sampler border-color state for pixel, vertex, geometry, and compute (compute shares the vertex bank), recording the four FPR float arguments as Latte config-register writes. Register bases and twelve-entry stage banks were checked against Cemu's Latte register definitions.
 - GX2 register/resource/sampler writes now transfer incrementally from each `Emulator::run` result to the frontend's Vulkan thread; the renderer maintains a last-write-wins raw Latte register shadow. This is command/state plumbing only, not draw submission or guest rendering.
 - The renderer register shadow can now retrieve complete seven-word texture-resource and three-word sampler bindings by shader stage. Partial groups are not exposed; compute correctly resolves through the shared vertex bank. This remains state decoding only and does not yet create Vulkan images or descriptors.
 - Added checked Latte texture-word decoding into a typed descriptor: dimensions, encoded pitch, tile mode/type, hardware format, guest image/mipmap addresses, view levels/slices, numeric/endian modes, degamma, and component selectors. Invalid resource types, >32-bit addresses, reserved selectors, and invalid format fields are rejected. This is descriptor interpretation only; tiled guest memory is not yet uploaded to Vulkan.
 - Added typed sampler decoding for wrap/filter modes, anisotropy, border/depth state, signed fixed-point LOD bias, and word-2 flags. Ambiguous overlapping word-0 bits remain available through raw words rather than being guessed.
 - Corrected `GX2Set*Texture` to read `GX2Surface.mipmaps` from offset `0x2C`, not `mipmapSize` at `0x28`. A missing mip pointer still aliases the base image even when the size field is nonzero.
+- Added this iteration: a CPU-side texture staging conversion for one supported path: single-layer 2D RGBA8 UNORM in linear-aligned layout, with guest pitch respected and Latte component selectors applied. Tiled, compressed, endian-swapped, mipmapped, array, and non-UNORM formats are explicitly rejected rather than misread.
 - Actual guest rendering/presentation is not yet confirmed; command submission, shader execution, and framebuffer presentation remain incomplete.
 
 ## Completed commits
@@ -34,17 +35,19 @@
 - `8903dbb` - `gpu: expose complete Latte texture bindings`
 - `ad89b6e` - `gpu: decode Latte texture resource words`
 - `cffd6eb` - `gpu: decode Latte sampler state`
+- `801f671` - `gx2: fix texture mipmap address field`
+- `eed37e6` - `gpu: stage linear RGBA8 Latte textures`
 
 ## Current test status
 
 - Debug build: `build/debug-win-native`, Ninja; build is current.
-- CTest after texture/sampler descriptor decoding and mipmap-pointer correction: 2/2 passed.
-- Latest WWHD diagnostic: 6,080,538 instructions; stop remains at CIA 0 with null `bcctr` target (`CTR=0`); the new renderer state accessors do not affect this guest path. Latest run: RPX load 206 ms; guest execution 5,482 ms.
+- CTest: 2/2 passed after linear RGBA8 staging and swizzle/layout rejection tests.
+- Latest WWHD diagnostic after staging change: 6,080,538 instructions; stop remains at CIA 0 with null `bcctr` target (`CTR=0`); the staging helper does not affect this guest path. Latest run: RPX load 185 ms; guest execution 5,032 ms.
 
 ## Prioritized queue
 
 1. Trace the null `bcctr` caller/object owner further; current evidence shows zero thread-specific and global candidate pointers. Check guest-side initialization and relevant HLE state; do not fabricate a callback.
-2. Carry decoded texture and sampler bindings together with safely snapshotted guest image bytes to the Vulkan thread; begin with explicit supported linear formats and reject unsupported tiling/layouts.
+2. Add a Vulkan image-upload path for the already-supported linear RGBA8 staging representation, with resource lifetime/synchronization tests and no claim that current WWHD has submitted a draw.
 3. Audit actual guest shader, draw, and scan-buffer producers; the current WWHD run stops before any draw or texture-binding HLE is observed.
 4. Add real render submission and guest framebuffer presentation only after command and resource state are available; do not present the clear-test window as game output.
 5. Run a fresh Cemu-vs-Affogato CPU coverage audit if the null guest call remains the only runtime stop.

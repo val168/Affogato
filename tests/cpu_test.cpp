@@ -11,6 +11,7 @@
 #include "cpu_state_test.hpp"
 #include "emulator.hpp"
 #include "gpu/gx2_register_state.hpp"
+#include "gpu/latte_texture_staging.hpp"
 
 #include <algorithm>
 #include <array>
@@ -21821,6 +21822,58 @@ void gx2_register_state_tests()
     assert(!affogato::gpu::decode_latte_sampler(invalid_sampler_words));
 }
 
+void latte_texture_staging_tests()
+{
+    affogato::gpu::LatteTextureResourceDescriptor descriptor{};
+    descriptor.dimension = 2U;
+    descriptor.tile_mode = 1U;
+    descriptor.pitch_pixels = 3U;
+    descriptor.width = 2U;
+    descriptor.height = 2U;
+    descriptor.depth_or_layers = 1U;
+    descriptor.format = 0x1AU;
+    descriptor.component_selectors = {0U, 1U, 2U, 3U};
+
+    // Each row has three guest pixels, but only two belong to the image.
+    const std::array<std::uint8_t, 24U> guest_bytes{
+        1U, 2U, 3U, 4U, 5U, 6U, 7U, 8U, 99U, 98U, 97U, 96U,
+        9U, 10U, 11U, 12U, 13U, 14U, 15U, 16U, 95U, 94U, 93U, 92U};
+    const auto staged = affogato::gpu::stage_linear_rgba8_texture(
+        descriptor, guest_bytes);
+    assert(staged.has_value());
+    assert(staged->width == 2U);
+    assert(staged->height == 2U);
+    assert((staged->pixels == std::vector<std::uint8_t>{
+        1U, 2U, 3U, 4U, 5U, 6U, 7U, 8U,
+        9U, 10U, 11U, 12U, 13U, 14U, 15U, 16U}));
+
+    descriptor.component_selectors = {2U, 1U, 0U, 5U};
+    const auto swizzled = affogato::gpu::stage_linear_rgba8_texture(
+        descriptor, guest_bytes);
+    assert(swizzled.has_value());
+    assert((swizzled->pixels == std::vector<std::uint8_t>{
+        3U, 2U, 1U, 255U, 7U, 6U, 5U, 255U,
+        11U, 10U, 9U, 255U, 15U, 14U, 13U, 255U}));
+
+    assert(!affogato::gpu::stage_linear_rgba8_texture(
+        descriptor, std::span<const std::uint8_t>(guest_bytes).first(23U)));
+    auto unsupported = descriptor;
+    unsupported.tile_mode = 4U; // Macro-tiled layout is not decoded here.
+    assert(!affogato::gpu::stage_linear_rgba8_texture(unsupported, guest_bytes));
+    unsupported = descriptor;
+    unsupported.endian_swap = 1U;
+    assert(!affogato::gpu::stage_linear_rgba8_texture(unsupported, guest_bytes));
+    unsupported = descriptor;
+    unsupported.numeric_format = 1U; // Integer sampling is not RGBA8 UNORM.
+    assert(!affogato::gpu::stage_linear_rgba8_texture(unsupported, guest_bytes));
+    unsupported = descriptor;
+    unsupported.base_level = 1U;
+    assert(!affogato::gpu::stage_linear_rgba8_texture(unsupported, guest_bytes));
+    unsupported = descriptor;
+    unsupported.component_selectors[0] = 6U;
+    assert(!affogato::gpu::stage_linear_rgba8_texture(unsupported, guest_bytes));
+}
+
 void gx2_set_tv_buffer_hle_tests()
 {
     constexpr std::uint32_t buffer_address = 0x0A001000U;
@@ -29563,6 +29616,7 @@ int main(int argc, char* argv[])
     gx2_set_pixel_sampler_hle_tests();
     gx2_set_sampler_border_color_hle_tests();
     gx2_register_state_tests();
+    latte_texture_staging_tests();
     gx2_calc_tv_size_hle_tests();
     gx2_set_tv_buffer_hle_tests();
     gx2_set_tv_scale_hle_tests();
