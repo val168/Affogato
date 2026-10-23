@@ -74,6 +74,13 @@ constexpr std::int32_t os_thread_default_internal_priority =
     os_thread_app_priority_base + os_thread_default_app_priority;
 constexpr std::uint32_t os_message_queue_size = 0x3CU;
 constexpr std::uint32_t os_message_queue_tag = 0x6D536751U; // mSgQ
+constexpr std::uint32_t os_event_size = 0x24U;
+constexpr std::uint32_t os_event_tag = 0x65566E54U; // eVnT
+constexpr std::uint32_t os_event_value_offset = 0x0CU;
+constexpr std::uint32_t os_event_queue_offset = 0x10U;
+constexpr std::uint32_t os_event_mode_offset = 0x20U;
+constexpr std::uint32_t os_event_mode_manual = 0U;
+constexpr std::uint32_t os_event_mode_auto = 1U;
 constexpr std::uint32_t os_message_queue_send_queue_offset = 0x0CU;
 constexpr std::uint32_t os_message_queue_recv_queue_offset = 0x1CU;
 constexpr std::uint32_t os_message_queue_messages_offset = 0x2CU;
@@ -255,6 +262,19 @@ void initialize_guest_message_queue(
     memory.write32_be(queue + os_message_queue_capacity_offset, size);
     memory.write32_be(queue + os_message_queue_first_offset, 0U);
     memory.write32_be(queue + os_message_queue_used_offset, 0U);
+}
+
+void initialize_guest_os_event(
+    GuestMemory& memory,
+    std::uint32_t event,
+    std::uint32_t initial_value,
+    std::uint32_t mode)
+{
+    memory.zero_fill(event, os_event_size);
+    memory.write32_be(event, os_event_tag);
+    memory.write32_be(event + os_event_value_offset, initial_value != 0U ? 1U : 0U);
+    initialize_guest_thread_queue(memory, event + os_event_queue_offset, event);
+    memory.write32_be(event + os_event_mode_offset, mode);
 }
 
 [[nodiscard]] bool send_guest_message(
@@ -3265,6 +3285,40 @@ void register_coreinit_hle(HleDispatcher& dispatcher)
         "OSInitMutex",
         [](EspressoCore& core) {
             initialize_guest_os_mutex(core, core.state.gpr[3], core.state.gpr[4]);
+        });
+    dispatcher.register_function(
+        "coreinit",
+        "OSInitEvent",
+        [](EspressoCore& core) {
+            constexpr std::uint64_t guest_address_space_end =
+                std::uint64_t{1} << 32U;
+            const std::uint32_t event = core.state.gpr[3];
+            const std::uint32_t initial_value = core.state.gpr[4];
+            const std::uint32_t mode = core.state.gpr[5];
+            if (event == 0U)
+            {
+                throw HleExecutionError("OSInitEvent received null OSEvent pointer");
+            }
+            if (static_cast<std::uint64_t>(event) + os_event_size >
+                guest_address_space_end)
+            {
+                throw HleExecutionError("OSInitEvent OSEvent address wraps guest address space");
+            }
+            if (mode != os_event_mode_manual && mode != os_event_mode_auto)
+            {
+                throw HleExecutionError("OSInitEvent received an unsupported OSEventMode");
+            }
+            try
+            {
+                // Validate the complete Cafe structure before clearing it.
+                core.memory.validate_write_range(event, os_event_size);
+            }
+            catch (const GuestMemoryFault&)
+            {
+                throw HleExecutionError("OSInitEvent OSEvent is outside writable guest memory");
+            }
+
+            initialize_guest_os_event(core.memory, event, initial_value, mode);
         });
     dispatcher.register_function(
         "coreinit",

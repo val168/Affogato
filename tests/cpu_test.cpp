@@ -15289,6 +15289,131 @@ void os_init_message_queue_hle_tests()
     }
 }
 
+void os_init_event_hle_tests()
+{
+    constexpr std::uint32_t event = 0x1000U;
+    constexpr std::uint32_t event_size = 0x24U;
+    constexpr std::uint32_t event_tag = 0x65566E54U;
+    constexpr std::uint32_t return_address = 0x02760BE0U;
+    constexpr std::uint8_t sentinel = 0xA5U;
+
+    EspressoCore core(0x4000U);
+    register_coreinit_hle(core.hle);
+    const std::uint32_t initialize = core.hle.bind_import("coreinit", "OSInitEvent");
+    core.memory.fill_bytes(event - 1U, event_size + 2U, sentinel);
+    for (std::uint32_t reg = 0U; reg < core.state.gpr.size(); ++reg)
+    {
+        core.state.gpr[reg] = 0xA5000000U + reg * 0x101U;
+    }
+    for (std::uint32_t reg = 0U; reg < core.state.fpr.size(); ++reg)
+    {
+        core.state.fpr[reg] = 0x1111000000000000ULL + reg;
+        core.state.fpr_ps1[reg] = 0x2222000000000000ULL + reg;
+    }
+    core.state.gpr[3] = event;
+    core.state.gpr[4] = 1U;
+    core.state.gpr[5] = 0U;
+    core.state.cr = 0x12345678U;
+    core.state.xer = 0xA00000A5U;
+    core.state.ctr = 0xCAFEBABEU;
+    core.state.fpscr = 0x5A5AA55AU;
+    core.state.lr = return_address;
+    const auto gprs_before = core.state.gpr;
+    const auto fprs_before = core.state.fpr;
+    const auto ps1_before = core.state.fpr_ps1;
+    const std::uint32_t cr_before = core.state.cr;
+    const std::uint32_t xer_before = core.state.xer;
+    const std::uint32_t ctr_before = core.state.ctr;
+    const std::uint32_t fpscr_before = core.state.fpscr;
+    const std::uint32_t lr_before = core.state.lr;
+
+    core.state.cia = initialize;
+    const RunResult initialized = core.run(1U);
+    assert(initialized.reason == StopReason::instruction_limit);
+    assert(initialized.steps == 1U);
+    assert(core.state.cia == return_address);
+    assert(core.state.gpr == gprs_before);
+    assert(core.state.fpr == fprs_before);
+    assert(core.state.fpr_ps1 == ps1_before);
+    assert(core.state.cr == cr_before);
+    assert(core.state.xer == xer_before);
+    assert(core.state.ctr == ctr_before);
+    assert(core.state.fpscr == fpscr_before);
+    assert(core.state.lr == lr_before);
+
+    assert(core.memory.read32_be(event) == event_tag);
+    assert(core.memory.read32_be(event + 4U) == 0U); // OSInitEvent has no name.
+    assert(core.memory.read32_be(event + 8U) == 0U);
+    assert(core.memory.read32_be(event + 0x0CU) == 1U);
+    assert(core.memory.read32_be(event + 0x10U) == 0U); // waiter head
+    assert(core.memory.read32_be(event + 0x14U) == 0U); // waiter tail
+    assert(core.memory.read32_be(event + 0x18U) == event); // queue parent
+    assert(core.memory.read32_be(event + 0x1CU) == 0U);
+    assert(core.memory.read32_be(event + 0x20U) == 0U); // manual reset
+    assert(core.memory.read8(event - 1U) == sentinel);
+    assert(core.memory.read8(event + event_size) == sentinel);
+
+    // Reinitializing an auto-reset event clears stale queue/name state and
+    // stores the requested unset value and mode.
+    core.memory.write32_be(event + 4U, 0xDEADBEEFU);
+    core.memory.write32_be(event + 0x10U, 0x11111111U);
+    core.memory.write32_be(event + 0x14U, 0x22222222U);
+    core.state.gpr[3] = event;
+    core.state.gpr[4] = 0U;
+    core.state.gpr[5] = 1U;
+    core.state.cia = initialize;
+    assert(core.step() == StepResult::executed);
+    assert(core.state.cia == return_address);
+    assert(core.memory.read32_be(event) == event_tag);
+    assert(core.memory.read32_be(event + 4U) == 0U);
+    assert(core.memory.read32_be(event + 0x0CU) == 0U);
+    assert(core.memory.read32_be(event + 0x10U) == 0U);
+    assert(core.memory.read32_be(event + 0x14U) == 0U);
+    assert(core.memory.read32_be(event + 0x18U) == event);
+    assert(core.memory.read32_be(event + 0x20U) == 1U);
+
+    const auto expect_error = [&](std::uint32_t pointer,
+                                  std::uint32_t mode,
+                                  const std::string& detail) {
+        core.memory.fill_bytes(event, event_size, sentinel);
+        std::array<std::uint8_t, event_size> before{};
+        core.memory.read_bytes(event, before);
+        core.state.cia = initialize;
+        core.state.lr = return_address;
+        core.state.gpr[3] = pointer;
+        core.state.gpr[4] = 1U;
+        core.state.gpr[5] = mode;
+        const RunResult result = core.run(1U);
+        assert(result.reason == StopReason::hle_error);
+        assert(result.steps == 0U);
+        assert(result.detail.find(detail) != std::string::npos);
+        std::array<std::uint8_t, event_size> after{};
+        core.memory.read_bytes(event, after);
+        assert(after == before);
+    };
+    expect_error(0U, 0U, "null OSEvent pointer");
+    expect_error(event, 2U, "unsupported OSEventMode");
+    expect_error(0xFFFFFFF0U, 0U, "wraps guest address space");
+
+    EspressoCore partial_core(0x1000U);
+    register_coreinit_hle(partial_core.hle);
+    partial_core.memory.map_region(0x2000U, 0x10U);
+    partial_core.memory.fill_bytes(0x2000U, 0x10U, sentinel);
+    partial_core.state.cia = partial_core.hle.bind_import("coreinit", "OSInitEvent");
+    partial_core.state.lr = return_address;
+    partial_core.state.gpr[3] = 0x2000U;
+    partial_core.state.gpr[4] = 1U;
+    partial_core.state.gpr[5] = 0U;
+    const RunResult partial_fault = partial_core.run(1U);
+    assert(partial_fault.reason == StopReason::hle_error);
+    assert(partial_fault.detail.find("outside writable guest memory") !=
+           std::string::npos);
+    for (std::uint32_t address = 0x2000U; address < 0x2010U; ++address)
+    {
+        assert(partial_core.memory.read8(address) == sentinel);
+    }
+}
+
 void os_send_message_hle_tests()
 {
     constexpr std::uint32_t queue = 0x1000U;
@@ -29865,6 +29990,7 @@ int main(int argc, char* argv[])
     os_set_exception_callback_hle_tests();
     os_get_thread_priority_hle_tests();
     os_init_message_queue_hle_tests();
+    os_init_event_hle_tests();
     os_send_message_hle_tests();
     os_receive_message_hle_tests();
     mem_get_base_heap_handle_hle_tests();

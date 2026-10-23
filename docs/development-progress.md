@@ -11,7 +11,7 @@
 
 ## Secondary BOTW checkpoint
 
-- The loader relocates its HLE data/import windows when an RPX section overlaps the defaults (`a9e1130`). It now handles `R_PPC_DTPMOD32` as module 1 and `R_PPC_DTPREL32` as the TLS symbol's module-relative offset. Latest BOTW run: entry `0x03AB62AC`, 26 sections, 540,400 guest instructions, stop CIA `0x0FF002AC`, GPR3 `0x104DED54`; blocker is unimplemented `coreinit::OSInitEvent`. The trace shows event initialization in startup synchronization code. This is the first BOTW guest-runtime checkpoint; it does not indicate game rendering.
+- The loader relocates its HLE data/import windows when an RPX section overlaps the defaults (`a9e1130`). It handles `R_PPC_DTPMOD32` as module 1 and `R_PPC_DTPREL32` as the TLS symbol's module-relative offset (`fc8714a`, `a5f3ed2`). Latest BOTW run: entry `0x03AB62AC`, 26 sections, 540,433 guest instructions, stop CIA `0x0346C38C`, GPR3 `0x104DED3C`; the next blocker is unsupported PPC word `0x7C006028`, decoded as `lwarx r0,0,r0`. `coreinit::OSInitEvent` now initializes the guest-visible OSEvent and returns normally. This remains startup/runtime progress, not evidence of game rendering.
 
 ## Graphics checkpoint
 
@@ -66,17 +66,18 @@
 - `0b656bb` - `debug: capture GPRs at watched guest writes`
 - `a9e1130` - `loader: relocate HLE ranges around RPX sections`
 - `fc8714a` - `loader: implement PPC TLS module ID relocation`
-- pending - `loader: implement PPC TLS symbol offset relocation`
+- `a5f3ed2` - `loader: implement PPC TLS symbol offset relocation`
+- pending - `hle: implement coreinit OSInitEvent`
 
 ## Current test status
 
-- Debug and Release CMake/Ninja builds completed; CTest passed 2/2 in both configurations. The opt-in hidden-window Vulkan RGBA8 upload smoke test passed in Debug and Release on the NVIDIA GeForce RTX 5070 Laptop GPU without validation warnings. WWHD remains at 6,080,538 instructions and the same null `bcctr` target. BOTW now passes RPX TLS relocation and reaches its first runtime HLE blocker, `coreinit::OSInitEvent`.
+- Debug and Release CMake/Ninja builds completed; CTest passed 2/2 in both configurations, including OSEvent layout, reset/reinitialization, argument validation, and transactional memory-fault tests. The opt-in hidden-window Vulkan RGBA8 upload smoke test passed in Debug and Release on the NVIDIA GeForce RTX 5070 Laptop GPU without validation warnings. WWHD remains at 6,080,538 instructions and the same null `bcctr` target. BOTW passes RPX TLS relocation and `OSInitEvent`, then reaches `lwarx` at `0x0346C38C`.
 - Native `lfs` interpreter/JIT differential tests cover signed zero, finite values, a single subnormal, infinities, qNaN/sNaN, literal-zero `rA`, PS0/PS1 behavior, history, and transactional 4-byte memory faults. Native `lfd` tests cover raw big-endian values, literal-zero `rA`, PS1 preservation, and transactional 8-byte faults.
 - RPX diagnostics capture and print the latest 512 HLE calls and 64 PPC instructions. `--trace-hle <library::symbol>` filters the bounded trace to one exact HLE symbol. `--watch-write <guest-address>` opts into a bounded watch of a four-byte word, reporting overlapping writes, writer CIA, resulting big-endian word, local decoded code context, and all 32 GPRs at each matching write. `--dump-memory` provides bounded post-run BE-word inspection. All are diagnostic-only and disabled unless requested.
 
 ## Prioritized queue
 
-1. Implement the required `coreinit::OSInitEvent` guest-visible event initialization semantics, then rerun BOTW and WWHD.
+1. Investigate `lwarx` and implement only with coherent reservation semantics (including its paired conditional-store behavior as required), then rerun both games.
 2. Determine whether the WWHD null indirect callback is caused by a missing guest initialization path or an incorrect runtime/HLE result; do not fabricate a callback or turn address zero into a valid call.
 3. Audit actual guest shader, draw, and scan-buffer producers; the current WWHD run stops before any draw or texture-binding HLE is observed.
 4. Connect binding-time/command-ordered guest snapshots to the Vulkan texture uploader only when a correct guest use point is available; do not assume a bind-time snapshot remains valid through later writes.
