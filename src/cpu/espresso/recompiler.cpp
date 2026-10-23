@@ -440,6 +440,10 @@ struct BlockCode
     {
         return true;
     }
+    if (insn.opcode == Opcode::subtract_from_extended)
+    {
+        return true;
+    }
     if ((insn.opcode == Opcode::shift_left_word ||
          insn.opcode == Opcode::shift_right_word) && insn.record)
     {
@@ -546,6 +550,7 @@ struct BlockCode
     case Opcode::add: return "add";
     case Opcode::subtract_from: return "subf";
     case Opcode::subtract_from_carrying: return "subfc";
+    case Opcode::subtract_from_extended: return "subfe";
     case Opcode::bitwise_or: return "or";
     case Opcode::bitwise_and: return "and";
     case Opcode::bitwise_xor: return "xor";
@@ -1306,6 +1311,77 @@ struct Recompiler::Impl
                         state, static_cast<std::int32_t>(offsetof(CpuState, cr))));
                     compiler.and_(cr, imm(0x0FFFFFFFU));
                     compiler.or_(cr, field);
+                    compiler.mov(x86::dword_ptr(
+                        state, static_cast<std::int32_t>(offsetof(CpuState, cr))), cr);
+                }
+                break;
+            }
+            case Opcode::subtract_from_extended:
+            {
+                // subfe computes rB-rA-(1-CAin). Preserve the first borrow
+                // before subtracting the borrow-in, then combine both borrow
+                // bits to produce the architectural no-borrow CA result.
+                x86::Gp minuend = read_guest_gpr(insn.source);
+                x86::Gp subtrahend = read_guest_gpr(insn.base);
+                x86::Gp old_carry = compiler.new_gp32("subfe_old_ca");
+                compiler.mov(old_carry, x86::dword_ptr(
+                    state, static_cast<std::int32_t>(offsetof(CpuState, xer))));
+                compiler.shr(old_carry, imm(29U));
+                compiler.and_(old_carry, imm(1U));
+                compiler.xor_(old_carry, imm(1U));
+
+                x86::Gp result = compiler.new_gp32("subfe_result");
+                compiler.mov(result, minuend);
+                compiler.sub(result, subtrahend);
+                x86::Gp first_borrow = compiler.new_gp32("subfe_first_borrow");
+                compiler.mov(first_borrow, imm(0U));
+                compiler.setb(first_borrow.r8());
+                compiler.sub(result, old_carry);
+                x86::Gp second_borrow = compiler.new_gp32("subfe_second_borrow");
+                compiler.mov(second_borrow, imm(0U));
+                compiler.setb(second_borrow.r8());
+                compiler.or_(first_borrow, second_borrow);
+                compiler.xor_(first_borrow, imm(1U));
+
+                constexpr std::size_t xer_offset = offsetof(CpuState, xer);
+                x86::Gp xer = compiler.new_gp32("subfe_xer");
+                compiler.mov(xer, x86::dword_ptr(
+                    state, static_cast<std::int32_t>(xer_offset)));
+                compiler.and_(xer, imm(~xer_carry_mask));
+                compiler.shl(first_borrow, imm(29U));
+                compiler.or_(xer, first_borrow);
+                compiler.mov(x86::dword_ptr(
+                    state, static_cast<std::int32_t>(xer_offset)), xer);
+                write_guest_gpr(insn.destination, result);
+
+                if (insn.record)
+                {
+                    compiler.test(result, result);
+                    x86::Gp less = compiler.new_gp32("subfe_cr0_lt");
+                    x86::Gp greater = compiler.new_gp32("subfe_cr0_gt");
+                    x86::Gp equal = compiler.new_gp32("subfe_cr0_eq");
+                    compiler.mov(less, imm(0U));
+                    compiler.setl(less.r8());
+                    compiler.mov(greater, imm(0U));
+                    compiler.setg(greater.r8());
+                    compiler.mov(equal, imm(0U));
+                    compiler.sete(equal.r8());
+                    compiler.shl(less, imm(3U));
+                    compiler.shl(greater, imm(2U));
+                    compiler.shl(equal, imm(1U));
+                    compiler.or_(less, greater);
+                    compiler.or_(less, equal);
+                    x86::Gp xer_so = compiler.new_gp32("subfe_xer_so");
+                    compiler.mov(xer_so, x86::dword_ptr(
+                        state, static_cast<std::int32_t>(xer_offset)));
+                    compiler.shr(xer_so, imm(31U));
+                    compiler.or_(less, xer_so);
+                    compiler.shl(less, imm(28U));
+                    x86::Gp cr = compiler.new_gp32("subfe_cr");
+                    compiler.mov(cr, x86::dword_ptr(
+                        state, static_cast<std::int32_t>(offsetof(CpuState, cr))));
+                    compiler.and_(cr, imm(0x0FFFFFFFU));
+                    compiler.or_(cr, less);
                     compiler.mov(x86::dword_ptr(
                         state, static_cast<std::int32_t>(offsetof(CpuState, cr))), cr);
                 }
