@@ -1186,17 +1186,20 @@ void interpreter_tests()
     assert(history_result.instruction_history[2].source_values[1] == 0xFFFFAC30U);
     assert(!history_result.instruction_history[2].completed);
 
-    EspressoCore ring_core(0x100U);
-    for (std::uint32_t i = 0; i < 35U; ++i)
+    constexpr std::uint32_t ring_instruction_count =
+        static_cast<std::uint32_t>(instruction_history_capacity + 3U);
+    EspressoCore ring_core(0x1000U);
+    for (std::uint32_t i = 0; i < ring_instruction_count; ++i)
     {
         ring_core.memory.write32_be(i * 4U, 0x38630001U); // addi r3, r3, 1
     }
-    const RunResult ring_result = ring_core.run(35U);
+    const RunResult ring_result = ring_core.run(ring_instruction_count);
     assert(ring_result.reason == StopReason::instruction_limit);
     assert(ring_result.instruction_history.size() == instruction_history_capacity);
     assert(ring_result.instruction_history.front().cia == 12U);
-    assert(ring_result.instruction_history.back().cia == 136U);
-    assert(ring_core.state.gpr[3] == 35U);
+    assert(ring_result.instruction_history.back().cia ==
+           (ring_instruction_count - 1U) * 4U);
+    assert(ring_core.state.gpr[3] == ring_instruction_count);
 
     EspressoCore fault_core(0x1000U);
     fault_core.memory.write32_be(0, 0x80640000U); // lwz r3, 0(r4)

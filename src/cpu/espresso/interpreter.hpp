@@ -32,7 +32,7 @@ enum class StopReason
     memory_fault,
 };
 
-inline constexpr std::size_t instruction_history_capacity = 32;
+inline constexpr std::size_t instruction_history_capacity = 64;
 
 struct InstructionHistoryEntry
 {

@@ -457,7 +457,7 @@ void recompiler_step_budget_test()
 void recompiler_recent_history_window_test()
 {
     constexpr std::uint32_t start = 0x100U;
-    constexpr std::size_t instruction_count = 80U;
+    constexpr std::size_t instruction_count = instruction_history_capacity + 8U;
     EspressoCore interpreted(0x1000U);
     EspressoCore compiled(0x1000U);
     for (std::size_t i = 0; i < instruction_count; ++i)
