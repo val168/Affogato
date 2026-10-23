@@ -22,8 +22,8 @@ struct Rgba8TextureStaging
     bool operator==(const Rgba8TextureStaging&) const = default;
 };
 
-// Converts one explicitly supported linear GX2 texture layout to tightly
-// packed RGBA8 bytes suitable for a Vulkan staging buffer. GuestMemory range
+// Converts explicitly supported linear GX2 formats to tightly packed RGBA8
+// bytes suitable for a Vulkan staging buffer. GuestMemory range
 // validation and snapshotting are the caller's responsibility; guest_bytes
 // starts at descriptor.image_address.
 [[nodiscard]] inline std::optional<Rgba8TextureStaging>
@@ -33,15 +33,22 @@ stage_linear_rgba8_texture(
 {
     constexpr std::uint32_t gx2_2d_dimension = 2U;
     constexpr std::uint32_t gx2_linear_aligned_tile_mode = 1U;
+    constexpr std::uint32_t gx2_unorm_r8_format = 0x01U;
+    constexpr std::uint32_t gx2_unorm_rg8_format = 0x07U;
     constexpr std::uint32_t gx2_unorm_rgba8_format = 0x1AU;
     constexpr std::uint32_t gx2_unorm_numeric_format = 0U;
     constexpr std::uint32_t rgba8_bytes_per_pixel = 4U;
     constexpr std::uint8_t alpha_selector = 3U;
     constexpr std::uint8_t one_selector = 5U;
 
+    const std::uint32_t source_channels = descriptor.format == gx2_unorm_r8_format
+        ? 1U
+        : descriptor.format == gx2_unorm_rg8_format
+            ? 2U
+            : descriptor.format == gx2_unorm_rgba8_format ? 4U : 0U;
     if (descriptor.dimension != gx2_2d_dimension ||
         descriptor.tile_mode != gx2_linear_aligned_tile_mode ||
-        descriptor.depth_or_layers != 1U || descriptor.format != gx2_unorm_rgba8_format ||
+        descriptor.depth_or_layers != 1U || source_channels == 0U ||
         descriptor.numeric_format != gx2_unorm_numeric_format ||
         descriptor.endian_swap != 0U || descriptor.force_degamma ||
         descriptor.base_level != 0U || descriptor.last_level != 0U ||
@@ -53,7 +60,7 @@ stage_linear_rgba8_texture(
     }
 
     const std::uint64_t source_row_bytes =
-        static_cast<std::uint64_t>(descriptor.pitch_pixels) * rgba8_bytes_per_pixel;
+        static_cast<std::uint64_t>(descriptor.pitch_pixels) * source_channels;
     const std::uint64_t required_source_bytes = source_row_bytes * descriptor.height;
     const std::uint64_t output_bytes =
         static_cast<std::uint64_t>(descriptor.width) * descriptor.height *
@@ -79,9 +86,6 @@ stage_linear_rgba8_texture(
     result.pixels.resize(static_cast<std::size_t>(output_bytes));
 
     const std::array<std::uint8_t, 6U> constants{0U, 0U, 0U, 0U, 0U, 0xFFU};
-    const auto select_component = [&](const std::uint8_t* source, std::uint8_t selector) {
-        return selector <= alpha_selector ? source[selector] : constants[selector];
-    };
     for (std::uint32_t y = 0U; y < descriptor.height; ++y)
     {
         const std::size_t source_row = static_cast<std::size_t>(
@@ -91,14 +95,22 @@ stage_linear_rgba8_texture(
         for (std::uint32_t x = 0U; x < descriptor.width; ++x)
         {
             const std::size_t source_offset = source_row +
-                static_cast<std::size_t>(x) * rgba8_bytes_per_pixel;
+                static_cast<std::size_t>(x) * source_channels;
             const std::size_t destination_offset = destination_row +
                 static_cast<std::size_t>(x) * rgba8_bytes_per_pixel;
             const std::uint8_t* source = guest_bytes.data() + source_offset;
+            const std::array<std::uint8_t, 4U> logical_rgba{
+                source[0U],
+                static_cast<std::uint8_t>(source_channels >= 2U ? source[1U] : 0U),
+                static_cast<std::uint8_t>(source_channels == 4U ? source[2U] : 0U),
+                static_cast<std::uint8_t>(source_channels == 4U ? source[3U] : 0xFFU)};
             for (std::size_t component = 0U; component < rgba8_bytes_per_pixel; ++component)
             {
+                const std::uint8_t selector = descriptor.component_selectors[component];
                 result.pixels[destination_offset + component] =
-                    select_component(source, descriptor.component_selectors[component]);
+                    selector <= alpha_selector
+                        ? logical_rgba[selector]
+                        : constants[selector];
             }
         }
     }

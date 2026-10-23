@@ -21855,6 +21855,30 @@ void latte_texture_staging_tests()
         3U, 2U, 1U, 255U, 7U, 6U, 5U, 255U,
         11U, 10U, 9U, 255U, 15U, 14U, 13U, 255U}));
 
+    descriptor.format = 0x01U; // GX2 UNORM R8.
+    descriptor.component_selectors = {0U, 4U, 4U, 5U};
+    const std::array<std::uint8_t, 6U> r8_bytes{10U, 20U, 99U, 30U, 40U, 98U};
+    const auto staged_r8 = affogato::gpu::stage_linear_rgba8_texture(
+        descriptor, r8_bytes);
+    assert(staged_r8.has_value());
+    assert((staged_r8->pixels == std::vector<std::uint8_t>{
+        10U, 0U, 0U, 255U, 20U, 0U, 0U, 255U,
+        30U, 0U, 0U, 255U, 40U, 0U, 0U, 255U}));
+
+    descriptor.format = 0x07U; // GX2 UNORM R8_G8.
+    descriptor.component_selectors = {0U, 1U, 4U, 5U};
+    const std::array<std::uint8_t, 12U> rg8_bytes{
+        1U, 2U, 3U, 4U, 99U, 98U,
+        5U, 6U, 7U, 8U, 97U, 96U};
+    const auto staged_rg8 = affogato::gpu::stage_linear_rgba8_texture(
+        descriptor, rg8_bytes);
+    assert(staged_rg8.has_value());
+    assert((staged_rg8->pixels == std::vector<std::uint8_t>{
+        1U, 2U, 0U, 255U, 3U, 4U, 0U, 255U,
+        5U, 6U, 0U, 255U, 7U, 8U, 0U, 255U}));
+
+    descriptor.format = 0x1AU;
+    descriptor.component_selectors = {0U, 1U, 2U, 3U};
     assert(!affogato::gpu::stage_linear_rgba8_texture(
         descriptor, std::span<const std::uint8_t>(guest_bytes).first(23U)));
     auto unsupported = descriptor;

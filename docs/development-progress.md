@@ -20,7 +20,7 @@
 - Added checked Latte texture-word decoding into a typed descriptor: dimensions, encoded pitch, tile mode/type, hardware format, guest image/mipmap addresses, view levels/slices, numeric/endian modes, degamma, and component selectors. Invalid resource types, >32-bit addresses, reserved selectors, and invalid format fields are rejected. This is descriptor interpretation only; tiled guest memory is not yet uploaded to Vulkan.
 - Added typed sampler decoding for wrap/filter modes, anisotropy, border/depth state, signed fixed-point LOD bias, and word-2 flags. Ambiguous overlapping word-0 bits remain available through raw words rather than being guessed.
 - Corrected `GX2Set*Texture` to read `GX2Surface.mipmaps` from offset `0x2C`, not `mipmapSize` at `0x28`. A missing mip pointer still aliases the base image even when the size field is nonzero.
-- Added this iteration: a CPU-side texture staging conversion for one supported path: single-layer 2D RGBA8 UNORM in linear-aligned layout, with guest pitch respected and Latte component selectors applied. Tiled, compressed, endian-swapped, mipmapped, array, and non-UNORM formats are explicitly rejected rather than misread.
+- Added: a CPU-side texture staging conversion for single-layer 2D UNORM R8, R8_G8, and R8_G8_B8_A8 in linear-aligned layout. Guest pitch and component selectors are honored; missing channels expand to zero with alpha one. Tiled, compressed, endian-swapped, mipmapped, array, and non-UNORM formats are explicitly rejected rather than misread.
 - Actual guest rendering/presentation is not yet confirmed; command submission, shader execution, and framebuffer presentation remain incomplete.
 
 ## Completed commits
@@ -36,13 +36,13 @@
 - `ad89b6e` - `gpu: decode Latte texture resource words`
 - `cffd6eb` - `gpu: decode Latte sampler state`
 - `801f671` - `gx2: fix texture mipmap address field`
-- `eed37e6` - `gpu: stage linear RGBA8 Latte textures`
+- `a6a7b7c` - `gpu: stage linear RGBA8 Latte textures`
 
 ## Current test status
 
 - Debug build: `build/debug-win-native`, Ninja; build is current.
-- CTest: 2/2 passed after linear RGBA8 staging and swizzle/layout rejection tests.
-- Latest WWHD diagnostic after staging change: 6,080,538 instructions; stop remains at CIA 0 with null `bcctr` target (`CTR=0`); the staging helper does not affect this guest path. Latest run: RPX load 185 ms; guest execution 5,032 ms.
+- CTest: 2/2 passed after linear R8, RG8, and RGBA8 staging, swizzle, and layout-rejection tests.
+- Latest WWHD diagnostic after staging changes: 6,080,538 instructions; stop remains at CIA 0 with null `bcctr` target (`CTR=0`); the staging helper does not affect this guest path. Latest run: RPX load about 185 ms; guest execution about 5.0 s.
 
 ## Prioritized queue
 
