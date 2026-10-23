@@ -357,6 +357,7 @@ struct BlockCode
     case Opcode::move_from_xer:
     case Opcode::move_to_xer:
     case Opcode::move_from_gqr:
+    case Opcode::move_to_gqr:
     case Opcode::load_word_zero:
     case Opcode::load_byte_zero:
     case Opcode::load_halfword_zero:
@@ -425,6 +426,7 @@ struct BlockCode
     case Opcode::move_from_xer: return "mfxer";
     case Opcode::move_to_xer: return "mtxer";
     case Opcode::move_from_gqr: return "mfgqr";
+    case Opcode::move_to_gqr: return "mtgqr";
     case Opcode::load_word_zero: return "lwz";
     case Opcode::load_byte_zero: return "lbz";
     case Opcode::load_halfword_zero: return "lhz";
@@ -1405,6 +1407,16 @@ struct Recompiler::Impl
                 compiler.mov(value, x86::dword_ptr(
                     state, static_cast<std::int32_t>(gqr_offset)));
                 write_guest_gpr(insn.destination, value);
+                break;
+            }
+            case Opcode::move_to_gqr:
+            {
+                const std::size_t gqr_offset = offsetof(CpuState, gqr) +
+                    sizeof(std::uint32_t) * insn.quantized_register;
+                x86::Gp value = compiler.new_gp32("gpr");
+                compiler.mov(value, read_guest_gpr(insn.destination));
+                compiler.mov(x86::dword_ptr(
+                    state, static_cast<std::int32_t>(gqr_offset)), value);
                 break;
             }
             case Opcode::load_single:
