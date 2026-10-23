@@ -19,6 +19,14 @@ namespace
            (static_cast<std::uint32_t>(xo) << 1U);
 }
 
+[[nodiscard]] constexpr std::uint32_t cmpwi_form(
+    std::uint8_t cr_field, std::uint8_t ra, std::int16_t immediate)
+{
+    return (11U << 26U) | (static_cast<std::uint32_t>(cr_field) << 23U) |
+           (static_cast<std::uint32_t>(ra) << 16U) |
+           static_cast<std::uint16_t>(immediate);
+}
+
 [[nodiscard]] constexpr std::uint32_t cr_form(
     std::uint8_t destination, std::uint8_t source_a,
     std::uint8_t source_b, std::uint16_t xo)
@@ -103,6 +111,57 @@ void recompiler_differential_arithmetic_test()
     assert(cached.steps == 3U);
     assert(compiled.state.gpr[5] == 17U);
     assert(recompiler.statistics().cache_hits >= 1U);
+}
+
+void recompiler_cmpwi_differential_test()
+{
+    constexpr std::uint32_t start = 0x100U;
+    constexpr std::array<std::uint32_t, 7> program{
+        cmpwi_form(0U, 3U, 0),
+        cmpwi_form(1U, 4U, -1),
+        cmpwi_form(2U, 5U, 1),
+        cmpwi_form(3U, 6U, -32768),
+        cmpwi_form(4U, 7U, 32767),
+        cmpwi_form(5U, 8U, -2),
+        cmpwi_form(6U, 9U, 2),
+    };
+    EspressoCore interpreted(0x1000U);
+    EspressoCore compiled(0x1000U);
+    for (EspressoCore* core : {&interpreted, &compiled})
+    {
+        for (std::size_t index = 0; index < program.size(); ++index)
+        {
+            core->memory.write32_be(
+                start + static_cast<std::uint32_t>(index * 4U), program[index]);
+        }
+        core->state.cia = start;
+        core->state.gpr[3] = 0U;
+        core->state.gpr[4] = 0xFFFFFFFFU;
+        core->state.gpr[5] = 1U;
+        core->state.gpr[6] = 0x80000000U;
+        core->state.gpr[7] = 0x7FFFFFFFU;
+        core->state.gpr[8] = 0xFFFFFFFEU;
+        core->state.gpr[9] = 3U;
+        core->state.cr = 0xA5C39E71U;
+        core->state.xer = 0x80000000U;
+        core->state.lr = 0x12345678U;
+        core->state.ctr = 0x87654321U;
+    }
+
+    const RunResult oracle = interpreted.run(program.size());
+    Recompiler recompiler;
+    const RunResult actual = recompiler.run(compiled, program.size());
+    assert(actual.reason == oracle.reason);
+    assert(actual.steps == oracle.steps);
+    assert(actual.cia == oracle.cia);
+    assert(compiled.state.gpr == interpreted.state.gpr);
+    assert(compiled.state.cr == interpreted.state.cr);
+    assert(compiled.state.xer == interpreted.state.xer);
+    assert(compiled.state.lr == interpreted.state.lr);
+    assert(compiled.state.ctr == interpreted.state.ctr);
+    assert(compiled.state.cr != 0xA5C39E71U);
+    assert(recompiler.statistics().native_instructions == program.size());
+    assert(recompiler.statistics().interpreter_fallbacks == 0U);
 }
 
 void recompiler_destination_aliases_second_source_test()
@@ -884,6 +943,7 @@ int main()
 {
     assert(std::string(opcode_mnemonic(Opcode::floating_multiply_add_double)) == "fmadd");
     recompiler_differential_arithmetic_test();
+    recompiler_cmpwi_differential_test();
     recompiler_destination_aliases_second_source_test();
     recompiler_logical_differential_test();
     recompiler_condition_bit_differential_tests();

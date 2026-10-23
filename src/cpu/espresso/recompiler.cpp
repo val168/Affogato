@@ -274,6 +274,7 @@ struct BlockCode
     case Opcode::bitwise_or:
     case Opcode::bitwise_and:
     case Opcode::bitwise_xor:
+    case Opcode::compare_signed_immediate:
     case Opcode::branch:
     case Opcode::conditional_branch:
     case Opcode::conditional_branch_to_link_register:
@@ -329,6 +330,7 @@ struct BlockCode
     case Opcode::bitwise_or: return "or";
     case Opcode::bitwise_and: return "and";
     case Opcode::bitwise_xor: return "xor";
+    case Opcode::compare_signed_immediate: return "cmpwi";
     case Opcode::branch: return "b";
     case Opcode::conditional_branch: return "bc";
     case Opcode::conditional_branch_to_link_register: return "bclr";
@@ -700,6 +702,49 @@ struct Recompiler::Impl
                         write_guest_gpr(insn.destination, lhs);
                     }
                 }
+                break;
+            }
+            case Opcode::compare_signed_immediate:
+            {
+                x86::Gp lhs = read_guest_gpr(insn.base);
+                compiler.cmp(lhs, imm(static_cast<std::uint32_t>(insn.immediate)));
+
+                // SETcc writes only the low byte, so zero-extend each result
+                // before combining the PPC LT/GT/EQ bits.
+                x86::Gp less = compiler.new_gp32("cmp_less");
+                x86::Gp greater = compiler.new_gp32("cmp_greater");
+                x86::Gp equal = compiler.new_gp32("cmp_equal");
+                compiler.mov(less, imm(0));
+                compiler.setl(less.r8());
+                compiler.mov(greater, imm(0));
+                compiler.setg(greater.r8());
+                compiler.mov(equal, imm(0));
+                compiler.sete(equal.r8());
+
+                compiler.shl(less, imm(3U));
+                compiler.shl(greater, imm(2U));
+                compiler.shl(equal, imm(1U));
+                compiler.or_(less, greater);
+                compiler.or_(less, equal);
+
+                const std::uint32_t field_shift =
+                    (7U - insn.cr_field) * 4U;
+                x86::Gp xer = compiler.new_gp32("cmp_xer");
+                compiler.mov(xer, x86::dword_ptr(
+                    state, static_cast<std::int32_t>(offsetof(CpuState, xer))));
+                compiler.shr(xer, imm(31U));
+                compiler.or_(less, xer);
+                compiler.shl(less, imm(field_shift));
+
+                constexpr std::uint32_t cr_mask = 0xFU;
+                const std::uint32_t shifted_mask = cr_mask << field_shift;
+                x86::Gp cr = compiler.new_gp32("cmp_cr");
+                compiler.mov(cr, x86::dword_ptr(
+                    state, static_cast<std::int32_t>(offsetof(CpuState, cr))));
+                compiler.and_(cr, imm(~shifted_mask));
+                compiler.or_(cr, less);
+                compiler.mov(x86::dword_ptr(
+                    state, static_cast<std::int32_t>(offsetof(CpuState, cr))), cr);
                 break;
             }
             case Opcode::condition_bit_and:
