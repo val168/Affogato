@@ -2909,6 +2909,112 @@ void recompiler_lwzu_differential_tests()
     assert(!fault.instruction_history.back().completed);
 }
 
+void recompiler_dcbst_differential_tests()
+{
+    struct Case
+    {
+        std::uint8_t base_register;
+        std::uint8_t index_register;
+        std::uint32_t base;
+        std::uint32_t index;
+        std::uint32_t address;
+    };
+    constexpr std::uint32_t start = 0x100U;
+    constexpr std::array cases{
+        Case{0U, 5U, 0xDEADBEEFU, 0x40U, 0x40U},
+        // rB==0 is a real GPR source; only rA==0 selects the literal base 0.
+        Case{4U, 0U, 0x100U, 0x20U, 0x120U},
+    };
+
+    for (const Case& test : cases)
+    {
+        EspressoCore interpreted(0x1000U);
+        EspressoCore compiled(0x1000U);
+        const std::uint32_t instruction = x_form(
+            0U, test.base_register, test.index_register, 54U);
+        for (EspressoCore* core : {&interpreted, &compiled})
+        {
+            core->memory.write32_be(start, instruction);
+            core->memory.write8(test.address, 0x5AU);
+            core->state.cia = start;
+            core->state.gpr.fill(0xA5A5A5A5U);
+            core->state.gpr[0] = test.index_register == 0U
+                ? test.index : 0xDEADBEEFU;
+            if (test.base_register != 0U)
+                core->state.gpr[test.base_register] = test.base;
+            if (test.index_register != 0U)
+                core->state.gpr[test.index_register] = test.index;
+            core->state.cr = 0x12345678U;
+            core->state.xer = 0xA00000A5U;
+            core->state.lr = 0x10203040U;
+            core->state.ctr = 0x50607080U;
+            core->state.fpscr = 0xCAFEBABEU;
+        }
+
+        const auto gprs_before = interpreted.state.gpr;
+        const auto fprs_before = interpreted.state.fpr;
+        const auto ps1_before = interpreted.state.fpr_ps1;
+        const std::uint32_t cr_before = interpreted.state.cr;
+        const std::uint32_t xer_before = interpreted.state.xer;
+        const std::uint32_t lr_before = interpreted.state.lr;
+        const std::uint32_t ctr_before = interpreted.state.ctr;
+        const std::uint32_t fpscr_before = interpreted.state.fpscr;
+
+        const RunResult oracle = interpreted.run(1U);
+        Recompiler recompiler;
+        const RunResult actual = recompiler.run(compiled, 1U);
+        assert(actual.reason == oracle.reason && actual.steps == oracle.steps);
+        assert(actual.steps == 1U && actual.cia == oracle.cia);
+        assert(compiled.state.gpr == interpreted.state.gpr);
+        assert(compiled.state.gpr == gprs_before);
+        assert(compiled.state.fpr == fprs_before &&
+            compiled.state.fpr_ps1 == ps1_before);
+        assert(compiled.state.cr == cr_before && compiled.state.xer == xer_before);
+        assert(compiled.state.lr == lr_before && compiled.state.ctr == ctr_before);
+        assert(compiled.state.fpscr == fpscr_before);
+        assert(compiled.memory.read8(test.address) == 0x5AU);
+        assert(recompiler.statistics().native_instructions == 1U);
+        assert(recompiler.statistics().interpreter_fallbacks == 0U);
+        const InstructionHistoryEntry& history = actual.instruction_history.back();
+        assert(history.opcode_name == "dcbst" && history.completed);
+        assert(history.has_effective_address &&
+            history.effective_address == test.address);
+        assert(history.source_count == (test.base_register == 0U ? 1U : 2U));
+        if (test.base_register == 0U)
+        {
+            assert(history.source_registers[0] == test.index_register);
+            assert(history.source_values[0] == test.index);
+        }
+        else
+        {
+            assert(history.source_registers[0] == test.base_register);
+            assert(history.source_values[0] == test.base);
+            assert(history.source_registers[1] == test.index_register);
+            assert(history.source_values[1] == test.index);
+        }
+        assert(!history.has_destination);
+    }
+
+    EspressoCore faulting(0x1000U);
+    faulting.memory.write32_be(start, x_form(0U, 6U, 5U, 54U));
+    faulting.state.cia = start;
+    faulting.state.gpr[6] = 0x2000U;
+    faulting.state.gpr[5] = 0x20U;
+    const auto gprs_before = faulting.state.gpr;
+    Recompiler recompiler;
+    const RunResult fault = recompiler.run(faulting, 1U);
+    assert(fault.reason == StopReason::memory_fault);
+    assert(fault.detail.find("read 1 byte(s)") != std::string::npos);
+    assert(faulting.state.gpr == gprs_before);
+    assert(faulting.state.cia == start);
+    assert(!fault.instruction_history.empty());
+    assert(fault.instruction_history.back().opcode_name == "dcbst");
+    assert(fault.instruction_history.back().has_effective_address &&
+        fault.instruction_history.back().effective_address == 0x2020U);
+    assert(!fault.instruction_history.back().completed);
+    assert(!fault.instruction_history.back().has_destination);
+}
+
 void recompiler_memory_tests()
 {
     EspressoCore watched_store(0x1000U);
@@ -3245,6 +3351,7 @@ int main()
     recompiler_isync_boundary_differential_test();
     recompiler_lbzu_differential_tests();
     recompiler_lwzu_differential_tests();
+    recompiler_dcbst_differential_tests();
     recompiler_branch_test();
     recompiler_fast_lookup_cache_test();
     recompiler_conditional_branch_tests();

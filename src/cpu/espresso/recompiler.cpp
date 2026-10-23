@@ -642,6 +642,7 @@ struct BlockCode
     case Opcode::store_word_indexed:
     case Opcode::store_byte_indexed:
     case Opcode::store_halfword_indexed:
+    case Opcode::data_cache_block_store:
     case Opcode::condition_bit_and:
     case Opcode::condition_bit_and_complement:
     case Opcode::condition_bit_or:
@@ -731,6 +732,7 @@ struct BlockCode
     case Opcode::store_word_indexed: return "stwx";
     case Opcode::store_byte_indexed: return "stbx";
     case Opcode::store_halfword_indexed: return "sthx";
+    case Opcode::data_cache_block_store: return "dcbst";
     case Opcode::condition_bit_and: return "crand";
     case Opcode::condition_bit_and_complement: return "crandc";
     case Opcode::condition_bit_or: return "cror";
@@ -770,6 +772,7 @@ struct BlockCode
     case Opcode::store_word_indexed:
     case Opcode::store_byte_indexed:
     case Opcode::store_halfword_indexed:
+    case Opcode::data_cache_block_store:
         return true;
     default:
         return false;
@@ -785,6 +788,7 @@ struct BlockCode
     case Opcode::store_byte:
     case Opcode::load_byte_zero_indexed:
     case Opcode::store_byte_indexed:
+    case Opcode::data_cache_block_store:
         return 1U;
     case Opcode::load_halfword_zero:
     case Opcode::load_halfword_algebraic:
@@ -815,7 +819,8 @@ struct BlockCode
         opcode == Opcode::load_halfword_zero_indexed ||
         opcode == Opcode::load_halfword_algebraic_indexed ||
         opcode == Opcode::store_word_indexed || opcode == Opcode::store_byte_indexed ||
-        opcode == Opcode::store_halfword_indexed;
+        opcode == Opcode::store_halfword_indexed ||
+        opcode == Opcode::data_cache_block_store;
 }
 
 [[nodiscard]] std::uint32_t immediate_value(const DecodedInstruction& insn) noexcept
@@ -2231,11 +2236,15 @@ struct Recompiler::Impl
             case Opcode::store_word_indexed:
             case Opcode::store_byte_indexed:
             case Opcode::store_halfword_indexed:
+            case Opcode::data_cache_block_store:
             {
                 const bool indexed = is_indexed_memory(insn.opcode);
                 const bool store = is_memory_store(insn.opcode);
+                const bool validation_only =
+                    insn.opcode == Opcode::data_cache_block_store;
                 const bool destination_was_cached =
-                    !store && guest_gpr_initialized[insn.destination];
+                    !store && !validation_only &&
+                    guest_gpr_initialized[insn.destination];
                 const bool single_store = insn.opcode == Opcode::store_single ||
                     insn.opcode == Opcode::store_single_update;
                 const bool double_store = insn.opcode == Opcode::store_double;
@@ -2350,7 +2359,7 @@ struct Recompiler::Impl
                 Label fault = compiler.new_label();
                 Label completed = compiler.new_label();
                 compiler.jnz(fault);
-                if (!store)
+                if (!store && !validation_only)
                 {
                     write_guest_gpr(insn.destination, value);
                     if (update_base)
@@ -2391,7 +2400,7 @@ struct Recompiler::Impl
                 compiler.bind(fault);
                 compiler.mov(x86::dword_ptr(state, static_cast<std::int32_t>(
                     offsetof(CpuState, cia))), imm(cia));
-                if (!store && !destination_was_cached)
+                if (!store && !validation_only && !destination_was_cached)
                 {
                     // The load destination is only assigned on the success
                     // edge. If the helper faults, initialize its cached host
@@ -2864,6 +2873,14 @@ RunResult Recompiler::run(EspressoCore& core, std::size_t max_steps)
                 }
                 entry.has_immediate = true;
                 entry.immediate = insn.immediate;
+            }
+            if (insn.opcode == Opcode::data_cache_block_store)
+            {
+                // dcbst has no architectural destination in Affogato's
+                // coherent-memory model; the byte read above exists only to
+                // retain its translation/protection fault behavior.
+                core.append_instruction_history(std::move(entry));
+                continue;
             }
             if (insn.opcode == Opcode::load_single || insn.opcode == Opcode::load_double)
             {
