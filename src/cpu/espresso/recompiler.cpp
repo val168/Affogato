@@ -925,7 +925,8 @@ struct BlockCode
 [[nodiscard]] bool is_native_instruction(const DecodedInstruction& insn) noexcept
 {
     if (insn.record && (insn.opcode == Opcode::bitwise_or ||
-        insn.opcode == Opcode::bitwise_and || insn.opcode == Opcode::bitwise_xor))
+        insn.opcode == Opcode::bitwise_and || insn.opcode == Opcode::bitwise_xor ||
+        insn.opcode == Opcode::bitwise_nor))
     {
         return true;
     }
@@ -975,6 +976,7 @@ struct BlockCode
     case Opcode::bitwise_or:
     case Opcode::bitwise_and:
     case Opcode::bitwise_xor:
+    case Opcode::bitwise_nor:
     case Opcode::move_condition_register_field:
     case Opcode::move_from_condition_register:
     case Opcode::move_to_condition_register_fields:
@@ -1078,6 +1080,7 @@ struct BlockCode
     case Opcode::bitwise_or: return "or";
     case Opcode::bitwise_and: return "and";
     case Opcode::bitwise_xor: return "xor";
+    case Opcode::bitwise_nor: return "nor";
     case Opcode::compare_signed_immediate: return "cmpwi";
     case Opcode::compare_unsigned_immediate: return "cmplwi";
     case Opcode::compare_signed_register: return "cmpw";
@@ -1741,12 +1744,14 @@ struct Recompiler::Impl
             case Opcode::bitwise_or:
             case Opcode::bitwise_and:
             case Opcode::bitwise_xor:
+            case Opcode::bitwise_nor:
             {
                 x86::Gp lhs = compiler.new_gp32("lhs");
                 x86::Gp source_a = read_guest_gpr(insn.base);
                 x86::Gp source_b = read_guest_gpr(insn.source);
                 if (insn.opcode == Opcode::add || insn.opcode == Opcode::bitwise_or ||
-                    insn.opcode == Opcode::bitwise_and || insn.opcode == Opcode::bitwise_xor)
+                    insn.opcode == Opcode::bitwise_and || insn.opcode == Opcode::bitwise_xor ||
+                    insn.opcode == Opcode::bitwise_nor)
                 {
                     x86::Gp rhs = source_b;
                     if (insn.destination == insn.base)
@@ -1765,7 +1770,12 @@ struct Recompiler::Impl
                     if (insn.opcode == Opcode::add) compiler.add(lhs, rhs);
                     else if (insn.opcode == Opcode::bitwise_or) compiler.or_(lhs, rhs);
                     else if (insn.opcode == Opcode::bitwise_and) compiler.and_(lhs, rhs);
-                    else compiler.xor_(lhs, rhs);
+                    else if (insn.opcode == Opcode::bitwise_xor) compiler.xor_(lhs, rhs);
+                    else
+                    {
+                        compiler.or_(lhs, rhs);
+                        compiler.not_(lhs);
+                    }
                     write_guest_gpr(insn.destination, lhs);
                     if (insn.record)
                     {

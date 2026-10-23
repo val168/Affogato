@@ -862,12 +862,13 @@ void recompiler_logical_differential_test()
 {
     EspressoCore interpreted(0x1000U);
     EspressoCore compiled(0x1000U);
-    const std::array<std::uint32_t, 5> program{
+    const std::array<std::uint32_t, 6> program{
         0x38601234U,                 // addi r3,r0,0x1234
         0x6064ABCDU,                 // ori r4,r3,0xABCD
         0x688500FFU,                 // xori r5,r4,0x00FF
         x_form(6, 5, 3, 28),         // and r6,r5,r3
         x_form(7, 6, 4, 316),        // xor r7,r6,r4
+        x_form(8, 7, 6, 124),        // nor r8,r7,r6
     };
     for (EspressoCore* core : {&interpreted, &compiled})
     {
@@ -883,6 +884,7 @@ void recompiler_logical_differential_test()
     assert(actual.cia == oracle.cia);
     assert(compiled.state.gpr == interpreted.state.gpr);
     assert(compiled.state.gpr[4] == 0x0000BBFD);
+    assert(compiled.state.gpr[8] == ~(compiled.state.gpr[7] | compiled.state.gpr[6]));
     assert(recompiler.statistics().native_instructions == program.size());
 }
 
@@ -905,6 +907,8 @@ void recompiler_logical_record_differential_test()
              0U, 0U, 2U, "and."},
         Case{x_form(3U, 5U, 4U, 316U, true), 5U, 3U,
              0x80000000U, 6U, 5U, "xor."},
+        Case{x_form(3U, 5U, 4U, 124U, true), 0U, 0U,
+             0x80000000U, 0xFFFFFFFFU, 9U, "nor."},
     };
 
     for (const Case& test : cases)
