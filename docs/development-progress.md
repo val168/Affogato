@@ -19,6 +19,7 @@
 - The renderer register shadow can now retrieve complete seven-word texture-resource and three-word sampler bindings by shader stage. Partial groups are not exposed; compute correctly resolves through the shared vertex bank. This remains state decoding only and does not yet create Vulkan images or descriptors.
 - Added checked Latte texture-word decoding into a typed descriptor: dimensions, encoded pitch, tile mode/type, hardware format, guest image/mipmap addresses, view levels/slices, numeric/endian modes, degamma, and component selectors. Invalid resource types, >32-bit addresses, reserved selectors, and invalid format fields are rejected. This is descriptor interpretation only; tiled guest memory is not yet uploaded to Vulkan.
 - Added typed sampler decoding for wrap/filter modes, anisotropy, border/depth state, signed fixed-point LOD bias, and word-2 flags. Ambiguous overlapping word-0 bits remain available through raw words rather than being guessed.
+- Corrected `GX2Set*Texture` to read `GX2Surface.mipmaps` from offset `0x2C`, not `mipmapSize` at `0x28`. A missing mip pointer still aliases the base image even when the size field is nonzero.
 - Actual guest rendering/presentation is not yet confirmed; command submission, shader execution, and framebuffer presentation remain incomplete.
 
 ## Completed commits
@@ -32,11 +33,12 @@
 - `4b4133d` - `gpu: forward GX2 register writes to Vulkan`
 - `8903dbb` - `gpu: expose complete Latte texture bindings`
 - `ad89b6e` - `gpu: decode Latte texture resource words`
+- `cffd6eb` - `gpu: decode Latte sampler state`
 
 ## Current test status
 
 - Debug build: `build/debug-win-native`, Ninja; build is current.
-- CTest after Latte texture and sampler descriptor decoding: 2/2 passed.
+- CTest after texture/sampler descriptor decoding and mipmap-pointer correction: 2/2 passed.
 - Latest WWHD diagnostic: 6,080,538 instructions; stop remains at CIA 0 with null `bcctr` target (`CTR=0`); the new renderer state accessors do not affect this guest path. Latest run: RPX load 206 ms; guest execution 5,482 ms.
 
 ## Prioritized queue

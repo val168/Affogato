@@ -1069,7 +1069,9 @@ void set_gx2_texture(
     // GX2Texture::regs stores resource words 0, 1, 4, 5, and 6; words 2 and 3
     // are derived from the image and mipmap addresses when the texture is bound.
     const std::uint32_t image_address = core.memory.read32_be(texture_address + 0x24U);
-    std::uint32_t mipmap_address = core.memory.read32_be(texture_address + 0x28U);
+    // GX2Surface stores mipmapSize at +0x28 and the mipmap pointer at +0x2C.
+    // The size is not an address and must never be emitted as RESOURCE_WORD3.
+    std::uint32_t mipmap_address = core.memory.read32_be(texture_address + 0x2CU);
     const std::uint32_t tile_mode = core.memory.read32_be(texture_address + 0x30U);
     const std::uint32_t swizzle = core.memory.read32_be(texture_address + 0x34U);
     const std::uint32_t word0 = core.memory.read32_be(texture_address + 0x88U);

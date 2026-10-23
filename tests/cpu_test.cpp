@@ -21338,7 +21338,8 @@ void gx2_set_pixel_texture_hle_tests()
 
     std::array<std::uint32_t, 0x9CU / 4U> texture{};
     texture[0x24U / 4U] = 0x12345600U;
-    texture[0x28U / 4U] = 0x23456700U;
+    texture[0x28U / 4U] = 0x00100000U; // mipmap size, not an address
+    texture[0x2CU / 4U] = 0x23456700U;
     texture[0x30U / 4U] = 4U; // macro-tiled
     texture[0x34U / 4U] = 0x00020100U; // swizzle applies to image and mips
     texture[0x88U / 4U] = 0x11223344U;
@@ -21384,8 +21385,9 @@ void gx2_set_pixel_texture_hle_tests()
         assert(command.value == expected_binding.registers[index]);
     }
 
-    // A missing mip allocation reuses the image address, as GX2 specifies.
-    core.memory.write32_be(texture_address + 0x28U, 0U);
+    // A nonzero mip size does not imply an allocated mipmap pointer. A null
+    // mipmap pointer reuses the base image address, as GX2 specifies.
+    core.memory.write32_be(texture_address + 0x2CU, 0U);
     core.state.gpr[4] = 3U;
     core.state.cia = import;
     const auto no_mips = core.run(1U);
