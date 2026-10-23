@@ -111,7 +111,7 @@ VkDebugUtilsMessengerCreateInfoEXT debug_messenger_info()
 
 }
 
-VulkanRenderer::VulkanRenderer()
+VulkanRenderer::VulkanRenderer(bool visible)
 {
     if (!glfwInit())
     {
@@ -120,6 +120,7 @@ VulkanRenderer::VulkanRenderer()
     owns_glfw_ = true;
 
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
+    glfwWindowHint(GLFW_VISIBLE, visible ? GLFW_TRUE : GLFW_FALSE);
     glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
     window_ = glfwCreateWindow(1280, 720, window_title, nullptr, nullptr);
     if (window_ == nullptr)
@@ -173,6 +174,247 @@ void VulkanRenderer::consume_guest_commands(
     std::span<const cpu::espresso::Gx2Command> commands)
 {
     guest_register_state_.apply(commands);
+}
+
+std::uint32_t VulkanRenderer::find_memory_type(
+    std::uint32_t type_bits,
+    VkMemoryPropertyFlags required,
+    VkMemoryPropertyFlags preferred) const
+{
+    VkPhysicalDeviceMemoryProperties properties{};
+    vkGetPhysicalDeviceMemoryProperties(physical_device_, &properties);
+    for (std::uint32_t index = 0U; index < properties.memoryTypeCount; ++index)
+    {
+        const VkMemoryPropertyFlags flags = properties.memoryTypes[index].propertyFlags;
+        if ((type_bits & (1U << index)) != 0U && (flags & required) == required &&
+            (flags & preferred) == preferred)
+        {
+            return index;
+        }
+    }
+    for (std::uint32_t index = 0U; index < properties.memoryTypeCount; ++index)
+    {
+        const VkMemoryPropertyFlags flags = properties.memoryTypes[index].propertyFlags;
+        if ((type_bits & (1U << index)) != 0U && (flags & required) == required)
+        {
+            return index;
+        }
+    }
+    throw std::runtime_error("No compatible Vulkan memory type is available");
+}
+
+std::size_t VulkanRenderer::upload_rgba8_texture(const Rgba8TextureStaging& staging)
+{
+    if (staging.width == 0U || staging.height == 0U)
+    {
+        throw std::invalid_argument("RGBA8 Vulkan texture staging has invalid dimensions or size");
+    }
+    const std::uint64_t row_bytes = static_cast<std::uint64_t>(staging.width) * 4U;
+    if (staging.height > std::numeric_limits<std::uint64_t>::max() / row_bytes)
+    {
+        throw std::invalid_argument("RGBA8 Vulkan texture staging size overflows");
+    }
+    const std::uint64_t expected_size = row_bytes * staging.height;
+    if (expected_size != staging.pixels.size())
+    {
+        throw std::invalid_argument("RGBA8 Vulkan texture staging has invalid dimensions or size");
+    }
+
+    VkPhysicalDeviceProperties device_properties{};
+    vkGetPhysicalDeviceProperties(physical_device_, &device_properties);
+    if (staging.width > device_properties.limits.maxImageDimension2D ||
+        staging.height > device_properties.limits.maxImageDimension2D)
+    {
+        throw std::invalid_argument("RGBA8 texture exceeds the Vulkan device's 2D image limit");
+    }
+    VkFormatProperties format_properties{};
+    vkGetPhysicalDeviceFormatProperties(
+        physical_device_, VK_FORMAT_R8G8B8A8_UNORM, &format_properties);
+    constexpr VkFormatFeatureFlags required_format_features =
+        VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT | VK_FORMAT_FEATURE_TRANSFER_DST_BIT;
+    if ((format_properties.optimalTilingFeatures & required_format_features) !=
+        required_format_features)
+    {
+        throw std::runtime_error("Vulkan device cannot sample optimal RGBA8 images");
+    }
+
+    VkBuffer staging_buffer{};
+    VkDeviceMemory staging_memory{};
+    VkImage image{};
+    VkDeviceMemory image_memory{};
+    VkImageView view{};
+    VkCommandBuffer upload_command{};
+    bool staging_mapped = false;
+    try
+    {
+        VkBufferCreateInfo buffer_info = make_info<VkBufferCreateInfo>(
+            VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO);
+        buffer_info.size = static_cast<VkDeviceSize>(staging.pixels.size());
+        buffer_info.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+        buffer_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        check(vkCreateBuffer(device_, &buffer_info, nullptr, &staging_buffer),
+            "vkCreateBuffer(texture staging)");
+
+        VkMemoryRequirements buffer_requirements{};
+        vkGetBufferMemoryRequirements(device_, staging_buffer, &buffer_requirements);
+        const std::uint32_t staging_memory_type = find_memory_type(
+            buffer_requirements.memoryTypeBits,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT,
+            VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+        VkMemoryAllocateInfo staging_allocation = make_info<VkMemoryAllocateInfo>(
+            VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO);
+        staging_allocation.allocationSize = buffer_requirements.size;
+        staging_allocation.memoryTypeIndex = staging_memory_type;
+        check(vkAllocateMemory(device_, &staging_allocation, nullptr, &staging_memory),
+            "vkAllocateMemory(texture staging)");
+        check(vkBindBufferMemory(device_, staging_buffer, staging_memory, 0U),
+            "vkBindBufferMemory(texture staging)");
+
+        void* mapped{};
+        check(vkMapMemory(device_, staging_memory, 0U, buffer_requirements.size, 0U, &mapped),
+            "vkMapMemory(texture staging)");
+        staging_mapped = true;
+        std::memcpy(mapped, staging.pixels.data(), staging.pixels.size());
+        VkPhysicalDeviceMemoryProperties memory_properties{};
+        vkGetPhysicalDeviceMemoryProperties(physical_device_, &memory_properties);
+        const VkMemoryPropertyFlags staging_flags =
+            memory_properties.memoryTypes[staging_memory_type].propertyFlags;
+        if ((staging_flags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) == 0U)
+        {
+            VkMappedMemoryRange mapped_range = make_info<VkMappedMemoryRange>(
+                VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE);
+            mapped_range.memory = staging_memory;
+            mapped_range.offset = 0U;
+            mapped_range.size = VK_WHOLE_SIZE;
+            check(vkFlushMappedMemoryRanges(device_, 1U, &mapped_range),
+                "vkFlushMappedMemoryRanges(texture staging)");
+        }
+        vkUnmapMemory(device_, staging_memory);
+        staging_mapped = false;
+
+        VkImageCreateInfo image_info = make_info<VkImageCreateInfo>(
+            VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO);
+        image_info.imageType = VK_IMAGE_TYPE_2D;
+        image_info.format = VK_FORMAT_R8G8B8A8_UNORM;
+        image_info.extent = {staging.width, staging.height, 1U};
+        image_info.mipLevels = 1U;
+        image_info.arrayLayers = 1U;
+        image_info.samples = VK_SAMPLE_COUNT_1_BIT;
+        image_info.tiling = VK_IMAGE_TILING_OPTIMAL;
+        image_info.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+        image_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        image_info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        check(vkCreateImage(device_, &image_info, nullptr, &image), "vkCreateImage(texture)");
+
+        VkMemoryRequirements image_requirements{};
+        vkGetImageMemoryRequirements(device_, image, &image_requirements);
+        VkMemoryAllocateInfo image_allocation = make_info<VkMemoryAllocateInfo>(
+            VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO);
+        image_allocation.allocationSize = image_requirements.size;
+        image_allocation.memoryTypeIndex = find_memory_type(
+            image_requirements.memoryTypeBits, 0U, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        check(vkAllocateMemory(device_, &image_allocation, nullptr, &image_memory),
+            "vkAllocateMemory(texture image)");
+        check(vkBindImageMemory(device_, image, image_memory, 0U),
+            "vkBindImageMemory(texture)");
+
+        VkCommandBufferAllocateInfo command_allocation = make_info<VkCommandBufferAllocateInfo>(
+            VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO);
+        command_allocation.commandPool = command_pool_;
+        command_allocation.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        command_allocation.commandBufferCount = 1U;
+        check(vkAllocateCommandBuffers(device_, &command_allocation, &upload_command),
+            "vkAllocateCommandBuffers(texture upload)");
+        VkCommandBufferBeginInfo command_begin = make_info<VkCommandBufferBeginInfo>(
+            VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO);
+        command_begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+        check(vkBeginCommandBuffer(upload_command, &command_begin),
+            "vkBeginCommandBuffer(texture upload)");
+
+        VkImageMemoryBarrier to_transfer = make_info<VkImageMemoryBarrier>(
+            VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER);
+        to_transfer.srcAccessMask = 0U;
+        to_transfer.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        to_transfer.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        to_transfer.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        to_transfer.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        to_transfer.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        to_transfer.image = image;
+        to_transfer.subresourceRange = {
+            VK_IMAGE_ASPECT_COLOR_BIT, 0U, 1U, 0U, 1U};
+        vkCmdPipelineBarrier(upload_command, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+            VK_PIPELINE_STAGE_TRANSFER_BIT, 0U, 0U, nullptr, 0U, nullptr,
+            1U, &to_transfer);
+
+        VkBufferImageCopy copy{};
+        copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0U, 0U, 1U};
+        copy.imageExtent = {staging.width, staging.height, 1U};
+        vkCmdCopyBufferToImage(upload_command, staging_buffer, image,
+            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1U, &copy);
+
+        VkImageMemoryBarrier to_shader_read = make_info<VkImageMemoryBarrier>(
+            VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER);
+        to_shader_read.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        to_shader_read.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        to_shader_read.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        to_shader_read.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        to_shader_read.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        to_shader_read.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        to_shader_read.image = image;
+        to_shader_read.subresourceRange = to_transfer.subresourceRange;
+        vkCmdPipelineBarrier(upload_command, VK_PIPELINE_STAGE_TRANSFER_BIT,
+            VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+            0U, 0U, nullptr, 0U, nullptr, 1U, &to_shader_read);
+        check(vkEndCommandBuffer(upload_command), "vkEndCommandBuffer(texture upload)");
+
+        VkSubmitInfo submit = make_info<VkSubmitInfo>(VK_STRUCTURE_TYPE_SUBMIT_INFO);
+        submit.commandBufferCount = 1U;
+        submit.pCommandBuffers = &upload_command;
+        check(vkQueueSubmit(graphics_queue_, 1U, &submit, VK_NULL_HANDLE),
+            "vkQueueSubmit(texture upload)");
+        check(vkQueueWaitIdle(graphics_queue_), "vkQueueWaitIdle(texture upload)");
+        vkFreeCommandBuffers(device_, command_pool_, 1U, &upload_command);
+        upload_command = VK_NULL_HANDLE;
+
+        VkImageViewCreateInfo view_info = make_info<VkImageViewCreateInfo>(
+            VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO);
+        view_info.image = image;
+        view_info.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        view_info.format = VK_FORMAT_R8G8B8A8_UNORM;
+        view_info.subresourceRange = to_transfer.subresourceRange;
+        check(vkCreateImageView(device_, &view_info, nullptr, &view),
+            "vkCreateImageView(texture)");
+
+        vkDestroyBuffer(device_, staging_buffer, nullptr);
+        staging_buffer = VK_NULL_HANDLE;
+        vkFreeMemory(device_, staging_memory, nullptr);
+        staging_memory = VK_NULL_HANDLE;
+        uploaded_textures_.push_back({image, image_memory, view, staging.width, staging.height});
+        return uploaded_textures_.size() - 1U;
+    }
+    catch (...)
+    {
+        if (staging_mapped) vkUnmapMemory(device_, staging_memory);
+        if (upload_command != VK_NULL_HANDLE)
+        {
+            vkFreeCommandBuffers(device_, command_pool_, 1U, &upload_command);
+        }
+        if (view != VK_NULL_HANDLE) vkDestroyImageView(device_, view, nullptr);
+        if (image != VK_NULL_HANDLE) vkDestroyImage(device_, image, nullptr);
+        if (image_memory != VK_NULL_HANDLE) vkFreeMemory(device_, image_memory, nullptr);
+        if (staging_buffer != VK_NULL_HANDLE) vkDestroyBuffer(device_, staging_buffer, nullptr);
+        if (staging_memory != VK_NULL_HANDLE) vkFreeMemory(device_, staging_memory, nullptr);
+        throw;
+    }
+}
+
+VkImageView VulkanRenderer::uploaded_texture_view(std::size_t texture_id) const
+{
+    if (texture_id >= uploaded_textures_.size())
+    {
+        throw std::out_of_range("Vulkan texture handle is out of range");
+    }
+    return uploaded_textures_[texture_id].view;
 }
 
 VulkanRenderer::QueueFamilies VulkanRenderer::find_queue_families(VkPhysicalDevice device) const
@@ -736,11 +978,27 @@ void VulkanRenderer::destroy_swapchain() noexcept
     }
 }
 
+void VulkanRenderer::destroy_uploaded_textures() noexcept
+{
+    if (device_ == VK_NULL_HANDLE) return;
+    for (const UploadedTexture& texture : uploaded_textures_)
+    {
+        if (texture.view != VK_NULL_HANDLE)
+            vkDestroyImageView(device_, texture.view, nullptr);
+        if (texture.image != VK_NULL_HANDLE)
+            vkDestroyImage(device_, texture.image, nullptr);
+        if (texture.memory != VK_NULL_HANDLE)
+            vkFreeMemory(device_, texture.memory, nullptr);
+    }
+    uploaded_textures_.clear();
+}
+
 void VulkanRenderer::cleanup() noexcept
 {
     if (device_ != VK_NULL_HANDLE)
     {
         static_cast<void>(vkDeviceWaitIdle(device_));
+        destroy_uploaded_textures();
         destroy_swapchain();
         for (std::size_t index = 0U; index < frames_in_flight; ++index)
         {

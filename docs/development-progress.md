@@ -3,7 +3,7 @@
 ## WWHD checkpoint
 
 - RPX: `cking.rpx`; entry point `0x028EA9E0`; 24 sections.
-- Latest confirmed run: 6,080,538 guest instructions; stop CIA `0x00000000`; GPR3 `0`; LR `0x027B6844`; CTR `0`; stop is an unsupported fetch of `0x46524D48` after `bcctr` loads CTR from zero. The trace identifies a global object at `0x06E4F660` obtained through `0x101F8C2C`, whose `+0x10` field is null; subsequent indirect-pointer loads also resolve to zero. `0x46524D48` is the synthetic `FRMH` header mirrored at low address zero by the MEM1 alias, so this is a null indirect call obscured by the current flat memory map, not a missing PPC opcode. The caller's object owner is still unidentified; do not synthesize a target.
+- Latest confirmed run: 6,080,538 guest instructions; stop CIA `0x00000000`; GPR3 `0`; LR `0x027B6844`; CTR `0`; stop is an unsupported fetch of `0x46524D48` after `bcctr` loads CTR from zero. The trace identifies a global object at `0x06E4F660` obtained through `0x101F8C2C`, whose `+0x10` field is null; subsequent indirect-pointer loads also resolve to zero. `0x46524D48` is the synthetic `FRMH` header mirrored at low address zero by the MEM1 alias, so this is a null indirect call obscured by the current flat memory map, not a missing PPC opcode. The caller's object owner is still unidentified; do not synthesize a target. Latest Release run after renderer upload work remains at this same checkpoint (guest execution 1.134 s).
 - Latest JIT run after native `lfs`: 4,158,093 native instructions, 1,922,446 interpreter fallbacks, 22,956 compiled blocks, 1,882,460 block-cache hits. Release guest time across three runs: 1.148/1.146/1.182 s versus 1.322/1.257/1.359 s before `lfs`; medians 1.148 s versus 1.322 s (13.2% lower guest time). Host total medians were 1.340 s versus 1.511 s. The 175,096 `lfs` fallbacks now execute natively. Remaining top fallbacks: `fmadd` 149,463; `stfs` 127,192; `stwu` 107,842; `fmr` 98,684; `stfd` 97,997; `cmpwi` 94,017; `slw` 87,439.
 - No unimplemented HLE was reached. `GX2InitTextureRegs` ran 13 times, along with the sampler initialization and existing GX2 state HLEs.
 
@@ -19,6 +19,7 @@
 - The renderer register shadow can now retrieve complete seven-word texture-resource and three-word sampler bindings by shader stage. Partial groups are not exposed; compute correctly resolves through the shared vertex bank. This remains state decoding only and does not yet create Vulkan images or descriptors.
 - Added checked Latte texture-word decoding into a typed descriptor: dimensions, encoded pitch, tile mode/type, hardware format, guest image/mipmap addresses, view levels/slices, numeric/endian modes, degamma, and component selectors. Invalid resource types, >32-bit addresses, reserved selectors, and invalid format fields are rejected. This is descriptor interpretation only; tiled guest memory is not yet uploaded to Vulkan.
 - Added typed sampler decoding for wrap/filter modes, anisotropy, border/depth state, signed fixed-point LOD bias, and word-2 flags. Ambiguous overlapping word-0 bits remain available through raw words rather than being guessed.
+- Added an explicit Vulkan RGBA8 upload path for the existing linear texture staging output: host-visible staging buffer, optimal-tiled sampled image, transfer-to-shader-read layout barriers, and renderer-owned image/memory/view lifetime. Upload is currently an opt-in smoke-tested backend primitive; guest texture binding and draw submission do not invoke it yet.
 - Corrected `GX2Set*Texture` to read `GX2Surface.mipmaps` from offset `0x2C`, not `mipmapSize` at `0x28`. A missing mip pointer still aliases the base image even when the size field is nonzero.
 - Added: a CPU-side texture staging conversion for single-layer 2D UNORM R8, R4_G4, R8_G8, R5_G6_B5, R5_G5_B5_A1, R4_G4_B4_A4, A1_B5_G5_R5, and R8_G8_B8_A8 in linear-aligned layout. GX2 dimension 1 (2D) is accepted; dimension 2 (3D) is rejected. Guest pitch and component selectors are honored; missing channels expand to zero with alpha one. Packed formats are unpacked from big-endian guest data and expanded to 8-bit channels. Format-appropriate Latte endian metadata is validated while the byte-ordered guest snapshot is kept intact. Tiled, compressed, mipmapped, array, and non-UNORM formats are explicitly rejected rather than misread.
 - Actual guest rendering/presentation is not yet confirmed; command submission, shader execution, and framebuffer presentation remain incomplete.
@@ -48,19 +49,21 @@
 - `f60e130` - `jit: emit native rlwinm instructions` (pushed HEAD before this `lfd` iteration)
 - `1a2a49f` - `jit: emit native lfd loads`
 - `a34c5c0` - `jit: report compile and execution timings`
-- pending - `jit: emit native lfs loads`
-- pending - `debug: trace recent HLE calls in RPX diagnostics`
+- `35de871` - `jit: emit native lfs loads`
+- `e1e3744` - `debug: trace recent HLE calls in RPX diagnostics`
+- pending - `gpu: upload staged RGBA8 textures to Vulkan`
 
 ## Current test status
 
-- Debug and Release CMake/Ninja builds completed; CTest passed 2/2 in both configurations. Debug WWHD remains at 6,080,538 instructions and the same null `bcctr` target; Release reaches the same state. Release RPX load is about 90 ms; guest execution is about 1.15 s after native `lfs`.
+- Debug and Release CMake/Ninja builds completed; CTest passed 2/2 in both configurations. The opt-in hidden-window Vulkan RGBA8 upload smoke test passed in Debug and Release on the NVIDIA GeForce RTX 5070 Laptop GPU without validation warnings. Debug and Release WWHD remain at 6,080,538 instructions and the same null `bcctr` target. Release RPX load was 91 ms; guest execution was 1.134 s in the latest run.
 - Native `lfs` interpreter/JIT differential tests cover signed zero, finite values, a single subnormal, infinities, qNaN/sNaN, literal-zero `rA`, PS0/PS1 behavior, history, and transactional 4-byte memory faults. Native `lfd` tests cover raw big-endian values, literal-zero `rA`, PS1 preservation, and transactional 8-byte faults.
 - RPX diagnostics capture the latest 64 HLE calls (guest arguments, resulting GPR3-r8, call/return addresses and completion) and print the last 16. Tracing is opt-in and enabled only by `--run-rpx`; ordinary frontend execution does not pay the per-HLE recording cost. Calls immediately before the current stop are GX2 surface/sampler initialization and size queries; there is no HLE adjacent to the null `bcctr`.
 
 ## Prioritized queue
 
 1. Trace the null `bcctr` caller/object owner further; current trace identifies global object `0x06E4F660` and its null `+0x10` field. Check guest-side initialization and relevant HLE state; do not fabricate a callback.
-2. Add a Vulkan image-upload path for the already-supported linear RGBA8 staging representation, with resource lifetime/synchronization tests and no claim that current WWHD has submitted a draw.
+2. Investigate the null indirect call and identify the owner/initializer for object `0x06E4F660`; avoid inventing a target or HLE success result.
 3. Audit actual guest shader, draw, and scan-buffer producers; the current WWHD run stops before any draw or texture-binding HLE is observed.
-4. Add real render submission and guest framebuffer presentation only after command and resource state are available; do not present the clear-test window as game output.
-5. Address measured cold compilation cost (3.7 s versus 0.15 s native execution in Debug) before broad native coverage; measure whether hot-block/lazy compilation can avoid compiling cold blocks without losing throughput. Then evaluate `fmadd` and store/update forms, measuring Debug and Release separately.
+4. Connect binding-time/command-ordered guest snapshots to the Vulkan texture uploader only when a correct guest use point is available; do not assume a bind-time snapshot remains valid through later writes.
+5. Add shader resource descriptors, shader translation, draw submission, and guest framebuffer presentation in independently testable steps. Do not present the clear-test window as game output.
+6. Revisit measured JIT fallbacks only with a repeatable Release benchmark: native `fmr`, `stfs`, and `stwu` prototypes each passed targeted differential checks but regressed full WWHD timing, so they were discarded.

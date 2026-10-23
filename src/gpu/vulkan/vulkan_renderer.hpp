@@ -1,6 +1,7 @@
 #pragma once
 
 #include "gpu/gx2_register_state.hpp"
+#include "gpu/latte_texture_staging.hpp"
 
 #define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
@@ -18,7 +19,7 @@ namespace affogato::gpu::vulkan
 class VulkanRenderer
 {
 public:
-    VulkanRenderer();
+    explicit VulkanRenderer(bool visible = true);
     ~VulkanRenderer();
 
     VulkanRenderer(const VulkanRenderer&) = delete;
@@ -29,6 +30,13 @@ public:
     void set_guest_clear_color(const std::array<float, 4U>& rgba) noexcept;
     void consume_guest_commands(
         std::span<const cpu::espresso::Gx2Command> commands);
+    [[nodiscard]] std::size_t upload_rgba8_texture(
+        const Rgba8TextureStaging& staging);
+    [[nodiscard]] VkImageView uploaded_texture_view(std::size_t texture_id) const;
+    [[nodiscard]] std::size_t uploaded_texture_count() const noexcept
+    {
+        return uploaded_textures_.size();
+    }
 
     [[nodiscard]] bool should_close() const noexcept;
     [[nodiscard]] const std::string& device_name() const noexcept
@@ -47,6 +55,15 @@ private:
         bool has_present{};
     };
 
+    struct UploadedTexture
+    {
+        VkImage image{};
+        VkDeviceMemory memory{};
+        VkImageView view{};
+        std::uint32_t width{};
+        std::uint32_t height{};
+    };
+
     void create_instance();
     void create_surface();
     void select_physical_device();
@@ -59,10 +76,15 @@ private:
     void create_synchronization();
     void recreate_swapchain();
     void destroy_swapchain() noexcept;
+    void destroy_uploaded_textures() noexcept;
     void cleanup() noexcept;
 
     [[nodiscard]] QueueFamilies find_queue_families(VkPhysicalDevice device) const;
     [[nodiscard]] bool supports_swapchain(VkPhysicalDevice device) const;
+    [[nodiscard]] std::uint32_t find_memory_type(
+        std::uint32_t type_bits,
+        VkMemoryPropertyFlags required,
+        VkMemoryPropertyFlags preferred = 0U) const;
 
     GLFWwindow* window_{};
     bool owns_glfw_{};
@@ -86,6 +108,7 @@ private:
     std::vector<VkSemaphore> render_finished_;
     std::array<VkFence, frames_in_flight> in_flight_{};
     std::vector<VkFence> images_in_flight_;
+    std::vector<UploadedTexture> uploaded_textures_;
     std::size_t current_frame_{};
     std::array<float, 4U> guest_clear_color_{0.025F, 0.055F, 0.09F, 1.0F};
     affogato::gpu::Gx2RegisterState guest_register_state_;

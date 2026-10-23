@@ -1116,6 +1116,51 @@ int run_frontend()
     return 0;
 }
 
+int run_vulkan_texture_upload_smoke_test()
+{
+    affogato::gpu::vulkan::VulkanRenderer renderer(false);
+    affogato::gpu::Rgba8TextureStaging texture{
+        2U, 2U,
+        {
+            0xFFU, 0x00U, 0x00U, 0xFFU,
+            0x00U, 0xFFU, 0x00U, 0xFFU,
+            0x00U, 0x00U, 0xFFU, 0xFFU,
+            0xFFU, 0xFFU, 0xFFU, 0xFFU,
+        }};
+    const std::size_t texture_id = renderer.upload_rgba8_texture(texture);
+    if (texture_id != 0U || renderer.uploaded_texture_count() != 1U ||
+        renderer.uploaded_texture_view(texture_id) == VK_NULL_HANDLE)
+    {
+        throw std::runtime_error("Vulkan texture upload did not produce a valid image view");
+    }
+    const affogato::gpu::Rgba8TextureStaging second_texture{
+        1U, 1U, {0x20U, 0x40U, 0x80U, 0xFFU}};
+    const std::size_t second_texture_id =
+        renderer.upload_rgba8_texture(second_texture);
+    if (second_texture_id != 1U || renderer.uploaded_texture_count() != 2U ||
+        renderer.uploaded_texture_view(second_texture_id) == VK_NULL_HANDLE)
+    {
+        throw std::runtime_error("Vulkan renderer did not retain multiple uploaded textures");
+    }
+
+    bool rejected_invalid_input = false;
+    try
+    {
+        static_cast<void>(renderer.upload_rgba8_texture({}));
+    }
+    catch (const std::invalid_argument&)
+    {
+        rejected_invalid_input = true;
+    }
+    if (!rejected_invalid_input || renderer.uploaded_texture_count() != 2U)
+    {
+        throw std::runtime_error("Vulkan texture upload accepted invalid staging data");
+    }
+    std::cout << "Vulkan RGBA8 upload smoke test passed on " << renderer.device_name()
+              << "; image view created and retained until renderer teardown.\n";
+    return 0;
+}
+
 int main(int argc, char* argv[])
 {
     const bool command_line_mode = argc > 1;
@@ -1127,9 +1172,15 @@ int main(int argc, char* argv[])
             {
                 return run_rpx_diagnostic(argc, argv);
             }
+            if (std::string_view(argv[1]) == "--vulkan-texture-upload-smoke-test" &&
+                argc == 2)
+            {
+                return run_vulkan_texture_upload_smoke_test();
+            }
             std::cerr << "Unknown option: " << argv[1] << '\n'
                       << "Usage: AffogatoFrontend.exe [--run-rpx <file.rpx> "
-                         "[--recompiler] [--limit <instructions>]]\n";
+                         "[--recompiler] [--limit <instructions>]]\n"
+                         "       AffogatoFrontend.exe --vulkan-texture-upload-smoke-test\n";
             return 2;
         }
         return run_frontend();
@@ -1138,7 +1189,7 @@ int main(int argc, char* argv[])
     {
         if (command_line_mode)
         {
-            std::cerr << "RPX diagnostic failed: " << error.what() << '\n';
+            std::cerr << "Command-line mode failed: " << error.what() << '\n';
             return 1;
         }
         report_fatal_error(error.what());
@@ -1147,7 +1198,7 @@ int main(int argc, char* argv[])
     {
         if (command_line_mode)
         {
-            std::cerr << "RPX diagnostic failed with an unknown exception.\n";
+            std::cerr << "Command-line mode failed with an unknown exception.\n";
             return 1;
         }
         report_fatal_error("Unknown non-standard exception.");
