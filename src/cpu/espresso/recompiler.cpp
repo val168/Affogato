@@ -643,6 +643,7 @@ struct BlockCode
     case Opcode::store_byte_indexed:
     case Opcode::store_halfword_indexed:
     case Opcode::data_cache_block_store:
+    case Opcode::data_cache_block_flush:
     case Opcode::condition_bit_and:
     case Opcode::condition_bit_and_complement:
     case Opcode::condition_bit_or:
@@ -733,6 +734,7 @@ struct BlockCode
     case Opcode::store_byte_indexed: return "stbx";
     case Opcode::store_halfword_indexed: return "sthx";
     case Opcode::data_cache_block_store: return "dcbst";
+    case Opcode::data_cache_block_flush: return "dcbf";
     case Opcode::condition_bit_and: return "crand";
     case Opcode::condition_bit_and_complement: return "crandc";
     case Opcode::condition_bit_or: return "cror";
@@ -773,6 +775,7 @@ struct BlockCode
     case Opcode::store_byte_indexed:
     case Opcode::store_halfword_indexed:
     case Opcode::data_cache_block_store:
+    case Opcode::data_cache_block_flush:
         return true;
     default:
         return false;
@@ -789,6 +792,7 @@ struct BlockCode
     case Opcode::load_byte_zero_indexed:
     case Opcode::store_byte_indexed:
     case Opcode::data_cache_block_store:
+    case Opcode::data_cache_block_flush:
         return 1U;
     case Opcode::load_halfword_zero:
     case Opcode::load_halfword_algebraic:
@@ -820,7 +824,8 @@ struct BlockCode
         opcode == Opcode::load_halfword_algebraic_indexed ||
         opcode == Opcode::store_word_indexed || opcode == Opcode::store_byte_indexed ||
         opcode == Opcode::store_halfword_indexed ||
-        opcode == Opcode::data_cache_block_store;
+        opcode == Opcode::data_cache_block_store ||
+        opcode == Opcode::data_cache_block_flush;
 }
 
 [[nodiscard]] std::uint32_t immediate_value(const DecodedInstruction& insn) noexcept
@@ -2237,11 +2242,13 @@ struct Recompiler::Impl
             case Opcode::store_byte_indexed:
             case Opcode::store_halfword_indexed:
             case Opcode::data_cache_block_store:
+            case Opcode::data_cache_block_flush:
             {
                 const bool indexed = is_indexed_memory(insn.opcode);
                 const bool store = is_memory_store(insn.opcode);
                 const bool validation_only =
-                    insn.opcode == Opcode::data_cache_block_store;
+                    insn.opcode == Opcode::data_cache_block_store ||
+                    insn.opcode == Opcode::data_cache_block_flush;
                 const bool destination_was_cached =
                     !store && !validation_only &&
                     guest_gpr_initialized[insn.destination];
@@ -2874,9 +2881,11 @@ RunResult Recompiler::run(EspressoCore& core, std::size_t max_steps)
                 entry.has_immediate = true;
                 entry.immediate = insn.immediate;
             }
-            if (insn.opcode == Opcode::data_cache_block_store)
+            if (insn.opcode == Opcode::data_cache_block_store ||
+                insn.opcode == Opcode::data_cache_block_flush)
             {
-                // dcbst has no architectural destination in Affogato's
+                // Cache-maintenance instructions have no architectural
+                // destination in Affogato's
                 // coherent-memory model; the byte read above exists only to
                 // retain its translation/protection fault behavior.
                 core.append_instruction_history(std::move(entry));
