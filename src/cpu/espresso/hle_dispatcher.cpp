@@ -138,13 +138,17 @@ HleDispatchResult HleDispatcher::dispatch(EspressoCore& core, std::uint32_t addr
     const BoundImport& binding = imported->second;
     ++call_counts_[binding.name];
     HleCallTraceEntry* trace = nullptr;
-    if (recent_call_trace_enabled_)
+    const std::string full_name = recent_call_trace_enabled_
+        ? binding.name.first + "::" + binding.name.second
+        : std::string{};
+    if (recent_call_trace_enabled_ &&
+        (recent_call_trace_filter_.empty() || full_name == recent_call_trace_filter_))
     {
         trace = &recent_calls_[next_recent_call_];
         *trace = {};
         trace->import_address = address;
         trace->return_address = core.state.lr;
-        trace->name = binding.name.first + "::" + binding.name.second;
+        trace->name = full_name;
         for (std::size_t index = 0U; index < trace->arguments.size(); ++index)
         {
             trace->arguments[index] = core.state.gpr[index + 3U];
@@ -210,15 +214,23 @@ std::vector<HleCallTraceEntry> HleDispatcher::recent_call_trace_snapshot() const
     return result;
 }
 
-void HleDispatcher::set_recent_call_trace_enabled(bool enabled) noexcept
+void HleDispatcher::set_recent_call_trace_enabled(bool enabled)
 {
     recent_call_trace_enabled_ = enabled;
     if (enabled)
     {
-        recent_calls_ = {};
+        recent_calls_.clear();
+        recent_calls_.resize(trace_capacity);
         recent_call_count_ = 0U;
         next_recent_call_ = 0U;
     }
+}
+
+void HleDispatcher::set_recent_call_trace_filter(std::string name)
+{
+    recent_call_trace_filter_ = std::move(name);
+    recent_call_count_ = 0U;
+    next_recent_call_ = 0U;
 }
 
 }

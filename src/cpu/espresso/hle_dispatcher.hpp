@@ -76,7 +76,8 @@ public:
     [[nodiscard]] HleDispatchResult dispatch(EspressoCore& core, std::uint32_t address);
     [[nodiscard]] std::vector<HleCallStatistic> call_statistics_snapshot() const;
     [[nodiscard]] std::vector<HleCallTraceEntry> recent_call_trace_snapshot() const;
-    void set_recent_call_trace_enabled(bool enabled) noexcept;
+    void set_recent_call_trace_enabled(bool enabled);
+    void set_recent_call_trace_filter(std::string name);
 
     [[nodiscard]] const std::string& last_unimplemented_call() const noexcept
     {
@@ -105,11 +106,15 @@ private:
     std::map<ImportName, std::uint32_t> data_addresses_;
     std::map<std::uint32_t, BoundImport> bound_imports_;
     std::map<ImportName, std::uint64_t> call_counts_;
-    static constexpr std::size_t trace_capacity = 64U;
-    std::array<HleCallTraceEntry, trace_capacity> recent_calls_{};
+    // Startup paths can make more than 64 HLE calls before a later failure.
+    // Keep a bounded but wider diagnostic window so earlier initialization
+    // calls remain inspectable at the eventual stop.
+    static constexpr std::size_t trace_capacity = 512U;
+    std::vector<HleCallTraceEntry> recent_calls_;
     std::size_t recent_call_count_{};
     std::size_t next_recent_call_{};
     bool recent_call_trace_enabled_{};
+    std::string recent_call_trace_filter_;
     std::uint32_t next_import_address_{first_import_address};
     std::uint32_t next_data_address_{first_data_address};
     std::string last_unimplemented_call_;

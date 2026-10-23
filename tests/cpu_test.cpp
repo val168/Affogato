@@ -11155,6 +11155,30 @@ void hle_dispatch_tests()
     assert(missing_trace.name == "gx2::GX2UnimplementedForStatisticsTest");
     assert(!missing_trace.implemented && !missing_trace.completed);
     assert(missing_trace.import_address == unknown_gx2_import);
+
+    thread_core.hle.set_recent_call_trace_filter("coreinit::OSGetThreadSpecific");
+    thread_core.state.cia = unknown_gx2_import;
+    assert(thread_core.step() == StepResult::unimplemented_hle_call);
+    assert(thread_core.hle.recent_call_trace_snapshot().empty());
+    thread_core.state.cia = get_specific;
+    thread_core.state.lr = 0x80U;
+    thread_core.state.gpr[3] = specific_id;
+    assert(thread_core.step() == StepResult::executed);
+    const auto filtered_calls = thread_core.hle.recent_call_trace_snapshot();
+    assert(filtered_calls.size() == 1U);
+    assert(filtered_calls.front().name == "coreinit::OSGetThreadSpecific");
+
+    thread_core.hle.set_recent_call_trace_filter({});
+    for (std::uint32_t call = 0U; call < 520U; ++call)
+    {
+        thread_core.state.cia = unknown_gx2_import;
+        thread_core.state.lr = call;
+        assert(thread_core.step() == StepResult::unimplemented_hle_call);
+    }
+    const auto widened_recent_calls = thread_core.hle.recent_call_trace_snapshot();
+    assert(widened_recent_calls.size() == 512U);
+    assert(widened_recent_calls.front().return_address == 8U);
+    assert(widened_recent_calls.back().return_address == 519U);
 }
 
 void nn_olv_hle_tests()

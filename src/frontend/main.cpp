@@ -377,6 +377,7 @@ int run_rpx_diagnostic(int argc, char* argv[])
         std::cerr << "Usage: AffogatoFrontend.exe --run-rpx <file.rpx> "
                      "[--recompiler] [--limit <instructions>] "
                      "[--watch-write <guest-address>] "
+                     "[--trace-hle <library::symbol>] "
                      "[--dump-memory <address> <bytes>]...\n";
         return 2;
     }
@@ -384,6 +385,7 @@ int run_rpx_diagnostic(int argc, char* argv[])
     affogato::ExecutionMode mode = affogato::ExecutionMode::interpreter;
     std::size_t instruction_limit = 5'000'000'000ULL;
     std::optional<std::uint32_t> watched_guest_write_address;
+    std::optional<std::string> hle_trace_filter;
     std::vector<std::pair<std::uint32_t, std::uint32_t>> guest_memory_dumps;
     for (int index = 3; index < argc; ++index)
     {
@@ -414,6 +416,15 @@ int run_rpx_diagnostic(int argc, char* argv[])
                     "--watch-write requires a 32-bit guest address");
             }
             watched_guest_write_address = static_cast<std::uint32_t>(parsed);
+        }
+        else if (argument == "--trace-hle" && index + 1 < argc)
+        {
+            hle_trace_filter = argv[++index];
+            if (hle_trace_filter->find("::") == std::string::npos)
+            {
+                throw std::invalid_argument(
+                    "--trace-hle requires an exact library::symbol name");
+            }
         }
         else if (argument == "--dump-memory" && index + 2 < argc)
         {
@@ -479,6 +490,10 @@ int run_rpx_diagnostic(int argc, char* argv[])
             *watched_guest_write_address, sizeof(std::uint32_t));
     }
     emulator.core().hle.set_recent_call_trace_enabled(true);
+    if (hle_trace_filter.has_value())
+    {
+        emulator.core().hle.set_recent_call_trace_filter(*hle_trace_filter);
+    }
     const auto load_end = std::chrono::steady_clock::now();
     const auto load_time = std::chrono::duration_cast<std::chrono::milliseconds>(
         load_end - load_start);
@@ -661,7 +676,7 @@ int run_rpx_diagnostic(int argc, char* argv[])
         std::cout << "  " << statistic.name << ": " << statistic.calls << '\n';
     }
     const auto recent_hle_calls = emulator.core().hle.recent_call_trace_snapshot();
-    constexpr std::size_t recent_hle_display_count = 64U;
+    constexpr std::size_t recent_hle_display_count = 512U;
     const std::size_t first_recent_hle = recent_hle_calls.size() > recent_hle_display_count
         ? recent_hle_calls.size() - recent_hle_display_count
         : 0U;
