@@ -10640,8 +10640,35 @@ void rpx_loader_tests()
     assert(unregistered_data_core.memory.read32_be(0x0200000CU) == imported_data_slot);
     assert(unregistered_data_core.memory.read32_be(imported_data_slot) == fallback_import_address);
 
+    RpxRelocationSymbol tls_symbol{"tls_symbol", 4U, 1U, 1U, 1U, 0x12345678};
+    RpxRelocationOptions tls_module_id_relocation{};
+    tls_module_id_relocation.type = 68U;
+    const auto tls_module_id_file = make_minimal_compressed_rpx(
+        0x02000000U, 16U, tls_symbol, tls_module_id_relocation);
+    EspressoCore tls_module_id_core(0x1000U);
+    static_cast<void>(load_rpx32_powerpc(tls_module_id_core, tls_module_id_file));
+    assert(tls_module_id_core.memory.read32_be(0x0200000CU) == 1U);
+
+    const auto external_tls_module_file = make_minimal_compressed_rpx(
+        0x02000000U, 16U, {}, tls_module_id_relocation);
+    EspressoCore external_tls_module_core(0x1000U);
+    bool external_tls_module_rejected = false;
+    try
+    {
+        static_cast<void>(load_rpx32_powerpc(
+            external_tls_module_core, external_tls_module_file));
+    }
+    catch (const std::invalid_argument& error)
+    {
+        external_tls_module_rejected =
+            std::string(error.what()).find(
+                "R_PPC_DTPMOD32 references a symbol outside the loaded RPX TLS module") !=
+            std::string::npos;
+    }
+    assert(external_tls_module_rejected);
+
     RpxRelocationOptions unsupported_relocation{};
-    unsupported_relocation.type = 68U;
+    unsupported_relocation.type = 69U;
     const auto unsupported_relocation_file = make_minimal_compressed_rpx(
         0x02000000U, 16U, {}, unsupported_relocation);
     EspressoCore unsupported_relocation_core(0x1000U);
@@ -10655,7 +10682,7 @@ void rpx_loader_tests()
     {
         const std::string message = error.what();
         unsupported_relocation_diagnostic =
-            message.find("relocation type 68") != std::string::npos &&
+            message.find("relocation type 69") != std::string::npos &&
             message.find("guest address 0x200000C") != std::string::npos &&
             message.find("symbol '$UNDEF'") != std::string::npos;
     }

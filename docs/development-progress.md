@@ -11,7 +11,7 @@
 
 ## Secondary BOTW checkpoint
 
-- The loader now relocates its HLE data/import windows when an RPX section overlaps the defaults. BOTW passes that check and now stops at unsupported relocation type 68 (`R_PPC_DTPMOD32`) in section 3, guest address `0x103F3174`, symbol `s_memoryRouter__14hkMemoryRouter` (symbol value 4, addend 0). It remains pre-guest and is not yet a CPU regression checkpoint.
+- The loader relocates its HLE data/import windows when an RPX section overlaps the defaults (`a9e1130`). BOTW now passes `R_PPC_DTPMOD32` at `0x103F3174`; the single loaded RPX is module 1, as required for its TLS module-index word. Loading next stops at `R_PPC_DTPREL32` in section 3 at `0x103F3178` for the same symbol (value 4, addend 0). BOTW is still pre-guest and is not yet a runtime regression checkpoint.
 
 ## Graphics checkpoint
 
@@ -64,17 +64,18 @@
 - `50c38dd` - `debug: dump guest memory in RPX diagnostics`
 - `75ef1ec` - `debug: filter recent HLE call trace`
 - `0b656bb` - `debug: capture GPRs at watched guest writes`
-- pending - `loader: relocate HLE ranges around RPX sections`
+- `a9e1130` - `loader: relocate HLE ranges around RPX sections`
+- pending - `loader: implement PPC TLS module ID relocation`
 
 ## Current test status
 
-- Debug and Release CMake/Ninja builds completed; CTest passed 2/2 in both configurations. The opt-in hidden-window Vulkan RGBA8 upload smoke test passed in Debug and Release on the NVIDIA GeForce RTX 5070 Laptop GPU without validation warnings. WWHD remains at 6,080,538 instructions and the same null `bcctr` target. The RPX loader range relocation lets BOTW pass the previous reserved-import overlap rejection and exposes its first TLS relocation requirement.
+- Debug and Release CMake/Ninja builds completed; CTest passed 2/2 in both configurations. The opt-in hidden-window Vulkan RGBA8 upload smoke test passed in Debug and Release on the NVIDIA GeForce RTX 5070 Laptop GPU without validation warnings. WWHD remains at 6,080,538 instructions and the same null `bcctr` target. The RPX loader now passes BOTW's module-ID relocation and exposes the subsequent TLS-symbol-offset relocation.
 - Native `lfs` interpreter/JIT differential tests cover signed zero, finite values, a single subnormal, infinities, qNaN/sNaN, literal-zero `rA`, PS0/PS1 behavior, history, and transactional 4-byte memory faults. Native `lfd` tests cover raw big-endian values, literal-zero `rA`, PS1 preservation, and transactional 8-byte faults.
 - RPX diagnostics capture and print the latest 512 HLE calls and 64 PPC instructions. `--trace-hle <library::symbol>` filters the bounded trace to one exact HLE symbol. `--watch-write <guest-address>` opts into a bounded watch of a four-byte word, reporting overlapping writes, writer CIA, resulting big-endian word, local decoded code context, and all 32 GPRs at each matching write. `--dump-memory` provides bounded post-run BE-word inspection. All are diagnostic-only and disabled unless requested.
 
 ## Prioritized queue
 
-1. Implement the single-module `R_PPC_DTPMOD32` relocation with verified Cafe/ELF TLS module-ID semantics, then rerun BOTW to expose the next loader/runtime boundary.
+1. Implement and test `R_PPC_DTPREL32` using the ELF TLS block-relative symbol value, then rerun BOTW to expose the next loader/runtime boundary.
 2. Determine whether the null indirect callback is caused by a missing guest initialization path or an incorrect runtime/HLE result; do not fabricate a callback or turn address zero into a valid call.
 3. Audit actual guest shader, draw, and scan-buffer producers; the current WWHD run stops before any draw or texture-binding HLE is observed.
 4. Connect binding-time/command-ordered guest snapshots to the Vulkan texture uploader only when a correct guest use point is available; do not assume a bind-time snapshot remains valid through later writes.
