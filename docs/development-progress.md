@@ -1,5 +1,6 @@
 # Development Progress
 
+- Native JIT `divwu` now handles unsigned quotient in a focused generated-block helper, including the architectural zero-divisor result, source/destination aliasing, and optional CR0/XER.SO record behavior. Interpreter/JIT differential cases cover regular division, zero divisor, and record form. Debug/Release builds and CTest pass. Latest WWHD Release run remains at 6,080,538 instructions, entry `0x028EA9E0`, 24 sections, GPR3/4/5 `0/512/256`, stop CIA `0`, and unsupported null-target fetch `0x46524D48`; fallbacks fell from 143,185 to 126,365 (16,820 fewer), and `divwu` is no longer among the fallback leaders. BOTW remains at 860,172 instructions, entry `0x03AB62AC`, 26 sections, GPR3/4/5 `0/4,194,304/64`, same stop; fallbacks fell from 3,129 to 3,121 (8 fewer). No wall-time speedup is claimed.
 - Native JIT `fnmsub` now snapshots A/B/C, performs fused `fma(A,C,-B)` followed by sign inversion only for non-NaN results, and matches the interpreter's A→C→B NaN priority, `VXSNAN`/`VXIMZ`/`VXISI` conditions, VE suppression, PS0-only result, exactness scope, and trace. Differential coverage includes fused cancellation, all source aliases, Wind Waker's D=B/C=0 case, NaN behavior, and invalid-infinity enables. Debug/Release builds and CTest pass. WWHD remains at 6,080,538 instructions and the `0x46524D48` null indirect stop; fallbacks fell from 161,613 to 143,185 (18,428 native `fnmsub`). BOTW remains at 860,172 instructions with the same stop and 3,129 fallbacks; it does not execute `fnmsub` in this startup run. No timing improvement is claimed.
 - Native JIT `fadds` now mirrors the interpreter's PS0 binary64 addition followed by one binary32 rounding, including A→B NaN selection, `VXSNAN`, opposite-infinity `VXISI`, VE write suppression, paired-lane commit, FPRF/FI/FR/XX, and history. Differential cases cover finite and signed-zero results, aliases, qNaN/sNaN, and invalid infinities. Debug/Release builds and CTest pass. WWHD stays at 6,080,538 instructions and the known `0x46524D48` null indirect fetch; fallbacks fell from 180,442 to 161,613 (18,829 native `fadds`). BOTW stays at 860,172 and the same stop; fallbacks fell from 3,186 to 3,129 (57 native `fadds`). No wall-time speedup is claimed.
 - Native JIT `fmadds` uses a fused operation with Espresso's 25-bit frC rounding and matches interpreter NaN source priority (A, C, B), `VXSNAN`/`VXIMZ`/`VXISI`, VE suppression, paired-lane result, and single-precision FPSCR status. Differential tests cover fused cancellation, 25-bit precision, aliases, NaNs, infinity invalid cases, and enabled-exception suppression. Debug/Release builds and CTest pass. WWHD remains at 6,080,538 instructions and the null-CTR fetch `0x46524D48`; interpreter fallbacks fell from 209,613 to 180,442 (29,171 native `fmadds`). BOTW remains at 860,172 and the same stop; fallbacks fell from 3,338 to 3,186 (152 native `fmadds`). No wall-time speedup is claimed.
@@ -88,7 +89,8 @@
 
 ## Completed commits
 
-- `d32bfce` - `jit: emit native fnmsub`
+- `pending` - `jit: emit native divwu`
+- `e039b95` - `jit: emit native fnmsub`
 - `0e6122d` - `jit: emit native fadds`
 - `c9ae452` - `jit: emit native fmadds`
 - `055485c` - `jit: emit native fmuls`

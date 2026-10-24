@@ -143,6 +143,13 @@ struct NativeMullwRecord
     std::uint32_t result{};
 };
 
+struct NativeDivwuRecord
+{
+    std::uint32_t dividend{};
+    std::uint32_t divisor{};
+    std::uint32_t result{};
+};
+
 struct NativeExecutionContext
 {
     GuestMemory* memory{};
@@ -161,6 +168,7 @@ struct NativeExecutionContext
     std::array<NativePsqLoadRecord, 64> psq_load_records{};
     std::array<NativeMulliRecord, 64> mulli_records{};
     std::array<NativeMullwRecord, 64> mullw_records{};
+    std::array<NativeDivwuRecord, 64> divwu_records{};
     std::uint64_t memory_access_calls{};
     bool failed{};
     bool guest_memory_fault{};
@@ -1430,6 +1438,47 @@ extern "C" void native_fnmsub(
     commit(raw_result, known_exact);
 }
 
+extern "C" void native_divwu(
+    NativeExecutionContext* context,
+    CpuState* state,
+    std::uint32_t destination,
+    std::uint32_t source_a,
+    std::uint32_t source_b,
+    std::uint32_t record_form,
+    std::uint32_t instruction_index) noexcept
+{
+    if (destination >= state->gpr.size() || source_a >= state->gpr.size() ||
+        source_b >= state->gpr.size() || instruction_index >= context->divwu_records.size())
+    {
+        context->failed = true;
+        context->failed_instruction_index = instruction_index;
+        return;
+    }
+
+    NativeDivwuRecord& record = context->divwu_records[instruction_index];
+    record.dividend = state->gpr[source_a];
+    record.divisor = state->gpr[source_b];
+    record.result = record.divisor == 0U ? 0U : record.dividend / record.divisor;
+    state->gpr[destination] = record.result;
+    if (record_form != 0U)
+    {
+        std::uint32_t cr0 = (state->xer >> 31U) & 1U;
+        if ((record.result & 0x80000000U) != 0U)
+        {
+            cr0 |= 0x8U;
+        }
+        else if (record.result != 0U)
+        {
+            cr0 |= 0x4U;
+        }
+        else
+        {
+            cr0 |= 0x2U;
+        }
+        state->cr = (state->cr & 0x0FFFFFFFU) | (cr0 << 28U);
+    }
+}
+
 extern "C" void native_fsub(
     NativeExecutionContext* context,
     CpuState* state,
@@ -2016,6 +2065,7 @@ struct BlockCode
     case Opcode::addis:
     case Opcode::multiply_low_immediate:
     case Opcode::multiply_low_word:
+    case Opcode::divide_word_unsigned:
     case Opcode::negate:
     case Opcode::add_immediate_carry:
     case Opcode::subtract_from_immediate_carry:
@@ -2124,6 +2174,7 @@ struct BlockCode
     case Opcode::addis: return "addis";
     case Opcode::multiply_low_immediate: return "mulli";
     case Opcode::multiply_low_word: return "mullw";
+    case Opcode::divide_word_unsigned: return "divwu";
     case Opcode::negate: return "neg";
     case Opcode::add_immediate_carry: return "addic";
     case Opcode::subtract_from_immediate_carry: return "subfic";
@@ -2788,6 +2839,24 @@ struct Recompiler::Impl
                     compiler.mov(x86::dword_ptr(
                         state, static_cast<std::int32_t>(offsetof(CpuState, cr))), cr);
                 }
+                break;
+            }
+            case Opcode::divide_word_unsigned:
+            {
+                auto* invoke = static_cast<InvokeNode*>(nullptr);
+                const auto helper_address = static_cast<std::uint64_t>(
+                    reinterpret_cast<std::uintptr_t>(&native_divwu));
+                compiler.invoke(Out(invoke), helper_address,
+                    FuncSignature::build<void, NativeExecutionContext*, CpuState*,
+                        std::uint32_t, std::uint32_t, std::uint32_t,
+                        std::uint32_t, std::uint32_t>(CallConvId::kCDecl));
+                invoke->set_arg(0, context);
+                invoke->set_arg(1, state);
+                invoke->set_arg(2, imm(insn.destination));
+                invoke->set_arg(3, imm(insn.base));
+                invoke->set_arg(4, imm(insn.source));
+                invoke->set_arg(5, imm(insn.record ? 1U : 0U));
+                invoke->set_arg(6, imm(static_cast<std::uint32_t>(index)));
                 break;
             }
             case Opcode::negate:
@@ -5035,6 +5104,21 @@ RunResult Recompiler::run(EspressoCore& core, std::size_t max_steps)
                 entry.source_values[0] = record.source_a;
                 entry.source_registers[1] = insn.source;
                 entry.source_values[1] = record.source_b;
+                entry.source_count = 2U;
+                entry.has_destination = true;
+                entry.destination_register = insn.destination;
+                entry.destination_value = record.result;
+                core.append_instruction_history(std::move(entry));
+                continue;
+            }
+            if (insn.opcode == Opcode::divide_word_unsigned)
+            {
+                InstructionHistoryEntry entry = native_history(insn, cia);
+                const NativeDivwuRecord& record = context.divwu_records[i];
+                entry.source_registers[0] = insn.base;
+                entry.source_values[0] = record.dividend;
+                entry.source_registers[1] = insn.source;
+                entry.source_values[1] = record.divisor;
                 entry.source_count = 2U;
                 entry.has_destination = true;
                 entry.destination_register = insn.destination;

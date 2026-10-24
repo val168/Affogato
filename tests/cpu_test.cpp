@@ -10178,10 +10178,16 @@ void divide_word_unsigned_tests()
     assert(decode(encode_divwu(8U, 29U, 31U, false, true)).opcode ==
            Opcode::divide_word_unsigned_overflow);
 
+    struct Execution
+    {
+        std::uint32_t first{};
+        RunResult second{};
+        CpuState state{};
+    };
     const auto execute = [&](std::uint8_t destination, std::uint8_t ra,
                              std::uint8_t rb, std::uint32_t dividend,
                              std::uint32_t divisor, bool record = false,
-                             bool so = false) {
+                             bool so = false, bool use_recompiler = false) {
         EspressoCore core(8U);
         core.state.gpr.fill(0xA5A5A5A5U);
         core.state.gpr[ra] = dividend;
@@ -10203,7 +10209,9 @@ void divide_word_unsigned_tests()
         const auto original_fpr_ps1 = core.state.fpr_ps1;
         const std::uint32_t expected = divisor == 0U ? 0U : dividend / divisor;
 
-        const RunResult run_result = core.run(1U);
+        Recompiler recompiler;
+        const RunResult run_result = use_recompiler
+            ? recompiler.run(core, 1U) : core.run(1U);
         assert(run_result.steps == 1U);
         assert(run_result.reason == StopReason::instruction_limit);
         assert(core.state.gpr[destination] == expected);
@@ -10234,7 +10242,7 @@ void divide_word_unsigned_tests()
         assert(core.state.fpr == original_fpr);
         assert(core.state.fpr_ps1 == original_fpr_ps1);
         assert(core.memory.read32_be(0U) == word);
-        return std::pair{expected, run_result};
+        return Execution{expected, run_result, core.state};
     };
 
     assert(execute(3U, 4U, 5U, 10U, 2U).first == 5U);
@@ -10263,6 +10271,36 @@ void divide_word_unsigned_tests()
     const std::string trace = format_instruction_history(wind_result.second);
     assert(trace.find("divwu r29=0x000041A7 r31=0x7FFFFFFF -> r8=0x00000000") !=
            std::string::npos);
+
+    const Execution interpreted = execute(3U, 4U, 5U, 0xFEDCBA98U, 0x1234U);
+    const Execution compiled = execute(3U, 4U, 5U, 0xFEDCBA98U, 0x1234U,
+                                       false, false, true);
+    assert(compiled.first == interpreted.first);
+    assert(compiled.state.gpr == interpreted.state.gpr);
+    assert(compiled.state.cr == interpreted.state.cr);
+    assert(compiled.state.xer == interpreted.state.xer);
+    assert(format_instruction_history(compiled.second) ==
+           format_instruction_history(interpreted.second));
+
+    const Execution interpreted_record = execute(
+        3U, 4U, 5U, 0xFFFFFFFFU, 1U, true, true);
+    const Execution compiled_record = execute(
+        3U, 4U, 5U, 0xFFFFFFFFU, 1U, true, true, true);
+    assert(compiled_record.state.gpr == interpreted_record.state.gpr);
+    assert(compiled_record.state.cr == interpreted_record.state.cr);
+    assert(compiled_record.state.xer == interpreted_record.state.xer);
+    assert(format_instruction_history(compiled_record.second) ==
+           format_instruction_history(interpreted_record.second));
+
+    const Execution interpreted_zero_divisor = execute(
+        3U, 4U, 5U, 0xFEDCBA98U, 0U);
+    const Execution compiled_zero_divisor = execute(
+        3U, 4U, 5U, 0xFEDCBA98U, 0U, false, false, true);
+    assert(compiled_zero_divisor.state.gpr == interpreted_zero_divisor.state.gpr);
+    assert(compiled_zero_divisor.state.cr == interpreted_zero_divisor.state.cr);
+    assert(compiled_zero_divisor.state.xer == interpreted_zero_divisor.state.xer);
+    assert(format_instruction_history(compiled_zero_divisor.second) ==
+           format_instruction_history(interpreted_zero_divisor.second));
 }
 
 void divide_word_unsigned_overflow_tests()
