@@ -205,6 +205,14 @@ struct NativeSubfRecord
     std::uint32_t result{};
 };
 
+struct NativeFselRecord
+{
+    std::uint64_t source_a_raw{};
+    std::uint64_t source_b_raw{};
+    std::uint64_t source_c_raw{};
+    std::uint64_t result_raw{};
+};
+
 struct NativeAddcRecord
 {
     std::uint32_t operand_a{};
@@ -258,6 +266,7 @@ struct NativeExecutionContext
     std::array<NativeDivwuRecord, 64> divwu_records{};
     std::array<NativeDivwRecord, 64> divw_records{};
     std::array<NativeSubfRecord, 64> subf_records{};
+    std::array<NativeFselRecord, 64> fsel_records{};
     std::array<NativeAddcRecord, 64> addc_records{};
     std::array<NativeAddzeRecord, 64> addze_records{};
     std::array<NativeExtsbRecord, 64> extsb_records{};
@@ -2410,6 +2419,40 @@ extern "C" void native_divw(
     }
 }
 
+extern "C" void native_fsel(
+    NativeExecutionContext* context,
+    CpuState* state,
+    std::uint32_t destination,
+    std::uint32_t source_a,
+    std::uint32_t source_b,
+    std::uint32_t source_c,
+    std::uint32_t instruction_index) noexcept
+{
+    if (destination >= state->fpr.size() || source_a >= state->fpr.size() ||
+        source_b >= state->fpr.size() || source_c >= state->fpr.size() ||
+        instruction_index >= context->fsel_records.size())
+    {
+        context->failed = true;
+        context->failed_instruction_index = instruction_index;
+        return;
+    }
+
+    NativeFselRecord& record = context->fsel_records[instruction_index];
+    record.source_a_raw = state->fpr[source_a];
+    record.source_b_raw = state->fpr[source_b];
+    record.source_c_raw = state->fpr[source_c];
+    constexpr std::uint64_t sign_mask = 0x8000000000000000ULL;
+    constexpr std::uint64_t exponent_mask = 0x7FF0000000000000ULL;
+    constexpr std::uint64_t fraction_mask = 0x000FFFFFFFFFFFFFULL;
+    const std::uint64_t magnitude = record.source_a_raw & ~sign_mask;
+    const bool is_nan = (magnitude & exponent_mask) == exponent_mask &&
+        (magnitude & fraction_mask) != 0U;
+    const bool selects_c = !is_nan &&
+        ((record.source_a_raw & sign_mask) == 0U || magnitude == 0U);
+    record.result_raw = selects_c ? record.source_c_raw : record.source_b_raw;
+    state->fpr[destination] = record.result_raw;
+}
+
 extern "C" void native_fadd(
     NativeExecutionContext* context,
     CpuState* state,
@@ -3159,6 +3202,7 @@ struct BlockCode
     case Opcode::floating_multiply_double:
     case Opcode::floating_multiply_add_double:
     case Opcode::floating_negative_multiply_subtract_double:
+    case Opcode::floating_select:
     case Opcode::floating_subtract_double:
     case Opcode::floating_divide_double:
     case Opcode::floating_add_double:
@@ -3306,6 +3350,7 @@ struct BlockCode
     case Opcode::floating_multiply_double: return "fmul";
     case Opcode::floating_multiply_add_double: return "fmadd";
     case Opcode::floating_negative_multiply_subtract_double: return "fnmsub";
+    case Opcode::floating_select: return "fsel";
     case Opcode::floating_subtract_double: return "fsub";
     case Opcode::floating_divide_double: return "fdiv";
     case Opcode::floating_add_double: return "fadd";
@@ -5114,6 +5159,24 @@ struct Recompiler::Impl
                 invoke->set_arg(4, imm(static_cast<std::uint32_t>(index)));
                 break;
             }
+            case Opcode::floating_select:
+            {
+                auto* invoke = static_cast<InvokeNode*>(nullptr);
+                const auto helper_address = static_cast<std::uint64_t>(
+                    reinterpret_cast<std::uintptr_t>(&native_fsel));
+                compiler.invoke(Out(invoke), helper_address,
+                    FuncSignature::build<void, NativeExecutionContext*, CpuState*,
+                        std::uint32_t, std::uint32_t, std::uint32_t,
+                        std::uint32_t, std::uint32_t>(CallConvId::kCDecl));
+                invoke->set_arg(0, context);
+                invoke->set_arg(1, state);
+                invoke->set_arg(2, imm(insn.fp_register));
+                invoke->set_arg(3, imm(insn.fp_source_a));
+                invoke->set_arg(4, imm(insn.fp_source_b));
+                invoke->set_arg(5, imm(insn.fp_source_c));
+                invoke->set_arg(6, imm(static_cast<std::uint32_t>(index)));
+                break;
+            }
             case Opcode::floating_round_to_single:
             {
                 auto* invoke = static_cast<InvokeNode*>(nullptr);
@@ -6801,6 +6864,22 @@ RunResult Recompiler::run(EspressoCore& core, std::size_t max_steps)
                 entry.carry_input = record.carry_in != 0U;
                 entry.has_carry_result = true;
                 entry.carry_result = record.carry_out != 0U;
+                core.append_instruction_history(std::move(entry));
+                continue;
+            }
+            if (insn.opcode == Opcode::floating_select)
+            {
+                InstructionHistoryEntry entry = native_history(insn, cia);
+                const NativeFselRecord& record = context.fsel_records[i];
+                entry.has_fp_select = true;
+                entry.fp_select_destination = insn.fp_register;
+                entry.fp_select_a = insn.fp_source_a;
+                entry.fp_select_b = insn.fp_source_b;
+                entry.fp_select_c = insn.fp_source_c;
+                entry.fp_select_a_raw = record.source_a_raw;
+                entry.fp_select_b_raw = record.source_b_raw;
+                entry.fp_select_c_raw = record.source_c_raw;
+                entry.fp_select_result_raw = record.result_raw;
                 core.append_instruction_history(std::move(entry));
                 continue;
             }

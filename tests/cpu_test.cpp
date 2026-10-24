@@ -5648,6 +5648,60 @@ void floating_select_tests()
         assert(trace.find("-> f4=0x") != std::string::npos);
     }
 
+    const auto assert_jit_matches = [&](std::uint8_t destination,
+                                        std::uint8_t a_reg, std::uint8_t b_reg,
+                                        std::uint8_t c_reg, std::uint64_t a_raw,
+                                        std::uint64_t b_raw, std::uint64_t c_raw) {
+        EspressoCore interpreted(16U);
+        EspressoCore compiled(16U);
+        for (std::size_t index = 0; index < interpreted.state.gpr.size(); ++index)
+        {
+            interpreted.state.gpr[index] = compiled.state.gpr[index] =
+                static_cast<std::uint32_t>(0x1000U + index);
+            interpreted.state.fpr[index] = compiled.state.fpr[index] =
+                0x1111000000000000ULL + index;
+            interpreted.state.fpr_ps1[index] = compiled.state.fpr_ps1[index] =
+                0x2222000000000000ULL + index;
+        }
+        interpreted.state.fpr[a_reg] = compiled.state.fpr[a_reg] = a_raw;
+        interpreted.state.fpr[b_reg] = compiled.state.fpr[b_reg] = b_raw;
+        interpreted.state.fpr[c_reg] = compiled.state.fpr[c_reg] = c_raw;
+        interpreted.state.fpr_ps1[destination] = compiled.state.fpr_ps1[destination] =
+            0xDEADBEEF01234567ULL;
+        interpreted.state.fpscr = compiled.state.fpscr = 0xD4C3BEEFU;
+        interpreted.state.cr = compiled.state.cr = 0xA5C36E91U;
+        interpreted.state.xer = compiled.state.xer = 0x800000A5U;
+        const std::uint32_t word = encode_fsel(destination, a_reg, b_reg, c_reg);
+        interpreted.memory.write32_be(0U, word);
+        compiled.memory.write32_be(0U, word);
+        const RunResult oracle = interpreted.run(1U);
+        Recompiler recompiler;
+        const RunResult actual = recompiler.run(compiled, 1U);
+        assert(actual.steps == oracle.steps && actual.reason == oracle.reason);
+        assert(compiled.state.gpr == interpreted.state.gpr);
+        assert(compiled.state.fpr == interpreted.state.fpr);
+        assert(compiled.state.fpr_ps1 == interpreted.state.fpr_ps1);
+        assert(compiled.state.cr == interpreted.state.cr);
+        assert(compiled.state.xer == interpreted.state.xer);
+        assert(compiled.state.fpscr == interpreted.state.fpscr);
+        assert(compiled.state.lr == interpreted.state.lr);
+        assert(compiled.state.ctr == interpreted.state.ctr);
+        assert(compiled.state.cia == interpreted.state.cia);
+        assert(format_instruction_history(actual) == format_instruction_history(oracle));
+    };
+    for (const SelectionCase& test : cases)
+    {
+        assert_jit_matches(4U, 1U, 2U, 3U, test.a, test.b, test.c);
+    }
+    assert_jit_matches(5U, 5U, 6U, 7U, 0xBFF0000000000000ULL,
+        0x4008000000000000ULL, 0x4000000000000000ULL); // selector alias
+    assert_jit_matches(6U, 5U, 6U, 7U, 0x3FF0000000000000ULL,
+        0x4008000000000000ULL, 0x4000000000000000ULL); // B alias
+    assert_jit_matches(7U, 5U, 6U, 7U, 0x3FF0000000000000ULL,
+        0x4008000000000000ULL, 0x4000000000000000ULL); // C alias
+    assert_jit_matches(5U, 5U, 5U, 5U, 0xBFF0000000000000ULL,
+        0xBFF0000000000000ULL, 0xBFF0000000000000ULL); // all alias
+
     const auto execute_alias = [&](std::uint8_t destination, std::uint8_t a_reg,
                                    std::uint8_t b_reg, std::uint8_t c_reg,
                                    std::uint64_t a, std::uint64_t b,
