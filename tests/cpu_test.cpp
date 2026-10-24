@@ -25567,6 +25567,45 @@ void load_halfword_zero_update_tests()
     assert(history.source_count == 1U && history.source_registers[0] == 10U);
     assert(history.source_values[0] == wind_waker_base);
 
+    const auto execute_lhzu = [&](bool use_recompiler, std::uint32_t base_value,
+                                  std::int16_t displacement, std::uint16_t loaded) {
+        EspressoCore differential(0x100U);
+        differential.memory.map_region(0x1000U, 0x100U);
+        differential.state.gpr[10] = base_value;
+        differential.state.gpr[7] = 0xDEADBEEFU;
+        differential.state.gpr[4] = 0xA5A5A5A5U;
+        differential.state.cr = original_cr;
+        differential.state.xer = original_xer;
+        differential.state.lr = original_lr;
+        differential.state.ctr = original_ctr;
+        differential.state.fpscr = original_fpscr;
+        const std::uint32_t ea = base_value + static_cast<std::uint32_t>(displacement);
+        differential.memory.write16_be(ea, loaded);
+        differential.memory.write32_be(0U, 0xA4EA0000U |
+            static_cast<std::uint16_t>(displacement));
+        Recompiler recompiler;
+        RunResult execution = use_recompiler
+            ? recompiler.run(differential, 1U) : differential.run(1U);
+        if (use_recompiler)
+        {
+            assert(recompiler.statistics().native_instructions == 1U);
+            assert(recompiler.statistics().interpreter_fallbacks == 0U);
+        }
+        return std::pair{differential.state, std::move(execution)};
+    };
+    const auto interpreted_lhzu = execute_lhzu(false, 0x1000U, 2, 0x8001U);
+    const auto compiled_lhzu = execute_lhzu(true, 0x1000U, 2, 0x8001U);
+    assert(compiled_lhzu.first.gpr == interpreted_lhzu.first.gpr);
+    assert(compiled_lhzu.first.fpr == interpreted_lhzu.first.fpr);
+    assert(compiled_lhzu.first.fpr_ps1 == interpreted_lhzu.first.fpr_ps1);
+    assert(compiled_lhzu.first.cr == interpreted_lhzu.first.cr);
+    assert(compiled_lhzu.first.xer == interpreted_lhzu.first.xer);
+    assert(compiled_lhzu.first.lr == interpreted_lhzu.first.lr);
+    assert(compiled_lhzu.first.ctr == interpreted_lhzu.first.ctr);
+    assert(compiled_lhzu.first.fpscr == interpreted_lhzu.first.fpscr);
+    assert(format_instruction_history(compiled_lhzu.second) ==
+           format_instruction_history(interpreted_lhzu.second));
+
     // A negative D-form displacement is sign-extended before address addition.
     EspressoCore negative_displacement(0x100U);
     negative_displacement.state.gpr[10] = 0x80U;
@@ -25591,6 +25630,20 @@ void load_halfword_zero_update_tests()
     assert(!fault_result.instruction_history.front().completed);
     assert(fault.state.gpr[10] == 0x2000U);
     assert(fault.state.gpr[7] == 0xDEADBEEFU);
+
+    EspressoCore jit_fault(0x100U);
+    jit_fault.state.gpr[10] = 0x2000U;
+    jit_fault.state.gpr[7] = 0xDEADBEEFU;
+    jit_fault.memory.write32_be(0U, wind_waker_instruction);
+    Recompiler fault_recompiler;
+    const RunResult jit_fault_result = fault_recompiler.run(jit_fault, 1U);
+    assert(jit_fault_result.reason == StopReason::memory_fault);
+    assert(jit_fault_result.detail.find("read 2 byte(s)") != std::string::npos);
+    assert(jit_fault.state.gpr[10] == 0x2000U);
+    assert(jit_fault.state.gpr[7] == 0xDEADBEEFU);
+    assert(!jit_fault_result.instruction_history.front().completed);
+    assert(format_instruction_history(jit_fault_result) ==
+           format_instruction_history(fault_result));
 }
 
 void store_halfword_indexed_tests()

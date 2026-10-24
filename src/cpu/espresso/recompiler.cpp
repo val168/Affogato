@@ -3314,6 +3314,7 @@ struct BlockCode
     case Opcode::load_byte_zero:
     case Opcode::load_byte_update:
     case Opcode::load_halfword_zero:
+    case Opcode::load_halfword_zero_update:
     case Opcode::load_halfword_algebraic:
     case Opcode::load_single:
     case Opcode::load_single_update:
@@ -3445,6 +3446,7 @@ struct BlockCode
     case Opcode::load_byte_zero: return "lbz";
     case Opcode::load_byte_update: return "lbzu";
     case Opcode::load_halfword_zero: return "lhz";
+    case Opcode::load_halfword_zero_update: return "lhzu";
     case Opcode::load_halfword_algebraic: return "lha";
     case Opcode::load_single: return "lfs";
     case Opcode::load_single_update: return "lfsu";
@@ -3492,6 +3494,7 @@ struct BlockCode
     case Opcode::load_byte_zero:
     case Opcode::load_byte_update:
     case Opcode::load_halfword_zero:
+    case Opcode::load_halfword_zero_update:
     case Opcode::load_halfword_algebraic:
     case Opcode::load_single:
     case Opcode::load_single_update:
@@ -3537,6 +3540,7 @@ struct BlockCode
     case Opcode::data_cache_block_flush:
         return 1U;
     case Opcode::load_halfword_zero:
+    case Opcode::load_halfword_zero_update:
     case Opcode::load_halfword_algebraic:
     case Opcode::store_halfword:
     case Opcode::store_halfword_update:
@@ -6003,6 +6007,7 @@ struct Recompiler::Impl
             case Opcode::load_byte_update:
             case Opcode::load_halfword_zero:
             case Opcode::load_halfword_algebraic:
+    case Opcode::load_halfword_zero_update:
             case Opcode::store_word:
             case Opcode::store_word_update:
             case Opcode::store_byte:
@@ -6037,6 +6042,7 @@ struct Recompiler::Impl
                 const bool double_store = insn.opcode == Opcode::store_double;
                 const bool update_base = insn.opcode == Opcode::load_byte_update ||
                     insn.opcode == Opcode::load_word_update ||
+                    insn.opcode == Opcode::load_halfword_zero_update ||
                     insn.opcode == Opcode::store_byte_update ||
                     insn.opcode == Opcode::store_word_update ||
                     insn.opcode == Opcode::store_halfword_update ||
@@ -7196,7 +7202,8 @@ RunResult Recompiler::run(EspressoCore& core, std::size_t max_steps)
                     entry.source_values[entry.source_count++] = record.base_value;
                 }
                 if (insn.opcode != Opcode::store_halfword_update &&
-                    insn.opcode != Opcode::load_single_update)
+                    insn.opcode != Opcode::load_single_update &&
+                    insn.opcode != Opcode::load_halfword_zero_update)
                 {
                     entry.has_immediate = true;
                     entry.immediate = insn.immediate;
