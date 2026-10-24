@@ -3564,6 +3564,8 @@ struct BlockCode
         return !insn.record;
     case Opcode::rotate_left_word_and_mask:
         return true;
+    case Opcode::and_immediate_record:
+        return true;
     default:
         return false;
     }
@@ -3586,6 +3588,7 @@ struct BlockCode
     case Opcode::subtract_from_immediate_carry: return "subfic";
     case Opcode::ori: return "ori";
     case Opcode::or_immediate_shifted: return "oris";
+    case Opcode::and_immediate_record: return "andi";
     case Opcode::xor_immediate: return "xori";
     case Opcode::xor_immediate_shifted: return "xoris";
     case Opcode::add: return "add";
@@ -4529,6 +4532,7 @@ struct Recompiler::Impl
             }
             case Opcode::ori:
             case Opcode::or_immediate_shifted:
+            case Opcode::and_immediate_record:
             case Opcode::xor_immediate:
             case Opcode::xor_immediate_shifted:
             {
@@ -4538,11 +4542,48 @@ struct Recompiler::Impl
                     value = compiler.new_gp32("value");
                     compiler.mov(value, read_guest_gpr(insn.source));
                 }
-                if (insn.opcode == Opcode::ori || insn.opcode == Opcode::or_immediate_shifted)
+                if (insn.opcode == Opcode::and_immediate_record)
+                {
+                    compiler.and_(value, imm(immediate_value(insn)));
+                }
+                else if (insn.opcode == Opcode::ori ||
+                    insn.opcode == Opcode::or_immediate_shifted)
                     compiler.or_(value, imm(immediate_value(insn)));
                 else
                     compiler.xor_(value, imm(immediate_value(insn)));
                 write_guest_gpr(insn.destination, value);
+                if (insn.opcode == Opcode::and_immediate_record)
+                {
+                    x86::Gp field = compiler.new_gp32("andi_cr0_field");
+                    compiler.mov(field, value);
+                    compiler.shr(field, imm(28U));
+                    compiler.and_(field, imm(8U));
+
+                    x86::Gp equal = compiler.new_gp32("andi_cr0_eq");
+                    x86::Gp greater = compiler.new_gp32("andi_cr0_gt");
+                    compiler.test(value, value);
+                    compiler.setz(equal.r8());
+                    compiler.setg(greater.r8());
+                    compiler.shl(equal, imm(1U));
+                    compiler.or_(field, equal);
+                    compiler.shl(greater, imm(2U));
+                    compiler.or_(field, greater);
+
+                    x86::Gp summary_overflow = compiler.new_gp32("andi_cr0_so");
+                    compiler.mov(summary_overflow, x86::dword_ptr(
+                        state, static_cast<std::int32_t>(offsetof(CpuState, xer))));
+                    compiler.shr(summary_overflow, imm(31U));
+                    compiler.or_(field, summary_overflow);
+                    compiler.shl(field, imm(28U));
+
+                    x86::Gp cr = compiler.new_gp32("andi_cr0");
+                    compiler.mov(cr, x86::dword_ptr(
+                        state, static_cast<std::int32_t>(offsetof(CpuState, cr))));
+                    compiler.and_(cr, imm(0x0FFFFFFFU));
+                    compiler.or_(cr, field);
+                    compiler.mov(x86::dword_ptr(
+                        state, static_cast<std::int32_t>(offsetof(CpuState, cr))), cr);
+                }
                 break;
             }
             case Opcode::add:

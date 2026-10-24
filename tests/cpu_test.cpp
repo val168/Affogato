@@ -8165,6 +8165,47 @@ void and_immediate_shifted_record_tests()
     assert(result.instruction_history[0].opcode_name == "andis.");
     assert(format_instruction_history(result).find(
         "andis. r4=0xA1B2C3D4 imm=0xFFFF -> r3=0xA1B20000") != std::string::npos);
+
+    const std::uint32_t andi_word = encode_dlogical(28U, 4U, 3U, 0xFF00U);
+    EspressoCore interpreted(0x40U);
+    EspressoCore compiled(0x40U);
+    for (EspressoCore* candidate : {&interpreted, &compiled})
+    {
+        candidate->state.gpr[4] = 0xA1B2C3D4U;
+        candidate->state.gpr[3] = 0xDEADBEEFU;
+        candidate->state.cr = 0x12345678U;
+        candidate->state.xer = 0xA00000A5U;
+        candidate->memory.write32_be(0U, andi_word);
+    }
+    const RunResult interpreted_result = interpreted.run(1U);
+    Recompiler recompiler;
+    const RunResult compiled_result = recompiler.run(compiled, 1U);
+    assert(compiled_result.reason == StopReason::instruction_limit);
+    assert(recompiler.statistics().native_instructions == 1U);
+    assert(recompiler.statistics().interpreter_fallbacks == 0U);
+    assert(compiled.state.gpr == interpreted.state.gpr);
+    assert(compiled.state.cr == interpreted.state.cr);
+    assert(compiled.state.xer == interpreted.state.xer);
+    assert(compiled.state.cia == interpreted.state.cia);
+    assert(compiled.state.gpr[3] == 0x0000C300U);
+    assert(compiled.state.cr == 0x52345678U);
+    assert(compiled.state.xer == 0xA00000A5U);
+    assert(interpreted_result.instruction_history[0].opcode_name == "andi.");
+    assert(compiled_result.instruction_history[0].opcode_name == "andi.");
+    assert(compiled_result.instruction_history[0].instruction_word == andi_word);
+
+    // Destination/source aliasing and the zero-result EQ classification.
+    EspressoCore alias(0x40U);
+    alias.state.gpr[5] = 0x80000000U;
+    alias.state.cr = 0xABCDEF01U;
+    alias.state.xer = 0x80000000U;
+    alias.memory.write32_be(0U, encode_dlogical(28U, 5U, 5U, 0U));
+    Recompiler alias_recompiler;
+    const RunResult alias_result = alias_recompiler.run(alias, 1U);
+    assert(alias_result.reason == StopReason::instruction_limit);
+    assert(alias_recompiler.statistics().native_instructions == 1U);
+    assert(alias.state.gpr[5] == 0U);
+    assert(alias.state.cr == 0x3BCDEF01U);
 }
 
 void rotate_left_word_and_mask_register_tests()
