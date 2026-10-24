@@ -1806,6 +1806,7 @@ void recompiler_fctiwz_differential_tests()
         assert(compiled.state.fpscr == interpreted.state.fpscr);
         assert(recompiler.statistics().native_instructions == 1U);
         assert(recompiler.statistics().interpreter_fallbacks == 0U);
+        assert(recompiler.statistics().memory_slow_path_calls == 0U);
         const InstructionHistoryEntry& history = actual.instruction_history.back();
         assert(history.opcode_name == "fctiwz");
         assert(history.has_fp_integer_conversion);
@@ -3229,6 +3230,7 @@ void recompiler_lbzu_differential_tests()
         assert(compiled.state.fpscr == interpreted.state.fpscr);
         assert(recompiler.statistics().native_instructions == 1U);
         assert(recompiler.statistics().interpreter_fallbacks == 0U);
+        assert(recompiler.statistics().memory_slow_path_calls == 0U);
         const InstructionHistoryEntry& history = actual.instruction_history.back();
         assert(history.opcode_name == "lbzu");
         assert(history.has_effective_address && history.effective_address == address);
@@ -3253,6 +3255,44 @@ void recompiler_lbzu_differential_tests()
     assert(faulting.state.cia == start);
     assert(!fault.instruction_history.empty());
     assert(!fault.instruction_history.back().completed);
+    assert(recompiler.statistics().memory_slow_path_calls == 1U);
+}
+
+void recompiler_direct_flat_halfword_load_tests()
+{
+    constexpr std::uint32_t start = 0x100U;
+    constexpr std::uint8_t destination = 5U;
+    constexpr std::uint8_t base_register = 6U;
+    constexpr std::uint32_t instruction = (40U << 26U) |
+        (static_cast<std::uint32_t>(destination) << 21U) |
+        (static_cast<std::uint32_t>(base_register) << 16U) | 2U;
+    constexpr std::array<std::uint16_t, 4> values{
+        0x0000U, 0x7FFFU, 0x8000U, 0xFFFFU};
+
+    for (const std::uint16_t value : values)
+    {
+        EspressoCore interpreted(0x1000U);
+        EspressoCore compiled(0x1000U);
+        for (EspressoCore* core : {&interpreted, &compiled})
+        {
+            core->memory.write32_be(start, instruction);
+            core->memory.write16_be(0x302U, value);
+            core->state.cia = start;
+            core->state.gpr[base_register] = 0x300U;
+            core->state.gpr[destination] = 0xDEADBEEFU;
+        }
+
+        const RunResult oracle = interpreted.run(1U);
+        Recompiler recompiler;
+        const RunResult actual = recompiler.run(compiled, 1U);
+        assert(actual.reason == oracle.reason && actual.steps == oracle.steps);
+        assert(actual.steps == 1U && actual.cia == oracle.cia);
+        assert(compiled.state.gpr == interpreted.state.gpr);
+        assert(compiled.state.gpr[destination] == value);
+        assert(recompiler.statistics().native_instructions == 1U);
+        assert(recompiler.statistics().interpreter_fallbacks == 0U);
+        assert(recompiler.statistics().memory_slow_path_calls == 0U);
+    }
 }
 
 void recompiler_lwzu_differential_tests()
@@ -4399,6 +4439,7 @@ int main()
     recompiler_recent_history_window_test();
     recompiler_isync_boundary_differential_test();
     recompiler_lbzu_differential_tests();
+    recompiler_direct_flat_halfword_load_tests();
     recompiler_lwzu_differential_tests();
     recompiler_lmw_differential_tests();
     recompiler_stmw_differential_tests();

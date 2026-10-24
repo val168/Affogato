@@ -6724,9 +6724,9 @@ struct Recompiler::Impl
                     insn.opcode == Opcode::load_halfword_algebraic ||
                     insn.opcode == Opcode::load_halfword_algebraic_indexed;
                 const std::uint32_t width = memory_width(insn.opcode);
-                const bool direct_flat_word_load = !store && !validation_only &&
+                const bool direct_flat_load = !store && !validation_only &&
                     !single_store && !double_store && !fp_integer_store &&
-                    !sign_extend && width == 4U;
+                    !sign_extend && (width == 1U || width == 2U || width == 4U);
                 const std::size_t record_base = offsetof(NativeExecutionContext, memory_records) +
                     index * sizeof(NativeMemoryRecord);
                 const std::uint32_t cia = block.address +
@@ -6790,7 +6790,7 @@ struct Recompiler::Impl
                 x86::Gp value = compiler.new_gp32("loaded");
                 Label direct_load_slow = compiler.new_label();
                 Label direct_load_done = compiler.new_label();
-                if (direct_flat_word_load)
+                if (direct_flat_load)
                 {
                     x86::Gp access_end = compiler.new_gp64("flat_load_end");
                     compiler.mov(access_end.r32(), address);
@@ -6809,8 +6809,20 @@ struct Recompiler::Impl
                     x86::Gp guest_offset = compiler.new_gp64("flat_guest_offset");
                     compiler.mov(guest_offset.r32(), address);
                     compiler.add(host_address, guest_offset);
-                    compiler.mov(value, x86::dword_ptr(host_address));
-                    compiler.bswap(value);
+                    if (width == 1U)
+                    {
+                        compiler.movzx(value, x86::byte_ptr(host_address));
+                    }
+                    else if (width == 2U)
+                    {
+                        compiler.movzx(value, x86::word_ptr(host_address));
+                        compiler.rol(value.r16(), imm(8));
+                    }
+                    else
+                    {
+                        compiler.mov(value, x86::dword_ptr(host_address));
+                        compiler.bswap(value);
+                    }
                     compiler.mov(x86::dword_ptr(context, static_cast<std::int32_t>(
                         record_base + offsetof(NativeMemoryRecord, value))), value);
                     compiler.jmp(direct_load_done);
@@ -6861,7 +6873,7 @@ struct Recompiler::Impl
                     invoke->set_arg(5, imm(static_cast<std::uint32_t>(index)));
                 }
                 invoke->set_ret(0, value);
-                if (direct_flat_word_load)
+                if (direct_flat_load)
                 {
                     compiler.bind(direct_load_done);
                 }
