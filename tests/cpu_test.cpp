@@ -4016,6 +4016,66 @@ void floating_negative_multiply_subtract_single_tests()
     assert(core.state.fpr[1] == 0xBFF0000000000000ULL); // -(2*3 - 5) = -1
     assert(core.state.fpr_ps1[1] == 0xBFF0000000000000ULL);
     assert(format_instruction_history(result).find("fnmsubs") != std::string::npos);
+
+    const auto execute = [&](bool use_recompiler, std::uint8_t destination,
+                             std::uint64_t a_raw, std::uint64_t b_raw,
+                             std::uint64_t c_raw, std::uint32_t fpscr_value = 0U) {
+        EspressoCore differential(8U);
+        differential.state.fpr[1] = 0x1111000000000001ULL;
+        differential.state.fpr_ps1[1] = 0xDEADBEEF01234567ULL;
+        differential.state.fpr[2] = a_raw;
+        differential.state.fpr[3] = b_raw;
+        differential.state.fpr[4] = c_raw;
+        differential.state.fpscr = fpscr_value;
+        differential.state.gpr.fill(0xA5A5A5A5U);
+        differential.state.cr = 0x12345678U;
+        differential.state.xer = 0xA00000A5U;
+        differential.state.lr = 0x10203040U;
+        differential.state.ctr = 0x50607080U;
+        const std::uint32_t encoded = (59U << 26U) |
+            (static_cast<std::uint32_t>(destination) << 21U) |
+            (2U << 16U) | (3U << 11U) | (4U << 6U) | (30U << 1U);
+        differential.memory.write32_be(0U, encoded);
+        Recompiler recompiler;
+        RunResult execution = use_recompiler
+            ? recompiler.run(differential, 1U) : differential.run(1U);
+        assert(execution.steps == 1U);
+        assert(execution.reason == StopReason::instruction_limit);
+        return std::pair{differential.state, std::move(execution)};
+    };
+    const auto assert_jit_matches = [&](std::uint8_t destination,
+                                        std::uint64_t a_raw,
+                                        std::uint64_t b_raw,
+                                        std::uint64_t c_raw,
+                                        std::uint32_t fpscr_value = 0U) {
+        const auto interpreted = execute(false, destination,
+            a_raw, b_raw, c_raw, fpscr_value);
+        const auto compiled = execute(true, destination,
+            a_raw, b_raw, c_raw, fpscr_value);
+        assert(compiled.first.gpr == interpreted.first.gpr);
+        assert(compiled.first.fpr == interpreted.first.fpr);
+        assert(compiled.first.fpr_ps1 == interpreted.first.fpr_ps1);
+        assert(compiled.first.fpscr == interpreted.first.fpscr);
+        assert(compiled.first.cr == interpreted.first.cr);
+        assert(compiled.first.xer == interpreted.first.xer);
+        assert(compiled.first.lr == interpreted.first.lr);
+        assert(compiled.first.ctr == interpreted.first.ctr);
+        assert(compiled.first.cia == interpreted.first.cia);
+        assert(format_instruction_history(compiled.second) ==
+               format_instruction_history(interpreted.second));
+    };
+    assert_jit_matches(1U, 0x4000000000000000ULL,
+        0x4014000000000000ULL, 0x4008000000000000ULL);
+    assert_jit_matches(3U, 0x4000000000000000ULL,
+        0x4014000000000000ULL, 0x4008000000000000ULL); // destination aliases B
+    assert_jit_matches(1U, 0x4000000000000000ULL,
+        0x4014000000000000ULL, 0x4008000000000001ULL);
+    assert_jit_matches(1U, 0x7FF0000000001234ULL,
+        0x4014000000000000ULL, 0x4008000000000000ULL);
+    assert_jit_matches(1U, 0x7FF0000000000000ULL,
+        0x7FF0000000000000ULL, 0x3FF0000000000000ULL, fpscr::ve_mask);
+    assert_jit_matches(1U, 0x7FF0000000000000ULL,
+        0x0000000000000000ULL, 0x3FF0000000000000ULL);
 }
 
 void floating_multiply_subtract_single_tests()

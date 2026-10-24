@@ -1,5 +1,6 @@
 # Development Progress
 
+- Native JIT `fnmsubs` now mirrors the interpreter's single-precision fused negative multiply-subtract: A/C/B signaling-NaN priority, `VXSNAN`/`VXIMZ`, same-sign product/B `VXISI`, VE suppression, rounded 25-bit `frC`, fused subtraction with final non-NaN sign inversion, binary32 result/FPSCR, and paired-lane commit/history. Differential tests cover normal arithmetic, aliasing B, rounded-C data, NaN, invalid infinity subtraction, and infinity-zero product. Debug/Release CTest pass. WWHD remains at 6,080,538 instructions and the same null-target fetch; fallbacks fell from 18,103 to 15,323 (2,780 native `fnmsubs`). BOTW remains at 860,172 and the same stop; fallbacks fell from 3,006 to 2,985 (21 native `fnmsubs`). No wall-clock speedup is claimed.
 - Native JIT `ps_madd` implements the interpreter's lane semantics exactly: round each `frC` lane to Espresso 25-bit precision, round the product to binary32 before adding the paired addend, flush binary32 subnormal results to signed zero, then widen both result lanes. Source snapshots and paired history are preserved; FPSCR remains untouched. Differential tests cover aliases, 25-bit rounding, flush behavior, state, and history. Debug/Release CTest pass. WWHD remains at 6,080,538 instructions and the same null-target fetch; fallbacks fell from 27,130 to 18,103 (9,027 native `ps_madd`). BOTW remains at 860,172 and the same stop with 3,006 fallbacks; it did not execute `ps_madd` in this startup path. No wall-clock speedup is claimed.
 - Native JIT `ps_mul` computes both paired lanes, applies Espresso 25-bit rounding to each `frC` lane and flushes binary32 subnormal results to signed zero. Both input lanes are snapshotted before writes; trace records source and destination lane values, with FPSCR untouched. Differential tests cover ordinary values, precision-sensitive `frC`, subnormal flush, and aliases. Debug/Release CTest pass. WWHD remains at 6,080,538 instructions and the same null-target fetch; fallbacks fell from 36,223 to 27,130 (9,093 native `ps_mul`). BOTW remains at 860,172 and the same stop; fallbacks fell from 3,036 to 3,006 (30 native `ps_mul`). No wall-clock speedup is claimed.
 - Native JIT `ps_sum0` snapshots A.PS0, B.PS1, and both C lanes, computes A.PS0+B.PS1 into PS0 and C.PS1 into PS1 with the interpreter's binary32 conversions, and leaves FPSCR untouched. Tests compare interpreter/JIT state and history for normal inputs and a destination/source alias. Debug and Release CTest pass. WWHD remains at 6,080,538 instructions and the same null-target fetch; fallbacks fell from 45,250 to 36,223 (9,027 native `ps_sum0`). BOTW remains at 860,172 and the same stop; fallbacks fell from 3,054 to 3,036 (18 native `ps_sum0`). No wall-clock speedup is claimed.
@@ -100,7 +101,8 @@
 
 ## Completed commits
 
-- `pending` - `jit: emit native ps_madd`
+- `pending` - `jit: emit native fnmsubs`
+- `13a876c` - `jit: emit native ps_madd`
 - `743ac88` - `jit: emit native ps_mul`
 - `0f82e58` - `jit: emit native ps_sum0`
 - `1449184` - `jit: emit native fdiv`
