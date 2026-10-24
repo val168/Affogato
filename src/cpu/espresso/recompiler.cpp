@@ -3316,6 +3316,7 @@ struct BlockCode
     case Opcode::load_halfword_zero:
     case Opcode::load_halfword_algebraic:
     case Opcode::load_single:
+    case Opcode::load_single_update:
     case Opcode::load_double:
     case Opcode::store_word:
     case Opcode::store_word_update:
@@ -3446,6 +3447,7 @@ struct BlockCode
     case Opcode::load_halfword_zero: return "lhz";
     case Opcode::load_halfword_algebraic: return "lha";
     case Opcode::load_single: return "lfs";
+    case Opcode::load_single_update: return "lfsu";
     case Opcode::load_double: return "lfd";
     case Opcode::store_word: return "stw";
     case Opcode::store_word_update: return "stwu";
@@ -3492,6 +3494,7 @@ struct BlockCode
     case Opcode::load_halfword_zero:
     case Opcode::load_halfword_algebraic:
     case Opcode::load_single:
+    case Opcode::load_single_update:
     case Opcode::load_double:
     case Opcode::store_single:
     case Opcode::store_single_update:
@@ -5881,6 +5884,7 @@ struct Recompiler::Impl
                 break;
             }
             case Opcode::load_single:
+            case Opcode::load_single_update:
             {
                 const std::size_t record_base = offsetof(NativeExecutionContext, memory_records) +
                     index * sizeof(NativeMemoryRecord);
@@ -5925,6 +5929,10 @@ struct Recompiler::Impl
                 compiler.mov(x86::qword_ptr(state, static_cast<std::int32_t>(
                     offsetof(CpuState, fpr_ps1) + sizeof(std::uint64_t) * insn.fp_register)),
                     value);
+                if (insn.opcode == Opcode::load_single_update)
+                {
+                    write_guest_gpr(insn.base, address);
+                }
                 compiler.jmp(completed);
                 compiler.bind(fault);
                 compiler.mov(x86::dword_ptr(state, static_cast<std::int32_t>(
@@ -7187,7 +7195,8 @@ RunResult Recompiler::run(EspressoCore& core, std::size_t max_steps)
                     entry.source_registers[entry.source_count] = insn.base;
                     entry.source_values[entry.source_count++] = record.base_value;
                 }
-                if (insn.opcode != Opcode::store_halfword_update)
+                if (insn.opcode != Opcode::store_halfword_update &&
+                    insn.opcode != Opcode::load_single_update)
                 {
                     entry.has_immediate = true;
                     entry.immediate = insn.immediate;
@@ -7203,11 +7212,19 @@ RunResult Recompiler::run(EspressoCore& core, std::size_t max_steps)
                 core.append_instruction_history(std::move(entry));
                 continue;
             }
-            if (insn.opcode == Opcode::load_single || insn.opcode == Opcode::load_double)
+            if (insn.opcode == Opcode::load_single ||
+                insn.opcode == Opcode::load_single_update ||
+                insn.opcode == Opcode::load_double)
             {
                 entry.has_fp_destination = true;
                 entry.fp_destination_register = insn.fp_register;
                 entry.fp_destination_value = record.fp_value;
+                if (insn.opcode == Opcode::load_single_update)
+                {
+                    entry.has_destination = true;
+                    entry.destination_register = insn.base;
+                    entry.destination_value = record.address;
+                }
             }
             else if (insn.opcode == Opcode::store_single ||
                 insn.opcode == Opcode::store_single_update ||

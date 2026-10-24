@@ -28476,6 +28476,42 @@ void floating_point_single_update_tests()
         assert(trace.find("-> r9=0x00000084 -> f0=") != std::string::npos);
     }
 
+    const auto execute_lfsu = [&](bool use_recompiler, std::int16_t displacement,
+                                  std::uint32_t raw_single) {
+        EspressoCore differential(0x200U);
+        differential.state.gpr[9] = 0x120U;
+        differential.state.fpr[0] = 0x1111222233334444ULL;
+        differential.state.fpr_ps1[0] = 0xAAAABBBBCCCCDDDDULL;
+        differential.state.cr = initial_cr;
+        differential.state.xer = initial_xer;
+        differential.state.lr = initial_lr;
+        differential.state.ctr = initial_ctr;
+        const std::uint32_t ea = 0x120U + static_cast<std::uint32_t>(displacement);
+        differential.memory.write32_be(ea, raw_single);
+        differential.memory.write32_be(0U, encode_lfsu(0U, 9U, displacement));
+        Recompiler recompiler;
+        RunResult execution = use_recompiler
+            ? recompiler.run(differential, 1U) : differential.run(1U);
+        if (use_recompiler)
+        {
+            assert(recompiler.statistics().native_instructions == 1U);
+            assert(recompiler.statistics().interpreter_fallbacks == 0U);
+        }
+        return std::pair{differential.state, std::move(execution)};
+    };
+    const auto interpreted_lfsu = execute_lfsu(false, -4, 0xC0490FDBU);
+    const auto compiled_lfsu = execute_lfsu(true, -4, 0xC0490FDBU);
+    assert(compiled_lfsu.first.gpr == interpreted_lfsu.first.gpr);
+    assert(compiled_lfsu.first.fpr == interpreted_lfsu.first.fpr);
+    assert(compiled_lfsu.first.fpr_ps1 == interpreted_lfsu.first.fpr_ps1);
+    assert(compiled_lfsu.first.cr == interpreted_lfsu.first.cr);
+    assert(compiled_lfsu.first.xer == interpreted_lfsu.first.xer);
+    assert(compiled_lfsu.first.lr == interpreted_lfsu.first.lr);
+    assert(compiled_lfsu.first.ctr == interpreted_lfsu.first.ctr);
+    assert(compiled_lfsu.first.cia == interpreted_lfsu.first.cia);
+    assert(format_instruction_history(compiled_lfsu.second) ==
+           format_instruction_history(interpreted_lfsu.second));
+
     // Signed negative displacement uses the original base, then updates it.
     EspressoCore negative_displacement(0x200U);
     negative_displacement.state.gpr[9] = 0x120U;
@@ -28506,6 +28542,22 @@ void floating_point_single_update_tests()
     assert(failed.has_effective_address && failed.effective_address == fault_base);
     assert(failed.has_destination && failed.destination_register == 9U);
     assert(!failed.completed);
+
+    EspressoCore jit_fault_core(0x100U);
+    jit_fault_core.state.gpr[9] = fault_base;
+    jit_fault_core.state.fpr[0] = 0x1111222233334444ULL;
+    jit_fault_core.state.fpr_ps1[0] = 0xAAAABBBBCCCCDDDDULL;
+    jit_fault_core.memory.write32_be(0U, encode_lfsu(0U, 9U, 0));
+    Recompiler fault_recompiler;
+    const RunResult jit_fault = fault_recompiler.run(jit_fault_core, 1U);
+    assert(jit_fault.reason == StopReason::memory_fault);
+    assert(jit_fault.detail.find("read 4 byte(s)") != std::string::npos);
+    assert(jit_fault_core.state.gpr[9] == fault_base);
+    assert(jit_fault_core.state.fpr[0] == 0x1111222233334444ULL);
+    assert(jit_fault_core.state.fpr_ps1[0] == 0xAAAABBBBCCCCDDDDULL);
+    assert(!jit_fault.instruction_history.front().completed);
+    assert(jit_fault.instruction_history.front().has_destination);
+    assert(format_instruction_history(jit_fault) == format_instruction_history(fault));
 }
 
 void floating_point_double_load_tests()
