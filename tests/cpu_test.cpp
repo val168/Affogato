@@ -30468,6 +30468,66 @@ void paired_single_subtract_tests()
     assert(alias.step() == StepResult::executed);
     assert(alias.state.fpr[5] == double_bits(0.0));
     assert(alias.state.fpr_ps1[5] == double_bits(0.0));
+
+    const auto execute = [&](bool use_recompiler, std::uint8_t destination,
+                             std::uint8_t source_a, std::uint8_t source_b,
+                             std::uint64_t a_ps0, std::uint64_t a_ps1,
+                             std::uint64_t b_ps0, std::uint64_t b_ps1) {
+        EspressoCore differential(8U);
+        differential.state.fpr[destination] = double_bits(17.0);
+        differential.state.fpr_ps1[destination] = double_bits(-19.0);
+        differential.state.fpr[source_a] = a_ps0;
+        differential.state.fpr_ps1[source_a] = a_ps1;
+        differential.state.fpr[source_b] = b_ps0;
+        differential.state.fpr_ps1[source_b] = b_ps1;
+        differential.state.fpscr = 0xDEADBEEFU;
+        differential.state.gpr.fill(0xA5A5A5A5U);
+        differential.state.cr = 0x12345678U;
+        differential.state.xer = 0xA00000A5U;
+        differential.memory.write32_be(0U,
+            encode_ps_sub(destination, source_a, source_b));
+        Recompiler recompiler;
+        RunResult execution = use_recompiler
+            ? recompiler.run(differential, 1U) : differential.run(1U);
+        if (use_recompiler)
+        {
+            assert(recompiler.statistics().native_instructions == 1U);
+            assert(recompiler.statistics().interpreter_fallbacks == 0U);
+        }
+        return std::pair{differential.state, std::move(execution)};
+    };
+    const auto assert_jit_matches = [&](std::uint8_t destination,
+                                        std::uint8_t source_a,
+                                        std::uint8_t source_b,
+                                        std::uint64_t a_ps0,
+                                        std::uint64_t a_ps1,
+                                        std::uint64_t b_ps0,
+                                        std::uint64_t b_ps1) {
+        const auto interpreted = execute(false, destination, source_a, source_b,
+            a_ps0, a_ps1, b_ps0, b_ps1);
+        const auto compiled = execute(true, destination, source_a, source_b,
+            a_ps0, a_ps1, b_ps0, b_ps1);
+        assert(compiled.first.gpr == interpreted.first.gpr);
+        assert(compiled.first.fpr == interpreted.first.fpr);
+        assert(compiled.first.fpr_ps1 == interpreted.first.fpr_ps1);
+        assert(compiled.first.fpscr == interpreted.first.fpscr);
+        assert(compiled.first.cr == interpreted.first.cr);
+        assert(compiled.first.xer == interpreted.first.xer);
+        assert(compiled.first.lr == interpreted.first.lr);
+        assert(compiled.first.ctr == interpreted.first.ctr);
+        assert(compiled.first.cia == interpreted.first.cia);
+        assert(format_instruction_history(compiled.second) ==
+               format_instruction_history(interpreted.second));
+    };
+    assert_jit_matches(11U, 13U, 24U,
+        double_bits(4.5), double_bits(-3.0),
+        double_bits(1.25), double_bits(2.0));
+    assert_jit_matches(5U, 5U, 6U,
+        double_bits(1.5), double_bits(-3.0),
+        double_bits(0.5), double_bits(-1.0));
+    assert_jit_matches(5U, 5U, 5U,
+        double_bits(1.5), double_bits(-3.0),
+        double_bits(1.5), double_bits(-3.0));
 }
 
 void paired_single_multiply_scalar0_tests()
