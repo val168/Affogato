@@ -11066,7 +11066,9 @@ void extend_sign_byte_tests()
     assert(!decode(encode_extsb(6U, 5U)).record);
     assert(decode(encode_extsb(6U, 5U, false, 1U)).opcode == Opcode::unsupported);
     const auto execute = [&](std::uint8_t destination, std::uint8_t source,
-                             std::uint32_t input, bool record, bool so) {
+                             std::uint32_t input, bool record, bool so,
+                             CpuState* state_output = nullptr,
+                             bool use_recompiler = false) {
         EspressoCore core(8U);
         core.state.gpr.fill(0x76543210U);
         core.state.gpr[source] = input;
@@ -11088,7 +11090,9 @@ void extend_sign_byte_tests()
         const std::uint32_t byte = input & 0xFFU;
         const std::uint32_t expected = byte |
             ((byte & 0x80U) != 0U ? 0xFFFFFF00U : 0U);
-        const RunResult result = core.run(1U);
+        Recompiler recompiler;
+        const RunResult result = use_recompiler
+            ? recompiler.run(core, 1U) : core.run(1U);
         assert(result.steps == 1U);
         assert(result.reason == StopReason::instruction_limit);
         assert(core.state.gpr[destination] == expected);
@@ -11120,6 +11124,10 @@ void extend_sign_byte_tests()
         assert(core.state.fpr == original_fpr);
         assert(core.state.fpr_ps1 == original_fpr_ps1);
         assert(core.memory.read32_be(0U) == original_memory);
+        if (state_output != nullptr)
+        {
+            *state_output = core.state;
+        }
         return result;
     };
 
@@ -11144,6 +11152,30 @@ void extend_sign_byte_tests()
     const RunResult wind_waker_result = execute(12U, 12U, 1U, true, false);
     const std::string trace = format_instruction_history(wind_waker_result);
     assert(trace.find("extsb. r12=0x00000001 -> r12=0x00000001") != std::string::npos);
+
+    const auto assert_jit_matches = [&](std::uint32_t input, bool record, bool so) {
+        CpuState interpreted_state{};
+        CpuState compiled_state{};
+        const RunResult interpreted = execute(6U, 5U, input, record, so,
+            &interpreted_state);
+        const RunResult compiled = execute(6U, 5U, input, record, so,
+            &compiled_state, true);
+        assert(compiled.steps == interpreted.steps);
+        assert(compiled_state.gpr == interpreted_state.gpr);
+        assert(compiled_state.fpr == interpreted_state.fpr);
+        assert(compiled_state.fpr_ps1 == interpreted_state.fpr_ps1);
+        assert(compiled_state.cr == interpreted_state.cr);
+        assert(compiled_state.xer == interpreted_state.xer);
+        assert(compiled_state.lr == interpreted_state.lr);
+        assert(compiled_state.ctr == interpreted_state.ctr);
+        assert(compiled_state.fpscr == interpreted_state.fpscr);
+        assert(compiled_state.cia == interpreted_state.cia);
+        assert(format_instruction_history(compiled) ==
+               format_instruction_history(interpreted));
+    };
+    assert_jit_matches(0x00000080U, false, false);
+    assert_jit_matches(0x1234567FU, true, false);
+    assert_jit_matches(0xABCDEF81U, true, true);
 }
 
 void extend_sign_halfword_tests()
