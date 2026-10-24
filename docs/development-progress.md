@@ -1,5 +1,6 @@
 # Development Progress
 
+- Native JIT `ps_neg` now toggles the sign bit in both raw paired lanes using source snapshots, preserving NaN payloads and leaving FPSCR/CR/XER untouched. Differential tests cover the exact encoding, negative finite and signaling-NaN lane bits, state preservation, paired history, and destination/source aliasing. Debug/Release CTest pass. WWHD remains at 6,080,538 instructions with the same unsupported null-target fetch `0x46524D48`; fallbacks fell by 66, from 6,067 to 6,001. BOTW remains at 860,172 with the same stop; fallbacks fell by 12, from 2,812 to 2,800. Next WWHD hotspot is `fmsubs` (66), then `stfdu` (14).
 - Native JIT `ps_merge11` now copies source A's PS1 and source B's PS1 to the paired destination from pre-write snapshots. The merge path preserves all four raw source lanes for alias-safe execution and exact paired history. Differential tests cover the real encoding, native dispatch, preserved FPSCR/CR/XER, and all-same-register aliasing. Debug/Release CTest pass. WWHD remains at 6,080,538 instructions with the same unsupported null-target fetch `0x46524D48`; fallbacks fell by 66, from 6,133 to 6,067. BOTW remains at 860,172 with the same stop; fallbacks fell by 12, from 2,824 to 2,812. Next WWHD hotspots are `fmsubs` (66), `ps_neg` (66), then `stfdu` (14).
 - Native JIT `ps_merge01` now copies source A's PS0 and source B's PS1 into the paired destination, snapshots all source lanes before writing for alias safety, and records interpreter-equivalent paired history. Differential coverage verifies the real encoding, native execution, full state, source/destination history, and all-same-register aliasing. Debug/Release CTest pass. WWHD remains at 6,080,538 instructions with the same unsupported null-target fetch `0x46524D48`; fallbacks fell by 66, from 6,199 to 6,133. BOTW remains at 860,172 with the same stop; fallbacks fell by 12, from 2,836 to 2,824. Next WWHD hotspots are `ps_merge11`, `ps_neg`, and `fmsubs` (66 each).
 - Native JIT `ps_sub` now snapshots both operands' PS0/PS1 values, subtracts each lane in double precision and rounds to binary32 before widening back into the paired destination. Differential tests cover the real encoding, lane values, destination aliases, complete architectural state, and paired-history equality. Debug/Release CTest pass. WWHD remains at 6,080,538 instructions and the same unsupported null-target fetch `0x46524D48`; native instructions rose by 67 and fallbacks fell from 6,266 to 6,199. BOTW remains at 860,172 with the same stop; native instructions rose by 6 and fallbacks fell from 2,842 to 2,836. Next WWHD hotspots were `fmsubs`, `ps_merge01`, and `ps_merge11` (each 66).
@@ -117,7 +118,8 @@
 
 ## Completed commits
 
-- `pending` - `jit: emit native ps_merge11`
+- `pending` - `jit: emit native ps_neg`
+- `f0aee42` - `jit: emit native ps_merge11`
 - `195bda9` - `jit: emit native ps_merge01`
 - `9c697f2` - `jit: emit native ps_sub`
 - `35ed80c` - `jit: emit native lhzu`

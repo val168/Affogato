@@ -31250,6 +31250,38 @@ void paired_single_negate_tests()
     assert(alias.step() == StepResult::executed);
     assert(alias.state.fpr[7] == 0x0000000000000000ULL);
     assert(alias.state.fpr_ps1[7] == 0x8000000000000000ULL);
+
+    EspressoCore native(4U);
+    native.state.fpr[5] = 0xBFF0000000000000ULL;
+    native.state.fpr_ps1[5] = 0x7FF0123456789ABCULL;
+    native.state.fpscr = 0xDEADBEEFU;
+    native.state.cr = 0x12345678U;
+    native.state.xer = 0xA00000A5U;
+    native.memory.write32_be(0U, exact_encoding);
+    Recompiler recompiler;
+    const RunResult native_result = recompiler.run(native, 1U);
+    assert(recompiler.statistics().native_instructions == 1U);
+    assert(recompiler.statistics().interpreter_fallbacks == 0U);
+    assert(native.state.fpr[1] == 0x3FF0000000000000ULL);
+    assert(native.state.fpr_ps1[1] == 0xFFF0123456789ABCULL);
+    assert(native.state.fpscr == 0xDEADBEEFU);
+    assert(native.state.cr == 0x12345678U && native.state.xer == 0xA00000A5U);
+    const auto& native_history = native_result.instruction_history.front();
+    assert(native_history.has_paired_fp_state && native_history.paired_fp_unary);
+    assert(native_history.paired_fp_source_a_ps0 == 0xBFF0000000000000ULL);
+    assert(native_history.paired_fp_source_a_ps1 == 0x7FF0123456789ABCULL);
+    assert(native_history.paired_fp_destination_ps0 == 0x3FF0000000000000ULL);
+    assert(native_history.paired_fp_destination_ps1 == 0xFFF0123456789ABCULL);
+
+    EspressoCore native_alias(4U);
+    native_alias.state.fpr[7] = 0x8000000000000000ULL;
+    native_alias.state.fpr_ps1[7] = 0x0000000000000000ULL;
+    native_alias.memory.write32_be(0U, encode_ps_neg(7U, 7U));
+    Recompiler alias_recompiler;
+    (void)alias_recompiler.run(native_alias, 1U);
+    assert(alias_recompiler.statistics().native_instructions == 1U);
+    assert(native_alias.state.fpr[7] == 0x0000000000000000ULL);
+    assert(native_alias.state.fpr_ps1[7] == 0x8000000000000000ULL);
 }
 
 void paired_single_absolute_value_tests()
