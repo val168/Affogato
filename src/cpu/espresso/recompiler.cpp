@@ -334,7 +334,10 @@ struct NativeExecutionContext
     std::uint32_t failed_flags{};
     std::uint32_t failed_instruction_index{};
 
-    void begin_block(GuestMemory& guest_memory, std::uint32_t guest_cia) noexcept
+    void begin_block(
+        GuestMemory& guest_memory,
+        std::uint32_t guest_cia,
+        std::span<const DecodedInstruction> instructions) noexcept
     {
         memory = &guest_memory;
         block_cia = guest_cia;
@@ -348,6 +351,58 @@ struct NativeExecutionContext
         failed_width = 0U;
         failed_flags = 0U;
         failed_instruction_index = 0U;
+
+        for (std::size_t index = 0U; index < instructions.size(); ++index)
+        {
+            switch (instructions[index].opcode)
+            {
+            case Opcode::floating_round_to_single:
+                frsp_records[index].wrote_result = false;
+                break;
+            case Opcode::floating_reciprocal_square_root_estimate:
+                frsqrte_records[index].wrote_result = false;
+                break;
+            case Opcode::floating_multiply_double:
+                fmul_records[index].wrote_result = false;
+                break;
+            case Opcode::floating_multiply_single:
+                fmuls_records[index].wrote_result = false;
+                break;
+            case Opcode::floating_multiply_add_single:
+                fmadds_records[index].wrote_result = false;
+                break;
+            case Opcode::floating_multiply_subtract_single:
+                fmsubs_records[index].wrote_result = false;
+                break;
+            case Opcode::floating_negative_multiply_subtract_single:
+                fnmsubs_records[index].wrote_result = false;
+                break;
+            case Opcode::floating_add_single:
+                fadds_records[index].wrote_result = false;
+                break;
+            case Opcode::floating_subtract_single:
+                fsubs_records[index].wrote_result = false;
+                break;
+            case Opcode::floating_divide_single:
+                fdivs_records[index].wrote_result = false;
+                break;
+            case Opcode::floating_multiply_add_double:
+            case Opcode::floating_negative_multiply_subtract_double:
+                fmadd_records[index].wrote_result = false;
+                break;
+            case Opcode::floating_subtract_double:
+                fsub_records[index].wrote_result = false;
+                break;
+            case Opcode::floating_add_double:
+                fadd_records[index].wrote_result = false;
+                break;
+            case Opcode::floating_divide_double:
+                fdiv_records[index].wrote_result = false;
+                break;
+            default:
+                break;
+            }
+        }
     }
 };
 
@@ -7201,7 +7256,7 @@ RunResult Recompiler::run(EspressoCore& core, std::size_t max_steps)
         }
 
         NativeExecutionContext& context = impl_->execution_context;
-        context.begin_block(core.memory, block->address);
+        context.begin_block(core.memory, block->address, block->instructions);
 #ifndef NDEBUG
         const auto native_start = std::chrono::steady_clock::now();
 #endif

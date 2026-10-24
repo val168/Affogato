@@ -221,6 +221,40 @@ void recompiler_differential_arithmetic_test()
     assert(recompiler.statistics().cache_hits >= 1U);
 }
 
+void recompiler_execution_context_fp_history_reset_test()
+{
+    constexpr std::uint32_t fmul_f0_f1_f2 = (63U << 26U) | (1U << 16U) |
+        (2U << 6U) | (25U << 1U);
+    EspressoCore core(0x1000U);
+    core.memory.write32_be(0x100U, fmul_f0_f1_f2);
+    core.state.cia = 0x100U;
+    core.state.fpr[0] = std::bit_cast<std::uint64_t>(-7.0);
+    core.state.fpr[1] = std::bit_cast<std::uint64_t>(2.0);
+    core.state.fpr[2] = std::bit_cast<std::uint64_t>(3.0);
+    Recompiler recompiler;
+
+    const RunResult normal = recompiler.run(core, 1U);
+    assert(normal.steps == 1U);
+    assert(core.state.fpr[0] == std::bit_cast<std::uint64_t>(6.0));
+    assert(!normal.instruction_history.empty());
+    assert(normal.instruction_history.back().has_fp_arithmetic_result);
+
+    // Revisit the same cached native block with an invalid enabled operation.
+    // Its reused trace record must not retain the prior result-present bit.
+    core.state.cia = 0x100U;
+    core.state.fpr[0] = 0x0123456789ABCDEFULL;
+    core.state.fpr[1] = 0x7FF0000000000000ULL;
+    core.state.fpr[2] = 0U;
+    core.state.fpscr = fpscr::ve_mask;
+    const RunResult suppressed = recompiler.run(core, 1U);
+    assert(suppressed.steps == 1U);
+    assert(core.state.fpr[0] == 0x0123456789ABCDEFULL);
+    assert(!suppressed.instruction_history.empty());
+    assert(!suppressed.instruction_history.back().has_fp_arithmetic_result);
+    assert(recompiler.statistics().native_instructions == 2U);
+    assert(recompiler.statistics().interpreter_fallbacks == 0U);
+}
+
 void recompiler_mulli_differential_test()
 {
     const auto encode_mulli = [](std::uint8_t destination, std::uint8_t base,
@@ -4290,6 +4324,7 @@ int main()
 {
     assert(std::string(opcode_mnemonic(Opcode::floating_multiply_add_double)) == "fmadd");
     recompiler_differential_arithmetic_test();
+    recompiler_execution_context_fp_history_reset_test();
     recompiler_mulli_differential_test();
     recompiler_neg_differential_test();
     recompiler_mullw_differential_test();
