@@ -65,6 +65,15 @@ public:
         return bytes_.size();
     }
 
+    // The backing vector never resizes after construction. Native JIT loads
+    // may use this read-only view after checking that the full access stays
+    // inside flat memory; mapped regions and all writes still use the normal
+    // checked API.
+    [[nodiscard]] const std::uint8_t* flat_data() const noexcept
+    {
+        return bytes_.data();
+    }
+
     [[nodiscard]] std::uint64_t write_generation() const noexcept
     {
         return write_generation_;

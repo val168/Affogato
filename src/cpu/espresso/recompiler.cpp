@@ -282,6 +282,8 @@ using NativeExtshRecord = NativeExtsbRecord;
 struct NativeExecutionContext
 {
     GuestMemory* memory{};
+    const std::uint8_t* flat_memory_data{};
+    std::size_t flat_memory_size{};
     std::uint32_t block_cia{};
     std::array<NativeMemoryRecord, 64> memory_records{};
     std::array<NativeStringLoadRecord, 64> lswi_records{};
@@ -340,6 +342,8 @@ struct NativeExecutionContext
         std::span<const DecodedInstruction> instructions) noexcept
     {
         memory = &guest_memory;
+        flat_memory_data = guest_memory.flat_data();
+        flat_memory_size = guest_memory.size();
         block_cia = guest_cia;
         memory_access_calls = 0U;
         failed = false;
@@ -6720,6 +6724,9 @@ struct Recompiler::Impl
                     insn.opcode == Opcode::load_halfword_algebraic ||
                     insn.opcode == Opcode::load_halfword_algebraic_indexed;
                 const std::uint32_t width = memory_width(insn.opcode);
+                const bool direct_flat_word_load = !store && !validation_only &&
+                    !single_store && !double_store && !fp_integer_store &&
+                    !sign_extend && width == 4U;
                 const std::size_t record_base = offsetof(NativeExecutionContext, memory_records) +
                     index * sizeof(NativeMemoryRecord);
                 const std::uint32_t cia = block.address +
@@ -6772,9 +6779,43 @@ struct Recompiler::Impl
                 }
                 compiler.mov(x86::dword_ptr(context, static_cast<std::int32_t>(
                     offsetof(NativeExecutionContext, fault_cia))), imm(cia));
+                compiler.mov(x86::dword_ptr(context, static_cast<std::int32_t>(
+                    record_base + offsetof(NativeMemoryRecord, address))), address);
+                compiler.mov(x86::byte_ptr(context, static_cast<std::int32_t>(
+                    record_base + offsetof(NativeMemoryRecord, indexed))),
+                    imm(indexed ? 1U : 0U));
                 auto* invoke = static_cast<InvokeNode*>(nullptr);
                 const std::uint32_t flags = (store ? 1U : 0U) |
                     (sign_extend ? 2U : 0U) | (indexed ? 4U : 0U);
+                x86::Gp value = compiler.new_gp32("loaded");
+                Label direct_load_slow = compiler.new_label();
+                Label direct_load_done = compiler.new_label();
+                if (direct_flat_word_load)
+                {
+                    x86::Gp access_end = compiler.new_gp64("flat_load_end");
+                    compiler.mov(access_end.r32(), address);
+                    compiler.add(access_end, imm(width));
+                    x86::Gp flat_size = compiler.new_gp64("flat_memory_size");
+                    compiler.mov(flat_size, x86::qword_ptr(context,
+                        static_cast<std::int32_t>(offsetof(
+                            NativeExecutionContext, flat_memory_size))));
+                    compiler.cmp(access_end, flat_size);
+                    compiler.ja(direct_load_slow);
+
+                    x86::Gp host_address = compiler.new_gp_ptr("flat_memory_address");
+                    compiler.mov(host_address, x86::qword_ptr(context,
+                        static_cast<std::int32_t>(offsetof(
+                            NativeExecutionContext, flat_memory_data))));
+                    x86::Gp guest_offset = compiler.new_gp64("flat_guest_offset");
+                    compiler.mov(guest_offset.r32(), address);
+                    compiler.add(host_address, guest_offset);
+                    compiler.mov(value, x86::dword_ptr(host_address));
+                    compiler.bswap(value);
+                    compiler.mov(x86::dword_ptr(context, static_cast<std::int32_t>(
+                        record_base + offsetof(NativeMemoryRecord, value))), value);
+                    compiler.jmp(direct_load_done);
+                    compiler.bind(direct_load_slow);
+                }
                 if (single_store)
                 {
                     const auto helper_address = static_cast<std::uint64_t>(
@@ -6819,8 +6860,11 @@ struct Recompiler::Impl
                     invoke->set_arg(4, imm(flags));
                     invoke->set_arg(5, imm(static_cast<std::uint32_t>(index)));
                 }
-                x86::Gp value = compiler.new_gp32("loaded");
                 invoke->set_ret(0, value);
+                if (direct_flat_word_load)
+                {
+                    compiler.bind(direct_load_done);
+                }
 
                 x86::Gp failed = compiler.new_gp32("failed");
                 compiler.mov(failed, x86::byte_ptr(context, static_cast<std::int32_t>(

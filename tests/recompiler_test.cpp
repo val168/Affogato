@@ -3313,6 +3313,7 @@ void recompiler_lwzu_differential_tests()
         assert(compiled.state.fpscr == interpreted.state.fpscr);
         assert(recompiler.statistics().native_instructions == 1U);
         assert(recompiler.statistics().interpreter_fallbacks == 0U);
+        assert(recompiler.statistics().memory_slow_path_calls == 0U);
         const InstructionHistoryEntry& history = actual.instruction_history.back();
         assert(history.opcode_name == "lwzu");
         assert(history.has_effective_address && history.effective_address == address);
@@ -3320,6 +3321,31 @@ void recompiler_lwzu_differential_tests()
             history.destination_register == test.destination &&
             history.destination_value == test.memory_value);
     }
+
+    // Guest aliases are outside the flat backing range and must resolve
+    // through GuestMemory rather than the direct flat-RAM pointer path.
+    EspressoCore aliased(0x5000U);
+    constexpr std::uint8_t alias_base_register = 6U;
+    constexpr std::uint8_t alias_destination = 3U;
+    constexpr std::uint32_t alias_address = 0x10000U;
+    constexpr std::uint32_t alias_target = 0x2000U;
+    constexpr std::uint32_t alias_size = 0x1000U;
+    constexpr std::uint32_t alias_value = 0xA1B2C3D4U;
+    aliased.memory.map_alias(alias_address, alias_target, alias_size);
+    aliased.memory.write32_be(start, lwzu_form(alias_destination,
+        alias_base_register, 4));
+    aliased.memory.write32_be(alias_target + 4U, alias_value);
+    aliased.state.cia = start;
+    aliased.state.gpr[alias_base_register] = alias_address;
+    aliased.state.gpr[alias_destination] = 0xDEADBEEFU;
+    Recompiler alias_recompiler;
+    const RunResult alias_result = alias_recompiler.run(aliased, 1U);
+    assert(alias_result.reason == StopReason::instruction_limit);
+    assert(aliased.state.gpr[alias_destination] == alias_value);
+    assert(aliased.state.gpr[alias_base_register] == alias_address + 4U);
+    assert(alias_recompiler.statistics().native_instructions == 1U);
+    assert(alias_recompiler.statistics().interpreter_fallbacks == 0U);
+    assert(alias_recompiler.statistics().memory_slow_path_calls == 1U);
 
     EspressoCore faulting(0x1000U);
     constexpr std::uint8_t base_register = 6U;
@@ -3337,6 +3363,7 @@ void recompiler_lwzu_differential_tests()
     assert(faulting.state.cia == start);
     assert(!fault.instruction_history.empty());
     assert(!fault.instruction_history.back().completed);
+    assert(recompiler.statistics().memory_slow_path_calls == 1U);
 }
 
 void recompiler_lmw_differential_tests()
