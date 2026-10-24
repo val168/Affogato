@@ -8620,6 +8620,57 @@ void divide_word_signed_tests()
     divisor_alias.state.gpr[3] = 3U;
     divisor_alias.memory.write32_be(0U, encode_xo(3U, 4U, 3U, 491U));
     assert(divisor_alias.step() == StepResult::executed && divisor_alias.state.gpr[3] == 3U);
+
+    const auto execute = [&](bool use_recompiler, std::uint8_t destination,
+                             std::uint8_t ra, std::uint8_t rb,
+                             std::uint32_t dividend, std::uint32_t divisor,
+                             bool record, bool so) {
+        EspressoCore differential(8U);
+        differential.state.gpr.fill(0xA5A5A5A5U);
+        differential.state.gpr[ra] = dividend;
+        differential.state.gpr[rb] = divisor;
+        differential.state.cr = 0x12345678U;
+        differential.state.xer = so ? 0xA00000A5U : 0x200000A5U;
+        differential.state.lr = 0x10203040U;
+        differential.state.ctr = 0x50607080U;
+        const std::uint32_t instruction = encode_xo(
+            destination, ra, rb, 491U, record);
+        differential.memory.write32_be(0U, instruction);
+        Recompiler recompiler;
+        RunResult execution = use_recompiler
+            ? recompiler.run(differential, 1U) : differential.run(1U);
+        return std::pair{differential.state, std::move(execution)};
+    };
+    const auto assert_jit_matches = [&](std::uint8_t destination,
+                                        std::uint8_t ra, std::uint8_t rb,
+                                        std::uint32_t dividend,
+                                        std::uint32_t divisor,
+                                        bool record = false, bool so = false) {
+        const auto interpreted = execute(false, destination, ra, rb,
+            dividend, divisor, record, so);
+        const auto compiled = execute(true, destination, ra, rb,
+            dividend, divisor, record, so);
+        assert(compiled.first.gpr == interpreted.first.gpr);
+        assert(compiled.first.cr == interpreted.first.cr);
+        assert(compiled.first.xer == interpreted.first.xer);
+        assert(compiled.first.lr == interpreted.first.lr);
+        assert(compiled.first.ctr == interpreted.first.ctr);
+        assert(compiled.first.cia == interpreted.first.cia);
+        assert(compiled.second.steps == interpreted.second.steps);
+        assert(compiled.second.reason == interpreted.second.reason);
+        assert(format_instruction_history(compiled.second) ==
+               format_instruction_history(interpreted.second));
+    };
+    assert_jit_matches(3U, 4U, 5U, 10U, 3U);
+    assert_jit_matches(3U, 4U, 5U, 0xFFFFFFF6U, 3U);
+    assert_jit_matches(3U, 4U, 5U, 10U, 0U);
+    assert_jit_matches(3U, 4U, 5U, 0xFFFFFFF6U, 0U);
+    assert_jit_matches(3U, 4U, 5U, 0x80000000U, 0xFFFFFFFFU);
+    assert_jit_matches(4U, 4U, 5U, 0xFFFFFFF6U, 3U); // destination aliases A
+    assert_jit_matches(5U, 4U, 5U, 10U, 3U); // destination aliases B
+    assert_jit_matches(5U, 5U, 5U, 0xFFFFFFF6U, 3U); // all registers alias
+    assert_jit_matches(3U, 4U, 5U, 0U, 7U, true);
+    assert_jit_matches(3U, 4U, 5U, 0xFFFFFFF6U, 3U, true, true);
 }
 
 void divide_word_signed_overflow_tests()
