@@ -3067,6 +3067,26 @@ void recompiler_branch_test()
     assert(core.state.cia == 0x120U);
     assert(core.state.lr == 0x104U);
 
+    // If bl .+4 ends a compiled block, it must still publish the fallthrough
+    // CIA before the dispatcher handles the following unsupported word.
+    EspressoCore ending_link(0x1000U);
+    EspressoCore ending_link_interpreted(0x1000U);
+    for (EspressoCore* candidate : {&ending_link, &ending_link_interpreted})
+    {
+        candidate->memory.write32_be(0x100U, 0x48000005U); // bl .+4
+        candidate->memory.write32_be(0x104U, 0xFFFFFFFFU); // unsupported
+        candidate->state.cia = 0x100U;
+    }
+    const RunResult ending_link_oracle = ending_link_interpreted.run(2U);
+    Recompiler ending_link_recompiler;
+    const RunResult ending_link_result = ending_link_recompiler.run(ending_link, 2U);
+    assert(ending_link_result.reason == ending_link_oracle.reason);
+    assert(ending_link_result.reason == StopReason::unsupported_instruction);
+    assert(ending_link_result.steps == ending_link_oracle.steps);
+    assert(ending_link_result.cia == 0x104U);
+    assert(ending_link.state.cia == 0x104U);
+    assert(ending_link.state.lr == 0x104U);
+
     // A link branch to its own fallthrough is commonly used to capture the
     // guest PC. Keep it in the same native block as the following mflr.
     EspressoCore pc_relative(0x1000U);

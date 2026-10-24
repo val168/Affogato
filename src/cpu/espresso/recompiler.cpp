@@ -5582,7 +5582,7 @@ struct Recompiler::Impl
                 const std::uint32_t target = insn.absolute
                     ? static_cast<std::uint32_t>(insn.immediate)
                     : cia + static_cast<std::uint32_t>(insn.immediate);
-                if (target != cia + 4U)
+                if (target != cia + 4U || index + 1U == block.instructions.size())
                 {
                     compiler.mov(x86::dword_ptr(
                         state, static_cast<std::int32_t>(offsetof(CpuState, cia))),
