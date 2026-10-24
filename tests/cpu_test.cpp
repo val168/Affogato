@@ -28357,6 +28357,61 @@ void store_string_word_immediate_tests()
     assert(fault_result.instruction_history[0].has_effective_address);
     assert(fault_result.instruction_history[0].effective_address == 0xFEU);
     assert(!fault_result.instruction_history[0].completed);
+
+    EspressoCore compiled(0x100U);
+    compiled.state.gpr[7] = 0x80U;
+    compiled.state.gpr[8] = 0x80U;
+    compiled.memory.write32_be(0U, wind_waker_word);
+    Recompiler recompiler;
+    const RunResult compiled_result = recompiler.run(compiled, 1U);
+    assert(compiled_result.reason == StopReason::instruction_limit);
+    assert(recompiler.statistics().native_instructions == 1U);
+    assert(recompiler.statistics().interpreter_fallbacks == 0U);
+    assert(compiled.memory.read32_be(0x80U) == 0x00000080U);
+    assert(compiled.state.gpr[7] == 0x80U);
+    assert(compiled.state.gpr[8] == 0x80U);
+    assert(compiled_result.instruction_history.size() == 1U);
+    const InstructionHistoryEntry& compiled_history =
+        compiled_result.instruction_history.front();
+    assert(compiled_history.has_string_transfer);
+    assert(compiled_history.string_transfer_store);
+    assert(compiled_history.string_transfer_byte_count == 4U);
+    assert(compiled_history.string_transfer_bytes[0] == 0U);
+    assert(compiled_history.string_transfer_bytes[3] == 0x80U);
+
+    EspressoCore wrapped(0x100U);
+    wrapped.state.gpr[4] = 0x80U;
+    wrapped.state.gpr[31] = 0x11223344U;
+    wrapped.state.gpr[0] = 0x55667788U;
+    wrapped.memory.write32_be(0U, encode_stswi(31U, 4U, 5U));
+    Recompiler wrapped_recompiler;
+    const RunResult wrapped_result = wrapped_recompiler.run(wrapped, 1U);
+    assert(wrapped_result.reason == StopReason::instruction_limit);
+    assert(wrapped_recompiler.statistics().native_instructions == 1U);
+    assert(wrapped.memory.read32_be(0x80U) == 0x11223344U);
+    assert(wrapped.memory.read8(0x84U) == 0x55U);
+
+    EspressoCore compiled_fault(0x100U);
+    compiled_fault.state.cia = 0x40U;
+    compiled_fault.state.gpr[4] = 0xFEU;
+    compiled_fault.state.gpr[8] = 0xAABBCCDDU;
+    compiled_fault.memory.write8(0xFEU, 0x5AU);
+    compiled_fault.memory.write8(0xFFU, 0xA5U);
+    compiled_fault.memory.write32_be(0x40U, encode_stswi(8U, 4U, 5U));
+    Recompiler fault_recompiler;
+    const RunResult compiled_fault_result = fault_recompiler.run(compiled_fault, 1U);
+    assert(compiled_fault_result.reason == StopReason::memory_fault);
+    assert(compiled_fault_result.cia == 0x40U);
+    assert(compiled_fault_result.detail.find("write 5 byte(s)") != std::string::npos);
+    assert(compiled_fault.state.gpr[4] == 0xFEU);
+    assert(compiled_fault.state.gpr[8] == 0xAABBCCDDU);
+    assert(compiled_fault.memory.read8(0xFEU) == 0x5AU);
+    assert(compiled_fault.memory.read8(0xFFU) == 0xA5U);
+    assert(compiled_fault_result.instruction_history.size() == 1U);
+    assert(compiled_fault_result.instruction_history[0].opcode_name == "stswi");
+    assert(compiled_fault_result.instruction_history[0].has_effective_address);
+    assert(compiled_fault_result.instruction_history[0].effective_address == 0xFEU);
+    assert(!compiled_fault_result.instruction_history[0].completed);
 }
 
 void load_store_string_word_indexed_tests()
