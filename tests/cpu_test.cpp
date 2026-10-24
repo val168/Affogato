@@ -29279,6 +29279,46 @@ void paired_single_sum0_tests()
     assert(alias.step() == StepResult::executed);
     assert(alias.state.fpr[5] == double_bits(8.0));
     assert(alias.state.fpr_ps1[5] == double_bits(6.5));
+
+    const auto execute = [&](bool use_recompiler, bool destination_alias) {
+        EspressoCore differential(8U);
+        differential.state.fpr[1] = double_bits(1.25);
+        differential.state.fpr_ps1[1] = double_bits(8.0);
+        differential.state.fpr[2] = double_bits(3.0);
+        differential.state.fpr_ps1[2] = double_bits(2.5);
+        differential.state.fpr[3] = double_bits(4.0);
+        differential.state.fpr_ps1[3] = double_bits(-7.25);
+        differential.state.fpscr = 0xA5A55A5AU;
+        differential.state.cr = 0x12345678U;
+        differential.state.xer = 0xA00000A5U;
+        differential.memory.write32_be(0U, encode_ps_sum0(
+            destination_alias ? 2U : 8U,
+            destination_alias ? 2U : 1U,
+            destination_alias ? 2U : 2U,
+            destination_alias ? 2U : 3U));
+        Recompiler recompiler;
+        RunResult execution = use_recompiler
+            ? recompiler.run(differential, 1U) : differential.run(1U);
+        assert(execution.steps == 1U);
+        assert(execution.reason == StopReason::instruction_limit);
+        return std::pair{differential.state, std::move(execution)};
+    };
+    for (const bool destination_alias : {false, true})
+    {
+        const auto interpreted = execute(false, destination_alias);
+        const auto compiled = execute(true, destination_alias);
+        assert(compiled.first.gpr == interpreted.first.gpr);
+        assert(compiled.first.fpr == interpreted.first.fpr);
+        assert(compiled.first.fpr_ps1 == interpreted.first.fpr_ps1);
+        assert(compiled.first.fpscr == interpreted.first.fpscr);
+        assert(compiled.first.cr == interpreted.first.cr);
+        assert(compiled.first.xer == interpreted.first.xer);
+        assert(compiled.first.lr == interpreted.first.lr);
+        assert(compiled.first.ctr == interpreted.first.ctr);
+        assert(compiled.first.cia == interpreted.first.cia);
+        assert(format_instruction_history(compiled.second) ==
+               format_instruction_history(interpreted.second));
+    }
 }
 
 void paired_single_sum1_tests()
