@@ -28156,6 +28156,53 @@ void load_string_word_immediate_tests()
     const std::string fault_trace = format_instruction_history(fault_result);
     assert(fault_trace.find("lswi r8,r4,5 r4=0x000000FE [0x000000FE]") !=
            std::string::npos);
+
+    // The JIT performs the same all-or-nothing string load natively and
+    // preserves the transfer details in instruction history.
+    EspressoCore compiled(0x100U);
+    compiled.state.gpr[31] = 0x80U;
+    compiled.state.gpr[8] = 0xDEADBEEFU;
+    compiled.memory.write_bytes(0x80U,
+        std::array<std::uint8_t, 4>{0x12U, 0x34U, 0x56U, 0x78U});
+    compiled.memory.write32_be(0U, wind_waker_word);
+    Recompiler recompiler;
+    const RunResult compiled_result = recompiler.run(compiled, 1U);
+    assert(compiled_result.reason == StopReason::instruction_limit);
+    assert(recompiler.statistics().native_instructions == 1U);
+    assert(recompiler.statistics().interpreter_fallbacks == 0U);
+    assert(compiled.state.gpr[8] == 0x12345678U);
+    assert(compiled.state.gpr[31] == 0x80U);
+    assert(compiled_result.instruction_history.size() == 1U);
+    const InstructionHistoryEntry& compiled_history =
+        compiled_result.instruction_history.front();
+    assert(compiled_history.has_string_transfer);
+    assert(compiled_history.string_transfer_byte_count == 4U);
+    assert(compiled_history.string_transfer_register_count == 1U);
+    assert(compiled_history.string_transfer_registers[0] == 8U);
+    assert(compiled_history.string_transfer_register_values[0] == 0x12345678U);
+    assert(compiled_history.string_transfer_bytes[0] == 0x12U);
+    assert(compiled_history.string_transfer_bytes[3] == 0x78U);
+
+    EspressoCore compiled_fault(0x100U);
+    compiled_fault.state.cia = 0x40U;
+    compiled_fault.state.gpr[4] = 0xFEU;
+    compiled_fault.state.gpr[8] = 0xAAAAAAAAU;
+    compiled_fault.state.gpr[9] = 0xBBBBBBBBU;
+    compiled_fault.memory.write8(0xFEU, 0x11U);
+    compiled_fault.memory.write8(0xFFU, 0x22U);
+    compiled_fault.memory.write32_be(0x40U, encode_lswi(8U, 4U, 5U));
+    Recompiler fault_recompiler;
+    const RunResult compiled_fault_result = fault_recompiler.run(compiled_fault, 1U);
+    assert(compiled_fault_result.reason == StopReason::memory_fault);
+    assert(compiled_fault_result.cia == 0x40U);
+    assert(compiled_fault_result.detail.find("read 5 byte(s)") != std::string::npos);
+    assert(compiled_fault.state.gpr[8] == 0xAAAAAAAAU);
+    assert(compiled_fault.state.gpr[9] == 0xBBBBBBBBU);
+    assert(compiled_fault_result.instruction_history.size() == 1U);
+    assert(compiled_fault_result.instruction_history[0].opcode_name == "lswi");
+    assert(compiled_fault_result.instruction_history[0].has_effective_address);
+    assert(compiled_fault_result.instruction_history[0].effective_address == 0xFEU);
+    assert(!compiled_fault_result.instruction_history[0].completed);
 }
 
 void store_string_word_immediate_tests()
