@@ -25919,6 +25919,26 @@ void store_floating_as_integer_word_indexed_tests()
     assert(wind_trace.find("0x100FEEC0") != std::string::npos);
     assert(wind_trace.find("0x00000780") != std::string::npos);
 
+    EspressoCore native(0x100U);
+    native.state.gpr[0] = 0x100FEEC0U;
+    native.state.fpr[0] = 0xFFF8000000000780ULL;
+    native.memory.map_region(0x100FEE80U, 0x100U);
+    native.memory.write32_be(0U, wind_waker_word);
+    Recompiler recompiler;
+    const RunResult native_result = recompiler.run(native, 1U);
+    assert(recompiler.statistics().native_instructions == 1U);
+    assert(recompiler.statistics().interpreter_fallbacks == 0U);
+    assert(native.memory.read32_be(0x100FEEC0U) == 0x00000780U);
+    assert(native.state.gpr[0] == 0x100FEEC0U);
+    const auto& native_history = native_result.instruction_history.front();
+    assert(native_history.opcode_name == "stfiwx" && native_history.completed);
+    assert(native_history.has_fp_source &&
+           native_history.fp_source_value == 0xFFF8000000000780ULL);
+    assert(native_history.has_stored_integer_word_value &&
+           native_history.stored_integer_word_value == 0x780U);
+    assert(native_history.has_effective_address &&
+           native_history.effective_address == 0x100FEEC0U);
+
     // A partial word mapping faults atomically and leaves the faulting CIA/registers intact.
     EspressoCore fault(0x20U);
     fault.state.gpr[5] = 0x1EU;
@@ -25948,6 +25968,20 @@ void store_floating_as_integer_word_indexed_tests()
     const std::string fault_trace = format_instruction_history(fault_result);
     assert(fault_trace.find("stfiwx") != std::string::npos);
     assert(fault_trace.find("[did not complete]") != std::string::npos);
+
+    EspressoCore native_fault(0x20U);
+    native_fault.state.gpr[5] = 0x1EU;
+    native_fault.state.fpr[7] = 0x01234567CAFEBABEULL;
+    native_fault.memory.write8(0x1EU, 0xAAU);
+    native_fault.memory.write8(0x1FU, 0xBBU);
+    native_fault.memory.write32_be(0U, encode_stfiwx(7U, 0U, 5U));
+    Recompiler fault_recompiler;
+    const RunResult native_fault_result = fault_recompiler.run(native_fault, 1U);
+    assert(native_fault_result.reason == StopReason::memory_fault);
+    assert(native_fault.state.gpr[5] == 0x1EU);
+    assert(native_fault.memory.read8(0x1EU) == 0xAAU &&
+           native_fault.memory.read8(0x1FU) == 0xBBU);
+    assert(!native_fault_result.instruction_history.front().completed);
 }
 
 void load_halfword_zero_indexed_tests()

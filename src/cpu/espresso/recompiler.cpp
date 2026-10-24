@@ -3398,6 +3398,7 @@ struct BlockCode
     case Opcode::store_single_indexed:
     case Opcode::store_double:
     case Opcode::store_double_update:
+    case Opcode::store_floating_as_integer_word_indexed:
     case Opcode::load_word_indexed:
     case Opcode::load_byte_zero_indexed:
     case Opcode::load_halfword_zero_indexed:
@@ -3536,6 +3537,7 @@ struct BlockCode
     case Opcode::store_single_indexed: return "stfsx";
     case Opcode::store_double: return "stfd";
     case Opcode::store_double_update: return "stfdu";
+    case Opcode::store_floating_as_integer_word_indexed: return "stfiwx";
     case Opcode::load_word_indexed: return "lwzx";
     case Opcode::load_byte_zero_indexed: return "lbzx";
     case Opcode::load_halfword_zero_indexed: return "lhzx";
@@ -3579,6 +3581,7 @@ struct BlockCode
     case Opcode::store_single_indexed:
     case Opcode::store_double:
     case Opcode::store_double_update:
+    case Opcode::store_floating_as_integer_word_indexed:
     case Opcode::store_word:
     case Opcode::store_word_update:
     case Opcode::store_byte:
@@ -3641,7 +3644,8 @@ struct BlockCode
         opcode == Opcode::store_halfword_indexed ||
         opcode == Opcode::store_single || opcode == Opcode::store_single_indexed ||
         opcode == Opcode::store_double || opcode == Opcode::store_double_update ||
-        opcode == Opcode::store_word_update || opcode == Opcode::store_single_update;
+        opcode == Opcode::store_word_update || opcode == Opcode::store_single_update ||
+        opcode == Opcode::store_floating_as_integer_word_indexed;
 }
 
 [[nodiscard]] bool is_indexed_memory(Opcode opcode) noexcept
@@ -3652,6 +3656,7 @@ struct BlockCode
         opcode == Opcode::store_word_indexed || opcode == Opcode::store_byte_indexed ||
         opcode == Opcode::store_halfword_indexed ||
         opcode == Opcode::store_single_indexed ||
+        opcode == Opcode::store_floating_as_integer_word_indexed ||
         opcode == Opcode::data_cache_block_store ||
         opcode == Opcode::data_cache_block_flush;
 }
@@ -6189,6 +6194,7 @@ struct Recompiler::Impl
             case Opcode::store_single_indexed:
             case Opcode::store_double:
             case Opcode::store_double_update:
+            case Opcode::store_floating_as_integer_word_indexed:
             case Opcode::load_word_indexed:
             case Opcode::load_byte_zero_indexed:
             case Opcode::load_halfword_zero_indexed:
@@ -6212,6 +6218,8 @@ struct Recompiler::Impl
                     insn.opcode == Opcode::store_single_indexed;
                 const bool double_store = insn.opcode == Opcode::store_double ||
                     insn.opcode == Opcode::store_double_update;
+                const bool fp_integer_store = insn.opcode ==
+                    Opcode::store_floating_as_integer_word_indexed;
                 const bool update_base = insn.opcode == Opcode::load_byte_update ||
                     insn.opcode == Opcode::load_word_update ||
                     insn.opcode == Opcode::load_halfword_zero_update ||
@@ -6259,6 +6267,11 @@ struct Recompiler::Impl
                     if (single_store || double_store)
                     {
                         compiler.mov(stored_value, imm(0U));
+                    }
+                    else if (fp_integer_store)
+                    {
+                        compiler.mov(stored_value, x86::dword_ptr(state,
+                            static_cast<std::int32_t>(fpr_offset(insn.fp_register))));
                     }
                     else
                     {
@@ -7477,6 +7490,23 @@ RunResult Recompiler::run(EspressoCore& core, std::size_t max_steps)
                     entry.destination_register = insn.base;
                     entry.destination_value = record.address;
                 }
+            }
+            else if (insn.opcode == Opcode::store_floating_as_integer_word_indexed)
+            {
+                entry.has_fp_source = true;
+                entry.fp_source_register = insn.fp_register;
+                entry.fp_source_value = core.state.fpr[insn.fp_register];
+                entry.has_effective_address = true;
+                entry.effective_address = record.address;
+                if (insn.base != 0U)
+                {
+                    entry.source_registers[entry.source_count] = insn.base;
+                    entry.source_values[entry.source_count++] = record.base_value;
+                }
+                entry.source_registers[entry.source_count] = insn.source;
+                entry.source_values[entry.source_count++] = record.index_value;
+                entry.has_stored_integer_word_value = true;
+                entry.stored_integer_word_value = record.value;
             }
             else if (insn.opcode == Opcode::store_double ||
                 insn.opcode == Opcode::store_double_update)
