@@ -6564,7 +6564,8 @@ void floating_negative_multiply_subtract_double_tests()
                              std::uint8_t source_b, std::uint8_t source_c,
                              std::uint64_t a_raw, std::uint64_t b_raw,
                              std::uint64_t c_raw, std::uint32_t fpscr_value = 0U,
-                             std::uint64_t destination_ps1 = 0xDEADBEEF01234567ULL) {
+                             std::uint64_t destination_ps1 = 0xDEADBEEF01234567ULL,
+                             bool use_recompiler = false) {
         EspressoCore core(16U);
         for (std::size_t index = 0; index < core.state.gpr.size(); ++index)
         {
@@ -6593,7 +6594,9 @@ void floating_negative_multiply_subtract_double_tests()
         const auto ctr_before = core.state.ctr;
         const auto memory_before = core.memory.read32_be(8U);
 
-        Execution execution{.state = {}, .result = core.run(1U)};
+        Recompiler recompiler;
+        Execution execution{.state = {}, .result = use_recompiler
+            ? recompiler.run(core, 1U) : core.run(1U)};
         assert(execution.result.reason == StopReason::instruction_limit);
         assert(execution.result.steps == 1U);
         assert(core.state.cia == 4U);
@@ -6732,6 +6735,40 @@ void floating_negative_multiply_subtract_double_tests()
     assert(trace.find("-> f30=0.00076699041528627276 [0x3F4921FB60000000]") !=
            std::string::npos);
     assert(trace.find("single=") == std::string::npos);
+
+    const auto assert_jit_matches = [&](std::uint8_t destination,
+                                        std::uint8_t source_a,
+                                        std::uint8_t source_b,
+                                        std::uint8_t source_c,
+                                        std::uint64_t a_raw,
+                                        std::uint64_t b_raw,
+                                        std::uint64_t c_raw,
+                                        std::uint32_t initial_fpscr = 0U) {
+        const Execution interpreted = execute(destination, source_a, source_b,
+            source_c, a_raw, b_raw, c_raw, initial_fpscr);
+        const Execution compiled = execute(destination, source_a, source_b,
+            source_c, a_raw, b_raw, c_raw, initial_fpscr,
+            0xDEADBEEF01234567ULL, true);
+        assert(compiled.result.steps == interpreted.result.steps);
+        assert(compiled.state.gpr == interpreted.state.gpr);
+        assert(compiled.state.fpr == interpreted.state.fpr);
+        assert(compiled.state.fpr_ps1 == interpreted.state.fpr_ps1);
+        assert(compiled.state.cr == interpreted.state.cr);
+        assert(compiled.state.xer == interpreted.state.xer);
+        assert(compiled.state.lr == interpreted.state.lr);
+        assert(compiled.state.ctr == interpreted.state.ctr);
+        assert(compiled.state.fpscr == interpreted.state.fpscr);
+        assert(format_instruction_history(compiled.result) ==
+               format_instruction_history(interpreted.result));
+    };
+    assert_jit_matches(3U, 1U, 2U, 4U, two, 0x4024000000000000ULL, three);
+    assert_jit_matches(3U, 1U, 2U, 4U, a_fused_raw, one, c_fused_raw);
+    assert_jit_matches(30U, 0U, 30U, 1U,
+        0x3FF921FB54442D18ULL, wind_b, wind_c,
+        fpscr::fi_mask | fpscr::fr_mask | fpscr::xx_mask | 1U);
+    assert_jit_matches(2U, 1U, 2U, 4U, one, signaling_nan, one, fpscr::ve_mask);
+    assert_jit_matches(3U, 1U, 2U, 4U, positive_inf, positive_inf, one);
+    assert_jit_matches(3U, 1U, 2U, 4U, positive_inf, negative_inf, one);
 }
 
 void floating_round_to_single_tests()
