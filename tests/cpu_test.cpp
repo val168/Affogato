@@ -9274,6 +9274,67 @@ void add_carrying_recompiler_differential_tests()
     }
 }
 
+void subtract_from_recompiler_differential_tests()
+{
+    struct Case
+    {
+        std::uint8_t destination;
+        std::uint8_t ra;
+        std::uint8_t rb;
+        std::uint32_t a;
+        std::uint32_t b;
+        bool record;
+        bool so;
+    };
+    constexpr std::array<Case, 7> cases{{
+        {3U, 4U, 5U, 3U, 10U, false, false},
+        {3U, 4U, 5U, 10U, 3U, false, false},
+        {3U, 4U, 5U, 0xFFFFFFFFU, 1U, false, false},
+        {4U, 4U, 5U, 3U, 10U, false, false}, // destination aliases rA
+        {5U, 4U, 5U, 3U, 10U, false, false}, // destination aliases rB
+        {5U, 5U, 5U, 7U, 7U, true, false}, // all operands alias, EQ
+        {3U, 4U, 5U, 10U, 3U, true, true}, // negative result and sticky SO
+    }};
+    for (const Case& c : cases)
+    {
+        const std::uint32_t word = (31U << 26U) |
+            (static_cast<std::uint32_t>(c.destination) << 21U) |
+            (static_cast<std::uint32_t>(c.ra) << 16U) |
+            (static_cast<std::uint32_t>(c.rb) << 11U) | (40U << 1U) |
+            static_cast<std::uint32_t>(c.record);
+        EspressoCore interpreted(8U);
+        EspressoCore compiled(8U);
+        for (std::uint32_t reg = 0U; reg < 32U; ++reg)
+        {
+            interpreted.state.gpr[reg] = compiled.state.gpr[reg] =
+                0xA5A5A5A5U ^ (reg * 0x01010101U);
+        }
+        interpreted.state.gpr[c.ra] = compiled.state.gpr[c.ra] = c.a;
+        interpreted.state.gpr[c.rb] = compiled.state.gpr[c.rb] = c.b;
+        interpreted.state.xer = compiled.state.xer = c.so ? 0x800000A5U : 0x000000A5U;
+        interpreted.state.cr = compiled.state.cr = 0x12345678U;
+        interpreted.state.lr = compiled.state.lr = 0x10203040U;
+        interpreted.state.ctr = compiled.state.ctr = 0x50607080U;
+        interpreted.memory.write32_be(0U, word);
+        compiled.memory.write32_be(0U, word);
+
+        const RunResult oracle = interpreted.run(1U);
+        Recompiler recompiler;
+        const RunResult actual = recompiler.run(compiled, 1U);
+        assert(oracle.steps == 1U && actual.steps == 1U);
+        assert(oracle.reason == StopReason::instruction_limit);
+        assert(actual.reason == oracle.reason);
+        assert(compiled.state.gpr == interpreted.state.gpr);
+        assert(compiled.state.cr == interpreted.state.cr);
+        assert(compiled.state.xer == interpreted.state.xer);
+        assert(compiled.state.lr == interpreted.state.lr);
+        assert(compiled.state.ctr == interpreted.state.ctr);
+        assert(compiled.state.cia == interpreted.state.cia);
+        assert(format_instruction_history(actual) ==
+               format_instruction_history(oracle));
+    }
+}
+
 void add_carrying_overflow_tests()
 {
     constexpr std::uint32_t xer_so = 0x80000000U;
@@ -31466,6 +31527,7 @@ int main(int argc, char* argv[])
     arithmetic_shift_right_word_tests();
     add_carrying_tests();
     add_carrying_recompiler_differential_tests();
+    subtract_from_recompiler_differential_tests();
     add_carrying_overflow_tests();
     add_extended_overflow_tests();
     add_record_recompiler_differential_tests();

@@ -832,6 +832,7 @@ void add_history_source(
          instruction.opcode == Opcode::divide_word_unsigned ||
          instruction.opcode == Opcode::divide_word_signed ||
          instruction.opcode == Opcode::add_carrying ||
+         instruction.opcode == Opcode::subtract_from ||
          instruction.opcode == Opcode::add_extended ||
          instruction.opcode == Opcode::add_to_minus_one_extended ||
          instruction.opcode == Opcode::add_to_zero_extended ||
