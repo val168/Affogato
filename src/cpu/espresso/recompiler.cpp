@@ -3358,6 +3358,7 @@ struct BlockCode
     case Opcode::paired_single_merge00:
     case Opcode::paired_single_merge01:
     case Opcode::paired_single_merge10:
+    case Opcode::paired_single_merge11:
     case Opcode::paired_single_quantized_load:
     case Opcode::paired_single_quantized_store:
     case Opcode::instruction_sync:
@@ -3442,6 +3443,7 @@ struct BlockCode
     case Opcode::paired_single_merge00: return "ps_merge00";
     case Opcode::paired_single_merge01: return "ps_merge01";
     case Opcode::paired_single_merge10: return "ps_merge10";
+    case Opcode::paired_single_merge11: return "ps_merge11";
     case Opcode::paired_single_quantized_store: return "psq_st";
     case Opcode::paired_single_quantized_load: return "psq_l";
     case Opcode::instruction_sync: return "isync";
@@ -5681,6 +5683,7 @@ struct Recompiler::Impl
             case Opcode::paired_single_merge00:
             case Opcode::paired_single_merge01:
             case Opcode::paired_single_merge10:
+            case Opcode::paired_single_merge11:
             {
                 // Snapshot both lanes before either destination lane is
                 // written; frD may alias either or both sources.
@@ -5689,10 +5692,12 @@ struct Recompiler::Impl
                 x86::Gp source_b_ps0 = compiler.new_gp64("ps_merge_b_ps0");
                 x86::Gp source_b_ps1 = compiler.new_gp64("ps_merge_b_ps1");
                 const x86::Gp source_a_lane =
-                    insn.opcode == Opcode::paired_single_merge10
+                    insn.opcode == Opcode::paired_single_merge10 ||
+                    insn.opcode == Opcode::paired_single_merge11
                         ? source_a_ps1 : source_a_ps0;
                 const x86::Gp source_b_lane =
-                    insn.opcode == Opcode::paired_single_merge01
+                    insn.opcode == Opcode::paired_single_merge01 ||
+                    insn.opcode == Opcode::paired_single_merge11
                         ? source_b_ps1 : source_b_ps0;
                 x86::Gp record_ptr = compiler.new_gp64("ps_merge_record");
                 compiler.mov(source_a_ps0, x86::qword_ptr(state,
@@ -6716,7 +6721,8 @@ RunResult Recompiler::run(EspressoCore& core, std::size_t max_steps)
         {
             const std::uint32_t cia = block->address + static_cast<std::uint32_t>(i * 4U);
             const DecodedInstruction& insn = block->instructions[i];
-            if (insn.opcode == Opcode::paired_single_merge01)
+            if (insn.opcode == Opcode::paired_single_merge01 ||
+                insn.opcode == Opcode::paired_single_merge11)
             {
                 InstructionHistoryEntry entry = native_history(insn, cia);
                 const NativePsMergeRecord& record = context.ps_merge_records[i];
