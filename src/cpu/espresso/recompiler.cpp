@@ -333,6 +333,22 @@ struct NativeExecutionContext
     std::uint32_t failed_width{};
     std::uint32_t failed_flags{};
     std::uint32_t failed_instruction_index{};
+
+    void begin_block(GuestMemory& guest_memory, std::uint32_t guest_cia) noexcept
+    {
+        memory = &guest_memory;
+        block_cia = guest_cia;
+        memory_access_calls = 0U;
+        failed = false;
+        guest_memory_fault = false;
+        unsupported_instruction = false;
+        exception = nullptr;
+        fault_cia = 0U;
+        failed_address = 0U;
+        failed_width = 0U;
+        failed_flags = 0U;
+        failed_instruction_index = 0U;
+    }
 };
 
 extern "C" std::uint32_t native_psq_load(
@@ -3914,6 +3930,7 @@ struct Recompiler::Impl
     CacheEntry* last_cache_entry{};
     std::uint32_t last_cache_address{};
     RecompilerStatistics stats{};
+    NativeExecutionContext execution_context{};
 
     static void capture_code_page_generations(
         CacheEntry& entry, const GuestMemory& memory) noexcept
@@ -7183,9 +7200,8 @@ RunResult Recompiler::run(EspressoCore& core, std::size_t max_steps)
             continue;
         }
 
-        NativeExecutionContext context{};
-        context.memory = &core.memory;
-        context.block_cia = block->address;
+        NativeExecutionContext& context = impl_->execution_context;
+        context.begin_block(core.memory, block->address);
 #ifndef NDEBUG
         const auto native_start = std::chrono::steady_clock::now();
 #endif
