@@ -2931,6 +2931,7 @@ extern "C" std::uint32_t native_store_single(
     const CpuState* state,
     std::uint32_t address,
     std::uint32_t fp_register,
+    std::uint32_t indexed,
     std::uint32_t instruction_index) noexcept
 {
     try
@@ -2952,7 +2953,7 @@ extern "C" std::uint32_t native_store_single(
         }
         NativeMemoryRecord& record = context->memory_records[instruction_index];
         record.address = address;
-        record.indexed = false;
+        record.indexed = indexed != 0U;
         record.fp_value = state->fpr[fp_register];
         const float single_value = static_cast<float>(
             std::bit_cast<double>(record.fp_value));
@@ -3265,6 +3266,7 @@ struct BlockCode
     case Opcode::store_halfword_update:
     case Opcode::store_single:
     case Opcode::store_single_update:
+    case Opcode::store_single_indexed:
     case Opcode::store_double:
     case Opcode::load_word_indexed:
     case Opcode::load_byte_zero_indexed:
@@ -3393,6 +3395,7 @@ struct BlockCode
     case Opcode::store_halfword_update: return "sthu";
     case Opcode::store_single: return "stfs";
     case Opcode::store_single_update: return "stfsu";
+    case Opcode::store_single_indexed: return "stfsx";
     case Opcode::store_double: return "stfd";
     case Opcode::load_word_indexed: return "lwzx";
     case Opcode::load_byte_zero_indexed: return "lbzx";
@@ -3432,6 +3435,7 @@ struct BlockCode
     case Opcode::load_double:
     case Opcode::store_single:
     case Opcode::store_single_update:
+    case Opcode::store_single_indexed:
     case Opcode::store_double:
     case Opcode::store_word:
     case Opcode::store_word_update:
@@ -3491,7 +3495,8 @@ struct BlockCode
         opcode == Opcode::store_word_indexed ||
         opcode == Opcode::store_byte_update || opcode == Opcode::store_byte_indexed ||
         opcode == Opcode::store_halfword_indexed ||
-        opcode == Opcode::store_single || opcode == Opcode::store_double ||
+        opcode == Opcode::store_single || opcode == Opcode::store_single_indexed ||
+        opcode == Opcode::store_double ||
         opcode == Opcode::store_word_update || opcode == Opcode::store_single_update;
 }
 
@@ -3502,6 +3507,7 @@ struct BlockCode
         opcode == Opcode::load_halfword_algebraic_indexed ||
         opcode == Opcode::store_word_indexed || opcode == Opcode::store_byte_indexed ||
         opcode == Opcode::store_halfword_indexed ||
+        opcode == Opcode::store_single_indexed ||
         opcode == Opcode::data_cache_block_store ||
         opcode == Opcode::data_cache_block_flush;
 }
@@ -5934,6 +5940,7 @@ struct Recompiler::Impl
             case Opcode::store_halfword_update:
             case Opcode::store_single:
             case Opcode::store_single_update:
+            case Opcode::store_single_indexed:
             case Opcode::store_double:
             case Opcode::load_word_indexed:
             case Opcode::load_byte_zero_indexed:
@@ -5954,7 +5961,8 @@ struct Recompiler::Impl
                     !store && !validation_only &&
                     guest_gpr_initialized[insn.destination];
                 const bool single_store = insn.opcode == Opcode::store_single ||
-                    insn.opcode == Opcode::store_single_update;
+                    insn.opcode == Opcode::store_single_update ||
+                    insn.opcode == Opcode::store_single_indexed;
                 const bool double_store = insn.opcode == Opcode::store_double;
                 const bool update_base = insn.opcode == Opcode::load_byte_update ||
                     insn.opcode == Opcode::load_word_update ||
@@ -6023,12 +6031,13 @@ struct Recompiler::Impl
                     compiler.invoke(Out(invoke), helper_address,
                         FuncSignature::build<std::uint32_t, NativeExecutionContext*,
                             CpuState*, std::uint32_t, std::uint32_t,
-                            std::uint32_t>(CallConvId::kCDecl));
+                            std::uint32_t, std::uint32_t>(CallConvId::kCDecl));
                     invoke->set_arg(0, context);
                     invoke->set_arg(1, state);
                     invoke->set_arg(2, address);
                     invoke->set_arg(3, imm(insn.fp_register));
-                    invoke->set_arg(4, imm(static_cast<std::uint32_t>(index)));
+                    invoke->set_arg(4, imm(indexed ? 1U : 0U));
+                    invoke->set_arg(5, imm(static_cast<std::uint32_t>(index)));
                 }
                 else if (double_store)
                 {
@@ -7134,7 +7143,8 @@ RunResult Recompiler::run(EspressoCore& core, std::size_t max_steps)
                 entry.fp_destination_value = record.fp_value;
             }
             else if (insn.opcode == Opcode::store_single ||
-                insn.opcode == Opcode::store_single_update)
+                insn.opcode == Opcode::store_single_update ||
+                insn.opcode == Opcode::store_single_indexed)
             {
                 entry.has_fp_source = true;
                 entry.fp_source_register = insn.fp_register;

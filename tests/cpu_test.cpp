@@ -27299,6 +27299,57 @@ void store_single_indexed_tests()
     assert(history.source_registers[0] == 4U && history.source_values[0] == 0x40U);
     assert(history.source_registers[1] == 5U && history.source_values[1] == 8U);
 
+    // Native JIT execution must preserve indexed-address operands and FP store history.
+    const auto execute_stfsx = [&](bool use_recompiler, std::uint8_t fp_source,
+                                   std::uint8_t base, std::uint8_t index,
+                                   std::uint32_t base_value,
+                                   std::uint32_t index_value,
+                                   std::uint64_t fp_value) {
+        EspressoCore differential(0x100U);
+        differential.state.gpr[base] = base_value;
+        differential.state.gpr[index] = index_value;
+        differential.state.fpr[fp_source] = fp_value;
+        differential.state.fpr_ps1[fp_source] = 0xDEADBEEF01234567ULL;
+        differential.state.cr = 0x12345678U;
+        differential.state.xer = 0xA00000A5U;
+        differential.state.fpscr = 0xCAFEBABEU;
+        differential.memory.write32_be(0U,
+            encode_stfsx(fp_source, base, index));
+        const std::uint32_t ea = (base == 0U ? 0U : base_value) + index_value;
+        differential.memory.write32_be(ea, 0xAABBCCDDU);
+        Recompiler recompiler;
+        RunResult execution = use_recompiler
+            ? recompiler.run(differential, 1U) : differential.run(1U);
+        return std::tuple{differential.state, differential.memory.read32_be(ea),
+            std::move(execution)};
+    };
+    const auto interpreted = execute_stfsx(false, 7U, 4U, 5U, 0x40U, 8U,
+        0x3FF8000000000000ULL);
+    const auto compiled = execute_stfsx(true, 7U, 4U, 5U, 0x40U, 8U,
+        0x3FF8000000000000ULL);
+    assert(std::get<0>(compiled).gpr == std::get<0>(interpreted).gpr);
+    assert(std::get<0>(compiled).fpr == std::get<0>(interpreted).fpr);
+    assert(std::get<0>(compiled).fpr_ps1 == std::get<0>(interpreted).fpr_ps1);
+    assert(std::get<0>(compiled).cr == std::get<0>(interpreted).cr);
+    assert(std::get<0>(compiled).xer == std::get<0>(interpreted).xer);
+    assert(std::get<0>(compiled).fpscr == std::get<0>(interpreted).fpscr);
+    assert(std::get<1>(compiled) == std::get<1>(interpreted));
+    assert(format_instruction_history(std::get<2>(compiled)) ==
+           format_instruction_history(std::get<2>(interpreted)));
+    assert(std::get<2>(compiled).instruction_history.front().opcode_name == "stfsx");
+    assert(std::get<2>(compiled).instruction_history.front().has_fp_source);
+    assert(std::get<2>(compiled).instruction_history.front().has_stored_single_value);
+    assert(std::get<2>(compiled).instruction_history.front().source_count == 2U);
+
+    const auto zero_base_interpreted = execute_stfsx(false, 3U, 0U, 0U,
+        0xDEADBEEFU, 0x40U, 0xBFF0000000000000ULL);
+    const auto zero_base_compiled = execute_stfsx(true, 3U, 0U, 0U,
+        0xDEADBEEFU, 0x40U, 0xBFF0000000000000ULL);
+    assert(std::get<1>(zero_base_compiled) == 0xBF800000U);
+    assert(std::get<1>(zero_base_compiled) == std::get<1>(zero_base_interpreted));
+    assert(format_instruction_history(std::get<2>(zero_base_compiled)) ==
+           format_instruction_history(std::get<2>(zero_base_interpreted)));
+
     // rA=0 is zero, but rB=0 remains a normal GPR operand.
     EspressoCore zero_base(0x100U);
     zero_base.state.gpr[0] = 0x40U;
