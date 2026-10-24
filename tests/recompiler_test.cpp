@@ -3293,6 +3293,45 @@ void recompiler_direct_flat_halfword_load_tests()
         assert(recompiler.statistics().interpreter_fallbacks == 0U);
         assert(recompiler.statistics().memory_slow_path_calls == 0U);
     }
+
+    // When code is in a mapped region, a one-byte flat backing store still
+    // permits an in-bounds byte load but must send a halfword load to the
+    // checked helper, which reports the missing second byte.
+    constexpr std::uint32_t mapped_code = 0x1000U;
+    constexpr std::uint8_t mapped_base = 6U;
+    EspressoCore one_byte_memory(1U);
+    one_byte_memory.memory.map_region(mapped_code, 0x1000U);
+    const std::uint32_t lbz = (34U << 26U) |
+        (static_cast<std::uint32_t>(destination) << 21U) |
+        (static_cast<std::uint32_t>(mapped_base) << 16U);
+    one_byte_memory.memory.write32_be(mapped_code, lbz);
+    one_byte_memory.memory.write8(0U, 0xA5U);
+    one_byte_memory.state.cia = mapped_code;
+    one_byte_memory.state.gpr[mapped_base] = 0U;
+    Recompiler byte_recompiler;
+    const RunResult byte_result = byte_recompiler.run(one_byte_memory, 1U);
+    assert(byte_result.reason == StopReason::instruction_limit);
+    assert(one_byte_memory.state.gpr[destination] == 0xA5U);
+    assert(byte_recompiler.statistics().native_instructions == 1U);
+    assert(byte_recompiler.statistics().memory_slow_path_calls == 0U);
+
+    EspressoCore short_halfword_memory(1U);
+    short_halfword_memory.memory.map_region(mapped_code, 0x1000U);
+    const std::uint32_t lhz = (40U << 26U) |
+        (static_cast<std::uint32_t>(destination) << 21U) |
+        (static_cast<std::uint32_t>(mapped_base) << 16U);
+    short_halfword_memory.memory.write32_be(mapped_code, lhz);
+    short_halfword_memory.memory.write8(0U, 0xA5U);
+    short_halfword_memory.state.cia = mapped_code;
+    short_halfword_memory.state.gpr[mapped_base] = 0U;
+    short_halfword_memory.state.gpr[destination] = 0xDEADBEEFU;
+    Recompiler halfword_recompiler;
+    const RunResult halfword_result = halfword_recompiler.run(
+        short_halfword_memory, 1U);
+    assert(halfword_result.reason == StopReason::memory_fault);
+    assert(halfword_result.detail.find("read 2 byte(s)") != std::string::npos);
+    assert(short_halfword_memory.state.gpr[destination] == 0xDEADBEEFU);
+    assert(halfword_recompiler.statistics().memory_slow_path_calls == 1U);
 }
 
 void recompiler_lwzu_differential_tests()
@@ -4115,6 +4154,7 @@ void recompiler_memory_tests()
     assert(watched_store_events[0].writer_cia == 0x100U);
     assert(watched_store_events[0].access_address == 0x200U);
     assert(watched_store_events[0].watched_value == 0xAABBCCDDU);
+    assert(watched_store_recompiler.statistics().memory_slow_path_calls == 1U);
 
     EspressoCore interpreted(0x1000U);
     EspressoCore compiled(0x1000U);
@@ -4147,8 +4187,13 @@ void recompiler_memory_tests()
     assert(compiled.memory.read32_be(0x204U) == 0xFEDCBA98U);
     assert(compiled.memory.read8(0x208U) == 0x98U);
     assert(compiled.memory.read16_be(0x20AU) == 0xBA98U);
+    assert(compiled.memory.write_generation() == interpreted.memory.write_generation());
+    assert(compiled.memory.page_write_generation(0x200U) ==
+        interpreted.memory.page_write_generation(0x200U));
     assert(recompiler.statistics().native_instructions == program.size());
     assert(recompiler.statistics().interpreter_fallbacks == 0U);
+    // LHA and the three integer stores continue through the checked helper.
+    assert(recompiler.statistics().memory_slow_path_calls == 4U);
     const std::string history = format_instruction_history(actual);
     assert(history.find("lwz") != std::string::npos);
     assert(history.find("0x00000200") != std::string::npos);
@@ -4185,6 +4230,42 @@ void recompiler_memory_tests()
     assert(indexed_compiled.state.gpr[3] == 0xFEDCBA98U);
     assert(indexed_compiled.state.gpr[6] == 0x000000FEU);
     assert(indexed_compiled.state.gpr[7] == 0xFFFF8001U);
+
+    // A checked store crossing a page boundary advances both page generations
+    // and the global write generation exactly once.
+    EspressoCore boundary_store(0x2000U);
+    boundary_store.memory.write32_be(0x100U, 0x90A40000U); // stw r5,0(r4)
+    boundary_store.state.cia = 0x100U;
+    boundary_store.state.gpr[4] = 0xFFEU;
+    boundary_store.state.gpr[5] = 0x12345678U;
+    const std::uint64_t write_generation_before =
+        boundary_store.memory.write_generation();
+    const std::uint64_t first_page_before =
+        boundary_store.memory.page_write_generation(0xFFEU);
+    const std::uint64_t second_page_before =
+        boundary_store.memory.page_write_generation(0x1000U);
+    Recompiler boundary_recompiler;
+    const RunResult boundary_result = boundary_recompiler.run(boundary_store, 1U);
+    assert(boundary_result.steps == 1U);
+    assert(boundary_store.memory.read32_be(0xFFEU) == 0x12345678U);
+    assert(boundary_store.memory.write_generation() == write_generation_before + 1U);
+    assert(boundary_store.memory.page_write_generation(0xFFEU) == first_page_before + 1U);
+    assert(boundary_store.memory.page_write_generation(0x1000U) == second_page_before + 1U);
+    assert(boundary_recompiler.statistics().memory_slow_path_calls == 1U);
+
+    // A high guest alias must use the checked store path and still update the
+    // flat backing bytes and generation counters coherently.
+    EspressoCore aliased_store(0x3000U);
+    aliased_store.memory.map_alias(0x4000U, 0x1000U, 0x1000U);
+    aliased_store.memory.write32_be(0x100U, 0x90A40000U);
+    aliased_store.state.cia = 0x100U;
+    aliased_store.state.gpr[4] = 0x4000U;
+    aliased_store.state.gpr[5] = 0x89ABCDEFU;
+    Recompiler alias_store_recompiler;
+    const RunResult alias_store_result = alias_store_recompiler.run(aliased_store, 1U);
+    assert(alias_store_result.steps == 1U);
+    assert(aliased_store.memory.read32_be(0x1000U) == 0x89ABCDEFU);
+    assert(alias_store_recompiler.statistics().memory_slow_path_calls == 1U);
 
     // Memory instructions must observe values still resident in the block-local
     // guest-register cache, including a freshly computed base and store source.
