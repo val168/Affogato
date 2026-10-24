@@ -3956,7 +3956,8 @@ void floating_multiply_add_single_tests()
     const auto execute = [&](std::uint8_t destination, std::uint8_t source_a,
                              std::uint8_t source_c, std::uint8_t source_b,
                              std::uint64_t a_raw, std::uint64_t c_raw,
-                             std::uint64_t b_raw, std::uint32_t fpscr_value = 0U) {
+                             std::uint64_t b_raw, std::uint32_t fpscr_value = 0U,
+                             bool use_recompiler = false) {
         EspressoCore core(4U);
         for (std::size_t index = 0; index < core.state.gpr.size(); ++index)
         {
@@ -3981,7 +3982,9 @@ void floating_multiply_add_single_tests()
         core.memory.write32_be(
             0U, encode_fmadds(destination, source_a, source_c, source_b));
 
-        Execution execution{.state = {}, .result = core.run(1U)};
+        Recompiler recompiler;
+        Execution execution{.state = {}, .result = use_recompiler
+            ? recompiler.run(core, 1U) : core.run(1U)};
         assert(execution.result.reason == StopReason::instruction_limit);
         assert(core.state.cia == 4U);
         assert(core.state.gpr == gpr_before);
@@ -4155,6 +4158,43 @@ void floating_multiply_add_single_tests()
         7U, 1U, 2U, 3U, one, signaling_nan, one, fpscr::ve_mask);
     assert(snan_enabled.state.fpr[7] == sentinel_ps0);
     assert(snan_enabled.state.fpr_ps1[7] == sentinel_ps1);
+
+    const auto assert_jit_matches = [&](std::uint8_t destination,
+                                        std::uint8_t source_a,
+                                        std::uint8_t source_c,
+                                        std::uint8_t source_b,
+                                        std::uint64_t a_raw,
+                                        std::uint64_t c_raw,
+                                        std::uint64_t b_raw,
+                                        std::uint32_t initial_fpscr = 0U) {
+        const Execution interpreted = execute(destination, source_a, source_c,
+            source_b, a_raw, c_raw, b_raw, initial_fpscr);
+        const Execution compiled = execute(destination, source_a, source_c,
+            source_b, a_raw, c_raw, b_raw, initial_fpscr, true);
+        assert(compiled.result.steps == interpreted.result.steps);
+        assert(compiled.state.gpr == interpreted.state.gpr);
+        assert(compiled.state.fpr == interpreted.state.fpr);
+        assert(compiled.state.fpr_ps1 == interpreted.state.fpr_ps1);
+        assert(compiled.state.cr == interpreted.state.cr);
+        assert(compiled.state.xer == interpreted.state.xer);
+        assert(compiled.state.lr == interpreted.state.lr);
+        assert(compiled.state.ctr == interpreted.state.ctr);
+        assert(compiled.state.fpscr == interpreted.state.fpscr);
+        assert(format_instruction_history(compiled.result) ==
+               format_instruction_history(interpreted.result));
+    };
+    assert_jit_matches(7U, 1U, 2U, 3U, two, three, four);
+    assert_jit_matches(7U, 1U, 2U, 3U, a_near_one, c_near_one,
+                       negative_rounded_product);
+    assert_jit_matches(7U, 1U, 2U, 3U, precision_a, precision_c, positive_zero);
+    assert_jit_matches(1U, 1U, 2U, 3U, two, three, four); // D aliases A
+    assert_jit_matches(3U, 1U, 2U, 3U, two, three, four); // D aliases B
+    assert_jit_matches(7U, 1U, 2U, 3U, signaling_nan, one, quiet_nan);
+    assert_jit_matches(7U, 1U, 2U, 3U, signaling_nan, one, quiet_nan,
+                       fpscr::ve_mask);
+    assert_jit_matches(7U, 1U, 2U, 3U, positive_inf, positive_zero, one);
+    assert_jit_matches(7U, 1U, 2U, 3U, positive_inf, one, negative_inf,
+                       fpscr::ve_mask);
 }
 
 void floating_multiply_single_tests()
