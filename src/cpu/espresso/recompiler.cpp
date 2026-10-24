@@ -2018,7 +2018,8 @@ struct BlockCode
 {
     if (insn.record && (insn.opcode == Opcode::bitwise_or ||
         insn.opcode == Opcode::bitwise_and || insn.opcode == Opcode::bitwise_xor ||
-        insn.opcode == Opcode::bitwise_nor))
+        insn.opcode == Opcode::bitwise_nor ||
+        insn.opcode == Opcode::bitwise_and_complement))
     {
         return true;
     }
@@ -2078,6 +2079,7 @@ struct BlockCode
     case Opcode::subtract_from_carrying:
     case Opcode::bitwise_or:
     case Opcode::bitwise_and:
+    case Opcode::bitwise_and_complement:
     case Opcode::bitwise_xor:
     case Opcode::bitwise_nor:
     case Opcode::move_condition_register_field:
@@ -2194,6 +2196,7 @@ struct BlockCode
     case Opcode::instruction_sync: return "isync";
     case Opcode::bitwise_or: return "or";
     case Opcode::bitwise_and: return "and";
+    case Opcode::bitwise_and_complement: return "andc";
     case Opcode::bitwise_xor: return "xor";
     case Opcode::bitwise_nor: return "nor";
     case Opcode::compare_signed_immediate: return "cmpwi";
@@ -2978,13 +2981,22 @@ struct Recompiler::Impl
             case Opcode::subtract_from:
             case Opcode::bitwise_or:
             case Opcode::bitwise_and:
+            case Opcode::bitwise_and_complement:
             case Opcode::bitwise_xor:
             case Opcode::bitwise_nor:
             {
                 x86::Gp lhs = compiler.new_gp32("lhs");
                 x86::Gp source_a = read_guest_gpr(insn.base);
                 x86::Gp source_b = read_guest_gpr(insn.source);
-                if (insn.opcode == Opcode::add || insn.opcode == Opcode::bitwise_or ||
+                if (insn.opcode == Opcode::bitwise_and_complement)
+                {
+                    compiler.mov(lhs, source_b);
+                    x86::Gp complemented = compiler.new_gp32("andc_complemented_rhs");
+                    compiler.mov(complemented, source_a);
+                    compiler.not_(complemented);
+                    compiler.and_(lhs, complemented);
+                }
+                else if (insn.opcode == Opcode::add || insn.opcode == Opcode::bitwise_or ||
                     insn.opcode == Opcode::bitwise_and || insn.opcode == Opcode::bitwise_xor ||
                     insn.opcode == Opcode::bitwise_nor)
                 {
@@ -3011,6 +3023,14 @@ struct Recompiler::Impl
                         compiler.or_(lhs, rhs);
                         compiler.not_(lhs);
                     }
+                }
+                if (insn.opcode == Opcode::bitwise_and_complement ||
+                    insn.opcode == Opcode::add ||
+                    insn.opcode == Opcode::bitwise_or ||
+                    insn.opcode == Opcode::bitwise_and ||
+                    insn.opcode == Opcode::bitwise_xor ||
+                    insn.opcode == Opcode::bitwise_nor)
+                {
                     write_guest_gpr(insn.destination, lhs);
                     if (insn.record)
                     {

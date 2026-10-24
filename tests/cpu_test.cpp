@@ -8521,6 +8521,74 @@ void bitwise_nand_nor_or_complement_tests()
     }
 }
 
+void bitwise_and_complement_recompiler_tests()
+{
+    struct Case
+    {
+        std::uint8_t destination;
+        std::uint8_t source;
+        std::uint8_t base;
+        std::uint32_t source_value;
+        std::uint32_t base_value;
+        bool record;
+        bool so;
+    };
+    constexpr std::array<Case, 6> cases{{
+        {9U, 9U, 7U, 0xFFFF0000U, 0x00FF00FFU, false, false},
+        {3U, 4U, 5U, 0xF0F0AA55U, 0x0FF00FF0U, false, false},
+        {4U, 4U, 5U, 0xAAAAAAAAU, 0x55555555U, true, false},
+        {5U, 4U, 5U, 0x00000000U, 0xFFFFFFFFU, true, true},
+        {3U, 3U, 3U, 0x80000001U, 0x80000001U, true, false},
+        {3U, 4U, 5U, 0xFFFFFFFFU, 0x80000000U, true, false},
+    }};
+
+    for (const Case& c : cases)
+    {
+        const std::uint32_t word = (31U << 26U) |
+            (static_cast<std::uint32_t>(c.source) << 21U) |
+            (static_cast<std::uint32_t>(c.destination) << 16U) |
+            (static_cast<std::uint32_t>(c.base) << 11U) |
+            (60U << 1U) | static_cast<std::uint32_t>(c.record);
+        const DecodedInstruction decoded = decode(word);
+        assert(decoded.opcode == Opcode::bitwise_and_complement);
+        assert(decoded.destination == c.destination);
+        assert(decoded.source == c.source);
+        assert(decoded.base == c.base);
+
+        EspressoCore interpreted(8U);
+        EspressoCore compiled(8U);
+        for (std::uint32_t reg = 0U; reg < 32U; ++reg)
+        {
+            interpreted.state.gpr[reg] = compiled.state.gpr[reg] =
+                0x13579BDFU ^ (reg * 0x01010101U);
+        }
+        interpreted.state.gpr[c.source] = compiled.state.gpr[c.source] = c.source_value;
+        interpreted.state.gpr[c.base] = compiled.state.gpr[c.base] = c.base_value;
+        interpreted.state.cr = compiled.state.cr = 0x12345678U;
+        interpreted.state.xer = compiled.state.xer = c.so ? 0xA00000A5U : 0x200000A5U;
+        interpreted.state.lr = compiled.state.lr = 0x11223344U;
+        interpreted.state.ctr = compiled.state.ctr = 0x55667788U;
+        interpreted.memory.write32_be(0U, word);
+        compiled.memory.write32_be(0U, word);
+
+        const RunResult interpreted_result = interpreted.run(1U);
+        Recompiler recompiler;
+        const RunResult compiled_result = recompiler.run(compiled, 1U);
+        const std::uint32_t expected = c.source_value & ~c.base_value;
+        assert(interpreted_result.steps == 1U && compiled_result.steps == 1U);
+        assert(interpreted.state.gpr[c.destination] == expected);
+        assert(compiled.state.gpr == interpreted.state.gpr);
+        assert(compiled.state.cr == interpreted.state.cr);
+        assert(compiled.state.xer == interpreted.state.xer);
+        assert(compiled.state.lr == interpreted.state.lr);
+        assert(compiled.state.ctr == interpreted.state.ctr);
+        assert(compiled_result.instruction_history.size() == 1U);
+        assert(compiled_result.instruction_history[0].opcode_name ==
+               (c.record ? "andc." : "andc"));
+        assert(compiled_result.instruction_history[0].completed);
+    }
+}
+
 void arithmetic_shift_right_word_tests()
 {
     const std::uint32_t word = encode_xo(4U, 3U, 5U, 792U);
@@ -30627,6 +30695,7 @@ int main(int argc, char* argv[])
     divide_word_signed_tests();
     divide_word_signed_overflow_tests();
     bitwise_nand_nor_or_complement_tests();
+    bitwise_and_complement_recompiler_tests();
     arithmetic_shift_right_word_tests();
     add_carrying_tests();
     add_carrying_overflow_tests();
