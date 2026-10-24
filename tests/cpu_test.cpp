@@ -3721,7 +3721,8 @@ void floating_subtract_single_tests()
     };
     const auto execute = [&](std::uint8_t destination, std::uint8_t source_a,
                              std::uint8_t source_b, std::uint64_t a_raw,
-                             std::uint64_t b_raw, std::uint32_t fpscr_value = 0U) {
+                             std::uint64_t b_raw, std::uint32_t fpscr_value = 0U,
+                             bool use_recompiler = false) {
         EspressoCore core(4U);
         for (std::size_t index = 0U; index < core.state.gpr.size(); ++index)
         {
@@ -3747,7 +3748,10 @@ void floating_subtract_single_tests()
         const std::uint32_t ctr_before = core.state.ctr;
         core.memory.write32_be(0U, encode_fsubs(destination, source_a, source_b));
 
-        Execution execution{.state = {}, .result = core.run(1U)};
+        Recompiler recompiler;
+        const RunResult run_result = use_recompiler
+            ? recompiler.run(core, 1U) : core.run(1U);
+        Execution execution{.state = {}, .result = run_result};
         assert(execution.result.reason == StopReason::instruction_limit);
         assert(core.state.cia == 4U);
         assert(core.state.gpr == gprs_before);
@@ -3856,6 +3860,28 @@ void floating_subtract_single_tests()
     assert(trace.find("f1=0.5 [0x3FE0000000000000]") != std::string::npos);
     assert(trace.find("-> f10=0.5 [0x3FE0000000000000] single=") !=
            std::string::npos);
+
+    const auto assert_jit_matches = [&](std::uint64_t a_raw, std::uint64_t b_raw,
+                                        std::uint32_t fpscr_value = 0U) {
+        const Execution oracle = execute(3U, 1U, 2U, a_raw, b_raw, fpscr_value);
+        const Execution compiled = execute(3U, 1U, 2U, a_raw, b_raw,
+                                           fpscr_value, true);
+        assert(compiled.state.gpr == oracle.state.gpr);
+        assert(compiled.state.fpr == oracle.state.fpr);
+        assert(compiled.state.fpr_ps1 == oracle.state.fpr_ps1);
+        assert(compiled.state.cr == oracle.state.cr);
+        assert(compiled.state.xer == oracle.state.xer);
+        assert(compiled.state.fpscr == oracle.state.fpscr);
+        assert(format_instruction_history(compiled.result) ==
+               format_instruction_history(oracle.result));
+    };
+    assert_jit_matches(plus_three, plus_one);
+    assert_jit_matches(plus_one, 0x3E60000000000000ULL);
+    assert_jit_matches(plus_inf, plus_inf);
+    assert_jit_matches(plus_inf, plus_inf, fpscr::ve_mask);
+    assert_jit_matches(snan, plus_one);
+    assert_jit_matches(snan, plus_one, fpscr::ve_mask);
+    assert_jit_matches(minus_zero, plus_zero);
 }
 
 void floating_negative_multiply_add_single_tests()
