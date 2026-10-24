@@ -4,6 +4,7 @@
 
 ## WWHD checkpoint
 
+- Native JIT `fmadd` now uses a fused `std::fma` helper with pre-write A/B/C snapshots, architectural A→C→B NaN priority, `VXSNAN`/`VXIMZ`/`VXISI`, VE write suppression, PS0-only commit, and the interpreter's scoped exactness/FPRF policy. Differential tests cover the cancellation-sensitive fused case, NaN propagation, invalid exceptions, suppression, source/destination aliases, and history. Debug/Release builds and CTest pass. WWHD remains at 6,080,538 instructions and the same null-CTR fetch (`0x46524D48`); fallbacks fell by 149,463 to 294,199. BOTW remains at 860,172 and the same stop with 3,545 fallbacks. No wall-time improvement is claimed.
 - Native JIT `fmul` now uses a focused helper that snapshots PS0 operands, preserves the interpreter's NaN payload/`VXSNAN`/`VXIMZ` behavior and VE suppression, computes binary64 multiplication and normal-case rounding status, and limits exceptional subnormal/overflow status to the existing FPRF-only policy. Differential tests cover inexact arithmetic, qNaN/sNaN, invalid-enabled suppression, source/destination aliasing, and trace naming. Debug/Release builds and CTest pass. WWHD remains at 6,080,538 instructions and the same null-CTR fetch (`0x46524D48`); fallbacks fell by 71,663 to 443,662. BOTW remains at 860,172 and the same stop; fallbacks fell by 53 to 3,545. No wall-time improvement is claimed.
 - Latest dual-game Release regression after native `stbu`: WWHD remains at 6,080,538 instructions, stop CIA `0`, GPR3/4/5 `0/512/256`, unsupported null-target fetch `0x46524D48`; 5,532,557 native instructions, 547,982 interpreter fallbacks, 13,994 compiled blocks. BOTW remains at 860,172 instructions, stop CIA `0`, GPR3/4/5 `0/4,194,304/64`, same unsupported fetch; 856,544 native instructions, 3,629 fallbacks, 18,079 blocks. BOTW's 33 `stbu` calls are now native; no wall-time speedup is claimed.
 - Latest dual-game Release regression after native `mullw`: WWHD remains at 6,080,538 instructions, stop CIA `0`, GPR3/4/5 `0/512/256`, unsupported null-target fetch `0x46524D48`; 5,532,474 native instructions, 548,065 interpreter fallbacks, 14,000 compiled blocks. BOTW remains at 860,172 instructions, stop CIA `0`, GPR3/4/5 `0/4,194,304/64`, same unsupported fetch; 856,511 native instructions, 3,662 fallbacks, 18,101 blocks. Both checkpoints are unchanged; BOTW `mullw` fallbacks are gone; no wall-time speedup is claimed.
@@ -82,6 +83,7 @@
 
 ## Completed commits
 
+- `425cb91` - `jit: emit native fmul`
 - `995f95c` - `jit: emit native frsp`
 - `b92c642` - `jit: emit native stbu`
 - `c27ffb3` - `jit: emit native mullw`
