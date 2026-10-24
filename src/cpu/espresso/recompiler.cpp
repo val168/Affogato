@@ -213,6 +213,13 @@ struct NativeFselRecord
     std::uint64_t result_raw{};
 };
 
+struct NativeMulhwuRecord
+{
+    std::uint32_t source_a{};
+    std::uint32_t source_b{};
+    std::uint32_t result{};
+};
+
 struct NativeAddcRecord
 {
     std::uint32_t operand_a{};
@@ -267,6 +274,7 @@ struct NativeExecutionContext
     std::array<NativeDivwRecord, 64> divw_records{};
     std::array<NativeSubfRecord, 64> subf_records{};
     std::array<NativeFselRecord, 64> fsel_records{};
+    std::array<NativeMulhwuRecord, 64> mulhwu_records{};
     std::array<NativeAddcRecord, 64> addc_records{};
     std::array<NativeAddzeRecord, 64> addze_records{};
     std::array<NativeExtsbRecord, 64> extsb_records{};
@@ -3117,6 +3125,10 @@ struct BlockCode
     {
         return true;
     }
+    if (insn.opcode == Opcode::multiply_high_word_unsigned)
+    {
+        return true;
+    }
     if (insn.opcode == Opcode::divide_word_signed)
     {
         return true;
@@ -3287,6 +3299,7 @@ struct BlockCode
     case Opcode::addis: return "addis";
     case Opcode::multiply_low_immediate: return "mulli";
     case Opcode::multiply_low_word: return "mullw";
+    case Opcode::multiply_high_word_unsigned: return "mulhwu";
     case Opcode::divide_word_unsigned: return "divwu";
     case Opcode::divide_word_signed: return "divw";
     case Opcode::extend_sign_byte: return "extsb";
@@ -4015,6 +4028,61 @@ struct Recompiler::Impl
                     compiler.or_(less, xer_so);
                     compiler.shl(less, imm(28U));
                     x86::Gp cr = compiler.new_gp32("mullw_cr0");
+                    compiler.mov(cr, x86::dword_ptr(
+                        state, static_cast<std::int32_t>(offsetof(CpuState, cr))));
+                    compiler.and_(cr, imm(0x0FFFFFFFU));
+                    compiler.or_(cr, less);
+                    compiler.mov(x86::dword_ptr(
+                        state, static_cast<std::int32_t>(offsetof(CpuState, cr))), cr);
+                }
+                break;
+            }
+            case Opcode::multiply_high_word_unsigned:
+            {
+                const std::size_t record_base =
+                    offsetof(NativeExecutionContext, mulhwu_records) +
+                    index * sizeof(NativeMulhwuRecord);
+                const x86::Gp source_a = read_guest_gpr(insn.base);
+                const x86::Gp source_b = read_guest_gpr(insn.source);
+                compiler.mov(x86::dword_ptr(context, static_cast<std::int32_t>(
+                    record_base + offsetof(NativeMulhwuRecord, source_a))), source_a);
+                compiler.mov(x86::dword_ptr(context, static_cast<std::int32_t>(
+                    record_base + offsetof(NativeMulhwuRecord, source_b))), source_b);
+                x86::Gp product = compiler.new_gp64("mulhwu_product");
+                x86::Gp rhs = compiler.new_gp64("mulhwu_rhs");
+                compiler.mov(product.r32(), source_a);
+                compiler.mov(rhs.r32(), source_b);
+                compiler.imul(product, rhs);
+                compiler.shr(product, imm(32U));
+                x86::Gp result = compiler.new_gp32("mulhwu_result");
+                compiler.mov(result, product.r32());
+                compiler.mov(x86::dword_ptr(context, static_cast<std::int32_t>(
+                    record_base + offsetof(NativeMulhwuRecord, result))), result);
+                write_guest_gpr(insn.destination, result);
+                if (insn.record)
+                {
+                    compiler.test(result, result);
+                    x86::Gp less = compiler.new_gp32("mulhwu_cr0_lt");
+                    x86::Gp greater = compiler.new_gp32("mulhwu_cr0_gt");
+                    x86::Gp equal = compiler.new_gp32("mulhwu_cr0_eq");
+                    compiler.mov(less, imm(0U));
+                    compiler.setl(less.r8());
+                    compiler.mov(greater, imm(0U));
+                    compiler.setg(greater.r8());
+                    compiler.mov(equal, imm(0U));
+                    compiler.sete(equal.r8());
+                    compiler.shl(less, imm(3U));
+                    compiler.shl(greater, imm(2U));
+                    compiler.shl(equal, imm(1U));
+                    compiler.or_(less, greater);
+                    compiler.or_(less, equal);
+                    x86::Gp xer_so = compiler.new_gp32("mulhwu_xer_so");
+                    compiler.mov(xer_so, x86::dword_ptr(
+                        state, static_cast<std::int32_t>(offsetof(CpuState, xer))));
+                    compiler.shr(xer_so, imm(31U));
+                    compiler.or_(less, xer_so);
+                    compiler.shl(less, imm(28U));
+                    x86::Gp cr = compiler.new_gp32("mulhwu_cr0");
                     compiler.mov(cr, x86::dword_ptr(
                         state, static_cast<std::int32_t>(offsetof(CpuState, cr))));
                     compiler.and_(cr, imm(0x0FFFFFFFU));
@@ -6864,6 +6932,25 @@ RunResult Recompiler::run(EspressoCore& core, std::size_t max_steps)
                 entry.carry_input = record.carry_in != 0U;
                 entry.has_carry_result = true;
                 entry.carry_result = record.carry_out != 0U;
+                core.append_instruction_history(std::move(entry));
+                continue;
+            }
+            if (insn.opcode == Opcode::multiply_high_word_unsigned)
+            {
+                InstructionHistoryEntry entry = native_history(insn, cia);
+                const NativeMulhwuRecord& record = context.mulhwu_records[i];
+                entry.source_registers[0] = insn.base;
+                entry.source_values[0] = record.source_a;
+                entry.source_count = 1U;
+                if (insn.source != insn.base)
+                {
+                    entry.source_registers[1] = insn.source;
+                    entry.source_values[1] = record.source_b;
+                    entry.source_count = 2U;
+                }
+                entry.has_destination = true;
+                entry.destination_register = insn.destination;
+                entry.destination_value = record.result;
                 core.append_instruction_history(std::move(entry));
                 continue;
             }

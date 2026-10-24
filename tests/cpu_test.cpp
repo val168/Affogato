@@ -10782,6 +10782,45 @@ void multiply_high_word_unsigned_tests()
     const std::string trace = format_instruction_history(wind_result.second);
     assert(trace.find("mulhwu r0=0x00000001 r11=0x000041A7 -> r3=0x00000000") !=
            std::string::npos);
+
+    const auto assert_jit_matches = [&](std::uint8_t destination,
+                                        std::uint8_t ra, std::uint8_t rb,
+                                        std::uint32_t lhs, std::uint32_t rhs,
+                                        bool record = false, bool so = false) {
+        EspressoCore interpreted(8U);
+        EspressoCore compiled(8U);
+        for (std::uint32_t reg = 0U; reg < 32U; ++reg)
+        {
+            interpreted.state.gpr[reg] = compiled.state.gpr[reg] =
+                0xA5A5A5A5U ^ (reg * 0x01010101U);
+        }
+        interpreted.state.gpr[ra] = compiled.state.gpr[ra] = lhs;
+        interpreted.state.gpr[rb] = compiled.state.gpr[rb] = rhs;
+        interpreted.state.cr = compiled.state.cr = 0x12345678U;
+        interpreted.state.xer = compiled.state.xer = so ? 0x800000A5U : 0x000000A5U;
+        const std::uint32_t word = encode_mulhwu(destination, ra, rb, record);
+        interpreted.memory.write32_be(0U, word);
+        compiled.memory.write32_be(0U, word);
+        const RunResult oracle = interpreted.run(1U);
+        Recompiler recompiler;
+        const RunResult actual = recompiler.run(compiled, 1U);
+        assert(actual.steps == oracle.steps && actual.reason == oracle.reason);
+        assert(compiled.state.gpr == interpreted.state.gpr);
+        assert(compiled.state.cr == interpreted.state.cr);
+        assert(compiled.state.xer == interpreted.state.xer);
+        assert(compiled.state.lr == interpreted.state.lr);
+        assert(compiled.state.ctr == interpreted.state.ctr);
+        assert(compiled.state.cia == interpreted.state.cia);
+        assert(format_instruction_history(actual) == format_instruction_history(oracle));
+    };
+    assert_jit_matches(3U, 4U, 5U, 0xFFFFFFFFU, 0xFFFFFFFFU);
+    assert_jit_matches(3U, 4U, 5U, 0U, 0xFFFFFFFFU);
+    assert_jit_matches(3U, 4U, 5U, 0xFFFFFFFFU, 2U);
+    assert_jit_matches(3U, 4U, 5U, 0x80000000U, 2U);
+    assert_jit_matches(4U, 4U, 5U, 0xFFFFFFFFU, 2U); // destination aliases A
+    assert_jit_matches(5U, 4U, 5U, 0xFFFFFFFFU, 2U); // destination aliases B
+    assert_jit_matches(5U, 5U, 5U, 0xFFFFFFFFU, 0xFFFFFFFFU, true); // all alias
+    assert_jit_matches(6U, 4U, 5U, 0xFFFFFFFFU, 0xFFFFFFFFU, true, true);
 }
 
 void divide_word_unsigned_tests()
