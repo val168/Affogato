@@ -61,6 +61,13 @@ struct NativeFrspRecord
     bool wrote_result{};
 };
 
+struct NativeFrsqrteRecord
+{
+    std::uint64_t source_raw{};
+    std::uint64_t result_raw{};
+    bool wrote_result{};
+};
+
 struct NativeFmulRecord
 {
     std::uint64_t a_raw{};
@@ -208,6 +215,7 @@ struct NativeExecutionContext
     std::array<NativeFpCompareRecord, 64> fp_compare_records{};
     std::array<NativeFpIntegerConversionRecord, 64> fp_integer_conversion_records{};
     std::array<NativeFrspRecord, 64> frsp_records{};
+    std::array<NativeFrsqrteRecord, 64> frsqrte_records{};
     std::array<NativeFmulRecord, 64> fmul_records{};
     std::array<NativeFsubRecord, 64> fdiv_records{};
     std::array<NativePsSumRecord, 64> ps_sum0_records{};
@@ -784,6 +792,79 @@ extern "C" void native_frsp(
     state->fpr[destination] = record.result_raw;
     state->fpr_ps1[destination] = record.result_raw;
     record.wrote_result = true;
+}
+
+extern "C" void native_frsqrte(
+    NativeExecutionContext* context,
+    CpuState* state,
+    std::uint32_t destination,
+    std::uint32_t source_register,
+    std::uint32_t instruction_index) noexcept
+{
+    constexpr std::uint64_t exponent_mask = 0x7FF0000000000000ULL;
+    constexpr std::uint64_t fraction_mask = 0x000FFFFFFFFFFFFFULL;
+    constexpr std::uint64_t sign_mask = 0x8000000000000000ULL;
+    constexpr std::uint64_t quiet_bit = 0x0008000000000000ULL;
+    constexpr std::uint64_t infinity = 0x7FF0000000000000ULL;
+    if (destination >= state->fpr.size() || source_register >= state->fpr.size() ||
+        instruction_index >= context->frsqrte_records.size())
+    {
+        context->failed = true;
+        context->failed_instruction_index = instruction_index;
+        return;
+    }
+
+    NativeFrsqrteRecord& record = context->frsqrte_records[instruction_index];
+    record.source_raw = state->fpr[source_register];
+    record.wrote_result = false;
+    const std::uint64_t source_raw = record.source_raw;
+    const double source = std::bit_cast<double>(source_raw);
+    const bool is_nan = (source_raw & exponent_mask) == exponent_mask &&
+        (source_raw & fraction_mask) != 0U;
+    const bool is_signaling_nan = is_nan && (source_raw & quiet_bit) == 0U;
+    std::uint64_t result_raw{};
+    bool suppress_write = false;
+
+    if (is_signaling_nan)
+    {
+        native_raise_fpscr_exception(state, fpscr::vxsnan_mask);
+        suppress_write = (state->fpscr & fpscr::ve_mask) != 0U;
+        result_raw = source_raw | quiet_bit;
+    }
+    else if (is_nan)
+    {
+        result_raw = source_raw | quiet_bit;
+    }
+    else if (source < 0.0)
+    {
+        native_raise_fpscr_exception(state, fpscr::vxsqrt_mask);
+        suppress_write = (state->fpscr & fpscr::ve_mask) != 0U;
+        result_raw = 0x7FF8000000000000ULL;
+    }
+    else if (source == 0.0)
+    {
+        native_raise_fpscr_exception(state, fpscr::zx_mask);
+        suppress_write = (state->fpscr & fpscr::ze_mask) != 0U;
+        result_raw = ((source_raw & sign_mask) != 0U ? sign_mask : 0U) | infinity;
+    }
+    else if (std::isinf(source))
+    {
+        result_raw = 0U;
+    }
+    else
+    {
+        // frsqrte is architecturally an estimate (relative error <= 1/32),
+        // matching the interpreter's host estimate within that allowance.
+        result_raw = std::bit_cast<std::uint64_t>(1.0 / std::sqrt(source));
+    }
+
+    if (!suppress_write)
+    {
+        record.result_raw = result_raw;
+        state->fpr[destination] = result_raw;
+        native_set_double_fprf(state, result_raw);
+        record.wrote_result = true;
+    }
 }
 
 extern "C" void native_fmul(
@@ -2929,6 +3010,7 @@ struct BlockCode
     case Opcode::compare_unsigned_register:
     case Opcode::floating_compare_unordered:
     case Opcode::floating_convert_to_integer_word_zero:
+    case Opcode::floating_reciprocal_square_root_estimate:
     case Opcode::floating_round_to_single:
     case Opcode::floating_add_single:
     case Opcode::floating_subtract_single:
@@ -3071,6 +3153,7 @@ struct BlockCode
     case Opcode::floating_negate: return "fneg";
     case Opcode::floating_absolute_value: return "fabs";
     case Opcode::floating_convert_to_integer_word_zero: return "fctiwz";
+    case Opcode::floating_reciprocal_square_root_estimate: return "frsqrte";
     case Opcode::floating_round_to_single: return "frsp";
     case Opcode::floating_add_single: return "fadds";
     case Opcode::floating_subtract_single: return "fsubs";
@@ -4795,6 +4878,21 @@ struct Recompiler::Impl
                 invoke->set_arg(4, imm(static_cast<std::uint32_t>(index)));
                 break;
             }
+            case Opcode::floating_reciprocal_square_root_estimate:
+            {
+                auto* invoke = static_cast<InvokeNode*>(nullptr);
+                const auto helper_address = static_cast<std::uint64_t>(
+                    reinterpret_cast<std::uintptr_t>(&native_frsqrte));
+                compiler.invoke(Out(invoke), helper_address,
+                    FuncSignature::build<void, NativeExecutionContext*, CpuState*,
+                        std::uint32_t, std::uint32_t, std::uint32_t>(CallConvId::kCDecl));
+                invoke->set_arg(0, context);
+                invoke->set_arg(1, state);
+                invoke->set_arg(2, imm(insn.fp_register));
+                invoke->set_arg(3, imm(insn.fp_source_b));
+                invoke->set_arg(4, imm(static_cast<std::uint32_t>(index)));
+                break;
+            }
             case Opcode::floating_multiply_single:
             {
                 auto* invoke = static_cast<InvokeNode*>(nullptr);
@@ -6020,6 +6118,20 @@ RunResult Recompiler::run(EspressoCore& core, std::size_t max_steps)
         {
             const std::uint32_t cia = block->address + static_cast<std::uint32_t>(i * 4U);
             const DecodedInstruction& insn = block->instructions[i];
+            if (insn.opcode == Opcode::floating_reciprocal_square_root_estimate)
+            {
+                InstructionHistoryEntry entry = native_history(insn, cia);
+                const NativeFrsqrteRecord& record = context.frsqrte_records[i];
+                entry.has_fp_source = true;
+                entry.fp_source_register = insn.fp_source_b;
+                entry.fp_source_value = record.source_raw;
+                entry.has_fp_destination = true;
+                entry.fp_destination_register = insn.fp_register;
+                entry.fp_destination_value = record.wrote_result
+                    ? record.result_raw : core.state.fpr[insn.fp_register];
+                core.append_instruction_history(std::move(entry));
+                continue;
+            }
             if (insn.opcode == Opcode::floating_round_to_single)
             {
                 InstructionHistoryEntry entry = native_history(insn, cia);

@@ -1,5 +1,6 @@
 # Development Progress
 
+- Native JIT `frsqrte` now mirrors the interpreter's reciprocal-square-root estimate path for finite positives, signed zeros, infinities, qNaNs/sNaNs, negative inputs, VE/ZE suppression, and FPRF; it changes only PS0 and preserves source/destination history snapshots. Differential tests compare full architectural state and formatted history for normal, infinity, zero-enabled, negative-enabled, and NaN cases. Debug/Release CTest pass. WWHD remains at 6,080,538 instructions with the same `0x46524D48` null-target fetch; fallbacks fell from 13,277 to 10,586 (2,691 native `frsqrte`). BOTW remains at 860,172 and the same stop; fallbacks fell from 2,931 to 2,910 (21 native `frsqrte`). No wall-time speedup is claimed.
 - Native JIT `fadd` now matches binary64 interpreter behavior for A/B NaN priority, `VXSNAN`, opposite-sign infinity `VXISI`, VE suppression, PS0-only writes, exact normal/zero rounding status, and FPRF-only exceptional ranges. Interpreter/JIT differential tests cover the WWHD operand/result, aliases, NaNs, invalid exceptions, signed zero, inexact status, and history. Debug/Release CTest pass. WWHD remains at 6,080,538 instructions with the same `0x46524D48` null-target fetch; interpreter fallbacks fell from 15,323 to 13,277 (2,046 native `fadd`). BOTW remains at 860,172 and the same stop; fallbacks fell from 2,985 to 2,931 (54 native `fadd`). No wall-time speedup is claimed.
 - Native JIT `fnmsubs` now mirrors the interpreter's single-precision fused negative multiply-subtract: A/C/B signaling-NaN priority, `VXSNAN`/`VXIMZ`, same-sign product/B `VXISI`, VE suppression, rounded 25-bit `frC`, fused subtraction with final non-NaN sign inversion, binary32 result/FPSCR, and paired-lane commit/history. Differential tests cover normal arithmetic, aliasing B, rounded-C data, NaN, invalid infinity subtraction, and infinity-zero product. Debug/Release CTest pass. WWHD remains at 6,080,538 instructions and the same null-target fetch; fallbacks fell from 18,103 to 15,323 (2,780 native `fnmsubs`). BOTW remains at 860,172 and the same stop; fallbacks fell from 3,006 to 2,985 (21 native `fnmsubs`). No wall-clock speedup is claimed.
 - Native JIT `ps_madd` implements the interpreter's lane semantics exactly: round each `frC` lane to Espresso 25-bit precision, round the product to binary32 before adding the paired addend, flush binary32 subnormal results to signed zero, then widen both result lanes. Source snapshots and paired history are preserved; FPSCR remains untouched. Differential tests cover aliases, 25-bit rounding, flush behavior, state, and history. Debug/Release CTest pass. WWHD remains at 6,080,538 instructions and the same null-target fetch; fallbacks fell from 27,130 to 18,103 (9,027 native `ps_madd`). BOTW remains at 860,172 and the same stop with 3,006 fallbacks; it did not execute `ps_madd` in this startup path. No wall-clock speedup is claimed.
@@ -102,7 +103,8 @@
 
 ## Completed commits
 
-- `pending` - `jit: emit native fadd`
+- `pending` - `jit: emit native frsqrte`
+- `d9c67ab` - `jit: emit native fadd`
 - `0482819` - `jit: emit native fnmsubs`
 - `13a876c` - `jit: emit native ps_madd`
 - `743ac88` - `jit: emit native ps_mul`

@@ -5320,7 +5320,8 @@ void floating_reciprocal_square_root_estimate_tests()
     assert(decode(encode(7U, 3U, true)).opcode == Opcode::unsupported);
 
     const auto execute = [&](std::uint64_t source, std::uint32_t initial_fpscr,
-                             std::uint64_t initial_destination = 0xDEADBEEF01234567ULL) {
+                             std::uint64_t initial_destination = 0xDEADBEEF01234567ULL,
+                             bool use_recompiler = false) {
         EspressoCore core(16U);
         core.state.fpr[2] = source;
         core.state.fpr_ps1[2] = 0x1111222233334444ULL;
@@ -5335,7 +5336,9 @@ void floating_reciprocal_square_root_estimate_tests()
         core.memory.write32_be(0U, encode(4U, 2U));
         const auto gprs_before = core.state.gpr;
         const auto mem_before = core.memory.read32_be(4U);
-        const RunResult result = core.run(1U);
+        Recompiler recompiler;
+        const RunResult result = use_recompiler
+            ? recompiler.run(core, 1U) : core.run(1U);
         assert(result.steps == 1U);
         assert(core.state.cia == 4U);
         assert(core.state.gpr == gprs_before);
@@ -5387,6 +5390,32 @@ void floating_reciprocal_square_root_estimate_tests()
     assert((signaling_nan.first.fpscr & fpscr::vxsnan_mask) != 0U);
     const auto signaling_nan_enabled = execute(0xFFF0123456789ABCULL, fpscr::ve_mask);
     assert(signaling_nan_enabled.first.fpr[4] == 0xDEADBEEF01234567ULL);
+
+    const auto assert_jit_matches = [&](std::uint64_t source, std::uint32_t initial_fpscr) {
+        const auto interpreted = execute(source, initial_fpscr);
+        const auto compiled = execute(source, initial_fpscr,
+            0xDEADBEEF01234567ULL, true);
+        assert(compiled.second.steps == interpreted.second.steps);
+        assert(compiled.first.gpr == interpreted.first.gpr);
+        assert(compiled.first.fpr == interpreted.first.fpr);
+        assert(compiled.first.fpr_ps1 == interpreted.first.fpr_ps1);
+        assert(compiled.first.cr == interpreted.first.cr);
+        assert(compiled.first.xer == interpreted.first.xer);
+        assert(compiled.first.lr == interpreted.first.lr);
+        assert(compiled.first.ctr == interpreted.first.ctr);
+        assert(compiled.first.fpscr == interpreted.first.fpscr);
+        assert(compiled.first.cia == interpreted.first.cia);
+        assert(format_instruction_history(compiled.second) ==
+               format_instruction_history(interpreted.second));
+    };
+    assert_jit_matches(double_bits(4.0), 0U);
+    assert_jit_matches(0x7FF0000000000000ULL, 0U);
+    assert_jit_matches(0xFFF0000000000000ULL, 0U);
+    assert_jit_matches(double_bits(0.0), fpscr::ze_mask);
+    assert_jit_matches(double_bits(-4.0), fpscr::ve_mask);
+    assert_jit_matches(0xFFF8123456789ABCULL, 0U);
+    assert_jit_matches(0xFFF0123456789ABCULL, 0U);
+    assert_jit_matches(0xFFF0123456789ABCULL, fpscr::ve_mask);
 }
 
 void floating_reciprocal_estimate_single_tests()
