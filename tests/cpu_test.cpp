@@ -9178,6 +9178,57 @@ void add_extended_overflow_tests()
     assert(format_instruction_history(record).find("CAin=1") != std::string::npos);
 }
 
+void add_record_recompiler_differential_tests()
+{
+    struct Case
+    {
+        std::uint8_t destination;
+        std::uint8_t ra;
+        std::uint8_t rb;
+        std::uint32_t a;
+        std::uint32_t b;
+        bool so;
+    };
+    constexpr std::array<Case, 5> cases{{
+        {3U, 4U, 5U, 1U, 2U, false},
+        {4U, 4U, 5U, 0xFFFFFFFFU, 1U, true},
+        {5U, 4U, 5U, 0x7FFFFFFFU, 1U, false},
+        {4U, 4U, 5U, 0x80000000U, 0U, false},
+        {3U, 3U, 3U, 0x80000000U, 0x80000000U, true},
+    }};
+    for (const Case& c : cases)
+    {
+        const std::uint32_t word = (31U << 26U) |
+            (static_cast<std::uint32_t>(c.destination) << 21U) |
+            (static_cast<std::uint32_t>(c.ra) << 16U) |
+            (static_cast<std::uint32_t>(c.rb) << 11U) | (266U << 1U) | 1U;
+        EspressoCore interpreted(8U);
+        EspressoCore compiled(8U);
+        for (std::uint32_t reg = 0U; reg < 32U; ++reg)
+        {
+            interpreted.state.gpr[reg] = compiled.state.gpr[reg] =
+                0xA5A5A5A5U ^ (reg * 0x01010101U);
+        }
+        interpreted.state.gpr[c.ra] = compiled.state.gpr[c.ra] = c.a;
+        interpreted.state.gpr[c.rb] = compiled.state.gpr[c.rb] = c.b;
+        interpreted.state.xer = compiled.state.xer = c.so ? 0x80000000U : 0U;
+        interpreted.state.cr = compiled.state.cr = 0x12345678U;
+        interpreted.memory.write32_be(0U, word);
+        compiled.memory.write32_be(0U, word);
+
+        const RunResult oracle = interpreted.run(1U);
+        Recompiler recompiler;
+        const RunResult actual = recompiler.run(compiled, 1U);
+        assert(actual.steps == oracle.steps && actual.steps == 1U);
+        assert(compiled.state.gpr == interpreted.state.gpr);
+        assert(compiled.state.cr == interpreted.state.cr);
+        assert(compiled.state.xer == interpreted.state.xer);
+        assert(actual.instruction_history.size() == 1U);
+        assert(actual.instruction_history[0].opcode_name == "add.");
+        assert(actual.instruction_history[0].completed);
+    }
+}
+
 void add_overflow_tests()
 {
     constexpr std::uint32_t xer_so = 0x80000000U;
@@ -30814,6 +30865,7 @@ int main(int argc, char* argv[])
     add_carrying_recompiler_differential_tests();
     add_carrying_overflow_tests();
     add_extended_overflow_tests();
+    add_record_recompiler_differential_tests();
     add_overflow_tests();
     subtract_from_overflow_tests();
     subtract_from_carrying_overflow_tests();

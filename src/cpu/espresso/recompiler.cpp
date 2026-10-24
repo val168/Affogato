@@ -2034,7 +2034,8 @@ struct BlockCode
 
 [[nodiscard]] bool is_native_instruction(const DecodedInstruction& insn) noexcept
 {
-    if (insn.record && (insn.opcode == Opcode::bitwise_or ||
+    if (insn.record && (insn.opcode == Opcode::add ||
+        insn.opcode == Opcode::bitwise_or ||
         insn.opcode == Opcode::bitwise_and || insn.opcode == Opcode::bitwise_xor ||
         insn.opcode == Opcode::bitwise_nor ||
         insn.opcode == Opcode::bitwise_and_complement))

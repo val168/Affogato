@@ -1,5 +1,6 @@
 # Development Progress
 
+- Native JIT `add.` now uses the already-present native addition and CR0/SO generation path, with record-form execution enabled in the native eligibility check. Differential coverage includes zero/positive/negative results, `rD` aliases, and both SO states. Debug/Release builds and CTest pass. WWHD remains at 6,080,538 instructions, stop CIA `0`, GPR3/4/5 `0/512/256`, and unsupported fetch `0x46524D48`; fallbacks fell from 83,229 to 68,651 (14,578 fewer), and `add` is absent from fallback leaders. BOTW remains at 860,172 instructions and the same stop/register checkpoint; fallbacks fell from 3,121 to 3,102 (19 fewer). No wall-time speedup is claimed.
 - Native JIT `addze` now snapshots old XER.CA, adds it to `rA`, replaces only CA with the new unsigned carry-out, and optionally updates CR0 using XER.SO. The history records both CA input/output and matches the interpreter. Differential tests cover CA-in 0/1, carry-out, signed-boundary result, `rD==rA`, record form, and SO. Debug/Release builds and CTest pass. WWHD remains at 6,080,538 instructions and the null-target fetch `0x46524D48`, GPR3/4/5 `0/512/256`; fallbacks fell from 97,565 to 83,229 (14,336 native `addze`). BOTW remains at 860,172 instructions with the same stop/register checkpoint and 3,121 fallbacks; it does not execute `addze` during this startup run. No wall-time speedup is claimed.
 - Native JIT `addc` now emits the 32-bit sum and carry-out, changes only XER.CA, and supports record-form CR0 with existing XER.SO. Operand snapshots and carry results are retained for history; differential tests cover old-CA independence, unsigned carry, aliasing, record behavior, and history equality. Debug/Release builds and CTest pass. WWHD remains at 6,080,538 instructions and the `0x46524D48` null-target fetch with GPR3/4/5 `0/512/256`; fallbacks fell from 111,901 to 97,565 (14,336 native `addc`). BOTW remains at 860,172 instructions, same stop/register checkpoint, and 3,121 fallbacks (no `addc` executions in this startup run). No wall-time speedup is claimed.
 - Native JIT `andc` now computes `RS & ~RB` directly, snapshots both operands across destination aliases, and shares the existing CR0/XER.SO record path. Differential coverage includes source/destination aliases, all-equal registers, zero/high-bit outcomes, and record form with SO set. Debug/Release builds and CTest pass. WWHD remains at 6,080,538 instructions and the `0x46524D48` null-target fetch with GPR3/4/5 `0/512/256`; fallbacks fell from 126,365 to 111,901 (14,464 `andc` executions). BOTW remains at 860,172 instructions and the same stop/register checkpoint with 3,121 fallbacks; this startup does not execute `andc`. No wall-time speedup is claimed.
@@ -92,7 +93,8 @@
 
 ## Completed commits
 
-- `pending` - `jit: emit native addze`
+- `pending` - `jit: emit native add record form`
+- `ba951c2` - `jit: emit native addze`
 - `af09297` - `jit: emit native addc`
 - `b0187c1` - `jit: emit native andc`
 - `e0a33cb` - `jit: emit native divwu`
