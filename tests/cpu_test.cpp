@@ -5914,7 +5914,8 @@ void floating_add_double_tests()
     const auto execute = [&](std::uint8_t destination, std::uint8_t source_a,
                              std::uint8_t source_b, std::uint64_t a_raw,
                              std::uint64_t b_raw, std::uint32_t fpscr_value = 0U,
-                             std::uint64_t destination_ps1 = 0xDEADBEEF01234567ULL) {
+                             std::uint64_t destination_ps1 = 0xDEADBEEF01234567ULL,
+                             bool use_recompiler = false) {
         EspressoCore core(16U);
         for (std::size_t index = 0; index < core.state.gpr.size(); ++index)
         {
@@ -5941,7 +5942,9 @@ void floating_add_double_tests()
         const auto ctr_before = core.state.ctr;
         const auto memory_before = core.memory.read32_be(8U);
 
-        Execution execution{.state = {}, .result = core.run(1U)};
+        Recompiler recompiler;
+        Execution execution{.state = {}, .result = use_recompiler
+            ? recompiler.run(core, 1U) : core.run(1U)};
         assert(execution.result.reason == StopReason::instruction_limit);
         assert(execution.result.steps == 1U);
         assert(core.state.cia == 4U);
@@ -6077,6 +6080,42 @@ void floating_add_double_tests()
            std::string::npos);
     assert(trace.find("[0x404AA17F49ECFE91]") != std::string::npos);
     assert(trace.find("single=") == std::string::npos);
+
+    const auto assert_jit_matches = [&](std::uint8_t destination,
+                                        std::uint8_t source_a,
+                                        std::uint8_t source_b,
+                                        std::uint64_t a_raw,
+                                        std::uint64_t b_raw,
+                                        std::uint32_t fpscr_value = 0U) {
+        const Execution interpreted = execute(destination, source_a, source_b,
+            a_raw, b_raw, fpscr_value, 0xDEADBEEF01234567ULL);
+        const Execution compiled = execute(destination, source_a, source_b,
+            a_raw, b_raw, fpscr_value, 0xDEADBEEF01234567ULL, true);
+        assert(compiled.result.steps == interpreted.result.steps);
+        assert(compiled.state.gpr == interpreted.state.gpr);
+        assert(compiled.state.fpr == interpreted.state.fpr);
+        assert(compiled.state.fpr_ps1 == interpreted.state.fpr_ps1);
+        assert(compiled.state.cr == interpreted.state.cr);
+        assert(compiled.state.xer == interpreted.state.xer);
+        assert(compiled.state.lr == interpreted.state.lr);
+        assert(compiled.state.ctr == interpreted.state.ctr);
+        assert(compiled.state.fpscr == interpreted.state.fpscr);
+        assert(compiled.state.cia == interpreted.state.cia);
+        assert(format_instruction_history(compiled.result) ==
+               format_instruction_history(interpreted.result));
+    };
+    assert_jit_matches(13U, 10U, 13U, wind_a, wind_b,
+        fpscr::fi_mask | fpscr::fr_mask | fpscr::xx_mask | 1U);
+    assert_jit_matches(1U, 1U, 2U, one, two);
+    assert_jit_matches(2U, 1U, 2U, one, two); // destination aliases B
+    assert_jit_matches(5U, 5U, 5U, two, two); // all operands alias
+    assert_jit_matches(3U, 1U, 2U, qnan_a, qnan_b);
+    assert_jit_matches(3U, 1U, 2U, snan_a, one);
+    assert_jit_matches(3U, 1U, 2U, one, snan_b, fpscr::ve_mask);
+    assert_jit_matches(3U, 1U, 2U, positive_inf, negative_inf);
+    assert_jit_matches(3U, 1U, 2U, positive_inf, negative_inf, fpscr::ve_mask);
+    assert_jit_matches(3U, 1U, 2U, positive_zero, negative_zero);
+    assert_jit_matches(3U, 1U, 2U, one, half_ulp);
 }
 
 void floating_multiply_double_tests()
