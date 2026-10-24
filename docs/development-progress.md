@@ -1,5 +1,6 @@
 # Development Progress
 
+- Native JIT `ps_muls0` now snapshots both vector lanes and the scalar source, applies the existing Espresso 25-bit scalar rounding, multiplies each A lane by C.PS0, rounds to binary32 and widens back to PS0/PS1, with no FPSCR changes. Differential tests cover both lanes, aliasing destination with A/C/all sources, scalar rounding, full architectural state, and paired history. Debug/Release CTest pass. WWHD remains at 6,080,538 instructions with the same `0x46524D48` null-target fetch; fallbacks fell from 9,562 to 8,624 (938 native `ps_muls0`). BOTW remains at 860,172 and the same stop; fallbacks fell from 2,910 to 2,880 (30 native `ps_muls0`). No wall-time speedup is claimed.
 - Native JIT `extsb` now sign-extends the low byte in generated x86-64 code, preserves destination/source aliasing, and supports Rc=0/1 with CR0 classification and existing XER.SO. Differential tests compare full state and history for positive/negative results, record form, and SO propagation. Debug/Release CTest pass. WWHD remains at 6,080,538 instructions with the same `0x46524D48` null-target fetch; fallbacks fell from 10,586 to 9,562 (1,024 native `extsb`), and `extsb` left the fallback leaderboard. BOTW remains at 860,172 and the same stop with 2,910 fallbacks; this startup path does not execute `extsb`. No wall-time speedup is claimed.
 - Native JIT `frsqrte` now mirrors the interpreter's reciprocal-square-root estimate path for finite positives, signed zeros, infinities, qNaNs/sNaNs, negative inputs, VE/ZE suppression, and FPRF; it changes only PS0 and preserves source/destination history snapshots. Differential tests compare full architectural state and formatted history for normal, infinity, zero-enabled, negative-enabled, and NaN cases. Debug/Release CTest pass. WWHD remains at 6,080,538 instructions with the same `0x46524D48` null-target fetch; fallbacks fell from 13,277 to 10,586 (2,691 native `frsqrte`). BOTW remains at 860,172 and the same stop; fallbacks fell from 2,931 to 2,910 (21 native `frsqrte`). No wall-time speedup is claimed.
 - Native JIT `fadd` now matches binary64 interpreter behavior for A/B NaN priority, `VXSNAN`, opposite-sign infinity `VXISI`, VE suppression, PS0-only writes, exact normal/zero rounding status, and FPRF-only exceptional ranges. Interpreter/JIT differential tests cover the WWHD operand/result, aliases, NaNs, invalid exceptions, signed zero, inexact status, and history. Debug/Release CTest pass. WWHD remains at 6,080,538 instructions with the same `0x46524D48` null-target fetch; interpreter fallbacks fell from 15,323 to 13,277 (2,046 native `fadd`). BOTW remains at 860,172 and the same stop; fallbacks fell from 2,985 to 2,931 (54 native `fadd`). No wall-time speedup is claimed.
@@ -104,7 +105,8 @@
 
 ## Completed commits
 
-- `pending` - `jit: emit native extsb`
+- `pending` - `jit: emit native ps_muls0`
+- `aa09fd0` - `jit: emit native extsb`
 - `b2a17c7` - `jit: emit native frsqrte`
 - `d9c67ab` - `jit: emit native fadd`
 - `0482819` - `jit: emit native fnmsubs`

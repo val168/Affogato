@@ -30076,6 +30076,62 @@ void paired_single_multiply_scalar0_tests()
     assert(rounded_scalar.step() == StepResult::executed);
     assert(rounded_scalar.state.fpr[3] == double_bits(1.0));
     assert(rounded_scalar.state.fpr_ps1[3] == double_bits(2.0));
+
+    const auto execute_mode = [&](std::uint8_t destination, std::uint8_t source_a,
+                                  std::uint8_t source_c, std::uint64_t a_ps0,
+                                  std::uint64_t a_ps1, std::uint64_t c_ps0,
+                                  std::uint64_t c_ps1, bool use_recompiler) {
+        EspressoCore execution_core(8U);
+        execution_core.state.fpr.fill(0xDEADBEEF01234567ULL);
+        execution_core.state.fpr_ps1.fill(0xCAFEBABE76543210ULL);
+        execution_core.state.fpr[source_a] = a_ps0;
+        execution_core.state.fpr_ps1[source_a] = a_ps1;
+        execution_core.state.fpr[source_c] = c_ps0;
+        execution_core.state.fpr_ps1[source_c] = c_ps1;
+        execution_core.state.fpscr = 0xFEDCBA98U;
+        execution_core.state.cr = 0x12345678U;
+        execution_core.state.xer = 0xA00000A5U;
+        execution_core.memory.write32_be(0U,
+            encode_ps_muls0(destination, source_a, source_c));
+        Recompiler recompiler;
+        const RunResult run_result = use_recompiler
+            ? recompiler.run(execution_core, 1U) : execution_core.run(1U);
+        return std::pair{execution_core.state, run_result};
+    };
+    const auto assert_jit_matches = [&](std::uint8_t destination,
+                                        std::uint8_t source_a,
+                                        std::uint8_t source_c,
+                                        std::uint64_t a_ps0,
+                                        std::uint64_t a_ps1,
+                                        std::uint64_t c_ps0,
+                                        std::uint64_t c_ps1) {
+        const auto interpreted = execute_mode(destination, source_a, source_c,
+            a_ps0, a_ps1, c_ps0, c_ps1, false);
+        const auto compiled = execute_mode(destination, source_a, source_c,
+            a_ps0, a_ps1, c_ps0, c_ps1, true);
+        assert(compiled.second.steps == interpreted.second.steps);
+        assert(compiled.first.gpr == interpreted.first.gpr);
+        assert(compiled.first.fpr == interpreted.first.fpr);
+        assert(compiled.first.fpr_ps1 == interpreted.first.fpr_ps1);
+        assert(compiled.first.cr == interpreted.first.cr);
+        assert(compiled.first.xer == interpreted.first.xer);
+        assert(compiled.first.lr == interpreted.first.lr);
+        assert(compiled.first.ctr == interpreted.first.ctr);
+        assert(compiled.first.fpscr == interpreted.first.fpscr);
+        assert(compiled.first.cia == interpreted.first.cia);
+        assert(format_instruction_history(compiled.second) ==
+               format_instruction_history(interpreted.second));
+    };
+    assert_jit_matches(13U, 7U, 22U, double_bits(2.0), double_bits(-3.0),
+        double_bits(4.0), double_bits(99.0));
+    assert_jit_matches(5U, 5U, 6U, double_bits(2.0), double_bits(-3.0),
+        double_bits(4.0), double_bits(99.0));
+    assert_jit_matches(6U, 5U, 6U, double_bits(2.0), double_bits(-3.0),
+        double_bits(4.0), double_bits(99.0));
+    assert_jit_matches(5U, 5U, 5U, double_bits(2.0), double_bits(-3.0),
+        double_bits(4.0), double_bits(99.0));
+    assert_jit_matches(3U, 1U, 2U, double_bits(1.0), double_bits(2.0),
+        double_bits(1.0 + std::ldexp(1.0, -26)), double_bits(3.0));
 }
 
 void paired_single_multiply_scalar1_tests()
