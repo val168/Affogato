@@ -3508,7 +3508,8 @@ void floating_add_single_tests()
     };
     const auto execute = [&](std::uint8_t destination, std::uint8_t source_a,
                              std::uint8_t source_b, std::uint64_t a_raw,
-                             std::uint64_t b_raw, std::uint32_t fpscr_value = 0U) {
+                             std::uint64_t b_raw, std::uint32_t fpscr_value = 0U,
+                             bool use_recompiler = false) {
         EspressoCore core(4U);
         for (std::size_t index = 0; index < core.state.gpr.size(); ++index)
         {
@@ -3530,7 +3531,9 @@ void floating_add_single_tests()
         const auto fpr_ps1_before = core.state.fpr_ps1;
         core.memory.write32_be(0U, encode_fadds(destination, source_a, source_b));
 
-        Execution execution{.state = {}, .result = core.run(1U)};
+        Recompiler recompiler;
+        Execution execution{.state = {}, .result = use_recompiler
+            ? recompiler.run(core, 1U) : core.run(1U)};
         assert(execution.result.reason == StopReason::instruction_limit);
         assert(core.state.cia == 4U);
         assert(core.state.gpr == gpr_before);
@@ -3666,6 +3669,37 @@ void floating_add_single_tests()
     const Execution quiet = execute(3U, 1U, 2U, quiet_nan, positive_one);
     assert((quiet.state.fpscr & fpscr::vxsnan_mask) == 0U);
     assert((quiet.state.fpr[3] & 0x7FF8000000000000ULL) == 0x7FF8000000000000ULL);
+
+    const auto assert_jit_matches = [&](std::uint8_t destination,
+                                        std::uint8_t source_a,
+                                        std::uint8_t source_b,
+                                        std::uint64_t a_raw,
+                                        std::uint64_t b_raw,
+                                        std::uint32_t initial_fpscr = 0U) {
+        const Execution interpreted = execute(destination, source_a, source_b,
+            a_raw, b_raw, initial_fpscr);
+        const Execution compiled = execute(destination, source_a, source_b,
+            a_raw, b_raw, initial_fpscr, true);
+        assert(compiled.result.steps == interpreted.result.steps);
+        assert(compiled.state.gpr == interpreted.state.gpr);
+        assert(compiled.state.fpr == interpreted.state.fpr);
+        assert(compiled.state.fpr_ps1 == interpreted.state.fpr_ps1);
+        assert(compiled.state.cr == interpreted.state.cr);
+        assert(compiled.state.xer == interpreted.state.xer);
+        assert(compiled.state.lr == interpreted.state.lr);
+        assert(compiled.state.ctr == interpreted.state.ctr);
+        assert(compiled.state.fpscr == interpreted.state.fpscr);
+        assert(format_instruction_history(compiled.result) ==
+               format_instruction_history(interpreted.result));
+    };
+    assert_jit_matches(3U, 1U, 2U, positive_one, positive_two);
+    assert_jit_matches(1U, 1U, 2U, positive_one, positive_two); // D aliases A
+    assert_jit_matches(2U, 1U, 2U, positive_one, positive_two); // D aliases B
+    assert_jit_matches(3U, 1U, 2U, negative_zero, negative_zero);
+    assert_jit_matches(3U, 1U, 2U, quiet_nan, positive_one);
+    assert_jit_matches(3U, 1U, 2U, signaling_nan, positive_one,
+                       fpscr::ve_mask);
+    assert_jit_matches(3U, 1U, 2U, positive_inf, negative_inf);
 }
 
 void floating_subtract_single_tests()

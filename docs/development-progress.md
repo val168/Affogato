@@ -1,5 +1,6 @@
 # Development Progress
 
+- Native JIT `fadds` now mirrors the interpreter's PS0 binary64 addition followed by one binary32 rounding, including A→B NaN selection, `VXSNAN`, opposite-infinity `VXISI`, VE write suppression, paired-lane commit, FPRF/FI/FR/XX, and history. Differential cases cover finite and signed-zero results, aliases, qNaN/sNaN, and invalid infinities. Debug/Release builds and CTest pass. WWHD stays at 6,080,538 instructions and the known `0x46524D48` null indirect fetch; fallbacks fell from 180,442 to 161,613 (18,829 native `fadds`). BOTW stays at 860,172 and the same stop; fallbacks fell from 3,186 to 3,129 (57 native `fadds`). No wall-time speedup is claimed.
 - Native JIT `fmadds` uses a fused operation with Espresso's 25-bit frC rounding and matches interpreter NaN source priority (A, C, B), `VXSNAN`/`VXIMZ`/`VXISI`, VE suppression, paired-lane result, and single-precision FPSCR status. Differential tests cover fused cancellation, 25-bit precision, aliases, NaNs, infinity invalid cases, and enabled-exception suppression. Debug/Release builds and CTest pass. WWHD remains at 6,080,538 instructions and the null-CTR fetch `0x46524D48`; interpreter fallbacks fell from 209,613 to 180,442 (29,171 native `fmadds`). BOTW remains at 860,172 and the same stop; fallbacks fell from 3,338 to 3,186 (152 native `fmadds`). No wall-time speedup is claimed.
 - Native JIT `fmuls` now preserves the interpreter's Espresso 25-bit frC rounding (including normalized subnormals), single-precision result/FPSCR behavior, NaN payload handling, `VXSNAN`/`VXIMZ`, VE suppression, paired-lane writes, and arithmetic history. Differential tests cover precision-sensitive and subnormal operands, aliases, signed zero, NaNs, invalid operations, and enabled-invalid suppression. Debug/Release builds and CTest pass. WWHD remains at 6,080,538 instructions and the known null-CTR fetch `0x46524D48`; interpreter fallbacks fell from 267,389 to 209,613 (57,776 native `fmuls`). BOTW remains at 860,172 instructions and the same stop; fallbacks fell from 3,514 to 3,338 (176 native `fmuls`). No wall-time speedup is claimed.
 - Native JIT `frsp` now mirrors the interpreter's binary64-to-binary32 conversion, paired-lane write, FPRF/FI/FR/XX status, NaN quieting, `VXSNAN`, VE suppression, and single-result history. Interpreter/JIT differential checks cover an inexact normal, qNaN, sNaN, and enabled-invalid suppression. Debug and Release builds and CTest pass. Release WWHD remains at 6,080,538 instructions and the same null-CTR fetch (`0x46524D48`); fallbacks fell by 32,657 to 515,325. BOTW remains at 860,172 and the same stop; fallbacks fell by 31 to 3,598. Both no longer report `frsp` among fallback opcodes. No wall-time improvement is claimed.
@@ -86,7 +87,9 @@
 
 ## Completed commits
 
-- `8cb21a4` - `jit: emit native fmadds`
+- `34f0e28` - `jit: emit native fadds`
+- `c9ae452` - `jit: emit native fmadds`
+- `055485c` - `jit: emit native fmuls`
 - `640fccf` - `jit: emit native fsub`
 - `7575aa0` - `jit: emit native fmuls`
 - `0bd2cd4` - `jit: emit native fmadd`
