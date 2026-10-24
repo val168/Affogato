@@ -3291,6 +3291,47 @@ void floating_divide_single_tests()
 
     const std::uint32_t exact_wind_fprf = 0x00004000U;
     assert((wind_waker.state.fpscr & fpscr::fprf_mask) == exact_wind_fprf);
+
+    const auto assert_jit_matches = [&](std::uint8_t destination,
+                                        std::uint8_t source_a,
+                                        std::uint8_t source_b,
+                                        std::uint64_t a_raw,
+                                        std::uint64_t b_raw,
+                                        std::uint32_t fpscr_value = 0U) {
+        const Execution interpreted = execute(destination, source_a, source_b,
+            a_raw, b_raw, fpscr_value);
+        const Execution compiled = execute(destination, source_a, source_b,
+            a_raw, b_raw, fpscr_value, true);
+        assert(compiled.result.reason == interpreted.result.reason);
+        assert(compiled.result.steps == interpreted.result.steps);
+        assert(compiled.state.gpr == interpreted.state.gpr);
+        assert(compiled.state.fpr == interpreted.state.fpr);
+        assert(compiled.state.fpr_ps1 == interpreted.state.fpr_ps1);
+        assert(compiled.state.cr == interpreted.state.cr);
+        assert(compiled.state.xer == interpreted.state.xer);
+        assert(compiled.state.lr == interpreted.state.lr);
+        assert(compiled.state.ctr == interpreted.state.ctr);
+        assert(compiled.state.fpscr == interpreted.state.fpscr);
+        assert(compiled.state.cia == interpreted.state.cia);
+        assert(format_instruction_history(compiled.result) ==
+               format_instruction_history(interpreted.result));
+    };
+
+    // Differentially exercise the real-game case and each special-result path.
+    assert_jit_matches(0U, 1U, 13U,
+        0x40AA905E00000000ULL, 0x404CB204E0000000ULL,
+        fpscr::xe_mask | 0x00000001U);
+    assert_jit_matches(3U, 1U, 2U, six, two);
+    assert_jit_matches(1U, 1U, 2U, six, three); // destination aliases A
+    assert_jit_matches(2U, 1U, 2U, 0x4028000000000000ULL, six); // aliases B
+    assert_jit_matches(3U, 1U, 2U, 0x7FF8123456789ABCULL, one);
+    assert_jit_matches(3U, 1U, 2U, one, 0xFFF0000000005432ULL);
+    assert_jit_matches(3U, 1U, 2U, 0x7FF0000000001234ULL, one, fpscr::ve_mask);
+    assert_jit_matches(3U, 1U, 2U, positive_zero, negative_zero);
+    assert_jit_matches(3U, 1U, 2U, positive_inf, positive_inf);
+    assert_jit_matches(3U, 1U, 2U, one, negative_zero);
+    assert_jit_matches(3U, 1U, 2U, one, positive_zero, fpscr::ze_mask);
+    assert_jit_matches(3U, 1U, 2U, positive_inf, positive_zero);
 }
 
 void floating_divide_double_tests()
