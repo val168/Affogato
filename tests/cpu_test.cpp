@@ -11489,7 +11489,8 @@ void extend_sign_halfword_tests()
     }};
 
     const auto execute = [&](std::uint8_t destination, std::uint8_t source,
-                             std::uint32_t input, bool record, bool so) {
+                             std::uint32_t input, bool record, bool so,
+                             bool use_recompiler = false) {
         EspressoCore core(8U);
         core.state.gpr.fill(0x76543210U);
         core.state.gpr[source] = input;
@@ -11515,7 +11516,14 @@ void extend_sign_halfword_tests()
         const std::uint32_t low_half = input & 0xFFFFU;
         const std::uint32_t expected = low_half |
             ((low_half & 0x8000U) != 0U ? 0xFFFF0000U : 0U);
-        const RunResult result = core.run(1U);
+        Recompiler recompiler;
+        const RunResult result = use_recompiler
+            ? recompiler.run(core, 1U) : core.run(1U);
+        if (use_recompiler)
+        {
+            assert(recompiler.statistics().native_instructions == 1U);
+            assert(recompiler.statistics().interpreter_fallbacks == 0U);
+        }
         assert(result.steps == 1U);
         assert(result.reason == StopReason::instruction_limit);
         assert(core.state.cia == 4U);
@@ -11558,6 +11566,7 @@ void extend_sign_halfword_tests()
         assert(result.instruction_history.front().opcode_name == "extsh");
         assert(result.instruction_history.front().source_count == 1U);
         assert(result.instruction_history.front().source_values[0] == test.input);
+        static_cast<void>(execute(6U, 5U, test.input, false, false, true));
     }
 
     const RunResult alias = execute(9U, 9U, 0x12348001U, false, false);
@@ -11570,6 +11579,8 @@ void extend_sign_halfword_tests()
     assert(record_alias.instruction_history.front().opcode_name == "extsh.");
     assert(format_instruction_history(record_alias).find(
         "extsh. r9=0x12348001 -> r9=0xFFFF8001") != std::string::npos);
+    static_cast<void>(execute(6U, 5U, 0x80000001U, true, true, true));
+    static_cast<void>(execute(9U, 9U, 0x12348001U, true, true, true));
 
     // Wind Waker's Rc=0 case writes +1 and leaves CR/XER and its source alone.
     EspressoCore wind_waker_core(8U);
@@ -11585,6 +11596,22 @@ void extend_sign_halfword_tests()
     assert(wind_waker_core.state.cr == 0x12345678U);
     assert(wind_waker_core.state.xer == 0xA00000A5U);
     assert(format_instruction_history(wind_waker_result).find(
+        "extsh r9=0x00000001 -> r11=0x00000001") != std::string::npos);
+
+    EspressoCore compiled_wind_waker(8U);
+    compiled_wind_waker.state.gpr[9] = 1U;
+    compiled_wind_waker.state.gpr[11] = 0xAABBCCDDU;
+    compiled_wind_waker.state.cr = 0x12345678U;
+    compiled_wind_waker.state.xer = 0xA00000A5U;
+    compiled_wind_waker.memory.write32_be(0U, wind_waker_word);
+    Recompiler wind_waker_recompiler;
+    const RunResult compiled_wind_waker_result =
+        wind_waker_recompiler.run(compiled_wind_waker, 1U);
+    assert(wind_waker_recompiler.statistics().native_instructions == 1U);
+    assert(compiled_wind_waker.state.gpr[11] == 1U);
+    assert(compiled_wind_waker.state.cr == 0x12345678U);
+    assert(compiled_wind_waker.state.xer == 0xA00000A5U);
+    assert(format_instruction_history(compiled_wind_waker_result).find(
         "extsh r9=0x00000001 -> r11=0x00000001") != std::string::npos);
 }
 

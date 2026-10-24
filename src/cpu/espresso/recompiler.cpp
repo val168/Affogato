@@ -275,6 +275,8 @@ struct NativeExtsbRecord
     std::uint32_t result{};
 };
 
+using NativeExtshRecord = NativeExtsbRecord;
+
 struct NativeExecutionContext
 {
     GuestMemory* memory{};
@@ -317,6 +319,7 @@ struct NativeExecutionContext
     std::array<NativeAddcRecord, 64> addc_records{};
     std::array<NativeAddzeRecord, 64> addze_records{};
     std::array<NativeExtsbRecord, 64> extsb_records{};
+    std::array<NativeExtshRecord, 64> extsh_records{};
     std::uint64_t memory_access_calls{};
     bool failed{};
     bool guest_memory_fault{};
@@ -3414,7 +3417,8 @@ struct BlockCode
     {
         return true;
     }
-    if (insn.opcode == Opcode::extend_sign_byte)
+    if (insn.opcode == Opcode::extend_sign_byte ||
+        insn.opcode == Opcode::extend_sign_halfword)
     {
         return true;
     }
@@ -3583,6 +3587,7 @@ struct BlockCode
     case Opcode::divide_word_unsigned: return "divwu";
     case Opcode::divide_word_signed: return "divw";
     case Opcode::extend_sign_byte: return "extsb";
+    case Opcode::extend_sign_halfword: return "extsh";
     case Opcode::negate: return "neg";
     case Opcode::add_immediate_carry: return "addic";
     case Opcode::subtract_from_immediate_carry: return "subfic";
@@ -4229,15 +4234,21 @@ struct Recompiler::Impl
                 break;
             }
             case Opcode::extend_sign_byte:
+            case Opcode::extend_sign_halfword:
             {
-                const std::size_t record_offset =
-                    offsetof(NativeExecutionContext, extsb_records) +
-                    index * sizeof(NativeExtsbRecord);
+                const bool halfword = insn.opcode == Opcode::extend_sign_halfword;
+                const std::size_t record_offset = halfword
+                    ? offsetof(NativeExecutionContext, extsh_records) +
+                        index * sizeof(NativeExtshRecord)
+                    : offsetof(NativeExecutionContext, extsb_records) +
+                        index * sizeof(NativeExtsbRecord);
                 x86::Gp source = read_guest_gpr(insn.source);
-                x86::Gp result = compiler.new_gp32("extsb_result");
+                x86::Gp result = compiler.new_gp32(
+                    halfword ? "extsh_result" : "extsb_result");
                 compiler.mov(result, source);
-                compiler.shl(result, imm(24U));
-                compiler.sar(result, imm(24U));
+                const std::uint32_t shift = halfword ? 16U : 24U;
+                compiler.shl(result, imm(shift));
+                compiler.sar(result, imm(shift));
                 compiler.mov(x86::dword_ptr(context,
                     static_cast<std::int32_t>(record_offset +
                         offsetof(NativeExtsbRecord, source))), source);
@@ -4248,9 +4259,12 @@ struct Recompiler::Impl
                 if (insn.record)
                 {
                     compiler.test(result, result);
-                    x86::Gp less = compiler.new_gp32("extsb_cr0_lt");
-                    x86::Gp greater = compiler.new_gp32("extsb_cr0_gt");
-                    x86::Gp equal = compiler.new_gp32("extsb_cr0_eq");
+                    x86::Gp less = compiler.new_gp32(
+                        halfword ? "extsh_cr0_lt" : "extsb_cr0_lt");
+                    x86::Gp greater = compiler.new_gp32(
+                        halfword ? "extsh_cr0_gt" : "extsb_cr0_gt");
+                    x86::Gp equal = compiler.new_gp32(
+                        halfword ? "extsh_cr0_eq" : "extsb_cr0_eq");
                     compiler.mov(less, imm(0U));
                     compiler.setl(less.r8());
                     compiler.mov(greater, imm(0U));
@@ -4262,13 +4276,15 @@ struct Recompiler::Impl
                     compiler.shl(equal, imm(1U));
                     compiler.or_(less, greater);
                     compiler.or_(less, equal);
-                    x86::Gp xer_so = compiler.new_gp32("extsb_cr0_so");
+                    x86::Gp xer_so = compiler.new_gp32(
+                        halfword ? "extsh_cr0_so" : "extsb_cr0_so");
                     compiler.mov(xer_so, x86::dword_ptr(
                         state, static_cast<std::int32_t>(offsetof(CpuState, xer))));
                     compiler.shr(xer_so, imm(31U));
                     compiler.or_(less, xer_so);
                     compiler.shl(less, imm(28U));
-                    x86::Gp cr = compiler.new_gp32("extsb_cr0");
+                    x86::Gp cr = compiler.new_gp32(
+                        halfword ? "extsh_cr0" : "extsb_cr0");
                     compiler.mov(cr, x86::dword_ptr(
                         state, static_cast<std::int32_t>(offsetof(CpuState, cr))));
                     compiler.and_(cr, imm(0x0FFFFFFFU));
@@ -7555,10 +7571,13 @@ RunResult Recompiler::run(EspressoCore& core, std::size_t max_steps)
                 core.append_instruction_history(std::move(entry));
                 continue;
             }
-            if (insn.opcode == Opcode::extend_sign_byte)
+            if (insn.opcode == Opcode::extend_sign_byte ||
+                insn.opcode == Opcode::extend_sign_halfword)
             {
                 InstructionHistoryEntry entry = native_history(insn, cia);
-                const NativeExtsbRecord& record = context.extsb_records[i];
+                const NativeExtsbRecord& record =
+                    insn.opcode == Opcode::extend_sign_halfword
+                    ? context.extsh_records[i] : context.extsb_records[i];
                 entry.source_registers[0] = insn.source;
                 entry.source_values[0] = record.source;
                 entry.source_count = 1U;
