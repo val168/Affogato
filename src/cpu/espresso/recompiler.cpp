@@ -3129,6 +3129,7 @@ struct BlockCode
     case Opcode::store_byte:
     case Opcode::store_byte_update:
     case Opcode::store_halfword:
+    case Opcode::store_halfword_update:
     case Opcode::store_single:
     case Opcode::store_single_update:
     case Opcode::store_double:
@@ -3253,6 +3254,7 @@ struct BlockCode
     case Opcode::store_byte: return "stb";
     case Opcode::store_byte_update: return "stbu";
     case Opcode::store_halfword: return "sth";
+    case Opcode::store_halfword_update: return "sthu";
     case Opcode::store_single: return "stfs";
     case Opcode::store_single_update: return "stfsu";
     case Opcode::store_double: return "stfd";
@@ -3300,6 +3302,7 @@ struct BlockCode
     case Opcode::store_byte:
     case Opcode::store_byte_update:
     case Opcode::store_halfword:
+    case Opcode::store_halfword_update:
     case Opcode::load_word_indexed:
     case Opcode::load_byte_zero_indexed:
     case Opcode::load_halfword_zero_indexed:
@@ -3333,6 +3336,7 @@ struct BlockCode
     case Opcode::load_halfword_zero:
     case Opcode::load_halfword_algebraic:
     case Opcode::store_halfword:
+    case Opcode::store_halfword_update:
     case Opcode::load_halfword_zero_indexed:
     case Opcode::load_halfword_algebraic_indexed:
     case Opcode::store_halfword_indexed:
@@ -3347,7 +3351,8 @@ struct BlockCode
 [[nodiscard]] bool is_memory_store(Opcode opcode) noexcept
 {
     return opcode == Opcode::store_word || opcode == Opcode::store_byte ||
-        opcode == Opcode::store_halfword || opcode == Opcode::store_word_indexed ||
+        opcode == Opcode::store_halfword || opcode == Opcode::store_halfword_update ||
+        opcode == Opcode::store_word_indexed ||
         opcode == Opcode::store_byte_update || opcode == Opcode::store_byte_indexed ||
         opcode == Opcode::store_halfword_indexed ||
         opcode == Opcode::store_single || opcode == Opcode::store_double ||
@@ -5663,6 +5668,7 @@ struct Recompiler::Impl
             case Opcode::store_byte:
             case Opcode::store_byte_update:
             case Opcode::store_halfword:
+            case Opcode::store_halfword_update:
             case Opcode::store_single:
             case Opcode::store_single_update:
             case Opcode::store_double:
@@ -5691,6 +5697,7 @@ struct Recompiler::Impl
                     insn.opcode == Opcode::load_word_update ||
                     insn.opcode == Opcode::store_byte_update ||
                     insn.opcode == Opcode::store_word_update ||
+                    insn.opcode == Opcode::store_halfword_update ||
                     insn.opcode == Opcode::store_single_update;
                 const bool sign_extend =
                     insn.opcode == Opcode::load_halfword_algebraic ||
@@ -6771,8 +6778,11 @@ RunResult Recompiler::run(EspressoCore& core, std::size_t max_steps)
                     entry.source_registers[entry.source_count] = insn.base;
                     entry.source_values[entry.source_count++] = record.base_value;
                 }
-                entry.has_immediate = true;
-                entry.immediate = insn.immediate;
+                if (insn.opcode != Opcode::store_halfword_update)
+                {
+                    entry.has_immediate = true;
+                    entry.immediate = insn.immediate;
+                }
             }
             if (insn.opcode == Opcode::data_cache_block_store ||
                 insn.opcode == Opcode::data_cache_block_flush)
@@ -6815,9 +6825,14 @@ RunResult Recompiler::run(EspressoCore& core, std::size_t max_steps)
             }
             else if (is_memory_store(insn.opcode))
             {
-                entry.source_registers[entry.source_count] = insn.destination;
-                entry.source_values[entry.source_count++] = record.value;
+                if (insn.opcode != Opcode::store_halfword_update ||
+                    insn.destination != insn.base)
+                {
+                    entry.source_registers[entry.source_count] = insn.destination;
+                    entry.source_values[entry.source_count++] = record.value;
+                }
                 if (insn.opcode == Opcode::store_halfword ||
+                    insn.opcode == Opcode::store_halfword_update ||
                     insn.opcode == Opcode::store_halfword_indexed)
                 {
                     entry.has_stored_halfword_value = true;
@@ -6832,6 +6847,7 @@ RunResult Recompiler::run(EspressoCore& core, std::size_t max_steps)
                 }
                 if (insn.opcode == Opcode::store_word_update ||
                     insn.opcode == Opcode::store_byte_update ||
+                    insn.opcode == Opcode::store_halfword_update ||
                     insn.opcode == Opcode::store_single_update)
                 {
                     entry.has_destination = true;

@@ -32,6 +32,7 @@
 #include <string>
 #include <string_view>
 #include <thread>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -25118,6 +25119,65 @@ void store_halfword_update_tests()
     assert(!failed.completed);
     assert(!failed.has_stored_halfword_value);
     assert(failed.has_destination && failed.destination_register == 8U);
+
+    const auto execute = [&](bool use_recompiler, std::uint32_t base,
+                             std::uint32_t source_value, bool source_alias,
+                             bool fault_case) {
+        EspressoCore differential(0x100U);
+        differential.state.gpr.fill(0xA5A5A5A5U);
+        differential.state.gpr[8] = base;
+        if (!source_alias)
+        {
+            differential.state.gpr[31] = source_value;
+        }
+        differential.state.cr = original_cr;
+        differential.state.xer = original_xer;
+        differential.state.lr = original_lr;
+        differential.state.ctr = original_ctr;
+        differential.state.cia = 0U;
+        differential.memory.write8(0xFFU, 0xA5U);
+        differential.memory.write32_be(0U, encode_sthu(
+            source_alias ? 8U : 31U, 8U, fault_case ? 2 : 4));
+        Recompiler recompiler;
+        RunResult execution = use_recompiler
+            ? recompiler.run(differential, 1U) : differential.run(1U);
+        return std::tuple{differential.state, std::move(execution),
+            differential.memory.read8(0xFFU)};
+    };
+    const auto assert_jit_matches = [&](std::uint32_t base,
+                                        std::uint32_t source_value,
+                                        bool source_alias,
+                                        bool fault_case) {
+        const auto interpreted = execute(false, base, source_value, source_alias, fault_case);
+        const auto compiled = execute(true, base, source_value, source_alias, fault_case);
+        const CpuState& expected_state = std::get<0>(interpreted);
+        const RunResult& expected_result = std::get<1>(interpreted);
+        const CpuState& actual_state = std::get<0>(compiled);
+        const RunResult& actual_result = std::get<1>(compiled);
+        assert(actual_state.gpr == expected_state.gpr);
+        assert(actual_state.cr == expected_state.cr);
+        assert(actual_state.xer == expected_state.xer);
+        assert(actual_state.lr == expected_state.lr);
+        assert(actual_state.ctr == expected_state.ctr);
+        assert(actual_state.cia == expected_state.cia);
+        assert(actual_state.reservation_address == expected_state.reservation_address);
+        assert(actual_state.reservation_valid == expected_state.reservation_valid);
+        assert(std::get<2>(compiled) == std::get<2>(interpreted));
+        assert(actual_result.reason == expected_result.reason);
+        assert(actual_result.steps == expected_result.steps);
+        if (fault_case)
+        {
+            assert(actual_result.detail.find("write 2 byte(s)") != std::string::npos);
+            assert(actual_result.detail.find("0x000000FF") != std::string::npos);
+            assert(expected_result.detail.find("write 2 byte(s)") != std::string::npos);
+            assert(expected_result.detail.find("0x000000FF") != std::string::npos);
+        }
+        assert(format_instruction_history(actual_result) ==
+               format_instruction_history(expected_result));
+    };
+    assert_jit_matches(0x80U, 0x1234ABCDU, false, false);
+    assert_jit_matches(0x80U, 0U, true, false); // source aliases update base
+    assert_jit_matches(0xFDU, 0x1234ABCDU, false, true); // second byte is unmapped
 }
 
 void reservation_instruction_tests()
