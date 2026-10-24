@@ -29208,6 +29208,76 @@ void paired_single_multiply_add_tests()
     assert(flush.step() == StepResult::executed);
     assert(flush.state.fpr[4] == double_bits(0.0));
     assert(flush.state.fpr_ps1[4] == double_bits(-0.0));
+
+    const auto execute = [&](bool use_recompiler, std::uint8_t destination,
+                             std::uint8_t source_a, std::uint8_t source_b,
+                             std::uint8_t source_c, std::uint64_t a_ps0,
+                             std::uint64_t a_ps1, std::uint64_t b_ps0,
+                             std::uint64_t b_ps1, std::uint64_t c_ps0,
+                             std::uint64_t c_ps1) {
+        EspressoCore differential(8U);
+        differential.state.fpr[destination] = double_bits(17.0);
+        differential.state.fpr_ps1[destination] = double_bits(-19.0);
+        differential.state.fpr[source_a] = a_ps0;
+        differential.state.fpr_ps1[source_a] = a_ps1;
+        differential.state.fpr[source_b] = b_ps0;
+        differential.state.fpr_ps1[source_b] = b_ps1;
+        differential.state.fpr[source_c] = c_ps0;
+        differential.state.fpr_ps1[source_c] = c_ps1;
+        differential.state.fpscr = 0xDEADBEEFU;
+        differential.state.gpr.fill(0xA5A5A5A5U);
+        differential.state.cr = 0x12345678U;
+        differential.state.xer = 0xA00000A5U;
+        differential.memory.write32_be(0U,
+            encode_ps_madd(destination, source_a, source_b, source_c));
+        Recompiler recompiler;
+        RunResult execution = use_recompiler
+            ? recompiler.run(differential, 1U) : differential.run(1U);
+        assert(execution.steps == 1U);
+        assert(execution.reason == StopReason::instruction_limit);
+        return std::pair{differential.state, std::move(execution)};
+    };
+    const auto assert_jit_matches = [&](std::uint8_t destination,
+                                        std::uint8_t source_a,
+                                        std::uint8_t source_b,
+                                        std::uint8_t source_c,
+                                        std::uint64_t a_ps0,
+                                        std::uint64_t a_ps1,
+                                        std::uint64_t b_ps0,
+                                        std::uint64_t b_ps1,
+                                        std::uint64_t c_ps0,
+                                        std::uint64_t c_ps1) {
+        const auto interpreted = execute(false, destination, source_a, source_b,
+            source_c, a_ps0, a_ps1, b_ps0, b_ps1, c_ps0, c_ps1);
+        const auto compiled = execute(true, destination, source_a, source_b,
+            source_c, a_ps0, a_ps1, b_ps0, b_ps1, c_ps0, c_ps1);
+        assert(compiled.first.gpr == interpreted.first.gpr);
+        assert(compiled.first.fpr == interpreted.first.fpr);
+        assert(compiled.first.fpr_ps1 == interpreted.first.fpr_ps1);
+        assert(compiled.first.fpscr == interpreted.first.fpscr);
+        assert(compiled.first.cr == interpreted.first.cr);
+        assert(compiled.first.xer == interpreted.first.xer);
+        assert(compiled.first.lr == interpreted.first.lr);
+        assert(compiled.first.ctr == interpreted.first.ctr);
+        assert(compiled.first.cia == interpreted.first.cia);
+        assert(format_instruction_history(compiled.second) ==
+               format_instruction_history(interpreted.second));
+    };
+    assert_jit_matches(8U, 3U, 2U, 4U,
+        double_bits(2.0), double_bits(-3.0),
+        double_bits(5.0), double_bits(10.0),
+        double_bits(4.0), double_bits(-2.0));
+    assert_jit_matches(4U, 1U, 2U, 3U,
+        double_bits(1.0), double_bits(1.0),
+        double_bits(0.0), double_bits(0.0),
+        double_bits(1.0 + std::ldexp(1.0, -26)), double_bits(1.0));
+    assert_jit_matches(4U, 1U, 2U, 3U,
+        double_bits(std::ldexp(1.0, -126)), double_bits(-std::ldexp(1.0, -126)),
+        double_bits(0.0), double_bits(0.0), double_bits(0.5), double_bits(0.5));
+    assert_jit_matches(5U, 5U, 5U, 6U,
+        double_bits(2.0), double_bits(3.0),
+        double_bits(2.0), double_bits(3.0),
+        double_bits(4.0), double_bits(5.0));
 }
 
 void paired_single_multiply_subtract_tests()
