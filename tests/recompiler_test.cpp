@@ -3230,6 +3230,39 @@ void recompiler_conditional_branch_tests()
                 0x200U, 0U, 0x203U); // blr masks low target bits
     compare_run(0x4E800420U, 0U, 0x303U, 0U,
                 0x300U, 0x303U, 0U); // bctr
+
+    for (std::uint8_t bi = 0; bi < 32U; ++bi)
+    {
+        const std::uint32_t cr_mask = 1U << (31U - bi);
+        for (const bool condition_sense : {false, true})
+        {
+            const std::uint32_t bo = 0x04U | (condition_sense ? 0x08U : 0U);
+            const std::uint32_t word = 0x40000000U | (bo << 21U) |
+                (static_cast<std::uint32_t>(bi) << 16U) | 0x8U;
+            for (const bool bit_set : {false, true})
+            {
+                const std::uint32_t cr = bit_set ? cr_mask : 0U;
+                EspressoCore interpreted(0x1000U);
+                EspressoCore compiled(0x1000U);
+                for (EspressoCore* candidate : {&interpreted, &compiled})
+                {
+                    candidate->memory.write32_be(0x100U, word);
+                    candidate->state.cia = 0x100U;
+                    candidate->state.cr = cr;
+                    candidate->state.ctr = 0x89ABCDEFU;
+                }
+                const RunResult oracle = interpreted.run(1U);
+                Recompiler recompiler;
+                const RunResult actual = recompiler.run(compiled, 1U);
+                const bool taken = bit_set == condition_sense;
+                const std::uint32_t expected_cia = taken ? 0x108U : 0x104U;
+                assert(oracle.cia == expected_cia && actual.cia == expected_cia);
+                assert(compiled.state.cr == interpreted.state.cr);
+                assert(compiled.state.ctr == interpreted.state.ctr);
+                assert(compiled.state.lr == interpreted.state.lr);
+            }
+        }
+    }
 }
 
 void recompiler_special_register_move_tests()

@@ -81,6 +81,16 @@ void install_counted_loop(affogato::cpu::espresso::EspressoCore& core)
     core.state.ctr = 5'000'000U;
 }
 
+void install_cr_branch_loop(affogato::cpu::espresso::EspressoCore& core)
+{
+    // cmpwi r3,0; bne guest_code. The compare leaves CR0.GT set and the
+    // conditional branch repeatedly tests CR0.EQ.
+    core.memory.write32_be(guest_code, 0x2C030000U);
+    core.memory.write32_be(guest_code + 4U, 0x4082FFFCU);
+    core.state.cia = guest_code;
+    core.state.gpr[3] = 1U;
+}
+
 }
 
 int main()
@@ -319,6 +329,59 @@ int main()
               << "\nGPR3/CTR interpreter/JIT: " << counted_interpreted.state.gpr[3]
               << '/' << counted_compiled.state.gpr[3] << ' '
               << counted_interpreted.state.ctr << '/' << counted_compiled.state.ctr << '\n';
+
+    EspressoCore cr_branch_interpreted(0x1000U);
+    EspressoCore cr_branch_compiled(0x1000U);
+    install_cr_branch_loop(cr_branch_interpreted);
+    install_cr_branch_loop(cr_branch_compiled);
+    Recompiler cr_branch_recompiler;
+    static_cast<void>(cr_branch_recompiler.run(cr_branch_compiled, 2U));
+    cr_branch_compiled.state.cia = guest_code;
+    cr_branch_compiled.state.gpr[3] = 1U;
+    const RecompilerStatistics cr_branch_stats_before =
+        cr_branch_recompiler.statistics();
+    const auto cr_branch_interpreter_start = std::chrono::steady_clock::now();
+    const RunResult cr_branch_interpreter_result =
+        cr_branch_interpreted.run(pc_relative_benchmark_steps);
+    const auto cr_branch_interpreter_end = std::chrono::steady_clock::now();
+    const auto cr_branch_recompiler_start = std::chrono::steady_clock::now();
+    const RunResult cr_branch_recompiler_result =
+        cr_branch_recompiler.run(cr_branch_compiled, pc_relative_benchmark_steps);
+    const auto cr_branch_recompiler_end = std::chrono::steady_clock::now();
+    const auto cr_branch_interpreter_ms = std::chrono::duration_cast<
+        std::chrono::milliseconds>(
+            cr_branch_interpreter_end - cr_branch_interpreter_start).count();
+    const auto cr_branch_recompiler_ms = std::chrono::duration_cast<
+        std::chrono::milliseconds>(
+            cr_branch_recompiler_end - cr_branch_recompiler_start).count();
+    const RecompilerStatistics& cr_branch_stats_after =
+        cr_branch_recompiler.statistics();
+    if (cr_branch_interpreter_result.steps != pc_relative_benchmark_steps ||
+        cr_branch_recompiler_result.steps != pc_relative_benchmark_steps ||
+        cr_branch_interpreted.state.gpr != cr_branch_compiled.state.gpr ||
+        cr_branch_interpreted.state.cr != cr_branch_compiled.state.cr)
+    {
+        std::cerr << "CR branch benchmark interpreter/JIT mismatch\n";
+        return 1;
+    }
+    std::cout << "\nCR-tested branch-loop workload (2 guest instructions/block):"
+              << "\nGuest steps: " << pc_relative_benchmark_steps
+              << "\nInterpreter: " << cr_branch_interpreter_ms << " ms"
+              << "\nRecompiler: " << cr_branch_recompiler_ms << " ms"
+              << "\nSpeedup: " << std::fixed << std::setprecision(2)
+              << static_cast<double>(cr_branch_interpreter_ms) /
+                    static_cast<double>(cr_branch_recompiler_ms)
+              << "x vs interpreter"
+              << "\nDispatcher entries: "
+              << cr_branch_stats_after.dispatcher_entries -
+                    cr_branch_stats_before.dispatcher_entries
+              << "\nNative guest instructions: "
+              << cr_branch_stats_after.native_instructions -
+                    cr_branch_stats_before.native_instructions
+              << "\nGPR3/CR interpreter/JIT: " << cr_branch_interpreted.state.gpr[3]
+              << '/' << cr_branch_compiled.state.gpr[3] << " 0x"
+              << std::hex << cr_branch_interpreted.state.cr << "/0x"
+              << cr_branch_compiled.state.cr << std::dec << '\n';
 
     EspressoCore memory_interpreted(0x1000U);
     EspressoCore memory_compiled(0x1000U);
