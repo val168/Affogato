@@ -1,5 +1,6 @@
 # Development Progress
 
+- Native JIT `fdiv` now matches the interpreter's binary64 divide path: ordered NaN handling, `VXSNAN`/`VXZDZ`/`VXIDI`, `ZX`/`ZE`, destination suppression, correctly signed infinities/zeros, scoped FPRF/FI/FR status, PS0-only writes, and double-precision history. Differential tests cover WWHD's exact operands, source aliases, NaN priority/signaling behavior, invalid exceptions, divide-by-zero enables, and infinity denominator. Debug and Release CTest pass. WWHD remains at 6,080,538 instructions and the same null-target fetch; fallbacks fell from 49,641 to 45,250 (4,391 native `fdiv`). BOTW remains at 860,172 and the same stop, with 3,054 fallbacks; this startup path did not execute `fdiv`. No wall-clock speedup is claimed.
 - Native JIT `fdivs` matches the interpreter's single-precision division behavior, including NaN priority, `VXSNAN`/`VXZDZ`/`VXIDI`, `ZX`/`ZE`, invalid/divide-by-zero write suppression, paired-lane writes, FPSCR status, and the current infinity/zero rule. Differential tests cover the real-game operands, aliases, NaNs, invalid cases, divide-by-zero enables, and infinity/zero. Debug and Release CTest pass. WWHD remains at 6,080,538 instructions and the same null-target fetch; fallbacks fell from 58,085 to 49,641 (8,444 native `fdivs`). BOTW remains at 860,172 and the same stop; fallbacks fell from 3,076 to 3,054 (22 native `fdivs`). No wall-clock speedup is claimed.
 
 - Native JIT `fsubs` now mirrors the interpreter's single-precision subtraction pipeline: A→B NaN selection, `VXSNAN`, same-sign infinity `VXISI`, VE destination suppression, binary64 subtraction followed by one binary32 rounding, paired-lane writes, FPSCR updates, and arithmetic history. Differential cases cover normal/inexact results, invalid infinities with VE on/off, sNaN with VE on/off, and signed zero. Debug/Release builds and CTest pass. WWHD remains at 6,080,538 instructions, stop CIA `0`, GPR3/4/5 `0/512/256`, and null-target fetch `0x46524D48`; fallbacks fell from 68,651 to 58,085 (10,566 native `fsubs`). BOTW remains at 860,172 with the same stop/register checkpoint; fallbacks fell from 3,102 to 3,076 (26 native `fsubs`). No wall-time speedup is claimed.
@@ -96,7 +97,8 @@
 
 ## Completed commits
 
-- `pending` - `jit: emit native fdivs`
+- `pending` - `jit: emit native fdiv`
+- `f715ef5` - `jit: emit native fdivs`
 - `65b7b79` - `jit: emit native fsubs`
 - `ee2ec26` - `jit: emit native add record form`
 - `ba951c2` - `jit: emit native addze`
