@@ -3119,6 +3119,36 @@ void recompiler_branch_test()
     assert(ctr_recompiler.statistics().compiled_blocks == 1U);
     assert(ctr_recompiler.statistics().dispatcher_entries == 2U);
     assert(ctr_recompiler.statistics().interpreter_fallbacks == 0U);
+
+    // A CR-tested linked branch to its fallthrough has identical control flow
+    // for either CR value, but LK must be written in both cases.
+    for (const std::uint32_t cr : {0U, 0x20000000U})
+    {
+        EspressoCore linked_fallthrough(0x1000U);
+        EspressoCore linked_fallthrough_interpreted(0x1000U);
+        for (EspressoCore* candidate : {&linked_fallthrough,
+                                        &linked_fallthrough_interpreted})
+        {
+            candidate->memory.write32_be(0x100U, 0x41820005U); // beq+ .+4
+            candidate->memory.write32_be(0x104U, 0x38630001U); // addi r3,r3,1
+            candidate->memory.write32_be(0x108U, 0x4BFFFFF8U); // b 0x100
+            candidate->state.cia = 0x100U;
+            candidate->state.cr = cr;
+            candidate->state.ctr = 0x12345678U;
+        }
+        const RunResult linked_oracle = linked_fallthrough_interpreted.run(6U);
+        Recompiler linked_recompiler;
+        const RunResult linked_result = linked_recompiler.run(linked_fallthrough, 6U);
+        assert(linked_result.reason == linked_oracle.reason);
+        assert(linked_result.steps == 6U && linked_result.steps == linked_oracle.steps);
+        assert(linked_fallthrough.state.cia == linked_fallthrough_interpreted.state.cia);
+        assert(linked_fallthrough.state.lr == 0x104U);
+        assert(linked_fallthrough.state.ctr == 0x12345678U);
+        assert(linked_fallthrough.state.gpr == linked_fallthrough_interpreted.state.gpr);
+        assert(linked_fallthrough.state.cr == linked_fallthrough_interpreted.state.cr);
+        assert(linked_recompiler.statistics().compiled_blocks == 1U);
+        assert(linked_recompiler.statistics().interpreter_fallbacks == 0U);
+    }
 }
 
 void recompiler_fast_lookup_cache_test()

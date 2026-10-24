@@ -60,6 +60,27 @@ void install_pc_relative_loop(affogato::cpu::espresso::EspressoCore& core)
     core.state.cia = guest_code;
 }
 
+void install_ctr_fallthrough_loop(affogato::cpu::espresso::EspressoCore& core)
+{
+    // bdnz .+4; addi r3,r3,1; b guest_code. The conditional branch always
+    // continues at the same guest PC, but must still decrement CTR.
+    core.memory.write32_be(guest_code, 0x42000004U);
+    core.memory.write32_be(guest_code + 4U, 0x38630001U);
+    core.memory.write32_be(guest_code + 8U, 0x4BFFFFF8U);
+    core.state.cia = guest_code;
+    core.state.ctr = 0xFFFFFFFFU;
+}
+
+void install_counted_loop(affogato::cpu::espresso::EspressoCore& core)
+{
+    // addi r3,r3,1; bdnz guest_code. Five million iterations are exactly ten
+    // million instructions, including the final not-taken branch.
+    core.memory.write32_be(guest_code, 0x38630001U);
+    core.memory.write32_be(guest_code + 4U, 0x4200FFFCU);
+    core.state.cia = guest_code;
+    core.state.ctr = 5'000'000U;
+}
+
 }
 
 int main()
@@ -203,6 +224,101 @@ int main()
                     pc_stats_before.interpreter_fallbacks
               << "\nGPR3 interpreter/JIT: " << pc_interpreted.state.gpr[3]
               << '/' << pc_compiled.state.gpr[3] << '\n';
+
+    EspressoCore ctr_interpreted(0x1000U);
+    EspressoCore ctr_compiled(0x1000U);
+    install_ctr_fallthrough_loop(ctr_interpreted);
+    install_ctr_fallthrough_loop(ctr_compiled);
+    Recompiler ctr_recompiler;
+    static_cast<void>(ctr_recompiler.run(ctr_compiled, 3U));
+    ctr_compiled.state.cia = guest_code;
+    ctr_compiled.state.gpr[3] = 0U;
+    ctr_compiled.state.ctr = 0xFFFFFFFFU;
+    const RecompilerStatistics ctr_stats_before = ctr_recompiler.statistics();
+    const auto ctr_interpreter_start = std::chrono::steady_clock::now();
+    const RunResult ctr_interpreter_result =
+        ctr_interpreted.run(pc_relative_benchmark_steps);
+    const auto ctr_interpreter_end = std::chrono::steady_clock::now();
+    const auto ctr_recompiler_start = std::chrono::steady_clock::now();
+    const RunResult ctr_recompiler_result =
+        ctr_recompiler.run(ctr_compiled, pc_relative_benchmark_steps);
+    const auto ctr_recompiler_end = std::chrono::steady_clock::now();
+    const auto ctr_interpreter_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        ctr_interpreter_end - ctr_interpreter_start).count();
+    const auto ctr_recompiler_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        ctr_recompiler_end - ctr_recompiler_start).count();
+    const RecompilerStatistics& ctr_stats_after = ctr_recompiler.statistics();
+    if (ctr_interpreter_result.steps != pc_relative_benchmark_steps ||
+        ctr_recompiler_result.steps != pc_relative_benchmark_steps ||
+        ctr_interpreted.state.gpr != ctr_compiled.state.gpr ||
+        ctr_interpreted.state.ctr != ctr_compiled.state.ctr)
+    {
+        std::cerr << "CTR fallthrough benchmark interpreter/JIT mismatch\n";
+        return 1;
+    }
+    std::cout << "\nCTR fallthrough-branch workload (3 guest instructions/block):"
+              << "\nGuest steps: " << pc_relative_benchmark_steps
+              << "\nInterpreter: " << ctr_interpreter_ms << " ms"
+              << "\nRecompiler: " << ctr_recompiler_ms << " ms"
+              << "\nSpeedup: " << std::fixed << std::setprecision(2)
+              << static_cast<double>(ctr_interpreter_ms) /
+                    static_cast<double>(ctr_recompiler_ms)
+              << "x vs interpreter"
+              << "\nDispatcher entries: "
+              << ctr_stats_after.dispatcher_entries - ctr_stats_before.dispatcher_entries
+              << "\nNative guest instructions: "
+              << ctr_stats_after.native_instructions - ctr_stats_before.native_instructions
+              << "\nCTR interpreter/JIT: " << ctr_interpreted.state.ctr
+              << '/' << ctr_compiled.state.ctr << '\n';
+
+    EspressoCore counted_interpreted(0x1000U);
+    EspressoCore counted_compiled(0x1000U);
+    install_counted_loop(counted_interpreted);
+    install_counted_loop(counted_compiled);
+    Recompiler counted_recompiler;
+    static_cast<void>(counted_recompiler.run(counted_compiled, 2U));
+    counted_compiled.state.cia = guest_code;
+    counted_compiled.state.gpr[3] = 0U;
+    counted_compiled.state.ctr = 5'000'000U;
+    const RecompilerStatistics counted_stats_before = counted_recompiler.statistics();
+    const auto counted_interpreter_start = std::chrono::steady_clock::now();
+    const RunResult counted_interpreter_result =
+        counted_interpreted.run(pc_relative_benchmark_steps);
+    const auto counted_interpreter_end = std::chrono::steady_clock::now();
+    const auto counted_recompiler_start = std::chrono::steady_clock::now();
+    const RunResult counted_recompiler_result =
+        counted_recompiler.run(counted_compiled, pc_relative_benchmark_steps);
+    const auto counted_recompiler_end = std::chrono::steady_clock::now();
+    const auto counted_interpreter_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        counted_interpreter_end - counted_interpreter_start).count();
+    const auto counted_recompiler_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        counted_recompiler_end - counted_recompiler_start).count();
+    const RecompilerStatistics& counted_stats_after = counted_recompiler.statistics();
+    if (counted_interpreter_result.steps != pc_relative_benchmark_steps ||
+        counted_recompiler_result.steps != pc_relative_benchmark_steps ||
+        counted_interpreted.state.gpr != counted_compiled.state.gpr ||
+        counted_interpreted.state.ctr != counted_compiled.state.ctr)
+    {
+        std::cerr << "Counted branch-loop benchmark interpreter/JIT mismatch\n";
+        return 1;
+    }
+    std::cout << "\nCounted branch-loop workload (2 guest instructions/block):"
+              << "\nGuest steps: " << pc_relative_benchmark_steps
+              << "\nInterpreter: " << counted_interpreter_ms << " ms"
+              << "\nRecompiler: " << counted_recompiler_ms << " ms"
+              << "\nSpeedup: " << std::fixed << std::setprecision(2)
+              << static_cast<double>(counted_interpreter_ms) /
+                    static_cast<double>(counted_recompiler_ms)
+              << "x vs interpreter"
+              << "\nDispatcher entries: "
+              << counted_stats_after.dispatcher_entries -
+                    counted_stats_before.dispatcher_entries
+              << "\nNative guest instructions: "
+              << counted_stats_after.native_instructions -
+                    counted_stats_before.native_instructions
+              << "\nGPR3/CTR interpreter/JIT: " << counted_interpreted.state.gpr[3]
+              << '/' << counted_compiled.state.gpr[3] << ' '
+              << counted_interpreted.state.ctr << '/' << counted_compiled.state.ctr << '\n';
 
     EspressoCore memory_interpreted(0x1000U);
     EspressoCore memory_compiled(0x1000U);
