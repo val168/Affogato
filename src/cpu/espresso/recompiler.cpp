@@ -283,6 +283,7 @@ struct NativeExecutionContext
     std::array<NativeFmulsRecord, 64> fmuls_records{};
     std::array<NativeFmaddsRecord, 64> fmadds_records{};
     std::array<NativeFmaddsRecord, 64> fnmsubs_records{};
+    std::array<NativeFmaddsRecord, 64> fmsubs_records{};
     std::array<NativeFaddsRecord, 64> fadds_records{};
     std::array<NativeFaddsRecord, 64> fsubs_records{};
     std::array<NativeFaddsRecord, 64> fdivs_records{};
@@ -1323,7 +1324,8 @@ extern "C" void native_fnmsubs(
     std::uint32_t source_a,
     std::uint32_t source_b,
     std::uint32_t source_c,
-    std::uint32_t instruction_index) noexcept
+    std::uint32_t instruction_index,
+    std::uint32_t negate_output) noexcept
 {
     constexpr std::uint64_t exponent_mask = 0x7FF0000000000000ULL;
     constexpr std::uint64_t fraction_mask = 0x000FFFFFFFFFFFFFULL;
@@ -1331,14 +1333,17 @@ extern "C" void native_fnmsubs(
     constexpr std::uint64_t quiet_bit = 0x0008000000000000ULL;
     if (destination >= state->fpr.size() || source_a >= state->fpr.size() ||
         source_b >= state->fpr.size() || source_c >= state->fpr.size() ||
-        instruction_index >= context->fnmsubs_records.size())
+        instruction_index >= context->fnmsubs_records.size() ||
+        instruction_index >= context->fmsubs_records.size())
     {
         context->failed = true;
         context->failed_instruction_index = instruction_index;
         return;
     }
 
-    NativeFmaddsRecord& record = context->fnmsubs_records[instruction_index];
+    NativeFmaddsRecord& record = negate_output != 0U
+        ? context->fnmsubs_records[instruction_index]
+        : context->fmsubs_records[instruction_index];
     record.a_raw = state->fpr[source_a];
     record.b_raw = state->fpr[source_b];
     record.c_raw = state->fpr[source_c];
@@ -1451,7 +1456,7 @@ extern "C" void native_fnmsubs(
     const double temporary = std::fma(std::bit_cast<double>(a_raw),
         std::bit_cast<double>(rounded_c_raw), -std::bit_cast<double>(b_raw));
     std::uint64_t temporary_raw = std::bit_cast<std::uint64_t>(temporary);
-    if (!is_nan(temporary_raw))
+    if (negate_output != 0U && !is_nan(temporary_raw))
     {
         temporary_raw ^= sign_mask;
     }
@@ -3326,6 +3331,7 @@ struct BlockCode
     case Opcode::floating_subtract_single:
     case Opcode::floating_divide_single:
     case Opcode::floating_multiply_single:
+    case Opcode::floating_multiply_subtract_single:
     case Opcode::floating_multiply_add_single:
     case Opcode::floating_negative_multiply_subtract_single:
     case Opcode::floating_multiply_double:
@@ -3487,6 +3493,7 @@ struct BlockCode
     case Opcode::floating_divide_single: return "fdivs";
     case Opcode::floating_multiply_single: return "fmuls";
     case Opcode::floating_multiply_add_single: return "fmadds";
+    case Opcode::floating_multiply_subtract_single: return "fmsubs";
     case Opcode::floating_negative_multiply_subtract_single: return "fnmsubs";
     case Opcode::floating_multiply_double: return "fmul";
     case Opcode::floating_multiply_add_double: return "fmadd";
@@ -5471,6 +5478,7 @@ struct Recompiler::Impl
                 invoke->set_arg(6, imm(static_cast<std::uint32_t>(index)));
                 break;
             }
+            case Opcode::floating_multiply_subtract_single:
             case Opcode::floating_negative_multiply_subtract_single:
             {
                 auto* invoke = static_cast<InvokeNode*>(nullptr);
@@ -5479,7 +5487,7 @@ struct Recompiler::Impl
                 compiler.invoke(Out(invoke), helper_address,
                     FuncSignature::build<void, NativeExecutionContext*, CpuState*,
                         std::uint32_t, std::uint32_t, std::uint32_t,
-                        std::uint32_t, std::uint32_t>(CallConvId::kCDecl));
+                        std::uint32_t, std::uint32_t, std::uint32_t>(CallConvId::kCDecl));
                 invoke->set_arg(0, context);
                 invoke->set_arg(1, state);
                 invoke->set_arg(2, imm(insn.fp_register));
@@ -5487,6 +5495,8 @@ struct Recompiler::Impl
                 invoke->set_arg(4, imm(insn.fp_source_b));
                 invoke->set_arg(5, imm(insn.fp_source_c));
                 invoke->set_arg(6, imm(static_cast<std::uint32_t>(index)));
+                invoke->set_arg(7, imm(insn.opcode ==
+                    Opcode::floating_negative_multiply_subtract_single ? 1U : 0U));
                 break;
             }
             case Opcode::floating_multiply_double:
@@ -6899,12 +6909,15 @@ RunResult Recompiler::run(EspressoCore& core, std::size_t max_steps)
                 continue;
             }
             if (insn.opcode == Opcode::floating_multiply_add_single ||
+                insn.opcode == Opcode::floating_multiply_subtract_single ||
                 insn.opcode == Opcode::floating_negative_multiply_subtract_single)
             {
                 InstructionHistoryEntry entry = native_history(insn, cia);
                 const NativeFmaddsRecord& record =
                     insn.opcode == Opcode::floating_multiply_add_single
-                        ? context.fmadds_records[i] : context.fnmsubs_records[i];
+                        ? context.fmadds_records[i]
+                        : insn.opcode == Opcode::floating_multiply_subtract_single
+                            ? context.fmsubs_records[i] : context.fnmsubs_records[i];
                 entry.has_fp_arithmetic = true;
                 entry.fp_arithmetic_destination = insn.fp_register;
                 entry.fp_arithmetic_source_a = insn.fp_source_a;

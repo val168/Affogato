@@ -4102,7 +4102,8 @@ void floating_multiply_subtract_single_tests()
     assert(decode(encode_fmsubs(1U, 2U, 3U, 4U, true)).opcode == Opcode::unsupported);
 
     const auto execute = [&](std::uint64_t a, std::uint64_t b, std::uint64_t c,
-                             std::uint32_t fpscr = 0U) {
+                             std::uint32_t fpscr = 0U,
+                             bool use_recompiler = false) {
         EspressoCore core(16U);
         core.state.fpr[1] = 0x1111000000000001ULL;
         core.state.fpr_ps1[1] = 0xDEADBEEF01234567ULL;
@@ -4111,8 +4112,15 @@ void floating_multiply_subtract_single_tests()
         core.state.fpr[4] = c;
         core.state.fpscr = fpscr;
         core.memory.write32_be(0U, instruction);
-        const RunResult result = core.run(1U);
+        Recompiler recompiler;
+        const RunResult result = use_recompiler
+            ? recompiler.run(core, 1U) : core.run(1U);
         assert(result.steps == 1U);
+        if (use_recompiler)
+        {
+            assert(recompiler.statistics().native_instructions == 1U);
+            assert(recompiler.statistics().interpreter_fallbacks == 0U);
+        }
         return std::pair{core.state, result};
     };
 
@@ -4122,6 +4130,15 @@ void floating_multiply_subtract_single_tests()
     assert(basic.first.fpr[1] == 0x3FF0000000000000ULL);
     assert(basic.first.fpr_ps1[1] == 0x3FF0000000000000ULL);
     assert(format_instruction_history(basic.second).find("fmsubs") != std::string::npos);
+
+    const auto basic_jit = execute(0x4000000000000000ULL,
+                                   0x4014000000000000ULL,
+                                   0x4008000000000000ULL, 0U, true);
+    assert(basic_jit.first.fpr[1] == basic.first.fpr[1]);
+    assert(basic_jit.first.fpr_ps1[1] == basic.first.fpr_ps1[1]);
+    assert(basic_jit.first.fpscr == basic.first.fpscr);
+    assert(format_instruction_history(basic_jit.second) ==
+           format_instruction_history(basic.second));
 
     const auto invalid = execute(0x7FF0000000000000ULL,
                                  0x3FF0000000000000ULL,
@@ -4137,6 +4154,12 @@ void floating_multiply_subtract_single_tests()
     assert((suppressed.first.fpscr & fpscr::vximz_mask) != 0U);
     assert(suppressed.first.fpr[1] == 0x1111000000000001ULL);
     assert(suppressed.first.fpr_ps1[1] == 0xDEADBEEF01234567ULL);
+
+    const auto suppressed_jit = execute(0x7FF0000000000000ULL,
+        0x3FF0000000000000ULL, 0x0000000000000000ULL, fpscr::ve_mask, true);
+    assert(suppressed_jit.first.fpscr == suppressed.first.fpscr);
+    assert(suppressed_jit.first.fpr[1] == suppressed.first.fpr[1]);
+    assert(suppressed_jit.first.fpr_ps1[1] == suppressed.first.fpr_ps1[1]);
 }
 
 void floating_multiply_add_single_tests()
