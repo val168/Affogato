@@ -4,6 +4,7 @@
 
 ## WWHD checkpoint
 
+- Native JIT `fsub` now snapshots both operands, preserves A→B NaN payload priority, handles `VXSNAN` and same-sign infinity `VXISI` with VE suppression, and applies the interpreter's TwoDiff rounding-residual/FPRF policy for normal/zero results while retaining FPRF-only handling for subnormal/overflow cases. Differential coverage includes exact and inexact results, signed zero, NaNs, invalid-enabled suppression, and aliasing. Debug/Release builds and CTest pass. WWHD remains at 6,080,538 instructions and the same null-CTR fetch (`0x46524D48`); fallbacks fell by 26,810 to 267,389. BOTW remains at 860,172 and the same stop; fallbacks fell by 31 to 3,514. No wall-time improvement is claimed.
 - Native JIT `fmadd` now uses a fused `std::fma` helper with pre-write A/B/C snapshots, architectural A→C→B NaN priority, `VXSNAN`/`VXIMZ`/`VXISI`, VE write suppression, PS0-only commit, and the interpreter's scoped exactness/FPRF policy. Differential tests cover the cancellation-sensitive fused case, NaN propagation, invalid exceptions, suppression, source/destination aliases, and history. Debug/Release builds and CTest pass. WWHD remains at 6,080,538 instructions and the same null-CTR fetch (`0x46524D48`); fallbacks fell by 149,463 to 294,199. BOTW remains at 860,172 and the same stop with 3,545 fallbacks. No wall-time improvement is claimed.
 - Native JIT `fmul` now uses a focused helper that snapshots PS0 operands, preserves the interpreter's NaN payload/`VXSNAN`/`VXIMZ` behavior and VE suppression, computes binary64 multiplication and normal-case rounding status, and limits exceptional subnormal/overflow status to the existing FPRF-only policy. Differential tests cover inexact arithmetic, qNaN/sNaN, invalid-enabled suppression, source/destination aliasing, and trace naming. Debug/Release builds and CTest pass. WWHD remains at 6,080,538 instructions and the same null-CTR fetch (`0x46524D48`); fallbacks fell by 71,663 to 443,662. BOTW remains at 860,172 and the same stop; fallbacks fell by 53 to 3,545. No wall-time improvement is claimed.
 - Latest dual-game Release regression after native `stbu`: WWHD remains at 6,080,538 instructions, stop CIA `0`, GPR3/4/5 `0/512/256`, unsupported null-target fetch `0x46524D48`; 5,532,557 native instructions, 547,982 interpreter fallbacks, 13,994 compiled blocks. BOTW remains at 860,172 instructions, stop CIA `0`, GPR3/4/5 `0/4,194,304/64`, same unsupported fetch; 856,544 native instructions, 3,629 fallbacks, 18,079 blocks. BOTW's 33 `stbu` calls are now native; no wall-time speedup is claimed.
@@ -83,6 +84,7 @@
 
 ## Completed commits
 
+- `0bd2cd4` - `jit: emit native fmadd`
 - `425cb91` - `jit: emit native fmul`
 - `995f95c` - `jit: emit native frsp`
 - `b92c642` - `jit: emit native stbu`

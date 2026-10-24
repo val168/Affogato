@@ -78,6 +78,14 @@ struct NativeFmaddRecord
     bool wrote_result{};
 };
 
+struct NativeFsubRecord
+{
+    std::uint64_t a_raw{};
+    std::uint64_t b_raw{};
+    std::uint64_t result_raw{};
+    bool wrote_result{};
+};
+
 struct NativePsqStoreRecord
 {
     std::uint64_t source_ps0{};
@@ -117,6 +125,7 @@ struct NativeExecutionContext
     std::array<NativeFrspRecord, 64> frsp_records{};
     std::array<NativeFmulRecord, 64> fmul_records{};
     std::array<NativeFmaddRecord, 64> fmadd_records{};
+    std::array<NativeFsubRecord, 64> fsub_records{};
     std::array<NativePsqStoreRecord, 64> psq_store_records{};
     std::array<NativePsqLoadRecord, 64> psq_load_records{};
     std::array<NativeMulliRecord, 64> mulli_records{};
@@ -903,6 +912,114 @@ extern "C" void native_fmadd(
     commit(raw_result, known_exact);
 }
 
+extern "C" void native_fsub(
+    NativeExecutionContext* context,
+    CpuState* state,
+    std::uint32_t destination,
+    std::uint32_t source_a,
+    std::uint32_t source_b,
+    std::uint32_t instruction_index) noexcept
+{
+    constexpr std::uint64_t exponent_mask = 0x7FF0000000000000ULL;
+    constexpr std::uint64_t fraction_mask = 0x000FFFFFFFFFFFFFULL;
+    constexpr std::uint64_t sign_mask = 0x8000000000000000ULL;
+    constexpr std::uint64_t quiet_bit = 0x0008000000000000ULL;
+    if (destination >= state->fpr.size() || source_a >= state->fpr.size() ||
+        source_b >= state->fpr.size() || instruction_index >= context->fsub_records.size())
+    {
+        context->failed = true;
+        context->failed_instruction_index = instruction_index;
+        return;
+    }
+
+    NativeFsubRecord& record = context->fsub_records[instruction_index];
+    record.a_raw = state->fpr[source_a];
+    record.b_raw = state->fpr[source_b];
+    const std::uint64_t a_raw = record.a_raw;
+    const std::uint64_t b_raw = record.b_raw;
+    const auto is_nan = [&](std::uint64_t raw) {
+        return (raw & exponent_mask) == exponent_mask &&
+            (raw & fraction_mask) != 0U;
+    };
+    const auto is_signaling_nan = [&](std::uint64_t raw) {
+        return is_nan(raw) && (raw & quiet_bit) == 0U;
+    };
+    const auto is_infinity = [&](std::uint64_t raw) {
+        return (raw & ~sign_mask) == 0x7FF0000000000000ULL;
+    };
+    const auto commit = [&](std::uint64_t raw_result, bool inexact, bool rounded_up) {
+        state->fpr[destination] = raw_result;
+        native_set_double_result_status(state, raw_result, inexact, rounded_up);
+        record.result_raw = raw_result;
+        record.wrote_result = true;
+    };
+    const auto commit_nan = [&](std::uint64_t source_raw) {
+        const std::uint64_t quieted = is_nan(source_raw)
+            ? source_raw | quiet_bit : 0x7FF8000000000000ULL;
+        commit(quieted, false, false);
+    };
+    const auto signal_invalid = [&](std::uint32_t exception, std::uint64_t source_raw) {
+        native_raise_fpscr_exception(state, exception);
+        if ((state->fpscr & fpscr::ve_mask) == 0U)
+        {
+            commit_nan(source_raw);
+        }
+    };
+
+    if (is_signaling_nan(a_raw) || is_signaling_nan(b_raw))
+    {
+        signal_invalid(fpscr::vxsnan_mask,
+            is_signaling_nan(a_raw) ? a_raw : b_raw);
+        return;
+    }
+    if (is_nan(a_raw) || is_nan(b_raw))
+    {
+        commit_nan(is_nan(a_raw) ? a_raw : b_raw);
+        return;
+    }
+
+    const bool a_infinity = is_infinity(a_raw);
+    const bool b_infinity = is_infinity(b_raw);
+    if (a_infinity && b_infinity && ((a_raw ^ b_raw) & sign_mask) == 0U)
+    {
+        signal_invalid(fpscr::vxisi_mask, 0U);
+        return;
+    }
+
+    const double a = std::bit_cast<double>(a_raw);
+    const double b = std::bit_cast<double>(b_raw);
+    const double result = a - b;
+    const std::uint64_t raw_result = std::bit_cast<std::uint64_t>(result);
+    if (a_infinity || b_infinity)
+    {
+        commit(raw_result, false, false);
+        return;
+    }
+
+    if (native_binary64_normal_or_zero(a_raw) &&
+        native_binary64_normal_or_zero(b_raw) &&
+        native_binary64_normal_or_zero(raw_result))
+    {
+        const double virtual_b = a - result;
+        const double virtual_a = result + virtual_b;
+        const double roundoff_b = virtual_b - b;
+        const double roundoff_a = a - virtual_a;
+        const double error = roundoff_a + roundoff_b;
+        const bool inexact = error != 0.0;
+        const bool rounded_up = inexact && result != 0.0 &&
+            ((result > 0.0 && error < 0.0) || (result < 0.0 && error > 0.0));
+        commit(raw_result, inexact, rounded_up);
+    }
+    else
+    {
+        // Match the interpreter's current subnormal/overflow status scope.
+        state->fpr[destination] = raw_result;
+        native_set_double_fprf(state, raw_result);
+        record.result_raw = raw_result;
+        record.wrote_result = true;
+    }
+}
+
 extern "C" std::uint32_t native_memory_access(
     NativeExecutionContext* context,
     std::uint32_t address,
@@ -1408,6 +1525,7 @@ struct BlockCode
     case Opcode::floating_round_to_single:
     case Opcode::floating_multiply_double:
     case Opcode::floating_multiply_add_double:
+    case Opcode::floating_subtract_double:
     case Opcode::branch:
     case Opcode::conditional_branch:
     case Opcode::conditional_branch_to_link_register:
@@ -1533,6 +1651,7 @@ struct BlockCode
     case Opcode::floating_round_to_single: return "frsp";
     case Opcode::floating_multiply_double: return "fmul";
     case Opcode::floating_multiply_add_double: return "fmadd";
+    case Opcode::floating_subtract_double: return "fsub";
     case Opcode::shift_left_word: return "slw";
     case Opcode::shift_right_word: return "srw";
     case Opcode::arithmetic_shift_right_immediate: return "srawi";
@@ -3090,6 +3209,23 @@ struct Recompiler::Impl
                 invoke->set_arg(6, imm(static_cast<std::uint32_t>(index)));
                 break;
             }
+            case Opcode::floating_subtract_double:
+            {
+                auto* invoke = static_cast<InvokeNode*>(nullptr);
+                const auto helper_address = static_cast<std::uint64_t>(
+                    reinterpret_cast<std::uintptr_t>(&native_fsub));
+                compiler.invoke(Out(invoke), helper_address,
+                    FuncSignature::build<void, NativeExecutionContext*, CpuState*,
+                        std::uint32_t, std::uint32_t, std::uint32_t,
+                        std::uint32_t>(CallConvId::kCDecl));
+                invoke->set_arg(0, context);
+                invoke->set_arg(1, state);
+                invoke->set_arg(2, imm(insn.fp_register));
+                invoke->set_arg(3, imm(insn.fp_source_a));
+                invoke->set_arg(4, imm(insn.fp_source_b));
+                invoke->set_arg(5, imm(static_cast<std::uint32_t>(index)));
+                break;
+            }
             case Opcode::paired_single_merge00:
             case Opcode::paired_single_merge10:
             {
@@ -4136,6 +4272,25 @@ RunResult Recompiler::run(EspressoCore& core, std::size_t max_steps)
                 entry.fp_arithmetic_c_raw = record.c_raw;
                 entry.fp_arithmetic_source_count = 3U;
                 entry.has_fp_arithmetic_source_c = true;
+                if (record.wrote_result)
+                {
+                    entry.has_fp_arithmetic_result = true;
+                    entry.fp_arithmetic_result_raw = record.result_raw;
+                }
+                core.append_instruction_history(std::move(entry));
+                continue;
+            }
+            if (insn.opcode == Opcode::floating_subtract_double)
+            {
+                InstructionHistoryEntry entry = native_history(insn, cia);
+                const NativeFsubRecord& record = context.fsub_records[i];
+                entry.has_fp_arithmetic = true;
+                entry.fp_arithmetic_destination = insn.fp_register;
+                entry.fp_arithmetic_source_a = insn.fp_source_a;
+                entry.fp_arithmetic_source_b = insn.fp_source_b;
+                entry.fp_arithmetic_a_raw = record.a_raw;
+                entry.fp_arithmetic_b_raw = record.b_raw;
+                entry.fp_arithmetic_source_count = 2U;
                 if (record.wrote_result)
                 {
                     entry.has_fp_arithmetic_result = true;

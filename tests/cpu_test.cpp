@@ -3080,7 +3080,8 @@ void floating_divide_single_tests()
     };
     const auto execute = [&](std::uint8_t destination, std::uint8_t source_a,
                              std::uint8_t source_b, std::uint64_t a_raw,
-                             std::uint64_t b_raw, std::uint32_t fpscr_value = 0U) {
+                             std::uint64_t b_raw, std::uint32_t fpscr_value = 0U,
+                             bool use_recompiler = false) {
         EspressoCore core(4U);
         for (std::size_t index = 0; index < core.state.gpr.size(); ++index)
         {
@@ -3100,7 +3101,9 @@ void floating_divide_single_tests()
         const auto gpr_before = core.state.gpr;
         core.memory.write32_be(0U, encode_fdivs(destination, source_a, source_b));
 
-        Execution execution{.state = {}, .result = core.run(1U)};
+        Recompiler recompiler;
+        Execution execution{.state = {}, .result = use_recompiler
+            ? recompiler.run(core, 1U) : core.run(1U)};
         assert(execution.result.reason == StopReason::instruction_limit);
         assert(core.state.cia == 4U);
         assert(core.state.gpr == gpr_before);
@@ -5395,7 +5398,8 @@ void floating_subtract_double_tests()
     };
     const auto execute = [&](std::uint8_t destination, std::uint8_t source_a,
                              std::uint8_t source_b, std::uint64_t a_raw,
-                             std::uint64_t b_raw, std::uint32_t fpscr_value = 0U) {
+                             std::uint64_t b_raw, std::uint32_t fpscr_value = 0U,
+                             bool use_recompiler = false) {
         EspressoCore core(16U);
         for (std::size_t index = 0; index < core.state.gpr.size(); ++index)
         {
@@ -5423,7 +5427,9 @@ void floating_subtract_double_tests()
         const auto ctr_before = core.state.ctr;
         const auto memory_before = core.memory.read32_be(8U);
 
-        Execution execution{.state = {}, .result = core.run(1U)};
+        Recompiler recompiler;
+        Execution execution{.state = {}, .result = use_recompiler
+            ? recompiler.run(core, 1U) : core.run(1U)};
         assert(execution.result.reason == StopReason::instruction_limit);
         assert(execution.result.steps == 1U);
         assert(core.state.cia == 4U);
@@ -5559,6 +5565,35 @@ void floating_subtract_double_tests()
            std::string::npos);
     assert(trace.find("-> f12=0 [0x0000000000000000]") != std::string::npos);
     assert(trace.find("single=") == std::string::npos);
+
+    const auto assert_jit_matches_interpreter = [&](std::uint8_t destination,
+            std::uint8_t source_a, std::uint8_t source_b, std::uint64_t a_raw,
+            std::uint64_t b_raw, std::uint32_t fpscr_value = 0U) {
+        const Execution interpreted = execute(
+            destination, source_a, source_b, a_raw, b_raw, fpscr_value);
+        const Execution compiled = execute(
+            destination, source_a, source_b, a_raw, b_raw, fpscr_value, true);
+        assert(compiled.result.reason == interpreted.result.reason);
+        assert(compiled.result.steps == interpreted.result.steps);
+        assert(compiled.state.gpr == interpreted.state.gpr);
+        assert(compiled.state.fpr == interpreted.state.fpr);
+        assert(compiled.state.fpr_ps1 == interpreted.state.fpr_ps1);
+        assert(compiled.state.cr == interpreted.state.cr);
+        assert(compiled.state.xer == interpreted.state.xer);
+        assert(compiled.state.lr == interpreted.state.lr);
+        assert(compiled.state.ctr == interpreted.state.ctr);
+        assert(compiled.state.fpscr == interpreted.state.fpscr);
+        assert(format_instruction_history(compiled.result).find("fsub") !=
+               std::string::npos);
+    };
+    assert_jit_matches_interpreter(12U, 11U, 9U,
+        0x4330000080000000ULL, 0x4330000080000000ULL,
+        fpscr::fi_mask | fpscr::fr_mask | fpscr::xx_mask);
+    assert_jit_matches_interpreter(3U, 1U, 2U, one, 0x3C90000000000000ULL);
+    assert_jit_matches_interpreter(3U, 1U, 2U, snan, one, fpscr::ve_mask);
+    assert_jit_matches_interpreter(3U, 1U, 2U, positive_inf, positive_inf,
+                                   fpscr::ve_mask);
+    assert_jit_matches_interpreter(1U, 1U, 2U, five, two);
 }
 
 void floating_add_double_tests()
