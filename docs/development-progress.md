@@ -1,5 +1,6 @@
 # Development Progress
 
+- Native JIT `ps_mul` computes both paired lanes, applies Espresso 25-bit rounding to each `frC` lane and flushes binary32 subnormal results to signed zero. Both input lanes are snapshotted before writes; trace records source and destination lane values, with FPSCR untouched. Differential tests cover ordinary values, precision-sensitive `frC`, subnormal flush, and aliases. Debug/Release CTest pass. WWHD remains at 6,080,538 instructions and the same null-target fetch; fallbacks fell from 36,223 to 27,130 (9,093 native `ps_mul`). BOTW remains at 860,172 and the same stop; fallbacks fell from 3,036 to 3,006 (30 native `ps_mul`). No wall-clock speedup is claimed.
 - Native JIT `ps_sum0` snapshots A.PS0, B.PS1, and both C lanes, computes A.PS0+B.PS1 into PS0 and C.PS1 into PS1 with the interpreter's binary32 conversions, and leaves FPSCR untouched. Tests compare interpreter/JIT state and history for normal inputs and a destination/source alias. Debug and Release CTest pass. WWHD remains at 6,080,538 instructions and the same null-target fetch; fallbacks fell from 45,250 to 36,223 (9,027 native `ps_sum0`). BOTW remains at 860,172 and the same stop; fallbacks fell from 3,054 to 3,036 (18 native `ps_sum0`). No wall-clock speedup is claimed.
 - Native JIT `fdiv` now matches the interpreter's binary64 divide path: ordered NaN handling, `VXSNAN`/`VXZDZ`/`VXIDI`, `ZX`/`ZE`, destination suppression, correctly signed infinities/zeros, scoped FPRF/FI/FR status, PS0-only writes, and double-precision history. Differential tests cover WWHD's exact operands, source aliases, NaN priority/signaling behavior, invalid exceptions, divide-by-zero enables, and infinity denominator. Debug and Release CTest pass. WWHD remains at 6,080,538 instructions and the same null-target fetch; fallbacks fell from 49,641 to 45,250 (4,391 native `fdiv`). BOTW remains at 860,172 and the same stop, with 3,054 fallbacks; this startup path did not execute `fdiv`. No wall-clock speedup is claimed.
 - Native JIT `fdivs` matches the interpreter's single-precision division behavior, including NaN priority, `VXSNAN`/`VXZDZ`/`VXIDI`, `ZX`/`ZE`, invalid/divide-by-zero write suppression, paired-lane writes, FPSCR status, and the current infinity/zero rule. Differential tests cover the real-game operands, aliases, NaNs, invalid cases, divide-by-zero enables, and infinity/zero. Debug and Release CTest pass. WWHD remains at 6,080,538 instructions and the same null-target fetch; fallbacks fell from 58,085 to 49,641 (8,444 native `fdivs`). BOTW remains at 860,172 and the same stop; fallbacks fell from 3,076 to 3,054 (22 native `fdivs`). No wall-clock speedup is claimed.
@@ -98,7 +99,8 @@
 
 ## Completed commits
 
-- `pending` - `jit: emit native ps_sum0`
+- `pending` - `jit: emit native ps_mul`
+- `0f82e58` - `jit: emit native ps_sum0`
 - `1449184` - `jit: emit native fdiv`
 - `f715ef5` - `jit: emit native fdivs`
 - `65b7b79` - `jit: emit native fsubs`
