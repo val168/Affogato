@@ -3397,6 +3397,7 @@ struct BlockCode
     case Opcode::store_single_update:
     case Opcode::store_single_indexed:
     case Opcode::store_double:
+    case Opcode::store_double_update:
     case Opcode::load_word_indexed:
     case Opcode::load_byte_zero_indexed:
     case Opcode::load_halfword_zero_indexed:
@@ -3534,6 +3535,7 @@ struct BlockCode
     case Opcode::store_single_update: return "stfsu";
     case Opcode::store_single_indexed: return "stfsx";
     case Opcode::store_double: return "stfd";
+    case Opcode::store_double_update: return "stfdu";
     case Opcode::load_word_indexed: return "lwzx";
     case Opcode::load_byte_zero_indexed: return "lbzx";
     case Opcode::load_halfword_zero_indexed: return "lhzx";
@@ -3576,6 +3578,7 @@ struct BlockCode
     case Opcode::store_single_update:
     case Opcode::store_single_indexed:
     case Opcode::store_double:
+    case Opcode::store_double_update:
     case Opcode::store_word:
     case Opcode::store_word_update:
     case Opcode::store_byte:
@@ -3622,6 +3625,7 @@ struct BlockCode
     case Opcode::store_halfword_indexed:
         return 2U;
     case Opcode::store_double:
+    case Opcode::store_double_update:
         return 8U;
     default:
         return 4U;
@@ -3636,7 +3640,7 @@ struct BlockCode
         opcode == Opcode::store_byte_update || opcode == Opcode::store_byte_indexed ||
         opcode == Opcode::store_halfword_indexed ||
         opcode == Opcode::store_single || opcode == Opcode::store_single_indexed ||
-        opcode == Opcode::store_double ||
+        opcode == Opcode::store_double || opcode == Opcode::store_double_update ||
         opcode == Opcode::store_word_update || opcode == Opcode::store_single_update;
 }
 
@@ -6184,6 +6188,7 @@ struct Recompiler::Impl
             case Opcode::store_single_update:
             case Opcode::store_single_indexed:
             case Opcode::store_double:
+            case Opcode::store_double_update:
             case Opcode::load_word_indexed:
             case Opcode::load_byte_zero_indexed:
             case Opcode::load_halfword_zero_indexed:
@@ -6205,14 +6210,16 @@ struct Recompiler::Impl
                 const bool single_store = insn.opcode == Opcode::store_single ||
                     insn.opcode == Opcode::store_single_update ||
                     insn.opcode == Opcode::store_single_indexed;
-                const bool double_store = insn.opcode == Opcode::store_double;
+                const bool double_store = insn.opcode == Opcode::store_double ||
+                    insn.opcode == Opcode::store_double_update;
                 const bool update_base = insn.opcode == Opcode::load_byte_update ||
                     insn.opcode == Opcode::load_word_update ||
                     insn.opcode == Opcode::load_halfword_zero_update ||
                     insn.opcode == Opcode::store_byte_update ||
                     insn.opcode == Opcode::store_word_update ||
                     insn.opcode == Opcode::store_halfword_update ||
-                    insn.opcode == Opcode::store_single_update;
+                    insn.opcode == Opcode::store_single_update ||
+                    insn.opcode == Opcode::store_double_update;
                 const bool sign_extend =
                     insn.opcode == Opcode::load_halfword_algebraic ||
                     insn.opcode == Opcode::load_halfword_algebraic_indexed;
@@ -7471,13 +7478,20 @@ RunResult Recompiler::run(EspressoCore& core, std::size_t max_steps)
                     entry.destination_value = record.address;
                 }
             }
-            else if (insn.opcode == Opcode::store_double)
+            else if (insn.opcode == Opcode::store_double ||
+                insn.opcode == Opcode::store_double_update)
             {
                 entry.has_fp_source = true;
                 entry.fp_source_register = insn.fp_register;
                 entry.fp_source_value = record.fp_value;
                 entry.has_stored_double_value = true;
                 entry.stored_double_value = record.fp_value;
+                if (insn.opcode == Opcode::store_double_update)
+                {
+                    entry.has_destination = true;
+                    entry.destination_register = insn.base;
+                    entry.destination_value = record.address;
+                }
             }
             else if (is_memory_store(insn.opcode))
             {

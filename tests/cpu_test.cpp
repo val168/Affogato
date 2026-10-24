@@ -29190,6 +29190,51 @@ void floating_point_double_update_store_tests()
                std::string::npos);
     }
 
+    EspressoCore native_core(0x200U);
+    native_core.state.gpr[9] = 0x80U;
+    native_core.state.fpr[13] = 0x7FF8123456789ABCULL;
+    native_core.state.fpr_ps1[13] = ps1_sentinel;
+    native_core.state.cr = expected_cr;
+    native_core.state.xer = expected_xer;
+    native_core.state.fpscr = expected_fpscr;
+    native_core.state.lr = 0x11223344U;
+    native_core.state.ctr = 0x55667788U;
+    native_core.memory.write32_be(0U, encode_stfdu(13U, 9U, 8));
+    Recompiler recompiler;
+    const RunResult native_result = recompiler.run(native_core, 1U);
+    assert(recompiler.statistics().native_instructions == 1U);
+    assert(recompiler.statistics().interpreter_fallbacks == 0U);
+    assert(native_core.memory.read64_be(0x88U) == 0x7FF8123456789ABCULL);
+    assert(native_core.state.gpr[9] == 0x88U);
+    assert(native_core.state.fpr[13] == 0x7FF8123456789ABCULL);
+    assert(native_core.state.fpr_ps1[13] == ps1_sentinel);
+    assert(native_core.state.cr == expected_cr && native_core.state.xer == expected_xer);
+    assert(native_core.state.fpscr == expected_fpscr);
+    assert(native_core.state.lr == 0x11223344U && native_core.state.ctr == 0x55667788U);
+    const auto& native_history = native_result.instruction_history.front();
+    assert(native_history.opcode_name == "stfdu" && native_history.completed);
+    assert(native_history.has_fp_source &&
+           native_history.fp_source_value == 0x7FF8123456789ABCULL);
+    assert(native_history.has_stored_double_value &&
+           native_history.stored_double_value == 0x7FF8123456789ABCULL);
+    assert(native_history.has_destination && native_history.destination_register == 9U &&
+           native_history.destination_value == 0x88U);
+
+    EspressoCore native_fault(0x100U);
+    native_fault.state.gpr[6] = 0xF8U;
+    native_fault.state.fpr[7] = 0x7FF0123456789ABCULL;
+    native_fault.memory.fill_bytes(0xFCU, 4U, 0xA5U);
+    native_fault.memory.write32_be(0U, encode_stfdu(7U, 6U, 4));
+    Recompiler fault_recompiler;
+    const RunResult native_fault_result = fault_recompiler.run(native_fault, 1U);
+    assert(native_fault_result.reason == StopReason::memory_fault);
+    assert(native_fault.state.gpr[6] == 0xF8U);
+    assert(native_fault.state.fpr[7] == 0x7FF0123456789ABCULL);
+    for (std::uint32_t byte = 0U; byte < 4U; ++byte)
+    {
+        assert(native_fault.memory.read8(0xFCU + byte) == 0xA5U);
+    }
+
     // Exact Wind Waker instruction and behavior: raw PS0 is stored, then r9 updates.
     const DecodedInstruction wind_waker = decode(0xDDA904E8U);
     assert(wind_waker.opcode == Opcode::store_double_update);
