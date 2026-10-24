@@ -31388,6 +31388,44 @@ void paired_single_merge01_tests()
     assert(alias.step() == StepResult::executed);
     assert(alias.state.fpr[5] == 0x5000000000000000ULL);
     assert(alias.state.fpr_ps1[5] == 0x9100000000000000ULL);
+
+    // Native emission must select A.PS0/B.PS1 from pre-instruction values,
+    // including when the destination aliases both sources.
+    EspressoCore native(4U);
+    native.state.fpr[5] = 0x5000000000000000ULL;
+    native.state.fpr_ps1[5] = 0x5100000000000000ULL;
+    native.state.fpr[9] = 0x9000000000000000ULL;
+    native.state.fpr_ps1[9] = 0x9100000000000000ULL;
+    native.state.fpscr = 0xDEADBEEFU;
+    native.state.cr = 0x12345678U;
+    native.state.xer = 0xA00000A5U;
+    native.memory.write32_be(0U, encode_ps_merge01(3U, 5U, 9U));
+    Recompiler recompiler;
+    const RunResult native_result = recompiler.run(native, 1U);
+    assert(recompiler.statistics().native_instructions == 1U);
+    assert(recompiler.statistics().interpreter_fallbacks == 0U);
+    assert(native.state.fpr[3] == 0x5000000000000000ULL);
+    assert(native.state.fpr_ps1[3] == 0x9100000000000000ULL);
+    assert(native.state.fpscr == 0xDEADBEEFU);
+    assert(native.state.cr == 0x12345678U && native.state.xer == 0xA00000A5U);
+    const auto& native_history = native_result.instruction_history.front();
+    assert(native_history.has_paired_fp_state);
+    assert(native_history.paired_fp_source_a_ps0 == 0x5000000000000000ULL);
+    assert(native_history.paired_fp_source_b_ps1 == 0x9100000000000000ULL);
+    assert(native_history.paired_fp_destination_ps0 == 0x5000000000000000ULL);
+    assert(native_history.paired_fp_destination_ps1 == 0x9100000000000000ULL);
+    assert(format_instruction_history(native_result).find("ps_merge01") !=
+           std::string::npos);
+
+    EspressoCore native_alias(4U);
+    native_alias.state.fpr[5] = 0x5000000000000000ULL;
+    native_alias.state.fpr_ps1[5] = 0x5100000000000000ULL;
+    native_alias.memory.write32_be(0U, encode_ps_merge01(5U, 5U, 5U));
+    Recompiler alias_recompiler;
+    (void)alias_recompiler.run(native_alias, 1U);
+    assert(alias_recompiler.statistics().native_instructions == 1U);
+    assert(native_alias.state.fpr[5] == 0x5000000000000000ULL);
+    assert(native_alias.state.fpr_ps1[5] == 0x5100000000000000ULL);
 }
 
 void paired_single_merge10_tests()

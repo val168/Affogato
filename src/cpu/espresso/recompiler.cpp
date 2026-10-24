@@ -143,6 +143,16 @@ struct NativePsBinaryRecord
     std::uint64_t destination_ps1{};
 };
 
+struct NativePsMergeRecord
+{
+    std::uint64_t source_a_ps0{};
+    std::uint64_t source_a_ps1{};
+    std::uint64_t source_b_ps0{};
+    std::uint64_t source_b_ps1{};
+    std::uint64_t destination_ps0{};
+    std::uint64_t destination_ps1{};
+};
+
 struct NativePsMulRecord
 {
     std::uint64_t source_a_ps0{};
@@ -265,6 +275,7 @@ struct NativeExecutionContext
     std::array<NativeFsubRecord, 64> fdiv_records{};
     std::array<NativePsSumRecord, 64> ps_sum0_records{};
     std::array<NativePsBinaryRecord, 64> ps_sub_records{};
+    std::array<NativePsMergeRecord, 64> ps_merge_records{};
     std::array<NativePsMulRecord, 64> ps_mul_records{};
     std::array<NativePsMulRecord, 64> ps_muls0_records{};
     std::array<NativePsMaddRecord, 64> ps_madd_records{};
@@ -3345,6 +3356,7 @@ struct BlockCode
     case Opcode::floating_negate:
     case Opcode::floating_absolute_value:
     case Opcode::paired_single_merge00:
+    case Opcode::paired_single_merge01:
     case Opcode::paired_single_merge10:
     case Opcode::paired_single_quantized_load:
     case Opcode::paired_single_quantized_store:
@@ -3428,6 +3440,7 @@ struct BlockCode
     case Opcode::subtract_from_extended: return "subfe";
     case Opcode::rotate_left_word_and_mask_insert: return "rlwimi";
     case Opcode::paired_single_merge00: return "ps_merge00";
+    case Opcode::paired_single_merge01: return "ps_merge01";
     case Opcode::paired_single_merge10: return "ps_merge10";
     case Opcode::paired_single_quantized_store: return "psq_st";
     case Opcode::paired_single_quantized_load: return "psq_l";
@@ -5666,27 +5679,60 @@ struct Recompiler::Impl
                 break;
             }
             case Opcode::paired_single_merge00:
+            case Opcode::paired_single_merge01:
             case Opcode::paired_single_merge10:
             {
                 // Snapshot both lanes before either destination lane is
                 // written; frD may alias either or both sources.
-                x86::Gp source_a_lane = compiler.new_gp64("ps_merge_a_lane");
+                x86::Gp source_a_ps0 = compiler.new_gp64("ps_merge_a_ps0");
+                x86::Gp source_a_ps1 = compiler.new_gp64("ps_merge_a_ps1");
                 x86::Gp source_b_ps0 = compiler.new_gp64("ps_merge_b_ps0");
-                const std::size_t source_a_offset =
+                x86::Gp source_b_ps1 = compiler.new_gp64("ps_merge_b_ps1");
+                const x86::Gp source_a_lane =
                     insn.opcode == Opcode::paired_single_merge10
-                        ? offsetof(CpuState, fpr_ps1) : offsetof(CpuState, fpr);
-                compiler.mov(source_a_lane, x86::qword_ptr(state,
-                    static_cast<std::int32_t>(source_a_offset +
+                        ? source_a_ps1 : source_a_ps0;
+                const x86::Gp source_b_lane =
+                    insn.opcode == Opcode::paired_single_merge01
+                        ? source_b_ps1 : source_b_ps0;
+                x86::Gp record_ptr = compiler.new_gp64("ps_merge_record");
+                compiler.mov(source_a_ps0, x86::qword_ptr(state,
+                    static_cast<std::int32_t>(fpr_offset(insn.fp_source_a))));
+                compiler.mov(source_a_ps1, x86::qword_ptr(state,
+                    static_cast<std::int32_t>(offsetof(CpuState, fpr_ps1) +
                         sizeof(std::uint64_t) * insn.fp_source_a)));
                 compiler.mov(source_b_ps0, x86::qword_ptr(state,
                     static_cast<std::int32_t>(fpr_offset(insn.fp_source_b))));
+                compiler.mov(source_b_ps1, x86::qword_ptr(state,
+                    static_cast<std::int32_t>(offsetof(CpuState, fpr_ps1) +
+                        sizeof(std::uint64_t) * insn.fp_source_b)));
+                compiler.lea(record_ptr, x86::ptr(context,
+                    static_cast<std::int32_t>(offsetof(NativeExecutionContext,
+                        ps_merge_records) + index * sizeof(NativePsMergeRecord))));
+                compiler.mov(x86::qword_ptr(record_ptr,
+                    static_cast<std::int32_t>(offsetof(NativePsMergeRecord, source_a_ps0))),
+                    source_a_ps0);
+                compiler.mov(x86::qword_ptr(record_ptr,
+                    static_cast<std::int32_t>(offsetof(NativePsMergeRecord, source_a_ps1))),
+                    source_a_ps1);
+                compiler.mov(x86::qword_ptr(record_ptr,
+                    static_cast<std::int32_t>(offsetof(NativePsMergeRecord, source_b_ps0))),
+                    source_b_ps0);
+                compiler.mov(x86::qword_ptr(record_ptr,
+                    static_cast<std::int32_t>(offsetof(NativePsMergeRecord, source_b_ps1))),
+                    source_b_ps1);
                 compiler.mov(x86::qword_ptr(state,
                     static_cast<std::int32_t>(fpr_offset(insn.fp_register))),
                     source_a_lane);
                 compiler.mov(x86::qword_ptr(state,
                     static_cast<std::int32_t>(offsetof(CpuState, fpr_ps1) +
                         sizeof(std::uint64_t) * insn.fp_register)),
-                    source_b_ps0);
+                    source_b_lane);
+                compiler.mov(x86::qword_ptr(record_ptr,
+                    static_cast<std::int32_t>(offsetof(NativePsMergeRecord, destination_ps0))),
+                    source_a_lane);
+                compiler.mov(x86::qword_ptr(record_ptr,
+                    static_cast<std::int32_t>(offsetof(NativePsMergeRecord, destination_ps1))),
+                    source_b_lane);
                 break;
             }
             case Opcode::load_multiple_word:
@@ -6670,6 +6716,23 @@ RunResult Recompiler::run(EspressoCore& core, std::size_t max_steps)
         {
             const std::uint32_t cia = block->address + static_cast<std::uint32_t>(i * 4U);
             const DecodedInstruction& insn = block->instructions[i];
+            if (insn.opcode == Opcode::paired_single_merge01)
+            {
+                InstructionHistoryEntry entry = native_history(insn, cia);
+                const NativePsMergeRecord& record = context.ps_merge_records[i];
+                entry.has_paired_fp_state = true;
+                entry.paired_fp_destination_register = insn.fp_register;
+                entry.paired_fp_source_a_register = insn.fp_source_a;
+                entry.paired_fp_source_b_register = insn.fp_source_b;
+                entry.paired_fp_source_a_ps0 = record.source_a_ps0;
+                entry.paired_fp_source_a_ps1 = record.source_a_ps1;
+                entry.paired_fp_source_b_ps0 = record.source_b_ps0;
+                entry.paired_fp_source_b_ps1 = record.source_b_ps1;
+                entry.paired_fp_destination_ps0 = record.destination_ps0;
+                entry.paired_fp_destination_ps1 = record.destination_ps1;
+                core.append_instruction_history(std::move(entry));
+                continue;
+            }
             if (insn.opcode == Opcode::floating_reciprocal_square_root_estimate)
             {
                 InstructionHistoryEntry entry = native_history(insn, cia);
