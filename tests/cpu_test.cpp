@@ -8,6 +8,7 @@
 #include "cpu/espresso/nn_olv_hle.hpp"
 #include "cpu/espresso/nn_save_hle.hpp"
 #include "cpu/espresso/rpx_loader.hpp"
+#include "cpu/espresso/recompiler.hpp"
 #include "cpu_state_test.hpp"
 #include "emulator.hpp"
 #include "gpu/gx2_register_state.hpp"
@@ -6547,7 +6548,8 @@ void floating_round_to_single_tests()
         RunResult result;
     };
     const auto execute = [&](std::uint8_t destination, std::uint8_t source,
-                             std::uint64_t source_raw, std::uint32_t fpscr_value = 0U) {
+                             std::uint64_t source_raw, std::uint32_t fpscr_value = 0U,
+                             bool use_recompiler = false) {
         EspressoCore core(16U);
         for (std::size_t index = 0; index < core.state.gpr.size(); ++index)
         {
@@ -6575,7 +6577,9 @@ void floating_round_to_single_tests()
         const auto ctr_before = core.state.ctr;
         const auto memory_before = core.memory.read32_be(8U);
 
-        Execution execution{.state = {}, .result = core.run(1U)};
+        Recompiler recompiler;
+        Execution execution{.state = {}, .result = use_recompiler
+            ? recompiler.run(core, 1U) : core.run(1U)};
         assert(execution.result.steps == 1U);
         assert(core.state.cia == 4U);
         assert(core.state.gpr == gpr_before);
@@ -6695,6 +6699,32 @@ void floating_round_to_single_tests()
     const std::string trace = format_instruction_history(wind_waker.result);
     assert(trace.find("frsp f12=0 [0x0000000000000000] -> f11=0 [0x0000000000000000] single=0x00000000") !=
            std::string::npos);
+
+    const auto assert_jit_matches_interpreter = [&](std::uint8_t destination,
+            std::uint8_t source, std::uint64_t source_raw, std::uint32_t fpscr_value) {
+        const Execution interpreted = execute(destination, source, source_raw, fpscr_value);
+        const Execution compiled = execute(destination, source, source_raw, fpscr_value, true);
+        assert(compiled.result.reason == interpreted.result.reason);
+        assert(compiled.result.steps == interpreted.result.steps);
+        assert(compiled.state.gpr == interpreted.state.gpr);
+        assert(compiled.state.fpr == interpreted.state.fpr);
+        assert(compiled.state.fpr_ps1 == interpreted.state.fpr_ps1);
+        assert(compiled.state.cr == interpreted.state.cr);
+        assert(compiled.state.xer == interpreted.state.xer);
+        assert(compiled.state.lr == interpreted.state.lr);
+        assert(compiled.state.ctr == interpreted.state.ctr);
+        assert(compiled.state.fpscr == interpreted.state.fpscr);
+        const std::string compiled_trace = format_instruction_history(compiled.result);
+        assert(compiled_trace.find("frsp") != std::string::npos);
+        if ((fpscr_value & fpscr::ve_mask) != 0U)
+        {
+            assert(compiled_trace.find("write suppressed") != std::string::npos);
+        }
+    };
+    assert_jit_matches_interpreter(11U, 12U, 0x3FF0000010000000ULL, 0U);
+    assert_jit_matches_interpreter(11U, 12U, quiet_nan, fpscr::fi_mask | fpscr::fr_mask);
+    assert_jit_matches_interpreter(11U, 12U, signaling_nan, 0U);
+    assert_jit_matches_interpreter(11U, 12U, signaling_nan, fpscr::ve_mask);
 }
 
 void floating_convert_to_integer_word_zero_tests()

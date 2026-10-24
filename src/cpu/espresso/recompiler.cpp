@@ -53,6 +53,14 @@ struct NativeFpIntegerConversionRecord
     bool write_suppressed{};
 };
 
+struct NativeFrspRecord
+{
+    std::uint64_t source_raw{};
+    std::uint64_t result_raw{};
+    std::uint32_t single_bits{};
+    bool wrote_result{};
+};
+
 struct NativePsqStoreRecord
 {
     std::uint64_t source_ps0{};
@@ -89,6 +97,7 @@ struct NativeExecutionContext
     std::array<NativeMemoryRecord, 64> memory_records{};
     std::array<NativeFpCompareRecord, 64> fp_compare_records{};
     std::array<NativeFpIntegerConversionRecord, 64> fp_integer_conversion_records{};
+    std::array<NativeFrspRecord, 64> frsp_records{};
     std::array<NativePsqStoreRecord, 64> psq_store_records{};
     std::array<NativePsqLoadRecord, 64> psq_load_records{};
     std::array<NativeMulliRecord, 64> mulli_records{};
@@ -386,6 +395,26 @@ void native_update_fpscr_summaries(CpuState* state) noexcept
     }
 }
 
+[[nodiscard]] std::uint8_t native_single_result_fprf(std::uint32_t bits) noexcept
+{
+    const bool negative = (bits & 0x80000000U) != 0U;
+    const std::uint32_t exponent = bits & 0x7F800000U;
+    const std::uint32_t fraction = bits & 0x007FFFFFU;
+    if (exponent == 0x7F800000U)
+    {
+        return fraction != 0U ? 0x11U : negative ? 0x09U : 0x05U;
+    }
+    if (exponent == 0U)
+    {
+        if (fraction != 0U)
+        {
+            return negative ? 0x18U : 0x14U;
+        }
+        return negative ? 0x12U : 0x02U;
+    }
+    return negative ? 0x08U : 0x04U;
+}
+
 extern "C" void native_raise_fpscr_exception(
     CpuState* state, std::uint32_t subexception) noexcept
 {
@@ -501,6 +530,82 @@ extern "C" void native_fctiwz(
         record.invalid = invalid;
         record.write_suppressed = write_suppressed;
     }
+}
+
+extern "C" void native_frsp(
+    NativeExecutionContext* context,
+    CpuState* state,
+    std::uint32_t destination,
+    std::uint32_t source_register,
+    std::uint32_t instruction_index) noexcept
+{
+    constexpr std::uint64_t exponent_mask = 0x7FF0000000000000ULL;
+    constexpr std::uint64_t fraction_mask = 0x000FFFFFFFFFFFFFULL;
+    constexpr std::uint64_t quiet_bit = 0x0008000000000000ULL;
+    constexpr std::uint64_t sign_mask = 0x8000000000000000ULL;
+    if (destination >= state->fpr.size() || source_register >= state->fpr.size() ||
+        instruction_index >= context->frsp_records.size())
+    {
+        context->failed = true;
+        context->failed_instruction_index = instruction_index;
+        return;
+    }
+
+    NativeFrspRecord& record = context->frsp_records[instruction_index];
+    record.source_raw = state->fpr[source_register];
+    const std::uint64_t source_raw = record.source_raw;
+    const bool is_nan = (source_raw & exponent_mask) == exponent_mask &&
+        (source_raw & fraction_mask) != 0U;
+    const bool is_signaling_nan = is_nan && (source_raw & quiet_bit) == 0U;
+    bool inexact = false;
+    bool rounded_up = false;
+    if (is_signaling_nan)
+    {
+        native_raise_fpscr_exception(state, fpscr::vxsnan_mask);
+        if ((state->fpscr & fpscr::ve_mask) != 0U)
+        {
+            return;
+        }
+    }
+
+    float rounded{};
+    if (is_nan)
+    {
+        const std::uint32_t sign = (source_raw & sign_mask) != 0U ? 0x80000000U : 0U;
+        const std::uint32_t payload = static_cast<std::uint32_t>(
+            (source_raw & fraction_mask) >> 29U);
+        record.single_bits = sign | 0x7F800000U | payload | 0x00400000U;
+        rounded = std::bit_cast<float>(record.single_bits);
+    }
+    else
+    {
+        // Match the interpreter's currently modeled host conversion policy;
+        // FPSCR.RN and exact overflow/underflow exception modeling remain TODOs there.
+        rounded = static_cast<float>(std::bit_cast<double>(source_raw));
+        record.single_bits = std::bit_cast<std::uint32_t>(rounded);
+        const double extended = static_cast<double>(rounded);
+        inexact = extended != std::bit_cast<double>(source_raw);
+        rounded_up = inexact &&
+            std::fabs(extended) > std::fabs(std::bit_cast<double>(source_raw));
+    }
+
+    state->fpscr &= ~(fpscr::fprf_mask | fpscr::fi_mask | fpscr::fr_mask);
+    state->fpscr |= static_cast<std::uint32_t>(
+        native_single_result_fprf(record.single_bits)) << 12U;
+    if (inexact)
+    {
+        state->fpscr |= fpscr::fi_mask | fpscr::xx_mask | fpscr::fx_mask;
+        if (rounded_up)
+        {
+            state->fpscr |= fpscr::fr_mask;
+        }
+    }
+    native_update_fpscr_summaries(state);
+
+    record.result_raw = std::bit_cast<std::uint64_t>(static_cast<double>(rounded));
+    state->fpr[destination] = record.result_raw;
+    state->fpr_ps1[destination] = record.result_raw;
+    record.wrote_result = true;
 }
 
 extern "C" std::uint32_t native_memory_access(
@@ -1005,6 +1110,7 @@ struct BlockCode
     case Opcode::compare_unsigned_register:
     case Opcode::floating_compare_unordered:
     case Opcode::floating_convert_to_integer_word_zero:
+    case Opcode::floating_round_to_single:
     case Opcode::branch:
     case Opcode::conditional_branch:
     case Opcode::conditional_branch_to_link_register:
@@ -1127,6 +1233,7 @@ struct BlockCode
     case Opcode::floating_negate: return "fneg";
     case Opcode::floating_absolute_value: return "fabs";
     case Opcode::floating_convert_to_integer_word_zero: return "fctiwz";
+    case Opcode::floating_round_to_single: return "frsp";
     case Opcode::shift_left_word: return "slw";
     case Opcode::shift_right_word: return "srw";
     case Opcode::arithmetic_shift_right_immediate: return "srawi";
@@ -2634,6 +2741,21 @@ struct Recompiler::Impl
                 invoke->set_arg(4, imm(static_cast<std::uint32_t>(index)));
                 break;
             }
+            case Opcode::floating_round_to_single:
+            {
+                auto* invoke = static_cast<InvokeNode*>(nullptr);
+                const auto helper_address = static_cast<std::uint64_t>(
+                    reinterpret_cast<std::uintptr_t>(&native_frsp));
+                compiler.invoke(Out(invoke), helper_address,
+                    FuncSignature::build<void, NativeExecutionContext*, CpuState*,
+                        std::uint32_t, std::uint32_t, std::uint32_t>(CallConvId::kCDecl));
+                invoke->set_arg(0, context);
+                invoke->set_arg(1, state);
+                invoke->set_arg(2, imm(insn.fp_register));
+                invoke->set_arg(3, imm(insn.fp_source_a));
+                invoke->set_arg(4, imm(static_cast<std::uint32_t>(index)));
+                break;
+            }
             case Opcode::paired_single_merge00:
             case Opcode::paired_single_merge10:
             {
@@ -3627,6 +3749,25 @@ RunResult Recompiler::run(EspressoCore& core, std::size_t max_steps)
         {
             const std::uint32_t cia = block->address + static_cast<std::uint32_t>(i * 4U);
             const DecodedInstruction& insn = block->instructions[i];
+            if (insn.opcode == Opcode::floating_round_to_single)
+            {
+                InstructionHistoryEntry entry = native_history(insn, cia);
+                const NativeFrspRecord& record = context.frsp_records[i];
+                entry.has_fp_arithmetic = true;
+                entry.fp_arithmetic_destination = insn.fp_register;
+                entry.fp_arithmetic_source_a = insn.fp_source_a;
+                entry.fp_arithmetic_a_raw = record.source_raw;
+                entry.fp_arithmetic_source_count = 1U;
+                if (record.wrote_result)
+                {
+                    entry.has_fp_arithmetic_result = true;
+                    entry.fp_arithmetic_result_raw = record.result_raw;
+                    entry.has_fp_arithmetic_single_bits = true;
+                    entry.fp_arithmetic_single_bits = record.single_bits;
+                }
+                core.append_instruction_history(std::move(entry));
+                continue;
+            }
             if (insn.opcode == Opcode::floating_convert_to_integer_word_zero)
             {
                 InstructionHistoryEntry entry = native_history(insn, cia);

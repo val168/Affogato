@@ -1,5 +1,7 @@
 # Development Progress
 
+- Native JIT `frsp` now mirrors the interpreter's binary64-to-binary32 conversion, paired-lane write, FPRF/FI/FR/XX status, NaN quieting, `VXSNAN`, VE suppression, and single-result history. Interpreter/JIT differential checks cover an inexact normal, qNaN, sNaN, and enabled-invalid suppression. Debug and Release builds and CTest pass. Release WWHD remains at 6,080,538 instructions and the same null-CTR fetch (`0x46524D48`); fallbacks fell by 32,657 to 515,325. BOTW remains at 860,172 and the same stop; fallbacks fell by 31 to 3,598. Both no longer report `frsp` among fallback opcodes. No wall-time improvement is claimed.
+
 ## WWHD checkpoint
 
 - Latest dual-game Release regression after native `stbu`: WWHD remains at 6,080,538 instructions, stop CIA `0`, GPR3/4/5 `0/512/256`, unsupported null-target fetch `0x46524D48`; 5,532,557 native instructions, 547,982 interpreter fallbacks, 13,994 compiled blocks. BOTW remains at 860,172 instructions, stop CIA `0`, GPR3/4/5 `0/4,194,304/64`, same unsupported fetch; 856,544 native instructions, 3,629 fallbacks, 18,079 blocks. BOTW's 33 `stbu` calls are now native; no wall-time speedup is claimed.
