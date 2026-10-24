@@ -7192,12 +7192,21 @@ RunResult Recompiler::run(EspressoCore& core, std::size_t max_steps)
                         candidate.words.push_back(word);
                         candidate.instructions.push_back(decoded);
                         if (decoded.opcode == Opcode::instruction_sync ||
-                            decoded.opcode == Opcode::branch ||
-                            decoded.opcode == Opcode::conditional_branch ||
                             decoded.opcode == Opcode::conditional_branch_to_link_register ||
                             decoded.opcode == Opcode::conditional_branch_to_count_register)
                         {
                             break;
+                        }
+                        if (decoded.opcode == Opcode::branch ||
+                            decoded.opcode == Opcode::conditional_branch)
+                        {
+                            const std::uint32_t branch_target = decoded.absolute
+                                ? static_cast<std::uint32_t>(decoded.immediate)
+                                : cia + static_cast<std::uint32_t>(decoded.immediate);
+                            if (branch_target != cia + 4U)
+                            {
+                                break;
+                            }
                         }
                     }
                     bool compiled = false;

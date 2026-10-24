@@ -3066,6 +3066,59 @@ void recompiler_branch_test()
     assert(result.cia == 0x120U);
     assert(core.state.cia == 0x120U);
     assert(core.state.lr == 0x104U);
+
+    // A link branch to its own fallthrough is commonly used to capture the
+    // guest PC. Keep it in the same native block as the following mflr.
+    EspressoCore pc_relative(0x1000U);
+    EspressoCore pc_relative_interpreted(0x1000U);
+    for (EspressoCore* candidate : {&pc_relative, &pc_relative_interpreted})
+    {
+        candidate->memory.write32_be(0x100U, 0x48000005U); // bl 0x104
+        candidate->memory.write32_be(0x104U, 0x7C6802A6U); // mflr r3
+        candidate->memory.write32_be(0x108U, 0x4BFFFFF8U); // b 0x100
+        candidate->state.cia = 0x100U;
+    }
+    const RunResult pc_oracle = pc_relative_interpreted.run(6U);
+    Recompiler pc_recompiler;
+    const RunResult pc_result = pc_recompiler.run(pc_relative, 6U);
+    assert(pc_result.reason == pc_oracle.reason);
+    assert(pc_result.steps == 6U && pc_result.steps == pc_oracle.steps);
+    assert(pc_relative.state.cia == pc_relative_interpreted.state.cia);
+    assert(pc_relative.state.lr == 0x104U);
+    assert(pc_relative.state.gpr[3] == 0x104U);
+    assert(pc_relative.state.gpr == pc_relative_interpreted.state.gpr);
+    assert(pc_recompiler.statistics().native_instructions == 6U);
+    assert(pc_recompiler.statistics().compiled_blocks == 1U);
+    assert(pc_recompiler.statistics().dispatcher_entries == 2U);
+    assert(pc_recompiler.statistics().interpreter_fallbacks == 0U);
+
+    // Conditional fallthrough branches may also stay in the block; their
+    // architectural CTR effects still occur even though either path reaches
+    // the same next instruction.
+    EspressoCore ctr_fallthrough(0x1000U);
+    EspressoCore ctr_fallthrough_interpreted(0x1000U);
+    for (EspressoCore* candidate : {&ctr_fallthrough,
+                                    &ctr_fallthrough_interpreted})
+    {
+        candidate->memory.write32_be(0x100U, 0x42000004U); // bdnz .+4
+        candidate->memory.write32_be(0x104U, 0x38600007U); // addi r3,r0,7
+        candidate->memory.write32_be(0x108U, 0x4BFFFFF8U); // b 0x100
+        candidate->state.cia = 0x100U;
+        candidate->state.ctr = 1U;
+    }
+    const RunResult ctr_oracle = ctr_fallthrough_interpreted.run(6U);
+    Recompiler ctr_recompiler;
+    const RunResult ctr_result = ctr_recompiler.run(ctr_fallthrough, 6U);
+    assert(ctr_result.reason == ctr_oracle.reason);
+    assert(ctr_result.steps == 6U && ctr_result.steps == ctr_oracle.steps);
+    assert(ctr_fallthrough.state.cia == ctr_fallthrough_interpreted.state.cia);
+    assert(ctr_fallthrough.state.ctr == 0xFFFFFFFFU);
+    assert(ctr_fallthrough.state.ctr == ctr_fallthrough_interpreted.state.ctr);
+    assert(ctr_fallthrough.state.gpr == ctr_fallthrough_interpreted.state.gpr);
+    assert(ctr_recompiler.statistics().native_instructions == 6U);
+    assert(ctr_recompiler.statistics().compiled_blocks == 1U);
+    assert(ctr_recompiler.statistics().dispatcher_entries == 2U);
+    assert(ctr_recompiler.statistics().interpreter_fallbacks == 0U);
 }
 
 void recompiler_fast_lookup_cache_test()
