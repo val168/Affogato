@@ -11405,6 +11405,24 @@ void recompiler_memory_tests()
     assert(watched_store_events[0].watched_value == 0xAABBCCDDU);
     assert(watched_store_recompiler.statistics().memory_slow_path_calls == 1U);
 
+    EspressoCore watched_r0_store(0x1000U);
+    watched_r0_store.memory.write32_be(0x100U, 0x90040000U); // stw r0,0(r4)
+    watched_r0_store.state.cia = 0x100U;
+    watched_r0_store.state.gpr[0] = 0xAABBCCDDU;
+    watched_r0_store.state.gpr[4] = 0x200U;
+    watched_r0_store.memory.set_write_watch_gpr_source(
+        &watched_r0_store.state.gpr);
+    watched_r0_store.memory.set_write_watchpoint(0x200U, 4U);
+    Recompiler watched_r0_store_recompiler;
+    const RunResult watched_r0_store_result = watched_r0_store_recompiler.run(
+        watched_r0_store, 1U);
+    assert(watched_r0_store_result.steps == 1U);
+    const auto watched_r0_store_events =
+        watched_r0_store.memory.write_watch_events_snapshot();
+    assert(watched_r0_store_events.size() == 1U);
+    assert(watched_r0_store_events[0].watched_value == 0xAABBCCDDU);
+    assert(watched_r0_store_events[0].gpr_snapshot[0] == 0xAABBCCDDU);
+
     EspressoCore interpreted(0x1000U);
     EspressoCore compiled(0x1000U);
     const std::array<std::uint32_t, 7> program{
