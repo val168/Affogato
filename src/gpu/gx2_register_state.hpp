@@ -66,6 +66,7 @@ public:
                 draw_fetch_shaders_.push_back(fetch_shader_);
                 draw_program_shaders_.push_back(program_shaders_);
                 draw_shader_resources_.push_back(snapshot_shader_resources());
+                draw_color_buffers_.push_back(color_buffers_);
                 continue;
             }
             if (command.type == cpu::espresso::Gx2CommandType::set_vertex_buffer)
@@ -92,6 +93,23 @@ public:
                     if (stage < program_shaders_.size())
                     {
                         program_shaders_[stage] = command.program_shader;
+                    }
+                }
+                continue;
+            }
+            if (command.type == cpu::espresso::Gx2CommandType::set_color_buffer)
+            {
+                if (command.color_buffer &&
+                    command.color_buffer->target < color_buffers_.size())
+                {
+                    if (command.color_buffer->guest_address == 0U)
+                    {
+                        color_buffers_[command.color_buffer->target].reset();
+                    }
+                    else
+                    {
+                        color_buffers_[command.color_buffer->target] =
+                            command.color_buffer;
                     }
                 }
                 continue;
@@ -278,6 +296,20 @@ public:
         return draw_shader_resources_;
     }
 
+    [[nodiscard]] const std::array<std::optional<
+        cpu::espresso::Gx2ColorBufferBinding>, 8U>&
+    color_buffers() const noexcept
+    {
+        return color_buffers_;
+    }
+
+    [[nodiscard]] std::span<const std::array<std::optional<
+        cpu::espresso::Gx2ColorBufferBinding>, 8U>>
+    draw_color_buffers() const noexcept
+    {
+        return draw_color_buffers_;
+    }
+
 private:
     [[nodiscard]] Gx2DrawShaderResources snapshot_shader_resources() const
     {
@@ -323,6 +355,11 @@ private:
         cpu::espresso::Gx2ProgramShaderBinding>, 3U>>
         draw_program_shaders_;
     std::vector<Gx2DrawShaderResources> draw_shader_resources_;
+    std::array<std::optional<cpu::espresso::Gx2ColorBufferBinding>, 8U>
+        color_buffers_{};
+    std::vector<std::array<std::optional<
+        cpu::espresso::Gx2ColorBufferBinding>, 8U>>
+        draw_color_buffers_;
 };
 
 }

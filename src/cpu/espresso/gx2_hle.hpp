@@ -23,6 +23,7 @@ enum class Gx2CommandType
     set_vertex_buffer,
     set_fetch_shader,
     set_program_shader,
+    set_color_buffer,
     draw,
 };
 
@@ -87,6 +88,45 @@ struct Gx2ProgramShaderBinding
     bool operator==(const Gx2ProgramShaderBinding&) const = default;
 };
 
+struct Gx2ColorBufferState
+{
+    std::uint32_t guest_address{};
+    std::uint32_t dimension{};
+    std::uint32_t width{};
+    std::uint32_t height{};
+    std::uint32_t depth{};
+    std::uint32_t mip_levels{};
+    std::uint32_t format{};
+    std::uint32_t aa_mode{};
+    std::uint32_t use{};
+    std::uint32_t image_size{};
+    std::uint32_t image_address{};
+    std::uint32_t mipmap_size{};
+    std::uint32_t mipmap_address{};
+    std::uint32_t tile_mode{};
+    std::uint32_t swizzle{};
+    std::uint32_t alignment{};
+    std::uint32_t pitch{};
+    std::array<std::uint32_t, 13U> mip_level_offsets{};
+    std::uint32_t view_mip{};
+    std::uint32_t view_first_slice{};
+    std::uint32_t view_num_slices{};
+    std::uint32_t aa_buffer_address{};
+    std::uint32_t aa_size{};
+    std::array<std::uint32_t, 5U> registers{};
+
+    bool operator==(const Gx2ColorBufferState&) const = default;
+};
+
+struct Gx2ColorBufferBinding
+{
+    std::uint32_t target{};
+    std::uint32_t guest_address{};
+    std::optional<Gx2ColorBufferState> descriptor;
+
+    bool operator==(const Gx2ColorBufferBinding&) const = default;
+};
+
 struct Gx2Command
 {
     Gx2CommandType type{};
@@ -99,6 +139,7 @@ struct Gx2Command
     std::optional<Gx2VertexBufferBinding> vertex_buffer;
     std::optional<Gx2FetchShaderBinding> fetch_shader;
     std::optional<Gx2ProgramShaderBinding> program_shader;
+    std::optional<Gx2ColorBufferBinding> color_buffer;
 
     constexpr Gx2Command() = default;
     constexpr Gx2Command(
@@ -111,7 +152,8 @@ struct Gx2Command
         std::optional<Gx2DrawCall> command_draw_call = std::nullopt,
         std::optional<Gx2VertexBufferBinding> command_vertex_buffer = std::nullopt,
         std::optional<Gx2FetchShaderBinding> command_fetch_shader = std::nullopt,
-        std::optional<Gx2ProgramShaderBinding> command_program_shader = std::nullopt)
+        std::optional<Gx2ProgramShaderBinding> command_program_shader = std::nullopt,
+        std::optional<Gx2ColorBufferBinding> command_color_buffer = std::nullopt)
         : type(command_type),
           register_address(command_register_address),
           value(command_value),
@@ -121,7 +163,8 @@ struct Gx2Command
           draw_call(command_draw_call),
           vertex_buffer(command_vertex_buffer),
           fetch_shader(command_fetch_shader),
-          program_shader(command_program_shader)
+          program_shader(command_program_shader),
+          color_buffer(command_color_buffer)
     {
     }
 
@@ -158,36 +201,6 @@ struct Gx2SamplerBinding
     std::array<std::uint32_t, 3U> registers{};
 
     bool operator==(const Gx2SamplerBinding&) const = default;
-};
-
-struct Gx2ColorBufferState
-{
-    std::uint32_t guest_address{};
-    std::uint32_t dimension{};
-    std::uint32_t width{};
-    std::uint32_t height{};
-    std::uint32_t depth{};
-    std::uint32_t mip_levels{};
-    std::uint32_t format{};
-    std::uint32_t aa_mode{};
-    std::uint32_t use{};
-    std::uint32_t image_size{};
-    std::uint32_t image_address{};
-    std::uint32_t mipmap_size{};
-    std::uint32_t mipmap_address{};
-    std::uint32_t tile_mode{};
-    std::uint32_t swizzle{};
-    std::uint32_t alignment{};
-    std::uint32_t pitch{};
-    std::array<std::uint32_t, 13U> mip_level_offsets{};
-    std::uint32_t view_mip{};
-    std::uint32_t view_first_slice{};
-    std::uint32_t view_num_slices{};
-    std::uint32_t aa_buffer_address{};
-    std::uint32_t aa_size{};
-    std::array<std::uint32_t, 5U> registers{};
-
-    bool operator==(const Gx2ColorBufferState&) const = default;
 };
 
 struct Gx2RuntimeState

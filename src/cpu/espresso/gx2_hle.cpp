@@ -4122,6 +4122,14 @@ void register_gx2_hle(HleDispatcher& dispatcher)
             {
                 descriptor = read_color_buffer(core, color_buffer);
             }
+            Gx2ColorBufferBinding binding{
+                target,
+                color_buffer,
+                descriptor};
+            Gx2Command command{};
+            command.type = Gx2CommandType::set_color_buffer;
+            command.color_buffer = std::move(binding);
+            core.gx2.pending_commands.push_back(std::move(command));
             core.gx2.color_buffer_descriptors[target] = std::move(descriptor);
             core.gx2.bound_color_buffers[target] = color_buffer;
         });

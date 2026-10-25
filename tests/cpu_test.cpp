@@ -21114,20 +21114,51 @@ void gx2_set_color_buffer_hle_tests()
     assert(state.registers.back() == descriptor_words[38]);
     assert(core.gx2.bound_color_buffers[0] == 0U);
     assert(!core.gx2.color_buffer_descriptors[0].has_value());
+    assert(core.gx2.pending_commands.size() == 1U);
+    const Gx2ColorBufferBinding expected_binding{
+        target,
+        descriptor_address,
+        state};
+    assert(core.gx2.pending_commands.front().type ==
+           Gx2CommandType::set_color_buffer);
+    assert(core.gx2.pending_commands.front().color_buffer == expected_binding);
+    affogato::gpu::Gx2RegisterState register_state;
+    register_state.apply(take_gx2_commands(core.gx2));
+    assert(register_state.color_buffers()[target] == expected_binding);
+    const Gx2Command draw_command{
+        Gx2CommandType::draw,
+        0U,
+        0U,
+        0U,
+        0U,
+        0U,
+        Gx2DrawCall{4U, 3U, false, 0U, 0U, 0U, 1U, 0U}};
+    register_state.apply(std::span<const Gx2Command>(&draw_command, 1U));
+    assert(register_state.draw_color_buffers().size() == 1U);
+    assert(register_state.draw_color_buffers().front()[target] == expected_binding);
 
     const RunResult truncated_descriptor = invoke(0x1FF80U, target);
     assert(truncated_descriptor.reason == StopReason::memory_fault);
     assert(core.gx2.bound_color_buffers[target] == descriptor_address);
     assert(core.gx2.color_buffer_descriptors[target] == state);
+    assert(core.gx2.pending_commands.empty());
 
     constexpr std::uint32_t second_descriptor = 0x6000U;
     assert(invoke(second_descriptor, 7U).reason == StopReason::instruction_limit);
+    register_state.apply(take_gx2_commands(core.gx2));
     assert(core.gx2.bound_color_buffers[7] == second_descriptor);
     assert(core.gx2.color_buffer_descriptors[7].has_value());
     assert(core.gx2.color_buffer_descriptors[7]->width == 0U);
     assert(core.gx2.bound_color_buffers[target] == descriptor_address);
 
     assert(invoke(0U, target).reason == StopReason::instruction_limit);
+    const auto unbind_commands = take_gx2_commands(core.gx2);
+    assert(unbind_commands.size() == 1U);
+    assert(unbind_commands.front().color_buffer ==
+           (Gx2ColorBufferBinding{target, 0U, std::nullopt}));
+    register_state.apply(unbind_commands);
+    assert(!register_state.color_buffers()[target].has_value());
+    assert(register_state.draw_color_buffers().front()[target] == expected_binding);
     assert(core.gx2.bound_color_buffers[target] == 0U);
     assert(!core.gx2.color_buffer_descriptors[target].has_value());
     assert(core.gx2.bound_color_buffers[7] == second_descriptor);
