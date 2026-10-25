@@ -3606,6 +3606,101 @@ void recompiler_fnmadd_differential_tests()
     assert(alias_recompiler.statistics().interpreter_fallbacks == 0U);
 }
 
+void recompiler_fnmadds_differential_tests()
+{
+    const auto encode = [](std::uint8_t destination) {
+        return (59U << 26U) | (static_cast<std::uint32_t>(destination) << 21U) |
+            (1U << 16U) | (2U << 11U) | (3U << 6U) | (31U << 1U);
+    };
+    constexpr auto raw = [](double value) { return std::bit_cast<std::uint64_t>(value); };
+    constexpr std::uint32_t start = 0x100U;
+    constexpr std::uint64_t fpr_sentinel = 0x123456789ABCDEF0ULL;
+    constexpr std::uint64_t ps1_sentinel = 0xDEADBEEF01234567ULL;
+    struct Case
+    {
+        std::uint64_t a;
+        std::uint64_t b;
+        std::uint64_t c;
+        std::uint32_t fpscr;
+        std::uint8_t destination;
+        std::uint64_t expected;
+    };
+    constexpr std::array cases{
+        Case{raw(2.0), raw(4.0), raw(3.0), 0U, 4U, raw(-10.0)},
+        Case{0x3FF0000002000000ULL, 0xBFF0000000000000ULL, raw(1.0),
+            0U, 4U, raw(-0x1p-27)},
+        Case{0xFFF8123456789ABCULL, raw(1.0), raw(2.0),
+            0U, 4U, 0U}, // NaN source sign is preserved by the interpreter.
+        Case{0x7FF0000000004321ULL, raw(1.0), raw(2.0),
+            fpscr::ve_mask, 4U, fpr_sentinel},
+        Case{0x7FF0000000000000ULL, raw(1.0), 0U,
+            0U, 4U, 0x7FF8000000000000ULL}, // VXIMZ
+        Case{0x7FF0000000000000ULL, 0xFFF0000000000000ULL, raw(1.0),
+            0U, 4U, 0x7FF8000000000000ULL}, // VXISI
+        Case{0x7FF0000000000000ULL, 0x7FF0000000000000ULL, raw(1.0),
+            0U, 4U, 0xFFF0000000000000ULL}, // valid +infinity sum, then negate
+        Case{raw(2.0), raw(4.0), raw(3.0), 0U, 2U, raw(-10.0)}, // d == B
+    };
+    static_assert(encode(1U) == 0xEC2110FEU);
+
+    for (const Case& test : cases)
+    {
+        EspressoCore interpreted(0x1000U);
+        EspressoCore compiled(0x1000U);
+        for (EspressoCore* core : {&interpreted, &compiled})
+        {
+            core->memory.write32_be(start, encode(test.destination));
+            core->memory.write32_be(start + 8U, 0xA55AA55AU);
+            core->state.cia = start;
+            core->state.fpr.fill(fpr_sentinel);
+            core->state.fpr_ps1.fill(ps1_sentinel);
+            core->state.fpr[1] = test.a;
+            core->state.fpr[2] = test.b;
+            core->state.fpr[3] = test.c;
+            core->state.gpr.fill(0xA5A5A5A5U);
+            core->state.cr = 0xA5C39E71U;
+            core->state.xer = 0x87654321U;
+            core->state.lr = 0xABCDEF00U;
+            core->state.ctr = 0xFEDCBA98U;
+            core->state.fpscr = test.fpscr;
+        }
+
+        const RunResult oracle = interpreted.run(1U);
+        Recompiler recompiler;
+        const RunResult actual = recompiler.run(compiled, 1U);
+        assert(actual.reason == oracle.reason && actual.steps == 1U);
+        assert(actual.cia == oracle.cia);
+        assert(compiled.state.gpr == interpreted.state.gpr);
+        assert(compiled.state.fpr == interpreted.state.fpr);
+        assert(compiled.state.fpr_ps1 == interpreted.state.fpr_ps1);
+        assert(compiled.state.cr == interpreted.state.cr);
+        assert(compiled.state.xer == interpreted.state.xer);
+        assert(compiled.state.lr == interpreted.state.lr);
+        assert(compiled.state.ctr == interpreted.state.ctr);
+        assert(compiled.state.fpscr == interpreted.state.fpscr);
+        assert(compiled.memory.read32_be(start + 8U) == 0xA55AA55AU);
+        assert(compiled.state.fpr[test.destination] == interpreted.state.fpr[test.destination]);
+        if (test.expected != 0U)
+        {
+            assert(compiled.state.fpr[test.destination] == test.expected);
+        }
+        else
+        {
+            const std::uint64_t nan_result = compiled.state.fpr[test.destination];
+            assert((nan_result & 0x7FF0000000000000ULL) == 0x7FF0000000000000ULL);
+            assert((nan_result & 0x000FFFFFFFFFFFFFULL) != 0U);
+        }
+        assert(recompiler.statistics().native_instructions == 1U);
+        assert(recompiler.statistics().interpreter_fallbacks == 0U);
+        const InstructionHistoryEntry& history = actual.instruction_history.back();
+        assert(history.opcode_name == "fnmadds");
+        assert(history.has_fp_arithmetic);
+        assert(history.has_fp_arithmetic_single_bits ==
+            (test.expected != fpr_sentinel));
+        assert(history.fp_arithmetic_source_count == 3U);
+    }
+}
+
 void recompiler_fabs_differential_tests()
 {
     constexpr std::uint32_t start = 0x100U;
@@ -9750,6 +9845,7 @@ int main()
     recompiler_fctiw_differential_tests();
     recompiler_fmsub_differential_tests();
     recompiler_fnmadd_differential_tests();
+    recompiler_fnmadds_differential_tests();
     recompiler_fabs_differential_tests();
     recompiler_ps_add_differential_tests();
     recompiler_ps_div_differential_tests();
