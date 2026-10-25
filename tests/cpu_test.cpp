@@ -26348,6 +26348,71 @@ void gx2_set_alpha_to_mask_reg_hle_tests()
     assert(uninitialized.gx2.pending_commands.empty());
 }
 
+void gx2_init_alpha_test_reg_hle_tests()
+{
+    constexpr std::uint32_t return_address = 0x02750A98U;
+    constexpr std::uint32_t output_address = 0x503U;
+    constexpr std::uint32_t expected_control = 0xDU;
+    constexpr std::uint32_t expected_reference = 0x3F200000U;
+
+    EspressoCore core(0x10000U);
+    register_gx2_hle(core.hle);
+    const std::uint32_t import =
+        core.hle.bind_import("gx2", "GX2InitAlphaTestReg");
+    const std::uint32_t wrong_library =
+        core.hle.bind_import("coreinit", "GX2InitAlphaTestReg");
+    assert(import != 0U && wrong_library != 0U);
+    assert(!core.gx2.initialized);
+    core.memory.write8(output_address - 1U, 0xA5U);
+    core.memory.write32_be(output_address, 0xDEADBEEFU);
+    core.memory.write32_be(output_address + 4U, 0xCAFEBABEU);
+    core.memory.write8(output_address + 8U, 0x5AU);
+    core.state.gpr.fill(0xB1000000U);
+    core.state.gpr[3] = output_address;
+    core.state.gpr[4] = 0x12340001U;
+    core.state.gpr[5] = 0xABCDEF05U;
+    core.state.fpr[1] = std::bit_cast<std::uint64_t>(0.625);
+    core.state.cr = 0x12345678U;
+    core.state.xer = 0xA5A55A5AU;
+    core.state.ctr = 0x87654321U;
+    core.state.fpscr = 0x5A5AA55AU;
+    const auto gprs_before = core.state.gpr;
+    const auto fprs_before = core.state.fpr;
+    const auto ps1_before = core.state.fpr_ps1;
+
+    core.state.cia = import;
+    core.state.lr = return_address;
+    const RunResult result = core.run(1U);
+    assert(result.reason == StopReason::instruction_limit);
+    assert(result.steps == 1U && core.state.cia == return_address);
+    assert(core.memory.read32_be(output_address) == expected_control);
+    assert(core.memory.read32_be(output_address + 4U) == expected_reference);
+    assert(core.memory.read8(output_address - 1U) == 0xA5U);
+    assert(core.memory.read8(output_address + 8U) == 0x5AU);
+    assert(core.gx2.pending_commands.empty());
+    assert(core.state.gpr == gprs_before);
+    assert(core.state.fpr == fprs_before && core.state.fpr_ps1 == ps1_before);
+    assert(core.state.cr == 0x12345678U);
+    assert(core.state.xer == 0xA5A55A5AU);
+    assert(core.state.ctr == 0x87654321U);
+    assert(core.state.fpscr == 0x5A5AA55AU);
+
+    core.state.cia = wrong_library;
+    core.state.lr = return_address;
+    const RunResult wrong_library_result = core.run(1U);
+    assert(wrong_library_result.reason == StopReason::unimplemented_hle_call);
+    assert(wrong_library_result.hle_call == "coreinit::GX2InitAlphaTestReg");
+
+    core.state.gpr[3] = 0xFFFCU;
+    core.state.cia = import;
+    core.state.lr = return_address;
+    const RunResult bad_pointer = core.run(1U);
+    assert(bad_pointer.reason == StopReason::memory_fault);
+    assert(bad_pointer.detail.find("write 8 byte(s)") != std::string::npos);
+    assert(core.memory.read32_be(output_address) == expected_control);
+    assert(core.memory.read32_be(output_address + 4U) == expected_reference);
+}
+
 void gx2_set_alpha_test_reg_hle_tests()
 {
     constexpr std::uint32_t return_address = 0x02750AA0U;
@@ -39084,6 +39149,7 @@ int main(int argc, char* argv[])
     gx2_set_target_channel_masks_hle_tests();
     gx2_set_alpha_to_mask_hle_tests();
     gx2_set_alpha_to_mask_reg_hle_tests();
+    gx2_init_alpha_test_reg_hle_tests();
     gx2_set_alpha_test_reg_hle_tests();
     gx2_setup_context_state_ex_hle_tests();
     gx2_get_context_state_display_list_hle_tests();

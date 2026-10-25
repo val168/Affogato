@@ -3388,6 +3388,24 @@ void register_gx2_hle(HleDispatcher& dispatcher)
 
     dispatcher.register_function(
         "gx2",
+        "GX2InitAlphaTestReg",
+        [](EspressoCore& core) {
+            const std::uint32_t output = core.state.gpr[3];
+            core.memory.validate_write_range(
+                output, 2U * sizeof(std::uint32_t));
+            const std::uint32_t control = pack_alpha_test_control(
+                core.state.gpr[4], core.state.gpr[5]);
+            const std::uint32_t reference =
+                fpr_float_argument_bits(core, 1U);
+
+            // GX2AlphaTestReg is an output-only guest structure initializer;
+            // validate its whole range before either big-endian word is set.
+            core.memory.write32_be(output, control);
+            core.memory.write32_be(output + 4U, reference);
+        });
+
+    dispatcher.register_function(
+        "gx2",
         "GX2SetTargetChannelMasks",
         [](EspressoCore& core) {
             if (!core.gx2.initialized)
