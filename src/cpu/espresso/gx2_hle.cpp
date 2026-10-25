@@ -947,6 +947,23 @@ std::uint32_t gx2r_get_buffer_alignment(std::uint32_t resource_flags)
     return 0x100U;
 }
 
+std::uint32_t gx2r_lock_buffer(EspressoCore& core, std::uint32_t buffer_address)
+{
+    constexpr const char* api_name = "gx2::GX2RLockBufferEx";
+    constexpr std::uint32_t gx2r_buffer_size = 0x10U;
+    if (buffer_address == 0U || (buffer_address & 3U) != 0U ||
+        buffer_address > std::numeric_limits<std::uint32_t>::max() -
+                             gx2r_buffer_size)
+    {
+        throw HleExecutionError(std::string(api_name) +
+                                ": buffer pointer is null, misaligned, or wraps");
+    }
+
+    // GX2RLockBufferEx returns the descriptor's guest pointer. The current
+    // memory model is coherent and this operation does not modify the buffer.
+    return core.memory.read32_be(buffer_address + 0x0CU);
+}
+
 std::uint32_t gx2_texture_endian_swap(std::uint32_t format)
 {
     switch (format & 0x3FU)
@@ -2230,6 +2247,13 @@ void register_gx2_hle(HleDispatcher& dispatcher)
         "GX2RGetBufferAlignment",
         [](EspressoCore& core) {
             core.state.gpr[3] = gx2r_get_buffer_alignment(core.state.gpr[3]);
+        });
+
+    dispatcher.register_function(
+        "gx2",
+        "GX2RLockBufferEx",
+        [](EspressoCore& core) {
+            core.state.gpr[3] = gx2r_lock_buffer(core, core.state.gpr[3]);
         });
 
     dispatcher.register_function(

@@ -20036,6 +20036,81 @@ void gx2r_get_buffer_alignment_hle_tests()
     }
 }
 
+void gx2r_lock_buffer_ex_hle_tests()
+{
+    constexpr std::uint32_t buffer_address = 0x4000U;
+    constexpr std::uint32_t return_address = 0x0274BD9CU;
+    EspressoCore core(0x10000U);
+    register_gx2_hle(core.hle);
+    const std::uint32_t import = core.hle.bind_import("gx2", "GX2RLockBufferEx");
+    assert(import != 0U);
+
+    const std::array<std::uint32_t, 4U> descriptor{
+        0x60001234U, 16U, 8U, 0xDEADBEEFU};
+    for (std::size_t index = 0U; index < descriptor.size(); ++index)
+    {
+        core.memory.write32_be(
+            buffer_address + static_cast<std::uint32_t>(index * 4U),
+            descriptor[index]);
+    }
+    core.state.gpr.fill(0xA5000000U);
+    core.state.gpr[4] = 0x87654321U; // lock flags are not used by this API
+    core.state.cr = 0x12345678U;
+    core.state.xer = 0xA5A55A5AU;
+    core.state.ctr = 0x87654321U;
+    core.state.fpscr = 0x5A5AA55AU;
+    const auto gprs_before = core.state.gpr;
+    const auto fprs_before = core.state.fpr;
+    const auto ps1_before = core.state.fpr_ps1;
+    const std::uint32_t cr_before = core.state.cr;
+    const std::uint32_t xer_before = core.state.xer;
+    const std::uint32_t ctr_before = core.state.ctr;
+    const std::uint32_t fpscr_before = core.state.fpscr;
+    const auto invoke = [&](std::uint32_t address) {
+        core.state.cia = import;
+        core.state.lr = return_address;
+        core.state.gpr[3] = address;
+        return core.run(1U);
+    };
+
+    auto result = invoke(buffer_address);
+    assert(result.reason == StopReason::instruction_limit);
+    assert(result.steps == 1U && core.state.cia == return_address);
+    assert(core.state.gpr[3] == 0xDEADBEEFU);
+    assert(core.state.gpr[4] == gprs_before[4]);
+    for (std::size_t index = 0U; index < descriptor.size(); ++index)
+    {
+        assert(core.memory.read32_be(
+                   buffer_address + static_cast<std::uint32_t>(index * 4U)) ==
+               descriptor[index]);
+    }
+
+    // A null and an unmapped data pointer are returned as stored; this call
+    // neither dereferences the allocation nor fabricates a replacement.
+    core.memory.write32_be(buffer_address + 12U, 0U);
+    result = invoke(buffer_address);
+    assert(result.reason == StopReason::instruction_limit);
+    assert(core.state.gpr[3] == 0U);
+    core.memory.write32_be(buffer_address + 12U, 0x20000U);
+    result = invoke(buffer_address);
+    assert(result.reason == StopReason::instruction_limit);
+    assert(core.state.gpr[3] == 0x20000U);
+
+    assert(core.state.fpr == fprs_before && core.state.fpr_ps1 == ps1_before);
+    assert(core.state.cr == cr_before && core.state.xer == xer_before);
+    assert(core.state.ctr == ctr_before && core.state.fpscr == fpscr_before);
+    for (std::size_t index = 1U; index < core.state.gpr.size(); ++index)
+    {
+        if (index != 3U)
+            assert(core.state.gpr[index] == gprs_before[index]);
+    }
+
+    result = invoke(0U);
+    assert(result.reason == StopReason::hle_error);
+    result = invoke(0x20000U);
+    assert(result.reason == StopReason::memory_fault);
+}
+
 void gx2_clear_color_hle_tests()
 {
     constexpr std::uint32_t return_address = 0x02750600U;
@@ -32875,6 +32950,7 @@ int main(int argc, char* argv[])
     gx2r_buffer_exists_hle_tests();
     gx2r_get_buffer_allocation_size_hle_tests();
     gx2r_get_buffer_alignment_hle_tests();
+    gx2r_lock_buffer_ex_hle_tests();
     gx2_clear_color_hle_tests();
     gx2_set_color_buffer_hle_tests();
     gx2_set_depth_stencil_control_hle_tests();
