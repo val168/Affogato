@@ -860,6 +860,31 @@ void create_gx2_surface_user_memory(
     core.memory.write32_be(surface_address + 0x2CU, mipmap_address);
 }
 
+void create_gx2_buffer_user_memory(
+    EspressoCore& core,
+    std::uint32_t buffer_address,
+    std::uint32_t data_address)
+{
+    constexpr const char* api_name = "gx2::GX2RCreateBufferUserMemory";
+    constexpr std::uint32_t gx2r_buffer_size = 0x10U;
+    if (buffer_address == 0U || (buffer_address & 3U) != 0U ||
+        buffer_address > std::numeric_limits<std::uint32_t>::max() -
+                             gx2r_buffer_size)
+    {
+        throw HleExecutionError(std::string(api_name) +
+                                ": buffer pointer is null, misaligned, or wraps");
+    }
+
+    // GX2RCreateBufferUserMemory records an already allocated guest pointer;
+    // it does not access the allocation or use its legacy third argument.
+    core.memory.validate_write_range(buffer_address, gx2r_buffer_size);
+    const std::uint32_t resource_flags = core.memory.read32_be(buffer_address);
+    const std::uint32_t user_memory_flags = resource_flags &
+        ~(gx2r_resflag_locked | gx2r_resflag_allocated_by_gx2r);
+    core.memory.write32_be(buffer_address, user_memory_flags);
+    core.memory.write32_be(buffer_address + 0x0CU, data_address);
+}
+
 std::uint32_t gx2_texture_endian_swap(std::uint32_t format)
 {
     switch (format & 0x3FU)
@@ -2110,6 +2135,15 @@ void register_gx2_hle(HleDispatcher& dispatcher)
             core.gx2.gx2r_allocate_function = core.state.gpr[3];
             core.gx2.gx2r_free_function = core.state.gpr[4];
             core.gx2.gx2r_uses_default_allocator = false;
+        });
+
+    dispatcher.register_function(
+        "gx2",
+        "GX2RCreateBufferUserMemory",
+        [](EspressoCore& core) {
+            create_gx2_buffer_user_memory(
+                core, core.state.gpr[3], core.state.gpr[4]);
+            core.state.gpr[3] = 1U;
         });
 
     dispatcher.register_function(

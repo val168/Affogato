@@ -19756,6 +19756,84 @@ void gx2_allocator_hle_tests()
     assert(core.gx2.gx2r_free_function == 0U);
 }
 
+void gx2r_create_buffer_user_memory_hle_tests()
+{
+    constexpr std::uint32_t buffer_address = 0x4000U;
+    constexpr std::uint32_t return_address = 0x0274BD9CU;
+    constexpr std::uint32_t locked_flag = 1U << 30U;
+    constexpr std::uint32_t allocated_by_gx2r_flag = 1U << 29U;
+    constexpr std::uint32_t guest_data_address = 0xDEADBEEFU;
+    constexpr std::uint32_t resource_flags =
+        0xA5812345U | locked_flag | allocated_by_gx2r_flag;
+    constexpr std::uint32_t expected_flags =
+        resource_flags & ~(locked_flag | allocated_by_gx2r_flag);
+
+    EspressoCore core(0x10000U);
+    register_gx2_hle(core.hle);
+    const std::uint32_t import = core.hle.bind_import(
+        "gx2", "GX2RCreateBufferUserMemory");
+    assert(import != 0U);
+
+    core.memory.write32_be(buffer_address, resource_flags);
+    core.memory.write32_be(buffer_address + 4U, 12U);
+    core.memory.write32_be(buffer_address + 8U, 64U);
+    core.memory.write32_be(buffer_address + 12U, 0x12345678U);
+    core.state.gpr.fill(0xA5000000U);
+    core.state.gpr[3] = buffer_address;
+    core.state.gpr[4] = guest_data_address;
+    core.state.gpr[5] = 0x87654321U; // legacy size argument is ignored
+    core.state.cr = 0x12345678U;
+    core.state.xer = 0xA5A55A5AU;
+    core.state.ctr = 0x87654321U;
+    core.state.fpscr = 0x5A5AA55AU;
+    const auto gprs_before = core.state.gpr;
+    const auto fprs_before = core.state.fpr;
+    const auto ps1_before = core.state.fpr_ps1;
+    const std::uint32_t cr_before = core.state.cr;
+    const std::uint32_t xer_before = core.state.xer;
+    const std::uint32_t ctr_before = core.state.ctr;
+    const std::uint32_t fpscr_before = core.state.fpscr;
+
+    core.state.cia = import;
+    core.state.lr = return_address;
+    auto result = core.run(1U);
+    assert(result.reason == StopReason::instruction_limit);
+    assert(result.steps == 1U && core.state.cia == return_address);
+    assert(core.state.gpr[3] == 1U);
+    assert(core.state.gpr[4] == guest_data_address);
+    assert(core.state.gpr[5] == 0x87654321U);
+    for (std::size_t index = 0U; index < core.state.gpr.size(); ++index)
+    {
+        if (index != 3U)
+            assert(core.state.gpr[index] == gprs_before[index]);
+    }
+    assert(core.memory.read32_be(buffer_address) == expected_flags);
+    assert(core.memory.read32_be(buffer_address + 4U) == 12U);
+    assert(core.memory.read32_be(buffer_address + 8U) == 64U);
+    assert(core.memory.read32_be(buffer_address + 12U) == guest_data_address);
+    assert(core.state.fpr == fprs_before && core.state.fpr_ps1 == ps1_before);
+    assert(core.state.cr == cr_before && core.state.xer == xer_before);
+    assert(core.state.ctr == ctr_before && core.state.fpscr == fpscr_before);
+
+    // A null user pointer is stored verbatim; this API does not dereference it.
+    core.state.cia = import;
+    core.state.lr = return_address;
+    core.state.gpr[3] = buffer_address;
+    core.state.gpr[4] = 0U;
+    result = core.run(1U);
+    assert(result.reason == StopReason::instruction_limit);
+    assert(core.memory.read32_be(buffer_address + 12U) == 0U);
+    assert(core.state.gpr[3] == 1U);
+
+    // Invalid descriptor addresses fail before any guest memory is changed.
+    core.state.cia = import;
+    core.state.lr = return_address;
+    core.state.gpr[3] = 0U;
+    core.state.gpr[4] = guest_data_address;
+    result = core.run(1U);
+    assert(result.reason == StopReason::hle_error);
+}
+
 void gx2_clear_color_hle_tests()
 {
     constexpr std::uint32_t return_address = 0x02750600U;
@@ -32591,6 +32669,7 @@ int main(int argc, char* argv[])
     gx2_init_sampler_border_type_hle_tests();
     gx2_init_hle_tests();
     gx2_allocator_hle_tests();
+    gx2r_create_buffer_user_memory_hle_tests();
     gx2_clear_color_hle_tests();
     gx2_set_color_buffer_hle_tests();
     gx2_set_depth_stencil_control_hle_tests();
