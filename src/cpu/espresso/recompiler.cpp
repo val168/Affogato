@@ -3809,6 +3809,7 @@ struct BlockCode
     case Opcode::load_halfword_zero_indexed:
     case Opcode::load_halfword_zero_indexed_update:
     case Opcode::load_halfword_algebraic_indexed:
+    case Opcode::load_halfword_algebraic_indexed_update:
     case Opcode::store_word_indexed:
     case Opcode::store_word_conditional_indexed:
     case Opcode::store_byte_indexed:
@@ -3969,6 +3970,7 @@ struct BlockCode
     case Opcode::load_halfword_zero_indexed: return "lhzx";
     case Opcode::load_halfword_zero_indexed_update: return "lhzux";
     case Opcode::load_halfword_algebraic_indexed: return "lhax";
+    case Opcode::load_halfword_algebraic_indexed_update: return "lhaux";
     case Opcode::store_word_indexed: return "stwx";
     case Opcode::store_byte_indexed: return "stbx";
     case Opcode::store_halfword_indexed: return "sthx";
@@ -4024,6 +4026,7 @@ struct BlockCode
     case Opcode::load_halfword_zero_indexed:
     case Opcode::load_halfword_zero_indexed_update:
     case Opcode::load_halfword_algebraic_indexed:
+    case Opcode::load_halfword_algebraic_indexed_update:
     case Opcode::store_word_indexed:
     case Opcode::store_word_conditional_indexed:
     case Opcode::store_byte_indexed:
@@ -4060,6 +4063,7 @@ struct BlockCode
     case Opcode::load_halfword_zero_indexed:
     case Opcode::load_halfword_zero_indexed_update:
     case Opcode::load_halfword_algebraic_indexed:
+    case Opcode::load_halfword_algebraic_indexed_update:
     case Opcode::store_halfword_indexed:
         return 2U;
     case Opcode::store_double:
@@ -4094,6 +4098,7 @@ struct BlockCode
         opcode == Opcode::load_halfword_zero_indexed ||
         opcode == Opcode::load_halfword_zero_indexed_update ||
         opcode == Opcode::load_halfword_algebraic_indexed ||
+        opcode == Opcode::load_halfword_algebraic_indexed_update ||
         opcode == Opcode::store_word_indexed ||
         opcode == Opcode::store_word_conditional_indexed ||
         opcode == Opcode::store_byte_indexed ||
@@ -6949,6 +6954,7 @@ struct Recompiler::Impl
             case Opcode::load_halfword_zero_indexed:
             case Opcode::load_halfword_zero_indexed_update:
             case Opcode::load_halfword_algebraic_indexed:
+            case Opcode::load_halfword_algebraic_indexed_update:
             case Opcode::store_word_indexed:
             case Opcode::store_word_conditional_indexed:
             case Opcode::store_byte_indexed:
@@ -6977,6 +6983,7 @@ struct Recompiler::Impl
                     insn.opcode == Opcode::load_byte_zero_indexed_update ||
                     insn.opcode == Opcode::load_halfword_zero_update ||
                     insn.opcode == Opcode::load_halfword_zero_indexed_update ||
+                    insn.opcode == Opcode::load_halfword_algebraic_indexed_update ||
                     insn.opcode == Opcode::store_byte_update ||
                     insn.opcode == Opcode::store_word_update ||
                     insn.opcode == Opcode::store_halfword_update ||
@@ -6984,7 +6991,8 @@ struct Recompiler::Impl
                     insn.opcode == Opcode::store_double_update;
                 const bool sign_extend =
                     insn.opcode == Opcode::load_halfword_algebraic ||
-                    insn.opcode == Opcode::load_halfword_algebraic_indexed;
+                    insn.opcode == Opcode::load_halfword_algebraic_indexed ||
+                    insn.opcode == Opcode::load_halfword_algebraic_indexed_update;
                 const std::uint32_t width = memory_width(insn.opcode);
                 const bool direct_flat_load = !store && !validation_only &&
                     !single_store && !double_store && !fp_integer_store &&

@@ -212,6 +212,14 @@ namespace
         (static_cast<std::uint32_t>(index) << 11U) | (311U << 1U);
 }
 
+[[nodiscard]] constexpr std::uint32_t lhaux_form(
+    std::uint8_t destination, std::uint8_t base, std::uint8_t index)
+{
+    return (31U << 26U) | (static_cast<std::uint32_t>(destination) << 21U) |
+        (static_cast<std::uint32_t>(base) << 16U) |
+        (static_cast<std::uint32_t>(index) << 11U) | (375U << 1U);
+}
+
 [[nodiscard]] constexpr std::uint32_t lmw_form(
     std::uint8_t first_destination, std::uint8_t base, std::int16_t displacement)
 {
@@ -4376,6 +4384,100 @@ void recompiler_lhzux_differential_tests()
     assert(!fault.instruction_history.back().completed);
 }
 
+void recompiler_lhaux_differential_tests()
+{
+    struct Case
+    {
+        std::uint32_t base;
+        std::uint32_t index;
+        std::uint16_t memory_value;
+        std::uint32_t expected_value;
+        std::uint8_t destination;
+        std::uint8_t base_register;
+        std::uint8_t index_register;
+    };
+    constexpr std::uint32_t start = 0x100U;
+    constexpr std::array cases{
+        Case{0x300U, 4U, 0x0000U, 0x00000000U, 3U, 6U, 7U},
+        Case{0x300U, 8U, 0x7FFFU, 0x00007FFFU, 4U, 7U, 4U}, // RT aliases RB
+        Case{0x100U, 0x100U, 0x8000U, 0xFFFF8000U, 5U, 6U, 6U}, // RA aliases RB
+        Case{0xFFFFFFFCU, 8U, 0xFFFFU, 0xFFFFFFFFU, 11U, 12U, 13U}, // wraps to 4
+    };
+
+    for (const Case& test : cases)
+    {
+        EspressoCore interpreted(0x1000U);
+        EspressoCore compiled(0x1000U);
+        const std::uint32_t instruction = lhaux_form(
+            test.destination, test.base_register, test.index_register);
+        const std::uint32_t address = test.base + test.index;
+        for (EspressoCore* core : {&interpreted, &compiled})
+        {
+            core->memory.write32_be(start, instruction);
+            core->memory.write16_be(address, test.memory_value);
+            core->state.cia = start;
+            core->state.gpr.fill(0xDEADBEEFU);
+            core->state.gpr[test.base_register] = test.base;
+            core->state.gpr[test.index_register] = test.index;
+            if (test.destination != test.index_register)
+            {
+                core->state.gpr[test.destination] = 0x87654321U;
+            }
+            core->state.cr = 0xA5C39E71U;
+            core->state.xer = 0x87654321U;
+            core->state.lr = 0xABCDEF00U;
+            core->state.ctr = 0xFEDCBA98U;
+            core->state.fpscr = 0x89ABCDEFU;
+        }
+
+        const RunResult oracle = interpreted.run(1U);
+        Recompiler recompiler;
+        const RunResult actual = recompiler.run(compiled, 1U);
+        assert(actual.reason == oracle.reason);
+        assert(actual.steps == oracle.steps && actual.steps == 1U);
+        assert(actual.cia == oracle.cia);
+        assert(compiled.state.gpr == interpreted.state.gpr);
+        assert(compiled.state.gpr[test.destination] == test.expected_value);
+        assert(compiled.state.gpr[test.base_register] == address);
+        assert(compiled.state.cr == interpreted.state.cr);
+        assert(compiled.state.xer == interpreted.state.xer);
+        assert(compiled.state.lr == interpreted.state.lr);
+        assert(compiled.state.ctr == interpreted.state.ctr);
+        assert(compiled.state.fpscr == interpreted.state.fpscr);
+        assert(recompiler.statistics().native_instructions == 1U);
+        assert(recompiler.statistics().interpreter_fallbacks == 0U);
+        assert(recompiler.statistics().memory_slow_path_calls == 1U);
+        const InstructionHistoryEntry& history = actual.instruction_history.back();
+        assert(history.opcode_name == "lhaux");
+        assert(history.has_effective_address && history.effective_address == address);
+        assert(history.source_count == 2U);
+        assert(history.source_registers[0] == test.base_register);
+        assert(history.source_values[0] == test.base);
+        assert(history.source_registers[1] == test.index_register);
+        assert(history.source_values[1] == test.index);
+        assert(history.has_destination &&
+            history.destination_register == test.destination &&
+            history.destination_value == test.expected_value);
+    }
+
+    EspressoCore faulting(0x1000U);
+    faulting.memory.map_region(0x2000U, 1U);
+    faulting.memory.write8(0x2000U, 0x80U);
+    faulting.memory.write32_be(start, lhaux_form(3U, 6U, 7U));
+    faulting.state.cia = start;
+    faulting.state.gpr[6] = 0x2000U;
+    faulting.state.gpr[7] = 0U;
+    faulting.state.gpr[3] = 0xDEADBEEFU;
+    Recompiler fault_recompiler;
+    const RunResult fault = fault_recompiler.run(faulting, 1U);
+    assert(fault.reason == StopReason::memory_fault);
+    assert(fault.detail.find("read 2 byte(s)") != std::string::npos);
+    assert(faulting.state.gpr[3] == 0xDEADBEEFU);
+    assert(faulting.state.gpr[6] == 0x2000U);
+    assert(faulting.state.cia == start);
+    assert(!fault.instruction_history.back().completed);
+}
+
 void recompiler_lmw_differential_tests()
 {
     struct Case
@@ -5461,6 +5563,7 @@ int main()
     recompiler_lwzux_differential_tests();
     recompiler_lbzux_differential_tests();
     recompiler_lhzux_differential_tests();
+    recompiler_lhaux_differential_tests();
     recompiler_lmw_differential_tests();
     recompiler_stmw_differential_tests();
     recompiler_dcbst_differential_tests();
