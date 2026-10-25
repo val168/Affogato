@@ -3790,6 +3790,7 @@ struct BlockCode
     case Opcode::load_single:
     case Opcode::load_single_update:
     case Opcode::load_single_indexed:
+    case Opcode::load_single_indexed_update:
     case Opcode::load_double:
     case Opcode::load_double_update:
     case Opcode::store_word:
@@ -3958,6 +3959,7 @@ struct BlockCode
     case Opcode::load_single: return "lfs";
     case Opcode::load_single_update: return "lfsu";
     case Opcode::load_single_indexed: return "lfsx";
+    case Opcode::load_single_indexed_update: return "lfsux";
     case Opcode::load_double: return "lfd";
     case Opcode::load_double_update: return "lfdu";
     case Opcode::store_word: return "stw";
@@ -4021,6 +4023,7 @@ struct BlockCode
     case Opcode::load_single:
     case Opcode::load_single_update:
     case Opcode::load_single_indexed:
+    case Opcode::load_single_indexed_update:
     case Opcode::load_double:
     case Opcode::load_double_update:
     case Opcode::store_single:
@@ -4129,6 +4132,7 @@ struct BlockCode
         opcode == Opcode::load_byte_zero_indexed ||
         opcode == Opcode::load_byte_zero_indexed_update ||
         opcode == Opcode::load_single_indexed ||
+        opcode == Opcode::load_single_indexed_update ||
         opcode == Opcode::load_halfword_zero_indexed ||
         opcode == Opcode::load_halfword_zero_indexed_update ||
         opcode == Opcode::load_halfword_algebraic_indexed ||
@@ -6845,6 +6849,7 @@ struct Recompiler::Impl
             case Opcode::load_single:
             case Opcode::load_single_update:
             case Opcode::load_single_indexed:
+            case Opcode::load_single_indexed_update:
             {
                 const std::size_t record_base = offsetof(NativeExecutionContext, memory_records) +
                     index * sizeof(NativeMemoryRecord);
@@ -6861,7 +6866,8 @@ struct Recompiler::Impl
                     compiler.mov(x86::dword_ptr(context, static_cast<std::int32_t>(
                         record_base + offsetof(NativeMemoryRecord, base_value))), address);
                 }
-                const bool indexed = insn.opcode == Opcode::load_single_indexed;
+                const bool indexed = insn.opcode == Opcode::load_single_indexed ||
+                    insn.opcode == Opcode::load_single_indexed_update;
                 x86::Gp index_value;
                 if (indexed)
                 {
@@ -6903,7 +6909,8 @@ struct Recompiler::Impl
                 compiler.mov(x86::qword_ptr(state, static_cast<std::int32_t>(
                     offsetof(CpuState, fpr_ps1) + sizeof(std::uint64_t) * insn.fp_register)),
                     value);
-                if (insn.opcode == Opcode::load_single_update)
+                if (insn.opcode == Opcode::load_single_update ||
+                    insn.opcode == Opcode::load_single_indexed_update)
                 {
                     write_guest_gpr(insn.base, address);
                 }
@@ -8517,13 +8524,15 @@ RunResult Recompiler::run(EspressoCore& core, std::size_t max_steps)
             if (insn.opcode == Opcode::load_single ||
                 insn.opcode == Opcode::load_single_update ||
                 insn.opcode == Opcode::load_single_indexed ||
+                insn.opcode == Opcode::load_single_indexed_update ||
                 insn.opcode == Opcode::load_double ||
                 insn.opcode == Opcode::load_double_update)
             {
                 entry.has_fp_destination = true;
                 entry.fp_destination_register = insn.fp_register;
                 entry.fp_destination_value = record.fp_value;
-                if (insn.opcode == Opcode::load_single_update)
+                if (insn.opcode == Opcode::load_single_update ||
+                    insn.opcode == Opcode::load_single_indexed_update)
                 {
                     entry.has_destination = true;
                     entry.destination_register = insn.base;
