@@ -25688,6 +25688,65 @@ void latte_texture_staging_tests()
     assert(!affogato::gpu::stage_linear_rgba8_texture(unsupported, guest_bytes));
 }
 
+void gx2_set_display_enabled_hle_tests()
+{
+    constexpr std::uint32_t return_address = 0x02751AFCU;
+    EspressoCore core(0x1000U);
+    register_gx2_hle(core.hle);
+    core.state.gpr.fill(0xD7000000U);
+    core.state.gpr[3] = 1U;
+    core.state.lr = return_address;
+    core.state.cr = 0xA5A55A5AU;
+    core.state.xer = 0x87654321U;
+    core.state.ctr = 0xABCDEF01U;
+    core.state.fpscr = 0x5A5AA5A5U;
+    const auto gprs_before = core.state.gpr;
+    const auto fprs_before = core.state.fpr;
+    const auto ps1_before = core.state.fpr_ps1;
+
+    const auto invoke = [&](const char* function, std::uint32_t enabled) {
+        core.state.gpr[3] = enabled;
+        core.state.cia = core.hle.bind_import("gx2", function);
+        core.state.lr = return_address;
+        const RunResult result = core.run(1U);
+        assert(result.reason == StopReason::instruction_limit);
+        assert(result.steps == 1U);
+        assert(core.state.cia == return_address && core.state.lr == return_address);
+        assert(core.state.fpr == fprs_before && core.state.fpr_ps1 == ps1_before);
+        assert(core.state.cr == 0xA5A55A5AU);
+        assert(core.state.xer == 0x87654321U);
+        assert(core.state.ctr == 0xABCDEF01U);
+        assert(core.state.fpscr == 0x5A5AA5A5U);
+        for (std::size_t reg = 0U; reg < core.state.gpr.size(); ++reg)
+        {
+            if (reg != 3U)
+            {
+                assert(core.state.gpr[reg] == gprs_before[reg]);
+            }
+        }
+        assert(core.state.gpr[3] == enabled);
+        assert(core.gx2.pending_commands.empty());
+    };
+
+    assert(!core.gx2.tv_output_enabled.has_value());
+    assert(!core.gx2.drc_output_enabled.has_value());
+    invoke("GX2SetTVEnable", 1U);
+    assert(core.gx2.tv_output_enabled == true);
+    assert(!core.gx2.drc_output_enabled.has_value());
+
+    invoke("GX2SetDRCEnable", 0U);
+    assert(core.gx2.tv_output_enabled == true);
+    assert(core.gx2.drc_output_enabled == false);
+
+    invoke("GX2SetTVEnable", 0U);
+    assert(core.gx2.tv_output_enabled == false);
+    assert(core.gx2.drc_output_enabled == false);
+
+    invoke("GX2SetDRCEnable", 0xFFFFFFFFU);
+    assert(core.gx2.tv_output_enabled == false);
+    assert(core.gx2.drc_output_enabled == true);
+}
+
 void gx2_set_tv_buffer_hle_tests()
 {
     constexpr std::uint32_t buffer_address = 0x0A001000U;
@@ -35159,6 +35218,7 @@ int main(int argc, char* argv[])
     gx2_register_state_tests();
     latte_texture_staging_tests();
     gx2_calc_tv_size_hle_tests();
+    gx2_set_display_enabled_hle_tests();
     gx2_set_tv_buffer_hle_tests();
     gx2_set_tv_scale_hle_tests();
     gx2_calc_drc_size_hle_tests();

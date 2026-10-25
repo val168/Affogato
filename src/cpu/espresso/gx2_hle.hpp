@@ -137,6 +137,9 @@ struct Gx2RuntimeState
     std::uint32_t tv_buffering_mode{};
     std::uint32_t tv_scan_width{};
     std::uint32_t tv_scan_height{};
+    // An unset value means the output service has not defined an initial
+    // enable state. This request alone does not imply pixel presentation.
+    std::optional<bool> tv_output_enabled;
     bool tv_scale_configured{};
     std::uint32_t tv_scale_width{};
     std::uint32_t tv_scale_height{};
@@ -149,6 +152,7 @@ struct Gx2RuntimeState
     std::uint32_t drc_scan_width{};
     std::uint32_t drc_scan_height{};
     std::uint32_t drc_scan_pitch{};
+    std::optional<bool> drc_output_enabled;
     bool drc_scale_configured{};
     std::uint32_t drc_scale_width{};
     std::uint32_t drc_scale_height{};

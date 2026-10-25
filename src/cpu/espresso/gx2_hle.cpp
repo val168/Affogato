@@ -3312,6 +3312,24 @@ void register_gx2_hle(HleDispatcher& dispatcher)
 
     dispatcher.register_function(
         "gx2",
+        "GX2SetTVEnable",
+        [](EspressoCore& core) {
+            // Record the display-service request independently of buffer
+            // setup. Guest scanout to the Vulkan window is not implemented.
+            core.gx2.tv_output_enabled = core.state.gpr[3] != 0U;
+        });
+
+    dispatcher.register_function(
+        "gx2",
+        "GX2SetDRCEnable",
+        [](EspressoCore& core) {
+            // This is state/API coverage only; it does not claim a DRC frame
+            // was rendered or presented.
+            core.gx2.drc_output_enabled = core.state.gpr[3] != 0U;
+        });
+
+    dispatcher.register_function(
+        "gx2",
         "GX2SetTVBuffer",
         [](EspressoCore& core) {
             const std::uint32_t buffer = core.state.gpr[3];
