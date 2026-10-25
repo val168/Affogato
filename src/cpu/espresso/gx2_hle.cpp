@@ -3019,6 +3019,21 @@ void register_gx2_hle(HleDispatcher& dispatcher)
 
     dispatcher.register_function(
         "gx2",
+        "GX2InitStencilMaskReg",
+        [](EspressoCore& core) {
+            const std::uint32_t output = core.state.gpr[3];
+            core.memory.validate_write_range(
+                output, 2U * sizeof(std::uint32_t));
+            const std::uint32_t front = pack_stencil_ref_mask(
+                core.state.gpr[4], core.state.gpr[5], core.state.gpr[6]);
+            const std::uint32_t back = pack_stencil_ref_mask(
+                core.state.gpr[7], core.state.gpr[8], core.state.gpr[9]);
+            core.memory.write32_be(output, front);
+            core.memory.write32_be(output + 4U, back);
+        });
+
+    dispatcher.register_function(
+        "gx2",
         "GX2SetPolygonControl",
         [](EspressoCore& core) {
             if (!core.gx2.initialized)
