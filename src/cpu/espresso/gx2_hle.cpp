@@ -4297,6 +4297,15 @@ void register_gx2_hle(HleDispatcher& dispatcher)
 
     dispatcher.register_function(
         "gx2",
+        "GX2InitAlphaToMaskReg",
+        [](EspressoCore& core) {
+            const std::uint32_t value = pack_alpha_to_mask(
+                core.state.gpr[4], core.state.gpr[5]);
+            core.memory.write32_be(core.state.gpr[3], value);
+        });
+
+    dispatcher.register_function(
+        "gx2",
         "GX2SetAlphaToMaskReg",
         [](EspressoCore& core) {
             if (!core.gx2.initialized)

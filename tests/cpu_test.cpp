@@ -26348,6 +26348,86 @@ void gx2_set_alpha_to_mask_reg_hle_tests()
     assert(uninitialized.gx2.pending_commands.empty());
 }
 
+void gx2_init_alpha_to_mask_reg_hle_tests()
+{
+    constexpr std::uint32_t return_address = 0x02750A94U;
+    constexpr std::uint32_t output_address = 0x503U;
+    constexpr std::array<std::uint32_t, 5U> expected_offsets{
+        0xAAU, 0x78U, 0xC6U, 0x2DU, 0x93U};
+
+    EspressoCore core(0x10000U);
+    register_gx2_hle(core.hle);
+    const std::uint32_t import =
+        core.hle.bind_import("gx2", "GX2InitAlphaToMaskReg");
+    const std::uint32_t wrong_library =
+        core.hle.bind_import("coreinit", "GX2InitAlphaToMaskReg");
+    assert(import != 0U && wrong_library != 0U);
+    assert(!core.gx2.initialized);
+    core.memory.write8(output_address - 1U, 0xA5U);
+    core.memory.write32_be(output_address, 0xDEADBEEFU);
+    core.memory.write8(output_address + 4U, 0x5AU);
+    core.state.gpr.fill(0xB1000000U);
+    core.state.gpr[3] = output_address;
+    core.state.cr = 0x12345678U;
+    core.state.xer = 0xA5A55A5AU;
+    core.state.ctr = 0x87654321U;
+    core.state.fpscr = 0x5A5AA55AU;
+    const auto fprs_before = core.state.fpr;
+    const auto ps1_before = core.state.fpr_ps1;
+
+    for (std::uint32_t mode = 0U; mode < expected_offsets.size(); ++mode)
+    {
+        for (const std::uint32_t enabled : {0U, 1U})
+        {
+            core.state.gpr[4] = enabled;
+            core.state.gpr[5] = mode;
+            core.state.cia = import;
+            core.state.lr = return_address;
+            const auto gprs_before = core.state.gpr;
+            const RunResult result = core.run(1U);
+            assert(result.reason == StopReason::instruction_limit);
+            assert(result.steps == 1U && core.state.cia == return_address);
+            const std::uint32_t expected =
+                (expected_offsets[mode] << 8U) | enabled;
+            assert(core.memory.read32_be(output_address) == expected);
+            assert(core.memory.read8(output_address - 1U) == 0xA5U);
+            assert(core.memory.read8(output_address + 4U) == 0x5AU);
+            assert(core.state.gpr == gprs_before);
+            assert(core.state.fpr == fprs_before &&
+                   core.state.fpr_ps1 == ps1_before);
+            assert(core.state.cr == 0x12345678U);
+            assert(core.state.xer == 0xA5A55A5AU);
+            assert(core.state.ctr == 0x87654321U);
+            assert(core.state.fpscr == 0x5A5AA55AU);
+            assert(core.gx2.pending_commands.empty());
+        }
+    }
+
+    // The initializer shares the ordinary API's defined handling of unknown
+    // mode values: only the enable bit is set when no dither pattern matches.
+    core.state.gpr[4] = 1U;
+    core.state.gpr[5] = 0xFFFFFFFFU;
+    core.state.cia = import;
+    core.state.lr = return_address;
+    assert(core.run(1U).reason == StopReason::instruction_limit);
+    assert(core.memory.read32_be(output_address) == 1U);
+
+    core.state.cia = wrong_library;
+    core.state.lr = return_address;
+    const RunResult wrong_library_result = core.run(1U);
+    assert(wrong_library_result.reason == StopReason::unimplemented_hle_call);
+    assert(wrong_library_result.hle_call == "coreinit::GX2InitAlphaToMaskReg");
+
+    core.state.gpr[3] = 0x10000U;
+    core.state.cia = import;
+    core.state.lr = return_address;
+    const RunResult bad_pointer = core.run(1U);
+    assert(bad_pointer.reason == StopReason::memory_fault);
+    assert(bad_pointer.detail.find("write 4 byte(s)") != std::string::npos);
+    assert(core.memory.read32_be(output_address) == 1U);
+    assert(!core.gx2.initialized);
+}
+
 void gx2_init_alpha_test_reg_hle_tests()
 {
     constexpr std::uint32_t return_address = 0x02750A98U;
@@ -39232,6 +39312,7 @@ int main(int argc, char* argv[])
     gx2_set_target_channel_masks_hle_tests();
     gx2_set_alpha_to_mask_hle_tests();
     gx2_set_alpha_to_mask_reg_hle_tests();
+    gx2_init_alpha_to_mask_reg_hle_tests();
     gx2_init_alpha_test_reg_hle_tests();
     gx2_get_alpha_test_reg_hle_tests();
     gx2_set_alpha_test_reg_hle_tests();
