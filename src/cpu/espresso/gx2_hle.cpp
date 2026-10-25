@@ -1636,12 +1636,6 @@ void register_gx2_hle(HleDispatcher& dispatcher)
                         std::string(api_name) + ": unsupported attribute buffer index " +
                         std::to_string(attribute.buffer));
                 }
-                if (attribute.location >= 128U || attribute.offset > 0xFFFFU)
-                {
-                    throw HleExecutionError(
-                        std::string(api_name) +
-                        ": attribute location or offset is not encodable");
-                }
                 const std::uint32_t fetch_bytes =
                     gx2_attrib_format_bytes(attribute.format);
                 if (fetch_bytes == 0U)
@@ -1676,8 +1670,11 @@ void register_gx2_hle(HleDispatcher& dispatcher)
                 const std::uint32_t number_format =
                     (attribute.format & 0x800U) != 0U ? 2U :
                     (attribute.format & 0x100U) != 0U ? 1U : 0U;
+                // VTX_WORD1_GPR.DST_GPR is a 7-bit field. GX2 keeps location
+                // in a 32-bit slot (including UINT32_MAX sentinels), so encode
+                // exactly the bits the Latte instruction format retains.
                 const std::uint32_t word1 =
-                    attribute.location |
+                    ((attribute.location & 0x7FU)) |
                     (selector_x << 9U) |
                     (selector_y << 12U) |
                     (selector_z << 15U) |
@@ -1687,7 +1684,7 @@ void register_gx2_hle(HleDispatcher& dispatcher)
                     ((attribute.format & 0x200U) != 0U ? 1U << 30U : 0U);
 
                 const std::uint32_t word2 =
-                    attribute.offset |
+                    (attribute.offset & 0xFFFFU) |
                     (endian_swap << 16U) |
                     (1U << 19U); // MEGA_FETCH
 

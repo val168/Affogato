@@ -18754,6 +18754,14 @@ void gx2_init_fetch_shader_ex_hle_tests()
                    program_address + static_cast<std::uint32_t>(index * 4U)) ==
                program_before[index]);
     }
+
+    // Hardware fields are narrower than GX2AttribStream's uint32 members:
+    // UINT32_MAX location encodes as DST_GPR 127, and OFFSET keeps 16 bits.
+    write_attribute(attribs_address, {
+        0xFFFFFFFFU, 3U, 0x10001U, 0x80DU, 0U, 0U, 0x00010203U, 3U});
+    assert(invoke(0U, 0U).reason == StopReason::instruction_limit);
+    assert(core.memory.read32_be(program_address + 0x04U) == 0x234D107FU);
+    assert(core.memory.read32_be(program_address + 0x08U) == 0x000A0001U);
 }
 
 void gx2_init_sampler_hle_tests()
