@@ -742,6 +742,14 @@ void decoder_tests()
     const DecodedInstruction psq_lw = decode(0xE0E78000U);
     assert(psq_lw.opcode == Opcode::paired_single_quantized_load);
     assert(psq_lw.paired_single_w);
+    const std::uint32_t psq_lx_word = (4U << 26U) | (7U << 21U) |
+        (9U << 16U) | (8U << 11U) | (1U << 10U) | (5U << 7U) | (6U << 1U);
+    const DecodedInstruction psq_lx = decode(psq_lx_word);
+    assert(psq_lx.opcode == Opcode::paired_single_quantized_load_indexed);
+    assert(psq_lx.fp_register == 7U && psq_lx.base == 9U && psq_lx.source == 8U);
+    assert(psq_lx.quantized_register == 5U && psq_lx.paired_single_w);
+    assert(decode(psq_lx_word | (1U << 6U)).opcode == Opcode::unsupported);
+    assert(decode(psq_lx_word | 1U).opcode == Opcode::unsupported);
     const DecodedInstruction psq_st = decode(0xF1A10010U);
     assert(psq_st.opcode == Opcode::paired_single_quantized_store);
     assert(psq_st.fp_register == 13U && psq_st.base == 1U);
@@ -30448,6 +30456,111 @@ void paired_single_quantized_load_tests()
     assert(fault.state.fpr_ps1[7] == 0x5555666677778888ULL);
 }
 
+void paired_single_quantized_load_indexed_tests()
+{
+    const auto encode_psq_lx = [](
+        std::uint8_t destination, std::uint8_t base, std::uint8_t index,
+        bool single_element, std::uint8_t gqr) {
+        return (4U << 26U) |
+            (static_cast<std::uint32_t>(destination) << 21U) |
+            (static_cast<std::uint32_t>(base) << 16U) |
+            (static_cast<std::uint32_t>(index) << 11U) |
+            (static_cast<std::uint32_t>(single_element) << 10U) |
+            (static_cast<std::uint32_t>(gqr & 0x7U) << 7U) | (6U << 1U);
+    };
+    const auto double_bits = [](double value) { return std::bit_cast<std::uint64_t>(value); };
+
+    constexpr std::uint32_t start = 0x100U;
+    constexpr std::uint32_t encoding = 0x1080000CU; // psq_lx f4,r0,r0,W=0,GQR0
+    const DecodedInstruction decoded = decode(encoding);
+    assert(decoded.opcode == Opcode::paired_single_quantized_load_indexed);
+    assert(decoded.fp_register == 4U && decoded.base == 0U && decoded.source == 0U);
+    assert(decoded.quantized_register == 0U && !decoded.paired_single_w);
+
+    // Indexed EA uses literal zero for RA=0 but GPR0 as a real RB index.
+    // Both lanes are raw float32 values widened to the paired FPR representation.
+    EspressoCore indexed(0x1000U);
+    indexed.memory.map_region(0x2000U, 8U);
+    indexed.state.gpr[0] = 0x2000U;
+    indexed.state.gqr[0] = 0U;
+    indexed.state.fpr[4] = 0x1111222233334444ULL;
+    indexed.state.fpr_ps1[4] = 0x5555666677778888ULL;
+    indexed.state.cia = start;
+    indexed.memory.write32_be(start, encode_psq_lx(4U, 0U, 0U, false, 0U));
+    indexed.memory.write32_be(0x2000U, std::bit_cast<std::uint32_t>(1.25F));
+    indexed.memory.write32_be(0x2004U, std::bit_cast<std::uint32_t>(-4.5F));
+    const auto original_gprs = indexed.state.gpr;
+    const auto original_fpscr = indexed.state.fpscr;
+    const std::uint32_t original_cr = indexed.state.cr;
+    const std::uint32_t original_xer = indexed.state.xer;
+    const RunResult result = indexed.run(1U);
+    assert(result.reason == StopReason::instruction_limit);
+    assert(indexed.state.fpr[4] == double_bits(1.25));
+    assert(indexed.state.fpr_ps1[4] == double_bits(-4.5));
+    assert(indexed.state.gpr == original_gprs);
+    assert(indexed.state.fpscr == original_fpscr);
+    assert(indexed.state.cr == original_cr && indexed.state.xer == original_xer);
+    const InstructionHistoryEntry& history = result.instruction_history.front();
+    assert(history.opcode_name == "psq_lx" && history.completed);
+    assert(history.has_effective_address && history.effective_address == 0x2000U);
+    assert(history.source_count == 1U && history.source_registers[0] == 0U);
+    assert(history.source_values[0] == 0x2000U);
+    assert(history.has_paired_fp_state && history.paired_fp_destination_register == 4U);
+    assert(history.paired_fp_destination_ps0 == double_bits(1.25));
+    assert(history.paired_fp_destination_ps1 == double_bits(-4.5));
+
+    // Quantized unsigned-byte pair loads use the indexed base+index EA and GQR scale.
+    EspressoCore quantized(0x1000U);
+    quantized.memory.map_region(0x3000U, 2U);
+    quantized.state.gpr[6] = 0x2FF0U;
+    quantized.state.gpr[7] = 0x10U;
+    quantized.state.gqr[3] = (4U << 16U) | (1U << 24U); // U8, scale +1.
+    quantized.state.cia = start;
+    quantized.memory.write32_be(start, encode_psq_lx(8U, 6U, 7U, false, 3U));
+    quantized.memory.write8(0x3000U, 7U);
+    quantized.memory.write8(0x3001U, 0xFEU);
+    assert(quantized.step() == StepResult::executed);
+    assert(quantized.state.fpr[8] == double_bits(3.5));
+    assert(quantized.state.fpr_ps1[8] == double_bits(127.0));
+    assert(quantized.state.gpr[6] == 0x2FF0U && quantized.state.gpr[7] == 0x10U);
+
+    // W=1 reads only PS0 and supplies exactly +1.0 in PS1.
+    EspressoCore scalar(0x1000U);
+    scalar.memory.map_region(0x4000U, 4U);
+    scalar.state.gpr[4] = 0x4000U;
+    scalar.state.gpr[5] = 0U;
+    scalar.state.fpr_ps1[9] = 0xDEADBEEF01234567ULL;
+    scalar.state.cia = start;
+    scalar.memory.write32_be(start, encode_psq_lx(9U, 4U, 5U, true, 0U));
+    scalar.memory.write32_be(0x4000U, std::bit_cast<std::uint32_t>(-0.75F));
+    assert(scalar.step() == StepResult::executed);
+    assert(scalar.state.fpr[9] == double_bits(-0.75));
+    assert(scalar.state.fpr_ps1[9] == double_bits(1.0));
+
+    // A second-lane fault preserves both destination lanes and records indexed operands.
+    EspressoCore fault(0x1000U);
+    fault.memory.map_region(0x5000U, 4U);
+    fault.state.gpr[2] = 0x4FF0U;
+    fault.state.gpr[3] = 0x10U;
+    fault.state.fpr[6] = 0x1111222233334444ULL;
+    fault.state.fpr_ps1[6] = 0x5555666677778888ULL;
+    fault.state.cia = start;
+    fault.memory.write32_be(start, encode_psq_lx(6U, 2U, 3U, false, 0U));
+    fault.memory.write32_be(0x5000U, std::bit_cast<std::uint32_t>(2.0F));
+    const RunResult fault_result = fault.run(1U);
+    assert(fault_result.reason == StopReason::memory_fault);
+    assert(fault_result.detail.find("read 4 byte(s) at guest address 0x00005004") !=
+        std::string::npos);
+    assert(fault.state.fpr[6] == 0x1111222233334444ULL);
+    assert(fault.state.fpr_ps1[6] == 0x5555666677778888ULL);
+    const InstructionHistoryEntry& failed = fault_result.instruction_history.front();
+    assert(failed.opcode_name == "psq_lx" && !failed.completed);
+    assert(failed.has_effective_address && failed.effective_address == 0x5000U);
+    assert(failed.source_count == 2U);
+    assert(failed.source_registers[0] == 2U && failed.source_values[0] == 0x4FF0U);
+    assert(failed.source_registers[1] == 3U && failed.source_values[1] == 0x10U);
+}
+
 void paired_single_quantized_store_tests()
 {
     const auto encode_psq_st = [](
@@ -33157,6 +33270,7 @@ int main(int argc, char* argv[])
     floating_point_double_store_tests();
     floating_point_double_update_store_tests();
     paired_single_quantized_load_tests();
+    paired_single_quantized_load_indexed_tests();
     paired_single_quantized_store_tests();
     paired_single_merge00_tests();
     paired_single_select_tests();

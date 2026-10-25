@@ -34,7 +34,17 @@ DecodedInstruction decode(std::uint32_t raw) noexcept
     switch (field(raw, 26, 0x3FU))
     {
     case 4: // Paired-single X-form instructions
-        if ((field(raw, 1, 0x3FFU) == 40U ||
+        if (field(raw, 1, 0x1FU) == 6U &&
+            field(raw, 6U, 1U) == 0U && (raw & 1U) == 0U)
+        {
+            instruction.opcode = Opcode::paired_single_quantized_load_indexed;
+            instruction.fp_register = static_cast<std::uint8_t>(field(raw, 21U, 0x1FU));
+            instruction.base = static_cast<std::uint8_t>(field(raw, 16U, 0x1FU));
+            instruction.source = static_cast<std::uint8_t>(field(raw, 11U, 0x1FU));
+            instruction.paired_single_w = field(raw, 10U, 1U) != 0U;
+            instruction.quantized_register = static_cast<std::uint8_t>(field(raw, 7U, 0x7U));
+        }
+        else if ((field(raw, 1, 0x3FFU) == 40U ||
              field(raw, 1, 0x3FFU) == 136U ||
              field(raw, 1, 0x3FFU) == 264U) &&
             field(raw, 16, 0x1FU) == 0U && (raw & 1U) == 0U)

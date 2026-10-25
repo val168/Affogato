@@ -10926,6 +10926,110 @@ void recompiler_psq_l_differential_tests()
     assert(reserved_recompiler.statistics().native_instructions == 0U);
 }
 
+void recompiler_psq_lx_differential_tests()
+{
+    const auto encode_psq_lx = [](
+        std::uint8_t destination, std::uint8_t base, std::uint8_t index,
+        bool single_element, std::uint8_t gqr) {
+        return (4U << 26U) |
+            (static_cast<std::uint32_t>(destination) << 21U) |
+            (static_cast<std::uint32_t>(base) << 16U) |
+            (static_cast<std::uint32_t>(index) << 11U) |
+            (static_cast<std::uint32_t>(single_element) << 10U) |
+            (static_cast<std::uint32_t>(gqr & 7U) << 7U) | (6U << 1U);
+    };
+    const auto double_bits = [](double value) { return std::bit_cast<std::uint64_t>(value); };
+    constexpr std::uint32_t start = 0x100U;
+
+    EspressoCore interpreted(0x1000U);
+    EspressoCore compiled(0x1000U);
+    for (EspressoCore* core : {&interpreted, &compiled})
+    {
+        core->memory.map_region(0x2000U, 8U);
+        core->state.gpr[0] = 0x2000U;
+        core->state.gqr[2] = 0U;
+        core->state.fpr[4] = 0x1111222233334444ULL;
+        core->state.fpr_ps1[4] = 0x5555666677778888ULL;
+        core->state.cia = start;
+        core->memory.write32_be(0x2000U, std::bit_cast<std::uint32_t>(1.5F));
+        core->memory.write32_be(0x2004U, std::bit_cast<std::uint32_t>(-2.25F));
+        core->memory.write32_be(start, encode_psq_lx(4U, 0U, 0U, false, 2U));
+    }
+    const RunResult oracle = interpreted.run(1U);
+    Recompiler recompiler;
+    const RunResult actual = recompiler.run(compiled, 1U);
+    assert(actual.reason == oracle.reason && actual.steps == oracle.steps);
+    assert(actual.steps == 1U && compiled.state.cia == interpreted.state.cia);
+    assert(compiled.state.fpr == interpreted.state.fpr);
+    assert(compiled.state.fpr_ps1 == interpreted.state.fpr_ps1);
+    assert(compiled.state.gpr == interpreted.state.gpr);
+    assert(compiled.state.cr == interpreted.state.cr && compiled.state.xer == interpreted.state.xer);
+    assert(compiled.state.fpscr == interpreted.state.fpscr);
+    assert(compiled.memory.read32_be(0x2000U) == interpreted.memory.read32_be(0x2000U));
+    assert(recompiler.statistics().native_instructions == 1U);
+    assert(recompiler.statistics().interpreter_fallbacks == 0U);
+    const InstructionHistoryEntry& history = actual.instruction_history.back();
+    assert(history.opcode_name == "psq_lx" && history.completed);
+    assert(history.has_effective_address && history.effective_address == 0x2000U);
+    assert(history.source_count == 1U && history.source_registers[0] == 0U);
+    assert(history.source_values[0] == 0x2000U);
+    assert(history.paired_fp_destination_ps0 == double_bits(1.5));
+    assert(history.paired_fp_destination_ps1 == double_bits(-2.25));
+
+    // W=1 with an indexed GQR U16 load reads one element and writes PS1=1.
+    EspressoCore scalar_interpreted(0x1000U);
+    EspressoCore scalar_compiled(0x1000U);
+    for (EspressoCore* core : {&scalar_interpreted, &scalar_compiled})
+    {
+        core->memory.map_region(0x3000U, 2U);
+        core->state.gpr[5] = 0x2FF0U;
+        core->state.gpr[6] = 0x10U;
+        core->state.gqr[1] = (5U << 16U) | (1U << 24U); // U16, scale +1.
+        core->state.cia = start;
+        core->memory.write16_be(0x3000U, 0x1234U);
+        core->memory.write32_be(start, encode_psq_lx(8U, 5U, 6U, true, 1U));
+    }
+    const RunResult scalar_oracle = scalar_interpreted.run(1U);
+    Recompiler scalar_recompiler;
+    const RunResult scalar_actual = scalar_recompiler.run(scalar_compiled, 1U);
+    assert(scalar_actual.reason == scalar_oracle.reason && scalar_actual.steps == 1U);
+    assert(scalar_compiled.state.fpr == scalar_interpreted.state.fpr);
+    assert(scalar_compiled.state.fpr_ps1 == scalar_interpreted.state.fpr_ps1);
+    assert(scalar_compiled.state.gpr == scalar_interpreted.state.gpr);
+    assert(scalar_compiled.state.fpr_ps1[8] == double_bits(1.0));
+    assert(scalar_recompiler.statistics().native_instructions == 1U);
+    assert(scalar_recompiler.statistics().interpreter_fallbacks == 0U);
+
+    // A fault on lane 1 leaves both destination lanes unchanged in either engine.
+    EspressoCore fault_interpreted(0x1000U);
+    EspressoCore fault_compiled(0x1000U);
+    for (EspressoCore* core : {&fault_interpreted, &fault_compiled})
+    {
+        core->memory.map_region(0x4000U, 4U);
+        core->state.gpr[2] = 0x3FF0U;
+        core->state.gpr[3] = 0x10U;
+        core->state.fpr[6] = 0x1111222233334444ULL;
+        core->state.fpr_ps1[6] = 0x5555666677778888ULL;
+        core->state.cia = start;
+        core->memory.write32_be(0x4000U, std::bit_cast<std::uint32_t>(5.0F));
+        core->memory.write32_be(start, encode_psq_lx(6U, 2U, 3U, false, 0U));
+    }
+    const RunResult fault_oracle = fault_interpreted.run(1U);
+    Recompiler fault_recompiler;
+    const RunResult fault_actual = fault_recompiler.run(fault_compiled, 1U);
+    assert(fault_actual.reason == fault_oracle.reason);
+    assert(fault_actual.detail.find("read 4 byte(s) at guest address 0x00004004") !=
+        std::string::npos);
+    assert(fault_compiled.state.fpr == fault_interpreted.state.fpr);
+    assert(fault_compiled.state.fpr_ps1 == fault_interpreted.state.fpr_ps1);
+    assert(fault_compiled.state.cia == start);
+    assert(!fault_actual.instruction_history.back().completed);
+    assert(fault_actual.instruction_history.back().opcode_name == "psq_lx");
+    assert(fault_actual.instruction_history.back().has_effective_address &&
+        fault_actual.instruction_history.back().effective_address == 0x4000U);
+    assert(fault_recompiler.statistics().native_instructions == 0U);
+}
+
 void recompiler_memory_tests()
 {
     EspressoCore cached_watched_store(0x1000U);
@@ -11808,6 +11912,7 @@ int main()
     recompiler_dcbz_differential_tests();
     recompiler_psq_st_differential_tests();
     recompiler_psq_l_differential_tests();
+    recompiler_psq_lx_differential_tests();
     recompiler_branch_test();
     recompiler_fast_lookup_cache_test();
     recompiler_conditional_branch_tests();
