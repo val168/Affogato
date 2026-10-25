@@ -1445,6 +1445,10 @@ Gx2RuntimeState initialize_gx2(EspressoCore& core, std::uint32_t attribute_addre
     // Latte/PM4 execution are intentionally deferred to later GX2 work.
     Gx2RuntimeState state;
     state.initialized = true;
+    // GX2Init installs GX2's built-in GX2R adapter. The adapter itself is
+    // emulator-internal, so only its mode is guest-visible in this state
+    // model; explicit GX2RSetAllocator calls retain their guest callback PCs.
+    state.gx2r_uses_default_allocator = true;
     // Affogato currently has one Espresso execution lane corresponding to CPU1.
     // This becomes dynamic when multiple Espresso cores are modeled.
     state.main_core_id = 1U;
@@ -2055,6 +2059,23 @@ void register_gx2_hle(HleDispatcher& dispatcher)
             Gx2RuntimeState initialized = initialize_gx2(core, attributes);
             core.gx2 = initialized;
             // GX2Init is void: preserve all guest GPRs including r3.
+        });
+
+    dispatcher.register_function(
+        "gx2",
+        "GX2RSetAllocator",
+        [](EspressoCore& core) {
+            core.gx2.gx2r_allocate_function = core.state.gpr[3];
+            core.gx2.gx2r_free_function = core.state.gpr[4];
+            core.gx2.gx2r_uses_default_allocator = false;
+        });
+
+    dispatcher.register_function(
+        "gx2",
+        "GX2SetDefaultAllocator",
+        [](EspressoCore& core) {
+            core.gx2.default_allocate_function = core.state.gpr[3];
+            core.gx2.default_free_function = core.state.gpr[4];
         });
 
     dispatcher.register_function(

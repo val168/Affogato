@@ -19689,6 +19689,73 @@ void gx2_init_hle_tests()
     assert(emulator.core().gx2.command_buffer_pool_size == 0x00400000U);
 }
 
+void gx2_allocator_hle_tests()
+{
+    constexpr std::uint32_t return_address = 0x0274BD9CU;
+    constexpr std::uint32_t attributes_address = 0x100U;
+    constexpr std::uint32_t pool_address = 0x8000U;
+    constexpr std::uint32_t pool_size = 0x2000U;
+    EspressoCore core(0x20000U);
+    register_gx2_hle(core.hle);
+    const std::uint32_t gx2r_set_allocator =
+        core.hle.bind_import("gx2", "GX2RSetAllocator");
+    const std::uint32_t set_default_allocator =
+        core.hle.bind_import("gx2", "GX2SetDefaultAllocator");
+    const std::uint32_t gx2_init = core.hle.bind_import("gx2", "GX2Init");
+
+    const auto invoke = [&](std::uint32_t import) {
+        core.state.cia = import;
+        core.state.lr = return_address;
+        return core.run(1U);
+    };
+
+    core.state.gpr[3] = 0x02001000U;
+    core.state.gpr[4] = 0x02002000U;
+    const auto state_before = core.gx2;
+    const auto registers_before = core.state.gpr;
+    assert(invoke(gx2r_set_allocator).reason == StopReason::instruction_limit);
+    assert(core.gx2.gx2r_allocate_function == 0x02001000U);
+    assert(core.gx2.gx2r_free_function == 0x02002000U);
+    assert(!core.gx2.gx2r_uses_default_allocator);
+    assert(core.state.gpr[3] == registers_before[3]);
+    assert(core.state.gpr[4] == registers_before[4]);
+    assert(core.state.cia == return_address);
+    assert(core.gx2.initialized == state_before.initialized);
+
+    core.state.gpr[3] = 0x02003000U;
+    core.state.gpr[4] = 0x02004000U;
+    assert(invoke(set_default_allocator).reason == StopReason::instruction_limit);
+    assert(core.gx2.default_allocate_function == 0x02003000U);
+    assert(core.gx2.default_free_function == 0x02004000U);
+    assert(!core.gx2.initialized);
+
+    // GX2Init installs its built-in resource allocator path, replacing a
+    // previously selected custom GX2R pair just as the platform library does.
+    for (const auto [offset, value] : std::array<std::pair<std::uint32_t,
+            std::uint32_t>, 5U>{
+            std::pair{0U, 1U}, std::pair{4U, pool_address},
+            std::pair{8U, 2U}, std::pair{12U, pool_size},
+            std::pair{16U, 0U}})
+    {
+        core.memory.write32_be(attributes_address + offset, value);
+    }
+    core.state.gpr[3] = attributes_address;
+    assert(invoke(gx2_init).reason == StopReason::instruction_limit);
+    assert(core.gx2.initialized);
+    assert(core.gx2.gx2r_uses_default_allocator);
+    assert(core.gx2.gx2r_allocate_function == 0U);
+    assert(core.gx2.gx2r_free_function == 0U);
+    assert(core.gx2.default_allocate_function == 0U);
+    assert(core.gx2.default_free_function == 0U);
+
+    core.state.gpr[3] = 0U;
+    core.state.gpr[4] = 0U;
+    assert(invoke(gx2r_set_allocator).reason == StopReason::instruction_limit);
+    assert(!core.gx2.gx2r_uses_default_allocator);
+    assert(core.gx2.gx2r_allocate_function == 0U);
+    assert(core.gx2.gx2r_free_function == 0U);
+}
+
 void gx2_clear_color_hle_tests()
 {
     constexpr std::uint32_t return_address = 0x02750600U;
@@ -32406,6 +32473,7 @@ int main(int argc, char* argv[])
     gx2_init_sampler_depth_compare_hle_tests();
     gx2_init_sampler_border_type_hle_tests();
     gx2_init_hle_tests();
+    gx2_allocator_hle_tests();
     gx2_clear_color_hle_tests();
     gx2_set_color_buffer_hle_tests();
     gx2_set_depth_stencil_control_hle_tests();

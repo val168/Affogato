@@ -83,6 +83,11 @@ struct Gx2ColorBufferState
 struct Gx2RuntimeState
 {
     bool initialized{};
+    bool gx2r_uses_default_allocator{};
+    std::uint32_t gx2r_allocate_function{};
+    std::uint32_t gx2r_free_function{};
+    std::uint32_t default_allocate_function{};
+    std::uint32_t default_free_function{};
     std::uint32_t main_core_id{};
     std::uint32_t command_buffer_pool_base{};
     std::uint32_t command_buffer_pool_size{};
