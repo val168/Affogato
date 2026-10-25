@@ -146,6 +146,18 @@ struct NativePsSumRecord
     std::uint64_t destination_ps1{};
 };
 
+struct NativePsSelectRecord
+{
+    std::uint64_t source_a_ps0{};
+    std::uint64_t source_a_ps1{};
+    std::uint64_t source_b_ps0{};
+    std::uint64_t source_b_ps1{};
+    std::uint64_t source_c_ps0{};
+    std::uint64_t source_c_ps1{};
+    std::uint64_t destination_ps0{};
+    std::uint64_t destination_ps1{};
+};
+
 struct NativePsBinaryRecord
 {
     std::uint64_t source_a_ps0{};
@@ -295,6 +307,7 @@ struct NativeExecutionContext
     std::array<NativeFmulRecord, 64> fmul_records{};
     std::array<NativeFsubRecord, 64> fdiv_records{};
     std::array<NativePsSumRecord, 64> ps_sum_records{};
+    std::array<NativePsSelectRecord, 64> ps_select_records{};
     std::array<NativePsBinaryRecord, 64> ps_add_records{};
     std::array<NativePsBinaryRecord, 64> ps_sub_records{};
     std::array<NativePsMergeRecord, 64> ps_merge_records{};
@@ -2071,6 +2084,48 @@ extern "C" void native_ps_sum(
     state->fpr_ps1[destination] = record.destination_ps1;
 }
 
+extern "C" void native_ps_select(
+    NativeExecutionContext* context,
+    CpuState* state,
+    std::uint32_t destination,
+    std::uint32_t source_a,
+    std::uint32_t source_b,
+    std::uint32_t source_c,
+    std::uint32_t instruction_index) noexcept
+{
+    if (destination >= state->fpr.size() || source_a >= state->fpr.size() ||
+        source_b >= state->fpr.size() || source_c >= state->fpr.size() ||
+        instruction_index >= context->ps_select_records.size())
+    {
+        context->failed = true;
+        context->failed_instruction_index = instruction_index;
+        return;
+    }
+
+    NativePsSelectRecord& record = context->ps_select_records[instruction_index];
+    record.source_a_ps0 = state->fpr[source_a];
+    record.source_a_ps1 = state->fpr_ps1[source_a];
+    record.source_b_ps0 = state->fpr[source_b];
+    record.source_b_ps1 = state->fpr_ps1[source_b];
+    record.source_c_ps0 = state->fpr[source_c];
+    record.source_c_ps1 = state->fpr_ps1[source_c];
+    const auto choose_c = [](std::uint64_t raw) {
+        constexpr std::uint64_t exponent_mask = 0x7FF0000000000000ULL;
+        constexpr std::uint64_t fraction_mask = 0x000FFFFFFFFFFFFFULL;
+        constexpr std::uint64_t sign_mask = 0x8000000000000000ULL;
+        const bool is_nan = (raw & exponent_mask) == exponent_mask &&
+            (raw & fraction_mask) != 0U;
+        const bool is_zero = (raw & ~sign_mask) == 0U;
+        return !is_nan && ((raw & sign_mask) == 0U || is_zero);
+    };
+    record.destination_ps0 = choose_c(record.source_a_ps0)
+        ? record.source_c_ps0 : record.source_b_ps0;
+    record.destination_ps1 = choose_c(record.source_a_ps1)
+        ? record.source_c_ps1 : record.source_b_ps1;
+    state->fpr[destination] = record.destination_ps0;
+    state->fpr_ps1[destination] = record.destination_ps1;
+}
+
 extern "C" void native_ps_res(
     NativeExecutionContext* context,
     CpuState* state,
@@ -3809,6 +3864,7 @@ struct BlockCode
     case Opcode::floating_add_double:
     case Opcode::paired_single_sum0:
     case Opcode::paired_single_sum1:
+    case Opcode::paired_single_select:
     case Opcode::paired_single_add:
     case Opcode::paired_single_subtract:
     case Opcode::paired_single_multiply:
@@ -3963,6 +4019,7 @@ struct BlockCode
     case Opcode::paired_single_negative_absolute_value: return "ps_nabs";
     case Opcode::paired_single_reciprocal_estimate: return "ps_res";
     case Opcode::paired_single_reciprocal_square_root_estimate: return "ps_rsqrte";
+    case Opcode::paired_single_select: return "ps_sel";
     case Opcode::paired_single_quantized_store: return "psq_st";
     case Opcode::paired_single_quantized_load: return "psq_l";
     case Opcode::instruction_sync: return "isync";
@@ -6363,6 +6420,24 @@ struct Recompiler::Impl
                 invoke->set_arg(7, imm(static_cast<std::uint32_t>(index)));
                 break;
             }
+            case Opcode::paired_single_select:
+            {
+                auto* invoke = static_cast<InvokeNode*>(nullptr);
+                const auto helper_address = static_cast<std::uint64_t>(
+                    reinterpret_cast<std::uintptr_t>(&native_ps_select));
+                compiler.invoke(Out(invoke), helper_address,
+                    FuncSignature::build<void, NativeExecutionContext*, CpuState*,
+                        std::uint32_t, std::uint32_t, std::uint32_t,
+                        std::uint32_t, std::uint32_t>(CallConvId::kCDecl));
+                invoke->set_arg(0, context);
+                invoke->set_arg(1, state);
+                invoke->set_arg(2, imm(insn.fp_register));
+                invoke->set_arg(3, imm(insn.fp_source_a));
+                invoke->set_arg(4, imm(insn.fp_source_b));
+                invoke->set_arg(5, imm(insn.fp_source_c));
+                invoke->set_arg(6, imm(static_cast<std::uint32_t>(index)));
+                break;
+            }
             case Opcode::paired_single_reciprocal_estimate:
             {
                 auto* invoke = static_cast<InvokeNode*>(nullptr);
@@ -8421,6 +8496,26 @@ RunResult Recompiler::run(EspressoCore& core, std::size_t max_steps)
                     entry.has_fp_arithmetic_result = true;
                     entry.fp_arithmetic_result_raw = record.result_raw;
                 }
+                core.append_instruction_history(std::move(entry));
+                continue;
+            }
+            if (insn.opcode == Opcode::paired_single_select)
+            {
+                InstructionHistoryEntry entry = native_history(insn, cia);
+                const NativePsSelectRecord& record = context.ps_select_records[i];
+                entry.has_paired_fp_select = true;
+                entry.paired_fp_select_destination = insn.fp_register;
+                entry.paired_fp_select_a = insn.fp_source_a;
+                entry.paired_fp_select_b = insn.fp_source_b;
+                entry.paired_fp_select_c = insn.fp_source_c;
+                entry.paired_fp_select_a_ps0 = record.source_a_ps0;
+                entry.paired_fp_select_a_ps1 = record.source_a_ps1;
+                entry.paired_fp_select_b_ps0 = record.source_b_ps0;
+                entry.paired_fp_select_b_ps1 = record.source_b_ps1;
+                entry.paired_fp_select_c_ps0 = record.source_c_ps0;
+                entry.paired_fp_select_c_ps1 = record.source_c_ps1;
+                entry.paired_fp_select_result_ps0 = record.destination_ps0;
+                entry.paired_fp_select_result_ps1 = record.destination_ps1;
                 core.append_instruction_history(std::move(entry));
                 continue;
             }
