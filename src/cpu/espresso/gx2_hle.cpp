@@ -3254,6 +3254,52 @@ void register_gx2_hle(HleDispatcher& dispatcher)
 
     dispatcher.register_function(
         "gx2",
+        "GX2GetColorControlReg",
+        [](EspressoCore& core) {
+            constexpr const char* api_name = "GX2GetColorControlReg";
+            const std::uint32_t input = core.state.gpr[3];
+            if (static_cast<std::uint64_t>(input) + sizeof(std::uint32_t) >
+                guest_address_space_end)
+            {
+                throw HleExecutionError(
+                    "gx2::GX2GetColorControlReg: input range wraps guest address space");
+            }
+            const std::uint32_t control = core.memory.read32_be(input);
+            const std::array<std::uint32_t, 4U> output_addresses{
+                core.state.gpr[4],
+                core.state.gpr[5],
+                core.state.gpr[6],
+                core.state.gpr[7],
+            };
+            constexpr std::array<const char*, 4U> output_names{
+                "logic-op output",
+                "target-blend output",
+                "multi-write output",
+                "color-write output",
+            };
+            for (std::size_t index = 0U; index < output_addresses.size(); ++index)
+            {
+                validate_gx2_u32_output(
+                    core, output_addresses[index], api_name, output_names[index]);
+            }
+
+            // GX2InitColorControlReg maps color-write-disabled to
+            // SPECIAL_OP::DISABLE (1) and enabled to NORMAL (0). Other
+            // SPECIAL_OP encodings are not a normal color-write mode.
+            const std::array<std::uint32_t, 4U> values{
+                (control >> 16U) & 0xFFU,
+                (control >> 8U) & 0xFFU,
+                (control >> 1U) & 1U,
+                ((control >> 4U) & 7U) == 0U ? 1U : 0U,
+            };
+            for (std::size_t index = 0U; index < output_addresses.size(); ++index)
+            {
+                core.memory.write32_be(output_addresses[index], values[index]);
+            }
+        });
+
+    dispatcher.register_function(
+        "gx2",
         "GX2SetBlendControl",
         [](EspressoCore& core) {
             if (!core.gx2.initialized)

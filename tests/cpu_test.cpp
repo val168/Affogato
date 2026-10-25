@@ -24795,6 +24795,100 @@ void gx2_init_color_control_reg_hle_tests()
     assert(!core.gx2.initialized);
 }
 
+void gx2_get_color_control_reg_hle_tests()
+{
+    constexpr std::uint32_t return_address = 0x02750A84U;
+    constexpr std::uint32_t input_address = 0x503U;
+    constexpr std::array<std::uint32_t, 4U> outputs{
+        0x601U, 0x612U, 0x623U, 0x634U};
+
+    EspressoCore core(0x10000U);
+    register_gx2_hle(core.hle);
+    const std::uint32_t import =
+        core.hle.bind_import("gx2", "GX2GetColorControlReg");
+    const std::uint32_t wrong_library =
+        core.hle.bind_import("coreinit", "GX2GetColorControlReg");
+    assert(import != 0U && wrong_library != 0U);
+    assert(!core.gx2.initialized);
+    core.memory.write32_be(input_address, 0xBEEFCD02U);
+    for (const std::uint32_t output : outputs)
+    {
+        core.memory.write32_be(output, 0xDEADBEEFU);
+    }
+    core.state.gpr.fill(0xB1000000U);
+    core.state.gpr[3] = input_address;
+    for (std::size_t index = 0U; index < outputs.size(); ++index)
+    {
+        core.state.gpr[index + 4U] = outputs[index];
+    }
+    core.state.cr = 0x12345678U;
+    core.state.xer = 0xA5A55A5AU;
+    core.state.ctr = 0x87654321U;
+    core.state.fpscr = 0x5A5AA55AU;
+    const auto gprs_before = core.state.gpr;
+    const auto fprs_before = core.state.fpr;
+    const auto ps1_before = core.state.fpr_ps1;
+
+    const auto invoke = [&](std::uint32_t function) {
+        core.state.cia = function;
+        core.state.lr = return_address;
+        return core.run(1U);
+    };
+    const RunResult result = invoke(import);
+    assert(result.reason == StopReason::instruction_limit);
+    assert(result.steps == 1U && core.state.cia == return_address);
+    assert(core.memory.read32_be(outputs[0]) == 0xEFU);
+    assert(core.memory.read32_be(outputs[1]) == 0xCDU);
+    assert(core.memory.read32_be(outputs[2]) == 1U);
+    assert(core.memory.read32_be(outputs[3]) == 1U);
+    assert(core.memory.read32_be(input_address) == 0xBEEFCD02U);
+    assert(core.state.gpr == gprs_before);
+    assert(core.state.fpr == fprs_before && core.state.fpr_ps1 == ps1_before);
+    assert(core.state.cr == 0x12345678U);
+    assert(core.state.xer == 0xA5A55A5AU);
+    assert(core.state.ctr == 0x87654321U);
+    assert(core.state.fpscr == 0x5A5AA55AU);
+
+    // The inverse agrees with the initializer's disabled-color-write encoding.
+    core.memory.write32_be(input_address, 0x12345610U);
+    assert(invoke(import).reason == StopReason::instruction_limit);
+    assert(core.memory.read32_be(outputs[0]) == 0x34U);
+    assert(core.memory.read32_be(outputs[1]) == 0x56U);
+    assert(core.memory.read32_be(outputs[2]) == 0U);
+    assert(core.memory.read32_be(outputs[3]) == 0U);
+
+    core.memory.write32_be(input_address, 0xAABBCC20U);
+    assert(invoke(import).reason == StopReason::instruction_limit);
+    assert(core.memory.read32_be(outputs[0]) == 0xBBU);
+    assert(core.memory.read32_be(outputs[1]) == 0xCCU);
+    assert(core.memory.read32_be(outputs[2]) == 0U);
+    assert(core.memory.read32_be(outputs[3]) == 0U);
+
+    // An output may alias the input: decode all fields before writing outputs.
+    core.memory.write32_be(input_address, 0xA1B2C302U);
+    core.state.gpr[4] = input_address;
+    assert(invoke(import).reason == StopReason::instruction_limit);
+    assert(core.memory.read32_be(input_address) == 0xB2U);
+    assert(core.memory.read32_be(outputs[1]) == 0xC3U);
+
+    core.memory.write32_be(outputs[0], 0x11111111U);
+    core.memory.write32_be(outputs[1], 0x22222222U);
+    core.memory.write32_be(outputs[2], 0x33333333U);
+    core.state.gpr[7] = 0x10000U;
+    const RunResult late_output_fault = invoke(import);
+    assert(late_output_fault.reason == StopReason::memory_fault);
+    assert(core.memory.read32_be(outputs[0]) == 0x11111111U);
+    assert(core.memory.read32_be(outputs[1]) == 0x22222222U);
+    assert(core.memory.read32_be(outputs[2]) == 0x33333333U);
+
+    core.state.gpr[7] = outputs[3];
+    const RunResult wrong_library_result = invoke(wrong_library);
+    assert(wrong_library_result.reason == StopReason::unimplemented_hle_call);
+    assert(wrong_library_result.hle_call ==
+           "coreinit::GX2GetColorControlReg");
+    assert(!core.gx2.initialized);
+}
+
 void gx2_set_blend_control_hle_tests()
 {
     constexpr std::uint32_t return_address = 0x027508A0U;
@@ -39474,6 +39568,7 @@ int main(int argc, char* argv[])
     gx2_set_color_control_hle_tests();
     gx2_set_color_control_reg_hle_tests();
     gx2_init_color_control_reg_hle_tests();
+    gx2_get_color_control_reg_hle_tests();
     gx2_set_blend_control_hle_tests();
     gx2_set_blend_constant_color_hle_tests();
     gx2_set_alpha_test_hle_tests();
