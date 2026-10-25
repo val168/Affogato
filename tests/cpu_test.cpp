@@ -19907,6 +19907,77 @@ void gx2r_buffer_exists_hle_tests()
     assert(result.reason == StopReason::memory_fault);
 }
 
+void gx2r_get_buffer_allocation_size_hle_tests()
+{
+    constexpr std::uint32_t buffer_address = 0x4000U;
+    constexpr std::uint32_t return_address = 0x0274BD9CU;
+    EspressoCore core(0x10000U);
+    register_gx2_hle(core.hle);
+    const std::uint32_t import = core.hle.bind_import(
+        "gx2", "GX2RGetBufferAllocationSize");
+    assert(import != 0U);
+    core.memory.write32_be(buffer_address, 0x12345678U);
+    core.memory.write32_be(buffer_address + 4U, 12U);
+    core.memory.write32_be(buffer_address + 8U, 5U);
+    core.memory.write32_be(buffer_address + 12U, 0x87654321U);
+    core.state.gpr.fill(0xA5000000U);
+    core.state.gpr[4] = 0x44444444U;
+    core.state.cr = 0x12345678U;
+    core.state.xer = 0xA5A55A5AU;
+    core.state.ctr = 0x87654321U;
+    core.state.fpscr = 0x5A5AA55AU;
+    const auto gprs_before = core.state.gpr;
+    const auto fprs_before = core.state.fpr;
+    const auto ps1_before = core.state.fpr_ps1;
+    const std::uint32_t cr_before = core.state.cr;
+    const std::uint32_t xer_before = core.state.xer;
+    const std::uint32_t ctr_before = core.state.ctr;
+    const std::uint32_t fpscr_before = core.state.fpscr;
+
+    const auto invoke = [&](std::uint32_t descriptor) {
+        core.state.cia = import;
+        core.state.lr = return_address;
+        core.state.gpr[3] = descriptor;
+        return core.run(1U);
+    };
+    auto result = invoke(buffer_address);
+    assert(result.reason == StopReason::instruction_limit);
+    assert(core.state.gpr[3] == 64U); // 12 * 5 = 60, padded to 0x40
+    assert(core.state.gpr[4] == gprs_before[4]);
+    assert(core.memory.read32_be(buffer_address) == 0x12345678U);
+    assert(core.memory.read32_be(buffer_address + 4U) == 12U);
+    assert(core.memory.read32_be(buffer_address + 8U) == 5U);
+    assert(core.memory.read32_be(buffer_address + 12U) == 0x87654321U);
+
+    const auto expect_size = [&](std::uint32_t element_size,
+                                 std::uint32_t element_count,
+                                 std::uint32_t expected) {
+        core.memory.write32_be(buffer_address + 4U, element_size);
+        core.memory.write32_be(buffer_address + 8U, element_count);
+        const auto run_result = invoke(buffer_address);
+        assert(run_result.reason == StopReason::instruction_limit);
+        assert(core.state.gpr[3] == expected);
+    };
+    expect_size(0U, 99U, 0U);
+    expect_size(64U, 1U, 64U);
+    expect_size(65U, 1U, 128U);
+    expect_size(0xFFFFFFFFU, 2U, 0U); // guest uint32 product/alignment wrap
+
+    assert(core.state.fpr == fprs_before && core.state.fpr_ps1 == ps1_before);
+    assert(core.state.cr == cr_before && core.state.xer == xer_before);
+    assert(core.state.ctr == ctr_before && core.state.fpscr == fpscr_before);
+    for (std::size_t index = 1U; index < core.state.gpr.size(); ++index)
+    {
+        if (index != 3U)
+            assert(core.state.gpr[index] == gprs_before[index]);
+    }
+
+    result = invoke(0U);
+    assert(result.reason == StopReason::hle_error);
+    result = invoke(0x20000U);
+    assert(result.reason == StopReason::memory_fault);
+}
+
 void gx2_clear_color_hle_tests()
 {
     constexpr std::uint32_t return_address = 0x02750600U;
@@ -32744,6 +32815,7 @@ int main(int argc, char* argv[])
     gx2_allocator_hle_tests();
     gx2r_create_buffer_user_memory_hle_tests();
     gx2r_buffer_exists_hle_tests();
+    gx2r_get_buffer_allocation_size_hle_tests();
     gx2_clear_color_hle_tests();
     gx2_set_color_buffer_hle_tests();
     gx2_set_depth_stencil_control_hle_tests();

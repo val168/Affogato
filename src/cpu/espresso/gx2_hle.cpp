@@ -908,6 +908,28 @@ bool gx2r_buffer_exists(EspressoCore& core, std::uint32_t buffer_address)
     return data_address != 0U && (resource_flags & cpu_gpu_usage_mask) != 0U;
 }
 
+std::uint32_t gx2r_get_buffer_allocation_size(
+    EspressoCore& core,
+    std::uint32_t buffer_address)
+{
+    constexpr const char* api_name = "gx2::GX2RGetBufferAllocationSize";
+    constexpr std::uint32_t gx2r_buffer_size = 0x10U;
+    if (buffer_address == 0U || (buffer_address & 3U) != 0U ||
+        buffer_address > std::numeric_limits<std::uint32_t>::max() -
+                             gx2r_buffer_size)
+    {
+        throw HleExecutionError(std::string(api_name) +
+                                ": buffer pointer is null, misaligned, or wraps");
+    }
+
+    const std::uint32_t element_size = core.memory.read32_be(buffer_address + 4U);
+    const std::uint32_t element_count = core.memory.read32_be(buffer_address + 8U);
+    // GX2R's guest GetSize operation is uint32_t arithmetic, then pads that
+    // wrapped byte count upward to the next 0x40-byte allocation boundary.
+    const std::uint32_t size = element_size * element_count;
+    return (size + 0x3FU) & ~0x3FU;
+}
+
 std::uint32_t gx2_texture_endian_swap(std::uint32_t format)
 {
     switch (format & 0x3FU)
@@ -2176,6 +2198,14 @@ void register_gx2_hle(HleDispatcher& dispatcher)
             core.state.gpr[3] = gx2r_buffer_exists(core, core.state.gpr[3])
                 ? 1U
                 : 0U;
+        });
+
+    dispatcher.register_function(
+        "gx2",
+        "GX2RGetBufferAllocationSize",
+        [](EspressoCore& core) {
+            core.state.gpr[3] = gx2r_get_buffer_allocation_size(
+                core, core.state.gpr[3]);
         });
 
     dispatcher.register_function(
