@@ -4047,6 +4047,7 @@ struct BlockCode
     case Opcode::paired_single_compare_unordered0:
     case Opcode::paired_single_compare_unordered1:
     case Opcode::paired_single_compare_ordered0:
+    case Opcode::paired_single_compare_ordered1:
     case Opcode::floating_convert_to_integer_word_zero:
     case Opcode::floating_reciprocal_square_root_estimate:
     case Opcode::floating_round_to_single:
@@ -4244,6 +4245,7 @@ struct BlockCode
     case Opcode::paired_single_compare_unordered0: return "ps_cmpu0";
     case Opcode::paired_single_compare_unordered1: return "ps_cmpu1";
     case Opcode::paired_single_compare_ordered0: return "ps_cmpo0";
+    case Opcode::paired_single_compare_ordered1: return "ps_cmpo1";
     case Opcode::move_condition_register_field: return "mcrf";
     case Opcode::move_from_condition_register: return "mfcr";
     case Opcode::move_to_condition_register_fields: return "mtcrf";
@@ -5876,6 +5878,7 @@ struct Recompiler::Impl
             case Opcode::paired_single_compare_unordered0:
             case Opcode::paired_single_compare_unordered1:
             case Opcode::paired_single_compare_ordered0:
+            case Opcode::paired_single_compare_ordered1:
             {
                 const std::uint32_t compare_record_offset = static_cast<std::uint32_t>(
                     offsetof(NativeExecutionContext, fp_compare_records) +
@@ -5928,7 +5931,8 @@ struct Recompiler::Impl
                 compiler.jz(ordered);
                 compiler.mov(comparison, imm(1U));
                 auto* invoke_invalid = static_cast<InvokeNode*>(nullptr);
-                if (insn.opcode == Opcode::paired_single_compare_ordered0)
+                if (insn.opcode == Opcode::paired_single_compare_ordered0 ||
+                    insn.opcode == Opcode::paired_single_compare_ordered1)
                 {
                     compiler.invoke(Out(invoke_invalid),
                         reinterpret_cast<std::uintptr_t>(
@@ -8966,7 +8970,8 @@ RunResult Recompiler::run(EspressoCore& core, std::size_t max_steps)
             if (insn.opcode == Opcode::floating_compare_unordered ||
                 insn.opcode == Opcode::paired_single_compare_unordered0 ||
                 insn.opcode == Opcode::paired_single_compare_unordered1 ||
-                insn.opcode == Opcode::paired_single_compare_ordered0)
+                insn.opcode == Opcode::paired_single_compare_ordered0 ||
+                insn.opcode == Opcode::paired_single_compare_ordered1)
             {
                 InstructionHistoryEntry entry = native_history(insn, cia);
                 const NativeFpCompareRecord& record = context.fp_compare_records[i];
