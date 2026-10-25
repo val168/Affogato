@@ -252,6 +252,14 @@ namespace
         (static_cast<std::uint32_t>(index) << 11U) | (695U << 1U);
 }
 
+[[nodiscard]] constexpr std::uint32_t stfdx_form(
+    std::uint8_t fp_source, std::uint8_t base, std::uint8_t index)
+{
+    return (31U << 26U) | (static_cast<std::uint32_t>(fp_source) << 21U) |
+        (static_cast<std::uint32_t>(base) << 16U) |
+        (static_cast<std::uint32_t>(index) << 11U) | (727U << 1U);
+}
+
 [[nodiscard]] constexpr std::uint32_t lmw_form(
     std::uint8_t first_destination, std::uint8_t base, std::int16_t displacement)
 {
@@ -2593,6 +2601,105 @@ void recompiler_stfd_differential_tests()
     assert(fault.detail.find("write 8 byte(s)") != std::string::npos);
     assert(faulting.state.cia == start);
     assert(!fault.instruction_history.empty());
+    assert(!fault.instruction_history.back().completed);
+}
+
+void recompiler_stfdx_differential_tests()
+{
+    struct Case
+    {
+        std::uint8_t fp_source;
+        std::uint8_t base_register;
+        std::uint8_t index_register;
+        std::uint32_t base;
+        std::uint32_t index;
+        std::uint64_t fp_value;
+    };
+    constexpr std::uint32_t start = 0x100U;
+    constexpr std::array cases{
+        Case{1U, 6U, 7U, 0x300U, 8U, 0x3FF199999999999AULL},
+        Case{2U, 6U, 4U, 0x300U, 16U, 0x8000000000000000ULL},
+        Case{3U, 6U, 6U, 0x100U, 0x100U, 0x7FF0123456789ABCULL},
+        Case{4U, 0U, 5U, 0xDEADBEEFU, 0x300U, 0xFFFFFFFFFFFFFFFFULL},
+        Case{5U, 12U, 13U, 0xFFFFFFFCU, 8U, 0x0000000000000001ULL},
+    };
+
+    for (const Case& test : cases)
+    {
+        EspressoCore interpreted(0x1000U);
+        EspressoCore compiled(0x1000U);
+        const std::uint32_t address =
+            (test.base_register == 0U ? 0U : test.base) + test.index;
+        const std::uint32_t instruction = stfdx_form(
+            test.fp_source, test.base_register, test.index_register);
+        for (EspressoCore* core : {&interpreted, &compiled})
+        {
+            core->memory.write32_be(start, instruction);
+            core->state.cia = start;
+            core->state.gpr.fill(0xA5A5A5A5U);
+            core->state.gpr[test.base_register] = test.base;
+            core->state.gpr[test.index_register] = test.index;
+            core->state.fpr.fill(0xDEADBEEF01234567ULL);
+            core->state.fpr[test.fp_source] = test.fp_value;
+            core->state.fpr_ps1.fill(0x123456789ABCDEF0ULL);
+            core->state.cr = 0xA5C39E71U;
+            core->state.xer = 0x87654321U;
+            core->state.lr = 0xABCDEF00U;
+            core->state.ctr = 0xFEDCBA98U;
+            core->state.fpscr = 0x89ABCDEFU;
+        }
+
+        const RunResult oracle = interpreted.run(1U);
+        Recompiler recompiler;
+        const RunResult actual = recompiler.run(compiled, 1U);
+        assert(actual.reason == oracle.reason);
+        assert(actual.steps == oracle.steps && actual.steps == 1U);
+        assert(actual.cia == oracle.cia);
+        assert(compiled.memory.read64_be(address) == test.fp_value);
+        assert(interpreted.memory.read64_be(address) == test.fp_value);
+        assert(compiled.state.gpr == interpreted.state.gpr);
+        assert(compiled.state.fpr == interpreted.state.fpr);
+        assert(compiled.state.fpr_ps1 == interpreted.state.fpr_ps1);
+        assert(compiled.state.cr == interpreted.state.cr);
+        assert(compiled.state.xer == interpreted.state.xer);
+        assert(compiled.state.lr == interpreted.state.lr);
+        assert(compiled.state.ctr == interpreted.state.ctr);
+        assert(compiled.state.fpscr == interpreted.state.fpscr);
+        assert(recompiler.statistics().native_instructions == 1U);
+        assert(recompiler.statistics().interpreter_fallbacks == 0U);
+        assert(recompiler.statistics().memory_slow_path_calls == 1U);
+        const InstructionHistoryEntry& history = actual.instruction_history.back();
+        assert(history.opcode_name == "stfdx");
+        assert(history.has_effective_address && history.effective_address == address);
+        assert(history.source_count == (test.base_register == 0U ? 1U : 2U));
+        if (test.base_register != 0U)
+        {
+            assert(history.source_registers[0] == test.base_register);
+            assert(history.source_values[0] == test.base);
+        }
+        const std::uint8_t index_source = test.base_register == 0U ? 0U : 1U;
+        assert(history.source_registers[index_source] == test.index_register);
+        assert(history.source_values[index_source] == test.index);
+        assert(history.has_fp_source && history.fp_source_register == test.fp_source);
+        assert(history.fp_source_value == test.fp_value);
+        assert(history.has_stored_double_value &&
+            history.stored_double_value == test.fp_value);
+    }
+
+    EspressoCore faulting(0x1000U);
+    faulting.memory.write32_be(start, stfdx_form(1U, 6U, 7U));
+    faulting.state.cia = start;
+    faulting.state.gpr[6] = 0x2000U;
+    faulting.state.gpr[7] = 0U;
+    faulting.state.fpr[1] = 0x3FF0000000000000ULL;
+    Recompiler fault_recompiler;
+    const RunResult fault = fault_recompiler.run(faulting, 1U);
+    assert(fault.reason == StopReason::memory_fault);
+    assert(fault.detail.find("write 8 byte(s)") != std::string::npos);
+    assert(faulting.state.gpr[6] == 0x2000U);
+    assert(faulting.state.gpr[7] == 0U);
+    assert(faulting.state.fpr[1] == 0x3FF0000000000000ULL);
+    assert(faulting.state.cia == start);
     assert(!fault.instruction_history.back().completed);
 }
 
@@ -5938,6 +6045,7 @@ int main()
     recompiler_stfs_differential_tests();
     recompiler_stfsu_differential_tests();
     recompiler_stfd_differential_tests();
+    recompiler_stfdx_differential_tests();
     recompiler_stwu_differential_tests();
     recompiler_stbu_differential_tests();
     recompiler_slw_differential_tests();

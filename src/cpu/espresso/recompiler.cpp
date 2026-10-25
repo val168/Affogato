@@ -3503,6 +3503,7 @@ extern "C" std::uint32_t native_store_double(
     const CpuState* state,
     std::uint32_t address,
     std::uint32_t fp_register,
+    std::uint32_t indexed,
     std::uint32_t instruction_index) noexcept
 {
     try
@@ -3524,7 +3525,7 @@ extern "C" std::uint32_t native_store_double(
         }
         NativeMemoryRecord& record = context->memory_records[instruction_index];
         record.address = address;
-        record.indexed = false;
+        record.indexed = indexed != 0U;
         record.fp_value = state->fpr[fp_register];
         context->memory->write64_be(address, record.fp_value);
         return 0U;
@@ -3801,6 +3802,7 @@ struct BlockCode
     case Opcode::store_single_indexed_update:
     case Opcode::store_double:
     case Opcode::store_double_update:
+    case Opcode::store_double_indexed:
     case Opcode::store_floating_as_integer_word_indexed:
     case Opcode::load_word_indexed:
     case Opcode::load_word_indexed_update:
@@ -3967,6 +3969,7 @@ struct BlockCode
     case Opcode::store_single_indexed_update: return "stfsux";
     case Opcode::store_double: return "stfd";
     case Opcode::store_double_update: return "stfdu";
+    case Opcode::store_double_indexed: return "stfdx";
     case Opcode::store_floating_as_integer_word_indexed: return "stfiwx";
     case Opcode::load_word_indexed: return "lwzx";
     case Opcode::load_word_indexed_update: return "lwzux";
@@ -4020,6 +4023,7 @@ struct BlockCode
     case Opcode::store_single_indexed_update:
     case Opcode::store_double:
     case Opcode::store_double_update:
+    case Opcode::store_double_indexed:
     case Opcode::store_floating_as_integer_word_indexed:
     case Opcode::store_word:
     case Opcode::store_word_update:
@@ -4082,6 +4086,7 @@ struct BlockCode
         return 2U;
     case Opcode::store_double:
     case Opcode::store_double_update:
+    case Opcode::store_double_indexed:
         return 8U;
     default:
         return 4U;
@@ -4102,6 +4107,7 @@ struct BlockCode
         opcode == Opcode::store_single || opcode == Opcode::store_single_indexed ||
         opcode == Opcode::store_single_indexed_update ||
         opcode == Opcode::store_double || opcode == Opcode::store_double_update ||
+        opcode == Opcode::store_double_indexed ||
         opcode == Opcode::store_word_update || opcode == Opcode::store_single_update ||
         opcode == Opcode::store_floating_as_integer_word_indexed;
 }
@@ -4126,6 +4132,7 @@ struct BlockCode
         opcode == Opcode::store_halfword_indexed_update ||
         opcode == Opcode::store_single_indexed ||
         opcode == Opcode::store_single_indexed_update ||
+        opcode == Opcode::store_double_indexed ||
         opcode == Opcode::store_floating_as_integer_word_indexed ||
         opcode == Opcode::data_cache_block_store ||
         opcode == Opcode::data_cache_block_flush;
@@ -6968,6 +6975,7 @@ struct Recompiler::Impl
             case Opcode::store_single_indexed_update:
             case Opcode::store_double:
             case Opcode::store_double_update:
+            case Opcode::store_double_indexed:
             case Opcode::store_floating_as_integer_word_indexed:
             case Opcode::load_word_indexed:
             case Opcode::load_word_indexed_update:
@@ -7001,7 +7009,8 @@ struct Recompiler::Impl
                     insn.opcode == Opcode::store_single_indexed ||
                     insn.opcode == Opcode::store_single_indexed_update;
                 const bool double_store = insn.opcode == Opcode::store_double ||
-                    insn.opcode == Opcode::store_double_update;
+                    insn.opcode == Opcode::store_double_update ||
+                    insn.opcode == Opcode::store_double_indexed;
                 const bool fp_integer_store = insn.opcode ==
                     Opcode::store_floating_as_integer_word_indexed;
                 const bool update_base = insn.opcode == Opcode::load_byte_update ||
@@ -7228,13 +7237,14 @@ struct Recompiler::Impl
                         reinterpret_cast<std::uintptr_t>(&native_store_double));
                     compiler.invoke(Out(invoke), helper_address,
                         FuncSignature::build<std::uint32_t, NativeExecutionContext*,
-                            CpuState*, std::uint32_t, std::uint32_t,
+                            CpuState*, std::uint32_t, std::uint32_t, std::uint32_t,
                             std::uint32_t>(CallConvId::kCDecl));
                     invoke->set_arg(0, context);
                     invoke->set_arg(1, state);
                     invoke->set_arg(2, address);
                     invoke->set_arg(3, imm(insn.fp_register));
-                    invoke->set_arg(4, imm(static_cast<std::uint32_t>(index)));
+                    invoke->set_arg(4, imm(indexed ? 1U : 0U));
+                    invoke->set_arg(5, imm(static_cast<std::uint32_t>(index)));
                 }
                 else
                 {
@@ -8532,7 +8542,8 @@ RunResult Recompiler::run(EspressoCore& core, std::size_t max_steps)
                 entry.stored_integer_word_value = record.value;
             }
             else if (insn.opcode == Opcode::store_double ||
-                insn.opcode == Opcode::store_double_update)
+                insn.opcode == Opcode::store_double_update ||
+                insn.opcode == Opcode::store_double_indexed)
             {
                 entry.has_fp_source = true;
                 entry.fp_source_register = insn.fp_register;
