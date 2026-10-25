@@ -2978,6 +2978,81 @@ void register_gx2_hle(HleDispatcher& dispatcher)
 
     dispatcher.register_function(
         "gx2",
+        "GX2GetDepthStencilControlReg",
+        [](EspressoCore& core) {
+            constexpr const char* api_name = "GX2GetDepthStencilControlReg";
+            constexpr std::uint32_t stack_output_last_offset = 0x1CU;
+            const std::uint64_t stack_pointer = core.state.gpr[1];
+            if (stack_pointer + stack_output_last_offset + sizeof(std::uint32_t) >
+                guest_address_space_end)
+            {
+                throw HleExecutionError(
+                    "gx2::GX2GetDepthStencilControlReg: stack outputs wrap guest address space");
+            }
+            const std::uint32_t input = core.state.gpr[3];
+            if (static_cast<std::uint64_t>(input) + sizeof(std::uint32_t) >
+                guest_address_space_end)
+            {
+                throw HleExecutionError(
+                    "gx2::GX2GetDepthStencilControlReg: input wraps guest address space");
+            }
+            const std::uint32_t control = core.memory.read32_be(input);
+            std::array<std::uint32_t, 13U> output_addresses{};
+            for (std::size_t index = 0U; index < 7U; ++index)
+            {
+                output_addresses[index] = core.state.gpr[index + 4U];
+            }
+            for (std::size_t index = 0U; index < 6U; ++index)
+            {
+                const std::uint32_t offset = 0x08U +
+                    static_cast<std::uint32_t>(index * sizeof(std::uint32_t));
+                output_addresses[index + 7U] = core.memory.read32_be(
+                    static_cast<std::uint32_t>(stack_pointer + offset));
+            }
+            constexpr std::array<const char*, 13U> output_names{
+                "depth-test output",
+                "depth-write output",
+                "depth-compare output",
+                "stencil-test output",
+                "backface-stencil output",
+                "front-stencil-function output",
+                "front-stencil-zpass output",
+                "front-stencil-zfail output",
+                "front-stencil-fail output",
+                "back-stencil-function output",
+                "back-stencil-zpass output",
+                "back-stencil-zfail output",
+                "back-stencil-fail output",
+            };
+            for (std::size_t index = 0U; index < output_addresses.size(); ++index)
+            {
+                validate_gx2_u32_output(
+                    core, output_addresses[index], api_name, output_names[index]);
+            }
+
+            const std::array<std::uint32_t, 13U> values{
+                (control >> 1U) & 1U,
+                (control >> 2U) & 1U,
+                (control >> 4U) & 0x7U,
+                control & 1U,
+                (control >> 7U) & 1U,
+                (control >> 8U) & 0x7U,
+                (control >> 14U) & 0x7U,
+                (control >> 17U) & 0x7U,
+                (control >> 11U) & 0x7U,
+                (control >> 20U) & 0x7U,
+                (control >> 26U) & 0x7U,
+                (control >> 29U) & 0x7U,
+                (control >> 23U) & 0x7U,
+            };
+            for (std::size_t index = 0U; index < output_addresses.size(); ++index)
+            {
+                core.memory.write32_be(output_addresses[index], values[index]);
+            }
+        });
+
+    dispatcher.register_function(
+        "gx2",
         "GX2SetDepthStencilControlReg",
         [](EspressoCore& core) {
             if (!core.gx2.initialized)
