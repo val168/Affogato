@@ -3814,6 +3814,7 @@ struct BlockCode
     case Opcode::store_word_indexed_update:
     case Opcode::store_word_conditional_indexed:
     case Opcode::store_byte_indexed:
+    case Opcode::store_byte_indexed_update:
     case Opcode::store_halfword_indexed:
     case Opcode::data_cache_block_store:
     case Opcode::data_cache_block_flush:
@@ -3975,6 +3976,7 @@ struct BlockCode
     case Opcode::store_word_indexed: return "stwx";
     case Opcode::store_word_indexed_update: return "stwux";
     case Opcode::store_byte_indexed: return "stbx";
+    case Opcode::store_byte_indexed_update: return "stbux";
     case Opcode::store_halfword_indexed: return "sthx";
     case Opcode::data_cache_block_store: return "dcbst";
     case Opcode::data_cache_block_flush: return "dcbf";
@@ -4033,6 +4035,7 @@ struct BlockCode
     case Opcode::store_word_indexed_update:
     case Opcode::store_word_conditional_indexed:
     case Opcode::store_byte_indexed:
+    case Opcode::store_byte_indexed_update:
     case Opcode::store_halfword_indexed:
     case Opcode::paired_single_quantized_store:
     case Opcode::paired_single_quantized_load:
@@ -4055,6 +4058,7 @@ struct BlockCode
     case Opcode::load_byte_zero_indexed:
     case Opcode::load_byte_zero_indexed_update:
     case Opcode::store_byte_indexed:
+    case Opcode::store_byte_indexed_update:
     case Opcode::data_cache_block_store:
     case Opcode::data_cache_block_flush:
         return 1U;
@@ -4085,6 +4089,7 @@ struct BlockCode
         opcode == Opcode::store_word_indexed_update ||
         opcode == Opcode::store_word_conditional_indexed ||
         opcode == Opcode::store_byte_update || opcode == Opcode::store_byte_indexed ||
+        opcode == Opcode::store_byte_indexed_update ||
         opcode == Opcode::store_halfword_indexed ||
         opcode == Opcode::store_single || opcode == Opcode::store_single_indexed ||
         opcode == Opcode::store_double || opcode == Opcode::store_double_update ||
@@ -4107,6 +4112,7 @@ struct BlockCode
         opcode == Opcode::store_word_indexed_update ||
         opcode == Opcode::store_word_conditional_indexed ||
         opcode == Opcode::store_byte_indexed ||
+        opcode == Opcode::store_byte_indexed_update ||
         opcode == Opcode::store_halfword_indexed ||
         opcode == Opcode::store_single_indexed ||
         opcode == Opcode::store_floating_as_integer_word_indexed ||
@@ -6964,6 +6970,7 @@ struct Recompiler::Impl
             case Opcode::store_word_indexed_update:
             case Opcode::store_word_conditional_indexed:
             case Opcode::store_byte_indexed:
+            case Opcode::store_byte_indexed_update:
             case Opcode::store_halfword_indexed:
             case Opcode::data_cache_block_store:
             case Opcode::data_cache_block_flush:
@@ -6994,6 +7001,7 @@ struct Recompiler::Impl
                     insn.opcode == Opcode::store_word_update ||
                     insn.opcode == Opcode::store_word_indexed_update ||
                     insn.opcode == Opcode::store_halfword_update ||
+                    insn.opcode == Opcode::store_byte_indexed_update ||
                     insn.opcode == Opcode::store_single_update ||
                     insn.opcode == Opcode::store_double_update;
                 const bool sign_extend =
