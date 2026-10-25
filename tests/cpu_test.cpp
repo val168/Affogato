@@ -24948,6 +24948,85 @@ void gx2_set_alpha_test_hle_tests()
     assert(isolated_b.gx2.pending_commands.empty());
 }
 
+void gx2_init_target_channel_masks_reg_hle_tests()
+{
+    constexpr std::uint32_t return_address = 0x027505F4U;
+    constexpr std::uint32_t output_address = 0x703U;
+    constexpr std::uint32_t stack_pointer = 0x7000U;
+    EspressoCore core(0x10000U);
+    register_gx2_hle(core.hle);
+    const std::uint32_t import =
+        core.hle.bind_import("gx2", "GX2InitTargetChannelMasksReg");
+    const std::uint32_t wrong_library =
+        core.hle.bind_import("coreinit", "GX2InitTargetChannelMasksReg");
+    assert(import != 0U && wrong_library != 0U);
+    assert(!core.gx2.initialized);
+
+    core.memory.write8(output_address - 1U, 0xA5U);
+    core.memory.write32_be(output_address, 0xDEADBEEFU);
+    core.memory.write8(output_address + 4U, 0x5AU);
+    core.memory.write32_be(stack_pointer + 8U, 0x87U);
+    core.state.gpr.fill(0xB0000000U);
+    core.state.gpr[1] = stack_pointer;
+    core.state.gpr[3] = output_address;
+    core.state.gpr[4] = 0x1FU;
+    core.state.gpr[5] = 0x21U;
+    core.state.gpr[6] = 0x32U;
+    core.state.gpr[7] = 0x43U;
+    core.state.gpr[8] = 0x54U;
+    core.state.gpr[9] = 0x65U;
+    core.state.gpr[10] = 0x76U;
+    core.state.cr = 0x12345678U;
+    core.state.xer = 0xA5A55A5AU;
+    core.state.ctr = 0x87654321U;
+    core.state.fpscr = 0x5A5AA55AU;
+    const auto gprs_before = core.state.gpr;
+    const auto fprs_before = core.state.fpr;
+    const auto ps1_before = core.state.fpr_ps1;
+    const std::uint32_t cr_before = core.state.cr;
+    const std::uint32_t xer_before = core.state.xer;
+    const std::uint32_t ctr_before = core.state.ctr;
+    const std::uint32_t fpscr_before = core.state.fpscr;
+    const auto invoke = [&](std::uint32_t address) {
+        core.state.cia = address;
+        core.state.lr = return_address;
+        return core.run(1U);
+    };
+
+    const RunResult result = invoke(import);
+    assert(result.reason == StopReason::instruction_limit);
+    assert(result.steps == 1U && core.state.cia == return_address);
+    assert(core.memory.read32_be(output_address) == 0x7654321FU);
+    assert(core.memory.read8(output_address - 1U) == 0xA5U);
+    assert(core.memory.read8(output_address + 4U) == 0x5AU);
+    assert(core.gx2.pending_commands.empty());
+    assert(core.state.gpr == gprs_before);
+    assert(core.state.fpr == fprs_before && core.state.fpr_ps1 == ps1_before);
+    assert(core.state.cr == cr_before && core.state.xer == xer_before);
+    assert(core.state.ctr == ctr_before && core.state.fpscr == fpscr_before);
+    assert(invoke(wrong_library).hle_call ==
+           "coreinit::GX2InitTargetChannelMasksReg");
+
+    core.state.gpr[3] = 0xFFFFFFFEU;
+    const RunResult bad_output = invoke(import);
+    assert(bad_output.reason == StopReason::memory_fault);
+    assert(bad_output.detail.find("write 4 byte(s)") != std::string::npos);
+    assert(core.memory.read32_be(output_address) == 0x7654321FU);
+
+    core.state.gpr[3] = output_address;
+    core.state.gpr[1] = 0xFFF8U;
+    const RunResult bad_stack_argument = invoke(import);
+    assert(bad_stack_argument.reason == StopReason::memory_fault);
+    assert(bad_stack_argument.detail.find("read 4 byte(s)") != std::string::npos);
+    assert(core.memory.read32_be(output_address) == 0x7654321FU);
+
+    core.state.gpr[1] = 0xFFFFFFF8U;
+    const RunResult wrapped_stack = invoke(import);
+    assert(wrapped_stack.reason == StopReason::hle_error);
+    assert(wrapped_stack.detail.find("stack argument wraps") != std::string::npos);
+    assert(core.memory.read32_be(output_address) == 0x7654321FU);
+}
+
 void gx2_set_target_channel_masks_hle_tests()
 {
     constexpr std::uint32_t return_address = 0x0275090CU;
@@ -38029,6 +38108,7 @@ int main(int argc, char* argv[])
     gx2_set_blend_control_hle_tests();
     gx2_set_blend_constant_color_hle_tests();
     gx2_set_alpha_test_hle_tests();
+    gx2_init_target_channel_masks_reg_hle_tests();
     gx2_set_target_channel_masks_hle_tests();
     gx2_set_alpha_to_mask_hle_tests();
     gx2_setup_context_state_ex_hle_tests();

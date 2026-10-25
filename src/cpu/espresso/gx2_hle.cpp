@@ -3279,6 +3279,38 @@ void register_gx2_hle(HleDispatcher& dispatcher)
 
     dispatcher.register_function(
         "gx2",
+        "GX2InitTargetChannelMasksReg",
+        [](EspressoCore& core) {
+            constexpr std::uint32_t stack_argument_offset = 0x08U;
+            constexpr std::uint64_t stack_argument_end_size =
+                stack_argument_offset + sizeof(std::uint32_t);
+            const std::uint64_t stack_pointer = core.state.gpr[1];
+            if (stack_pointer + stack_argument_end_size >
+                guest_address_space_end)
+            {
+                throw HleExecutionError(
+                    "gx2::GX2InitTargetChannelMasksReg: stack argument wraps guest address space");
+            }
+
+            const std::uint32_t mask7 = core.memory.read32_be(
+                static_cast<std::uint32_t>(
+                    stack_pointer + stack_argument_offset));
+            const std::array<std::uint32_t, 8U> masks{
+                core.state.gpr[4],
+                core.state.gpr[5],
+                core.state.gpr[6],
+                core.state.gpr[7],
+                core.state.gpr[8],
+                core.state.gpr[9],
+                core.state.gpr[10],
+                mask7,
+            };
+            core.memory.write32_be(
+                core.state.gpr[3], pack_target_channel_masks(masks));
+        });
+
+    dispatcher.register_function(
+        "gx2",
         "GX2SetAAMask",
         [](EspressoCore& core) {
             if (!core.gx2.initialized)
