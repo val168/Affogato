@@ -25564,6 +25564,86 @@ void gx2_set_blend_constant_color_hle_tests()
     assert(isolated_b.gx2.pending_commands.empty());
 }
 
+void gx2_init_blend_constant_color_reg_hle_tests()
+{
+    constexpr std::uint32_t return_address = 0x027508B6U;
+    constexpr std::uint32_t output_address = 0x503U;
+
+    EspressoCore core(0x10000U);
+    register_gx2_hle(core.hle);
+    const std::uint32_t import =
+        core.hle.bind_import("gx2", "GX2InitBlendConstantColorReg");
+    const std::uint32_t wrong_library = core.hle.bind_import(
+        "coreinit", "GX2InitBlendConstantColorReg");
+    assert(import != 0U && wrong_library != 0U);
+    assert(!core.gx2.initialized);
+    core.memory.write8(output_address - 1U, 0xA5U);
+    core.memory.write32_be(output_address, 0xDEADBEEFU);
+    core.memory.write32_be(output_address + 4U, 0xDEADBEEFU);
+    core.memory.write32_be(output_address + 8U, 0xDEADBEEFU);
+    core.memory.write32_be(output_address + 12U, 0xDEADBEEFU);
+    core.memory.write8(output_address + 16U, 0x5AU);
+    core.state.gpr.fill(0xB1000000U);
+    core.state.gpr[3] = output_address;
+    core.state.fpr[1] = std::bit_cast<std::uint64_t>(0.25);
+    core.state.fpr[2] = std::bit_cast<std::uint64_t>(-0.5);
+    core.state.fpr[3] = std::bit_cast<std::uint64_t>(2.0);
+    core.state.fpr[4] = 0x8000000000000000ULL;
+    core.state.fpr_ps1.fill(0xDEADBEEF01234567ULL);
+    core.state.fpr_ps1[1] = std::bit_cast<std::uint64_t>(99.0);
+    core.state.fpr_ps1[2] = std::bit_cast<std::uint64_t>(-99.0);
+    core.state.cr = 0x12345678U;
+    core.state.xer = 0xA5A55A5AU;
+    core.state.ctr = 0x87654321U;
+    core.state.fpscr = 0x5A5AA55AU;
+    const auto gprs_before = core.state.gpr;
+    const auto fprs_before = core.state.fpr;
+    const auto ps1_before = core.state.fpr_ps1;
+
+    core.state.cia = import;
+    core.state.lr = return_address;
+    const RunResult result = core.run(1U);
+    assert(result.reason == StopReason::instruction_limit);
+    assert(result.steps == 1U && core.state.cia == return_address);
+    const std::array<std::uint32_t, 4U> expected{
+        0x3E800000U, 0xBF000000U, 0x40000000U, 0x80000000U};
+    for (std::size_t index = 0U; index < expected.size(); ++index)
+    {
+        assert(core.memory.read32_be(
+                   output_address + static_cast<std::uint32_t>(index * 4U)) ==
+               expected[index]);
+    }
+    assert(core.memory.read8(output_address - 1U) == 0xA5U);
+    assert(core.memory.read8(output_address + 16U) == 0x5AU);
+    assert(core.gx2.pending_commands.empty());
+    assert(core.state.gpr == gprs_before);
+    assert(core.state.fpr == fprs_before && core.state.fpr_ps1 == ps1_before);
+    assert(core.state.cr == 0x12345678U);
+    assert(core.state.xer == 0xA5A55A5AU);
+    assert(core.state.ctr == 0x87654321U);
+    assert(core.state.fpscr == 0x5A5AA55AU);
+
+    core.state.cia = wrong_library;
+    core.state.lr = return_address;
+    const RunResult wrong_library_result = core.run(1U);
+    assert(wrong_library_result.reason == StopReason::unimplemented_hle_call);
+    assert(wrong_library_result.hle_call ==
+           "coreinit::GX2InitBlendConstantColorReg");
+
+    core.state.gpr[3] = 0xFFF8U;
+    core.state.cia = import;
+    core.state.lr = return_address;
+    const RunResult bad_range = core.run(1U);
+    assert(bad_range.reason == StopReason::memory_fault);
+    assert(bad_range.detail.find("write 16 byte(s)") != std::string::npos);
+    for (std::size_t index = 0U; index < expected.size(); ++index)
+    {
+        assert(core.memory.read32_be(
+                   output_address + static_cast<std::uint32_t>(index * 4U)) ==
+               expected[index]);
+    }
+}
+
 void gx2_set_alpha_test_hle_tests()
 {
     constexpr std::uint32_t return_address = 0x027508C4U;
@@ -39736,6 +39816,7 @@ int main(int argc, char* argv[])
     gx2_get_color_control_reg_hle_tests();
     gx2_set_blend_control_hle_tests();
     gx2_set_blend_constant_color_hle_tests();
+    gx2_init_blend_constant_color_reg_hle_tests();
     gx2_set_alpha_test_hle_tests();
     gx2_init_target_channel_masks_reg_hle_tests();
     gx2_get_target_channel_masks_reg_hle_tests();
