@@ -306,6 +306,14 @@ struct NativeAddOverflowRecord
 
 using NativeSubfOverflowRecord = NativeAddOverflowRecord;
 
+struct NativeNegateOverflowRecord
+{
+    std::uint32_t source{};
+    std::uint32_t result{};
+    std::uint32_t overflow{};
+    std::uint32_t summary_overflow{};
+};
+
 struct NativeFselRecord
 {
     std::uint64_t source_a_raw{};
@@ -425,6 +433,7 @@ struct NativeExecutionContext
     std::array<NativeSubfRecord, 64> subf_records{};
     std::array<NativeAddOverflowRecord, 64> add_overflow_records{};
     std::array<NativeSubfOverflowRecord, 64> subf_overflow_records{};
+    std::array<NativeNegateOverflowRecord, 64> negate_overflow_records{};
     std::array<NativeFselRecord, 64> fsel_records{};
     std::array<NativeMulhwuRecord, 64> mulhwu_records{};
     std::array<NativeAddcRecord, 64> addc_records{};
@@ -4663,6 +4672,10 @@ struct BlockCode
     {
         return true;
     }
+    if (insn.opcode == Opcode::negate_overflow)
+    {
+        return true;
+    }
     if (insn.opcode == Opcode::negate && insn.record)
     {
         return true;
@@ -4959,6 +4972,7 @@ struct BlockCode
     case Opcode::extend_sign_byte: return "extsb";
     case Opcode::extend_sign_halfword: return "extsh";
     case Opcode::negate: return "neg";
+    case Opcode::negate_overflow: return "nego";
     case Opcode::add_immediate_carry: return "addic";
     case Opcode::subtract_from_immediate_carry: return "subfic";
     case Opcode::ori: return "ori";
@@ -6082,6 +6096,80 @@ struct Recompiler::Impl
                 invoke->set_arg(4, imm(insn.source));
                 invoke->set_arg(5, imm(insn.record ? 1U : 0U));
                 invoke->set_arg(6, imm(static_cast<std::uint32_t>(index)));
+                break;
+            }
+            case Opcode::negate_overflow:
+            {
+                const std::size_t record_offset =
+                    offsetof(NativeExecutionContext, negate_overflow_records) +
+                    index * sizeof(NativeNegateOverflowRecord);
+                x86::Gp source = read_guest_gpr(insn.source);
+                compiler.mov(x86::dword_ptr(context, static_cast<std::int32_t>(
+                    record_offset + offsetof(NativeNegateOverflowRecord, source))), source);
+                x86::Gp result = compiler.new_gp32("nego_result");
+                compiler.mov(result, source);
+                compiler.neg(result);
+                x86::Gp overflow = compiler.new_gp32("nego_overflow");
+                compiler.mov(overflow, imm(0U));
+                compiler.seto(overflow.r8());
+                compiler.mov(x86::dword_ptr(context, static_cast<std::int32_t>(
+                    record_offset + offsetof(NativeNegateOverflowRecord, result))), result);
+                compiler.mov(x86::dword_ptr(context, static_cast<std::int32_t>(
+                    record_offset + offsetof(NativeNegateOverflowRecord, overflow))), overflow);
+
+                constexpr std::size_t xer_offset = offsetof(CpuState, xer);
+                x86::Gp xer = compiler.new_gp32("nego_xer");
+                compiler.mov(xer, x86::dword_ptr(
+                    state, static_cast<std::int32_t>(xer_offset)));
+                x86::Gp summary_overflow = compiler.new_gp32("nego_summary_overflow");
+                compiler.mov(summary_overflow, xer);
+                compiler.shr(summary_overflow, imm(31U));
+                compiler.or_(summary_overflow, overflow);
+                compiler.shl(summary_overflow, imm(31U));
+                x86::Gp overflow_bit = compiler.new_gp32("nego_overflow_bit");
+                compiler.mov(overflow_bit, overflow);
+                compiler.shl(overflow_bit, imm(30U));
+                compiler.and_(xer, imm(~(xer_summary_overflow_mask | xer_overflow_mask)));
+                compiler.or_(xer, summary_overflow);
+                compiler.or_(xer, overflow_bit);
+                compiler.mov(x86::dword_ptr(
+                    state, static_cast<std::int32_t>(xer_offset)), xer);
+                compiler.mov(x86::dword_ptr(context, static_cast<std::int32_t>(
+                    record_offset + offsetof(NativeNegateOverflowRecord, summary_overflow))),
+                    summary_overflow);
+                write_guest_gpr(insn.destination, result);
+
+                if (insn.record)
+                {
+                    compiler.test(result, result);
+                    x86::Gp less = compiler.new_gp32("nego_cr0_lt");
+                    x86::Gp greater = compiler.new_gp32("nego_cr0_gt");
+                    x86::Gp equal = compiler.new_gp32("nego_cr0_eq");
+                    compiler.mov(less, imm(0U));
+                    compiler.setl(less.r8());
+                    compiler.mov(greater, imm(0U));
+                    compiler.setg(greater.r8());
+                    compiler.mov(equal, imm(0U));
+                    compiler.sete(equal.r8());
+                    compiler.shl(less, imm(3U));
+                    compiler.shl(greater, imm(2U));
+                    compiler.shl(equal, imm(1U));
+                    compiler.or_(less, greater);
+                    compiler.or_(less, equal);
+                    x86::Gp xer_so = compiler.new_gp32("nego_cr0_so");
+                    compiler.mov(xer_so, x86::dword_ptr(
+                        state, static_cast<std::int32_t>(xer_offset)));
+                    compiler.shr(xer_so, imm(31U));
+                    compiler.or_(less, xer_so);
+                    compiler.shl(less, imm(28U));
+                    x86::Gp cr = compiler.new_gp32("nego_cr0");
+                    compiler.mov(cr, x86::dword_ptr(
+                        state, static_cast<std::int32_t>(offsetof(CpuState, cr))));
+                    compiler.and_(cr, imm(0x0FFFFFFFU));
+                    compiler.or_(cr, less);
+                    compiler.mov(x86::dword_ptr(
+                        state, static_cast<std::int32_t>(offsetof(CpuState, cr))), cr);
+                }
                 break;
             }
             case Opcode::negate:
@@ -11034,6 +11122,23 @@ RunResult Recompiler::run(EspressoCore& core, std::size_t max_steps)
                     entry.source_values[1] = record.operand_b;
                     entry.source_count = 2U;
                 }
+                entry.has_destination = true;
+                entry.destination_register = insn.destination;
+                entry.destination_value = record.result;
+                entry.has_overflow_result = true;
+                entry.overflow_result = record.overflow != 0U;
+                entry.summary_overflow_result = record.summary_overflow != 0U;
+                core.append_instruction_history(std::move(entry));
+                continue;
+            }
+            if (insn.opcode == Opcode::negate_overflow)
+            {
+                InstructionHistoryEntry entry = native_history(insn, cia);
+                const NativeNegateOverflowRecord& record =
+                    context.negate_overflow_records[i];
+                entry.source_registers[0] = insn.source;
+                entry.source_values[0] = record.source;
+                entry.source_count = 1U;
                 entry.has_destination = true;
                 entry.destination_register = insn.destination;
                 entry.destination_value = record.result;
