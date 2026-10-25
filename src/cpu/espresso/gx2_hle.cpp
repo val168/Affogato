@@ -3189,6 +3189,29 @@ void register_gx2_hle(HleDispatcher& dispatcher)
 
     dispatcher.register_function(
         "gx2",
+        "GX2GetAAMaskReg",
+        [](EspressoCore& core) {
+            const std::uint32_t packed = core.memory.read32_be(core.state.gpr[3]);
+            const std::array<std::uint32_t, 4U> output_addresses{
+                core.state.gpr[4],
+                core.state.gpr[5],
+                core.state.gpr[6],
+                core.state.gpr[7],
+            };
+            for (const std::uint32_t address : output_addresses)
+            {
+                core.memory.validate_write_range(address, sizeof(std::uint8_t));
+            }
+            for (std::size_t index = 0; index < output_addresses.size(); ++index)
+            {
+                const auto mask = static_cast<std::uint8_t>(
+                    packed >> static_cast<unsigned>(index * 8U));
+                core.memory.write8(output_addresses[index], mask);
+            }
+        });
+
+    dispatcher.register_function(
+        "gx2",
         "GX2SetAAMaskReg",
         [](EspressoCore& core) {
             if (!core.gx2.initialized)
