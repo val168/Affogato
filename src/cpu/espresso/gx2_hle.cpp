@@ -3434,6 +3434,27 @@ void register_gx2_hle(HleDispatcher& dispatcher)
 
     dispatcher.register_function(
         "gx2",
+        "GX2SwapScanBuffers",
+        [](EspressoCore& core) {
+            // Cemu increments the shared request counter only on the GX2 main
+            // core and records the CPU-side swap time on every call. Affogato
+            // currently executes one guest lane, initialized on core 1.
+            core.gx2.last_flip_time = core.time_base_ticks();
+            if (core.gx2.main_core_id == 1U)
+            {
+                ++core.gx2.flip_request_count;
+            }
+
+            // Keep the swap in command order. flip_execute_count remains
+            // renderer-owned; queueing is not evidence of a completed flip.
+            core.gx2.pending_commands.push_back({
+                Gx2CommandType::scan_buffer_swap,
+                0U,
+                core.gx2.flip_request_count});
+        });
+
+    dispatcher.register_function(
+        "gx2",
         "GX2Flush",
         [](EspressoCore& core) {
             // Publish an ordered submission boundary. The frontend drains the

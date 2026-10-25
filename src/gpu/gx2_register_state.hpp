@@ -40,6 +40,13 @@ public:
                 gpu_fences_.push_back(command);
                 continue;
             }
+            if (command.type == cpu::espresso::Gx2CommandType::scan_buffer_swap)
+            {
+                // Retain swap requests in stream order until scan-buffer
+                // presentation is connected to the renderer.
+                scan_buffer_swaps_.push_back(command);
+                continue;
+            }
             if (command.type == cpu::espresso::Gx2CommandType::flush ||
                 command.type == cpu::espresso::Gx2CommandType::draw_done)
             {
@@ -163,6 +170,12 @@ public:
         return gpu_fences_;
     }
 
+    [[nodiscard]] std::span<const cpu::espresso::Gx2Command>
+    scan_buffer_swaps() const noexcept
+    {
+        return scan_buffer_swaps_;
+    }
+
 private:
     struct RegisterValue
     {
@@ -172,6 +185,7 @@ private:
 
     std::unordered_map<std::uint32_t, RegisterValue> registers_;
     std::vector<cpu::espresso::Gx2Command> gpu_fences_;
+    std::vector<cpu::espresso::Gx2Command> scan_buffer_swaps_;
 };
 
 }

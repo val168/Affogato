@@ -27047,6 +27047,73 @@ void gx2_set_drc_scale_hle_tests()
     assert(result.hle_call == "coreinit::GX2SetDRCScale");
 }
 
+void gx2_swap_scan_buffers_hle_tests()
+{
+    constexpr std::uint32_t return_address = 0x0274C3B8U;
+    EspressoCore core(0x1000U);
+    register_gx2_hle(core.hle);
+    core.gx2.main_core_id = 1U;
+    core.gx2.flip_request_count = 4U;
+    core.gx2.flip_execute_count = 3U;
+    core.gx2.pending_commands.push_back(
+        {Gx2CommandType::set_context_register, 0x28800U, 0x11223344U});
+    core.state.gpr.fill(0xD8000000U);
+    core.state.gpr[3] = 0xABCDEF01U;
+    core.state.lr = return_address;
+    core.state.cr = 0xA5A55A5AU;
+    core.state.xer = 0x87654321U;
+    core.state.ctr = 0xABCDEF01U;
+    core.state.fpscr = 0x5A5AA5A5U;
+    const auto gprs_before = core.state.gpr;
+    const auto fprs_before = core.state.fpr;
+    const auto ps1_before = core.state.fpr_ps1;
+    const auto import = core.hle.bind_import("gx2", "GX2SwapScanBuffers");
+    assert(import != 0U);
+
+    const auto invoke = [&]() {
+        core.state.cia = import;
+        core.state.lr = return_address;
+        const RunResult result = core.run(1U);
+        assert(result.reason == StopReason::instruction_limit);
+        assert(result.steps == 1U);
+        assert(core.state.cia == return_address && core.state.lr == return_address);
+        assert(core.state.gpr == gprs_before);
+        assert(core.state.fpr == fprs_before && core.state.fpr_ps1 == ps1_before);
+        assert(core.state.cr == 0xA5A55A5AU);
+        assert(core.state.xer == 0x87654321U);
+        assert(core.state.ctr == 0xABCDEF01U);
+        assert(core.state.fpscr == 0x5A5AA5A5U);
+    };
+
+    invoke();
+    assert(core.gx2.flip_request_count == 5U);
+    assert(core.gx2.flip_execute_count == 3U);
+    assert(core.gx2.last_flip_time != 0U);
+    assert(core.gx2.pending_commands.size() == 2U);
+    assert(core.gx2.pending_commands.front() ==
+           (Gx2Command{Gx2CommandType::set_context_register,
+                       0x28800U, 0x11223344U}));
+    assert(core.gx2.pending_commands.back() ==
+           (Gx2Command{Gx2CommandType::scan_buffer_swap, 0U, 5U}));
+
+    affogato::gpu::Gx2RegisterState register_state;
+    register_state.apply(core.gx2.pending_commands);
+    assert(register_state.read(0x28800U) == 0x11223344U);
+    assert(register_state.scan_buffer_swaps().size() == 1U);
+    assert(register_state.scan_buffer_swaps().front() ==
+           core.gx2.pending_commands.back());
+
+    // A non-main core submits a swap command but does not increment Cafe's
+    // main-core flip-request counter.
+    core.gx2.main_core_id = 0U;
+    invoke();
+    assert(core.gx2.flip_request_count == 5U);
+    assert(core.gx2.flip_execute_count == 3U);
+    assert(core.gx2.pending_commands.size() == 3U);
+    assert(core.gx2.pending_commands.back() ==
+           (Gx2Command{Gx2CommandType::scan_buffer_swap, 0U, 5U}));
+}
+
 void gx2_set_swap_interval_hle_tests()
 {
     constexpr std::uint32_t return_address = 0x0274C3BCU;
@@ -35224,6 +35291,7 @@ int main(int argc, char* argv[])
     gx2_calc_drc_size_hle_tests();
     gx2_set_drc_buffer_hle_tests();
     gx2_set_drc_scale_hle_tests();
+    gx2_swap_scan_buffers_hle_tests();
     gx2_set_swap_interval_hle_tests();
     gx2_get_swap_interval_hle_tests();
     gx2_sample_top_gpu_cycle_hle_tests();
