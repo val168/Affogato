@@ -301,6 +301,7 @@ struct NativeExecutionContext
     std::array<NativePsMergeRecord, 64> ps_move_records{};
     std::array<NativePsMergeRecord, 64> ps_neg_records{};
     std::array<NativePsMergeRecord, 64> ps_abs_records{};
+    std::array<NativePsMergeRecord, 64> ps_nabs_records{};
     std::array<NativePsMulRecord, 64> ps_mul_records{};
     std::array<NativePsMulRecord, 64> ps_muls0_records{};
     std::array<NativePsMaddRecord, 64> ps_madd_records{};
@@ -3773,6 +3774,7 @@ struct BlockCode
     case Opcode::paired_single_move_register:
     case Opcode::paired_single_negate:
     case Opcode::paired_single_absolute_value:
+    case Opcode::paired_single_negative_absolute_value:
     case Opcode::paired_single_quantized_load:
     case Opcode::paired_single_quantized_store:
     case Opcode::instruction_sync:
@@ -3893,6 +3895,7 @@ struct BlockCode
     case Opcode::paired_single_move_register: return "ps_mr";
     case Opcode::paired_single_negate: return "ps_neg";
     case Opcode::paired_single_absolute_value: return "ps_abs";
+    case Opcode::paired_single_negative_absolute_value: return "ps_nabs";
     case Opcode::paired_single_quantized_store: return "psq_st";
     case Opcode::paired_single_quantized_load: return "psq_l";
     case Opcode::instruction_sync: return "isync";
@@ -6509,6 +6512,40 @@ struct Recompiler::Impl
                     source_ps1);
                 break;
             }
+            case Opcode::paired_single_negative_absolute_value:
+            {
+                x86::Gp source_ps0 = compiler.new_gp64("ps_nabs_source_ps0");
+                x86::Gp source_ps1 = compiler.new_gp64("ps_nabs_source_ps1");
+                x86::Gp record_ptr = compiler.new_gp64("ps_nabs_record");
+                compiler.mov(source_ps0, x86::qword_ptr(state,
+                    static_cast<std::int32_t>(fpr_offset(insn.fp_source_b))));
+                compiler.mov(source_ps1, x86::qword_ptr(state,
+                    static_cast<std::int32_t>(offsetof(CpuState, fpr_ps1) +
+                        sizeof(std::uint64_t) * insn.fp_source_b)));
+                compiler.lea(record_ptr, x86::ptr(context,
+                    static_cast<std::int32_t>(offsetof(NativeExecutionContext,
+                        ps_nabs_records) + index * sizeof(NativePsMergeRecord))));
+                compiler.mov(x86::qword_ptr(record_ptr,
+                    static_cast<std::int32_t>(offsetof(NativePsMergeRecord, source_a_ps0))),
+                    source_ps0);
+                compiler.mov(x86::qword_ptr(record_ptr,
+                    static_cast<std::int32_t>(offsetof(NativePsMergeRecord, source_a_ps1))),
+                    source_ps1);
+                compiler.bts(source_ps0, imm(63U));
+                compiler.bts(source_ps1, imm(63U));
+                compiler.mov(x86::qword_ptr(state,
+                    static_cast<std::int32_t>(fpr_offset(insn.fp_register))), source_ps0);
+                compiler.mov(x86::qword_ptr(state,
+                    static_cast<std::int32_t>(offsetof(CpuState, fpr_ps1) +
+                        sizeof(std::uint64_t) * insn.fp_register)), source_ps1);
+                compiler.mov(x86::qword_ptr(record_ptr,
+                    static_cast<std::int32_t>(offsetof(NativePsMergeRecord, destination_ps0))),
+                    source_ps0);
+                compiler.mov(x86::qword_ptr(record_ptr,
+                    static_cast<std::int32_t>(offsetof(NativePsMergeRecord, destination_ps1))),
+                    source_ps1);
+                break;
+            }
             case Opcode::paired_single_negate:
             {
                 constexpr std::uint64_t sign_mask = 0x8000000000000000ULL;
@@ -7987,6 +8024,24 @@ RunResult Recompiler::run(EspressoCore& core, std::size_t max_steps)
             {
                 InstructionHistoryEntry entry = native_history(insn, cia);
                 const NativePsMergeRecord& record = context.ps_abs_records[i];
+                entry.has_paired_fp_state = true;
+                entry.paired_fp_unary = true;
+                entry.paired_fp_destination_register = insn.fp_register;
+                entry.paired_fp_source_a_register = insn.fp_source_b;
+                entry.paired_fp_source_b_register = insn.fp_source_b;
+                entry.paired_fp_source_a_ps0 = record.source_a_ps0;
+                entry.paired_fp_source_a_ps1 = record.source_a_ps1;
+                entry.paired_fp_source_b_ps0 = record.source_a_ps0;
+                entry.paired_fp_source_b_ps1 = record.source_a_ps1;
+                entry.paired_fp_destination_ps0 = record.destination_ps0;
+                entry.paired_fp_destination_ps1 = record.destination_ps1;
+                core.append_instruction_history(std::move(entry));
+                continue;
+            }
+            if (insn.opcode == Opcode::paired_single_negative_absolute_value)
+            {
+                InstructionHistoryEntry entry = native_history(insn, cia);
+                const NativePsMergeRecord& record = context.ps_nabs_records[i];
                 entry.has_paired_fp_state = true;
                 entry.paired_fp_unary = true;
                 entry.paired_fp_destination_register = insn.fp_register;
