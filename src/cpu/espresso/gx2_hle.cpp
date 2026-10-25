@@ -54,6 +54,11 @@ constexpr std::uint32_t db_alpha_to_mask_register = 0x00028D44U;
 constexpr std::uint32_t pa_sc_generic_scissor_tl_register = 0x00028240U;
 constexpr std::uint32_t pa_sc_generic_scissor_br_register = 0x00028244U;
 constexpr std::uint32_t pa_sc_window_offset_register = 0x00028200U;
+constexpr std::uint32_t pa_su_poly_offset_front_scale_register = 0x00028B80U;
+constexpr std::uint32_t pa_su_poly_offset_front_offset_register = 0x00028B84U;
+constexpr std::uint32_t pa_su_poly_offset_back_scale_register = 0x00028B88U;
+constexpr std::uint32_t pa_su_poly_offset_back_offset_register = 0x00028B8CU;
+constexpr std::uint32_t pa_su_poly_offset_clamp_register = 0x00028B7CU;
 constexpr std::uint32_t pa_cl_vport_xscale_register = 0x0002843CU;
 constexpr std::uint32_t pa_cl_gb_vert_clip_adj_register = 0x00028BE8U;
 constexpr std::uint32_t pa_cl_gb_vert_disc_adj_register = 0x00028BECU;
@@ -3164,6 +3169,49 @@ void register_gx2_hle(HleDispatcher& dispatcher)
                 packed});
             // This setter records the offset only; activation remains governed
             // by the independent PA_SU_SC_MODE_CNTL window-offset enable bit.
+        });
+
+    dispatcher.register_function(
+        "gx2",
+        "GX2SetPolygonOffset",
+        [](EspressoCore& core) {
+            if (!core.gx2.initialized)
+            {
+                throw HleExecutionError(
+                    "gx2::GX2SetPolygonOffset: GX2 has not been initialized");
+            }
+
+            // The ABI order is offset, scale for front and back; the register
+            // structure is scale, offset. All five float arguments arrive in
+            // FPR1-FPR5 and are stored as binary32 register words.
+            const std::uint32_t front_offset =
+                fpr_float_argument_bits(core, 1U);
+            const std::uint32_t front_scale =
+                fpr_float_argument_bits(core, 2U);
+            const std::uint32_t back_offset =
+                fpr_float_argument_bits(core, 3U);
+            const std::uint32_t back_scale =
+                fpr_float_argument_bits(core, 4U);
+            const std::uint32_t clamp =
+                fpr_float_argument_bits(core, 5U);
+            constexpr std::array<std::uint32_t, 5U> registers{
+                pa_su_poly_offset_front_scale_register,
+                pa_su_poly_offset_front_offset_register,
+                pa_su_poly_offset_back_scale_register,
+                pa_su_poly_offset_back_offset_register,
+                pa_su_poly_offset_clamp_register,
+            };
+            const std::array<std::uint32_t, 5U> values{
+                front_scale, front_offset, back_scale, back_offset, clamp};
+
+            for (std::size_t index = 0U; index < registers.size(); ++index)
+            {
+                core.gx2.pending_commands.push_back({
+                    Gx2CommandType::set_context_register,
+                    registers[index],
+                    values[index]});
+            }
+            // As a void setter, this records only the ordered Latte state.
         });
 
     dispatcher.register_function(
