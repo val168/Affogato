@@ -3404,6 +3404,41 @@ void register_gx2_hle(HleDispatcher& dispatcher)
 
     dispatcher.register_function(
         "gx2",
+        "GX2GetScissorReg",
+        [](EspressoCore& core) {
+            const std::uint32_t input = core.state.gpr[3];
+            const std::uint32_t top_left = core.memory.read32_be(input);
+            const std::uint32_t bottom_right =
+                core.memory.read32_be(input + 4U);
+            const std::uint32_t x = top_left & 0x7FFFU;
+            const std::uint32_t y = (top_left >> 16U) & 0x7FFFU;
+            const std::uint32_t right = bottom_right & 0x7FFFU;
+            const std::uint32_t bottom = (bottom_right >> 16U) & 0x7FFFU;
+            const std::array<std::uint32_t, 4U> outputs{
+                core.state.gpr[4],
+                core.state.gpr[5],
+                core.state.gpr[6],
+                core.state.gpr[7],
+            };
+            for (const std::uint32_t address : outputs)
+            {
+                core.memory.validate_write_range(
+                    address, sizeof(std::uint32_t));
+            }
+            const std::array<std::uint32_t, 4U> values{
+                x,
+                y,
+                (right - x) & 0x7FFFU,
+                (bottom - y) & 0x7FFFU,
+            };
+            for (std::size_t index = 0U; index < outputs.size(); ++index)
+            {
+                core.memory.write32_be(outputs[index], values[index]);
+            }
+        });
+
+    dispatcher.register_function(
+        "gx2",
         "GX2SetWindowOffset",
         [](EspressoCore& core) {
             if (!core.gx2.initialized)
