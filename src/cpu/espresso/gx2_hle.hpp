@@ -80,6 +80,9 @@ struct Gx2ProgramShaderBinding
     std::uint32_t program_address{};
     std::vector<std::uint32_t> descriptor_words;
     std::vector<std::uint32_t> program_words;
+    std::uint32_t secondary_program_size{};
+    std::uint32_t secondary_program_address{};
+    std::vector<std::uint32_t> secondary_program_words;
 
     bool operator==(const Gx2ProgramShaderBinding&) const = default;
 };

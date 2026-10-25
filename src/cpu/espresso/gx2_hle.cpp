@@ -148,6 +148,11 @@ constexpr std::uint32_t gx2_vertex_shader_program_address_offset = 0xD4U;
 constexpr std::uint32_t gx2_pixel_shader_struct_size = 0xE8U;
 constexpr std::uint32_t gx2_pixel_shader_program_size_offset = 0xA4U;
 constexpr std::uint32_t gx2_pixel_shader_program_address_offset = 0xA8U;
+constexpr std::uint32_t gx2_geometry_shader_struct_size = 0xB0U;
+constexpr std::uint32_t gx2_geometry_shader_program_size_offset = 0x4CU;
+constexpr std::uint32_t gx2_geometry_shader_program_address_offset = 0x50U;
+constexpr std::uint32_t gx2_geometry_shader_copy_size_offset = 0x54U;
+constexpr std::uint32_t gx2_geometry_shader_copy_address_offset = 0x58U;
 constexpr std::uint32_t gx2_max_shader_program_size = 0x01000000U;
 constexpr std::uint32_t gx2_attrib_stream_size = 0x20U;
 constexpr std::uint32_t gx2_max_fetch_attributes = 64U;
@@ -194,7 +199,9 @@ Gx2ProgramShaderBinding capture_program_shader(
     std::uint32_t descriptor_size,
     std::uint32_t program_size_offset,
     std::uint32_t program_address_offset,
-    const char* api_name)
+    const char* api_name,
+    std::optional<std::pair<std::uint32_t, std::uint32_t>> secondary_offsets =
+        std::nullopt)
 {
     const std::uint32_t descriptor_address = core.state.gpr[3];
     if (descriptor_address == 0U || (descriptor_address & 3U) != 0U)
@@ -255,6 +262,47 @@ Gx2ProgramShaderBinding capture_program_shader(
     {
         binding.program_words.push_back(
             core.memory.read32_be(binding.program_address + offset));
+    }
+
+    if (secondary_offsets)
+    {
+        const std::size_t secondary_size_word =
+            secondary_offsets->first / sizeof(std::uint32_t);
+        const std::size_t secondary_address_word =
+            secondary_offsets->second / sizeof(std::uint32_t);
+        binding.secondary_program_size =
+            binding.descriptor_words[secondary_size_word];
+        binding.secondary_program_address =
+            binding.descriptor_words[secondary_address_word];
+        if (binding.secondary_program_size > gx2_max_shader_program_size ||
+            (binding.secondary_program_size % sizeof(std::uint32_t)) != 0U)
+        {
+            throw HleExecutionError(
+                std::string(api_name) + ": invalid secondary shader program size");
+        }
+        if (binding.secondary_program_size != 0U &&
+            (binding.secondary_program_address == 0U ||
+             (binding.secondary_program_address & 3U) != 0U))
+        {
+            throw HleExecutionError(
+                std::string(api_name) + ": secondary program is null or misaligned");
+        }
+        if (static_cast<std::uint64_t>(binding.secondary_program_address) +
+                binding.secondary_program_size >
+            guest_address_space_end)
+        {
+            throw HleExecutionError(
+                std::string(api_name) + ": secondary program range wraps guest address space");
+        }
+        binding.secondary_program_words.reserve(
+            binding.secondary_program_size / sizeof(std::uint32_t));
+        for (std::uint32_t offset = 0U;
+             offset < binding.secondary_program_size;
+             offset += sizeof(std::uint32_t))
+        {
+            binding.secondary_program_words.push_back(
+                core.memory.read32_be(binding.secondary_program_address + offset));
+        }
     }
     return binding;
 }
@@ -3653,6 +3701,37 @@ void register_gx2_hle(HleDispatcher& dispatcher)
                 binding});
             core.gx2.program_shaders[
                 static_cast<std::size_t>(Gx2ProgramStage::pixel)] =
+                std::move(binding);
+        });
+
+    dispatcher.register_function(
+        "gx2",
+        "GX2SetGeometryShader",
+        [](EspressoCore& core) {
+            Gx2ProgramShaderBinding binding = capture_program_shader(
+                core,
+                Gx2ProgramStage::geometry,
+                gx2_geometry_shader_struct_size,
+                gx2_geometry_shader_program_size_offset,
+                gx2_geometry_shader_program_address_offset,
+                "gx2::GX2SetGeometryShader",
+                std::pair{
+                    gx2_geometry_shader_copy_size_offset,
+                    gx2_geometry_shader_copy_address_offset});
+
+            core.gx2.pending_commands.push_back({
+                Gx2CommandType::set_program_shader,
+                0U,
+                0U,
+                0U,
+                0U,
+                0U,
+                std::nullopt,
+                std::nullopt,
+                std::nullopt,
+                binding});
+            core.gx2.program_shaders[
+                static_cast<std::size_t>(Gx2ProgramStage::geometry)] =
                 std::move(binding);
         });
 
