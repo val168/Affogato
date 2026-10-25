@@ -3437,6 +3437,74 @@ void register_gx2_hle(HleDispatcher& dispatcher)
 
     dispatcher.register_function(
         "gx2",
+        "GX2GetBlendControlReg",
+        [](EspressoCore& core) {
+            constexpr const char* api_name = "GX2GetBlendControlReg";
+            constexpr std::uint32_t stack_output_offset = 0x08U;
+            const std::uint64_t stack_pointer = core.state.gpr[1];
+            if (stack_pointer + stack_output_offset + sizeof(std::uint32_t) >
+                guest_address_space_end)
+            {
+                throw HleExecutionError(
+                    "gx2::GX2GetBlendControlReg: stack output wraps guest address space");
+            }
+            const std::uint32_t input = core.state.gpr[3];
+            if (static_cast<std::uint64_t>(input) + 2U * sizeof(std::uint32_t) >
+                guest_address_space_end)
+            {
+                throw HleExecutionError(
+                    "gx2::GX2GetBlendControlReg: input range wraps guest address space");
+            }
+            const std::array<std::uint32_t, 2U> input_words{
+                core.memory.read32_be(input),
+                core.memory.read32_be(input + 4U),
+            };
+            const std::uint32_t last_output = core.memory.read32_be(
+                static_cast<std::uint32_t>(stack_pointer + stack_output_offset));
+            const std::uint32_t control = input_words[1];
+            const std::array<std::uint32_t, 8U> output_addresses{
+                core.state.gpr[4],
+                core.state.gpr[5],
+                core.state.gpr[6],
+                core.state.gpr[7],
+                core.state.gpr[8],
+                core.state.gpr[9],
+                core.state.gpr[10],
+                last_output,
+            };
+            constexpr std::array<const char*, 8U> output_names{
+                "target output",
+                "color-source-blend output",
+                "color-destination-blend output",
+                "color-combine output",
+                "use-alpha-blend output",
+                "alpha-source-blend output",
+                "alpha-destination-blend output",
+                "alpha-combine output",
+            };
+            for (std::size_t index = 0U; index < output_addresses.size(); ++index)
+            {
+                validate_gx2_u32_output(
+                    core, output_addresses[index], api_name, output_names[index]);
+            }
+            const std::array<std::uint32_t, 8U> values{
+                input_words[0],
+                control & 0x1FU,
+                (control >> 8U) & 0x1FU,
+                (control >> 5U) & 0x7U,
+                (control >> 29U) & 1U,
+                (control >> 16U) & 0x1FU,
+                (control >> 24U) & 0x1FU,
+                (control >> 21U) & 0x7U,
+            };
+            for (std::size_t index = 0U; index < output_addresses.size(); ++index)
+            {
+                core.memory.write32_be(output_addresses[index], values[index]);
+            }
+        });
+
+    dispatcher.register_function(
+        "gx2",
         "GX2SetBlendConstantColor",
         [](EspressoCore& core) {
             if (!core.gx2.initialized)

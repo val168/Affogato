@@ -25413,6 +25413,108 @@ void gx2_init_blend_control_reg_hle_tests()
            "coreinit::GX2InitBlendControlReg");
 }
 
+void gx2_get_blend_control_reg_hle_tests()
+{
+    constexpr std::uint32_t return_address = 0x027508A4U;
+    constexpr std::uint32_t input_address = 0x503U;
+    constexpr std::uint32_t stack_pointer = 0x3000U;
+    constexpr std::array<std::uint32_t, 8U> outputs{
+        0x601U, 0x612U, 0x623U, 0x634U,
+        0x645U, 0x656U, 0x667U, 0x678U};
+    constexpr std::array<std::uint32_t, 8U> expected{
+        3U, 4U, 29U, 5U, 1U, 3U, 31U, 7U};
+
+    EspressoCore core(0x10000U);
+    register_gx2_hle(core.hle);
+    const std::uint32_t import =
+        core.hle.bind_import("gx2", "GX2GetBlendControlReg");
+    const std::uint32_t wrong_library =
+        core.hle.bind_import("coreinit", "GX2GetBlendControlReg");
+    assert(import != 0U && wrong_library != 0U);
+    assert(!core.gx2.initialized);
+    core.memory.write32_be(input_address, 3U);
+    core.memory.write32_be(input_address + 4U, 0x3FE31DA4U);
+    core.memory.write32_be(stack_pointer + 8U, outputs[7]);
+    for (const std::uint32_t output : outputs)
+    {
+        core.memory.write32_be(output, 0xDEADBEEFU);
+    }
+    core.state.gpr.fill(0xB1000000U);
+    core.state.gpr[1] = stack_pointer;
+    core.state.gpr[3] = input_address;
+    for (std::size_t index = 0U; index < 7U; ++index)
+    {
+        core.state.gpr[index + 4U] = outputs[index];
+    }
+    core.state.cr = 0x12345678U;
+    core.state.xer = 0xA5A55A5AU;
+    core.state.ctr = 0x87654321U;
+    core.state.fpscr = 0x5A5AA55AU;
+    const auto gprs_before = core.state.gpr;
+    const auto fprs_before = core.state.fpr;
+    const auto ps1_before = core.state.fpr_ps1;
+
+    const auto invoke = [&](std::uint32_t function) {
+        core.state.cia = function;
+        core.state.lr = return_address;
+        return core.run(1U);
+    };
+    const RunResult result = invoke(import);
+    assert(result.reason == StopReason::instruction_limit);
+    assert(result.steps == 1U && core.state.cia == return_address);
+    for (std::size_t index = 0U; index < outputs.size(); ++index)
+    {
+        assert(core.memory.read32_be(outputs[index]) == expected[index]);
+    }
+    assert(core.memory.read32_be(input_address) == 3U);
+    assert(core.memory.read32_be(input_address + 4U) == 0x3FE31DA4U);
+    assert(core.memory.read32_be(stack_pointer + 8U) == outputs[7]);
+    assert(core.state.gpr == gprs_before);
+    assert(core.state.fpr == fprs_before && core.state.fpr_ps1 == ps1_before);
+    assert(core.state.cr == 0x12345678U);
+    assert(core.state.xer == 0xA5A55A5AU);
+    assert(core.state.ctr == 0x87654321U);
+    assert(core.state.fpscr == 0x5A5AA55AU);
+
+    // The structure is snapshotted before any output can alias its target word.
+    core.state.gpr[4] = input_address;
+    assert(invoke(import).reason == StopReason::instruction_limit);
+    assert(core.memory.read32_be(input_address) == expected[0]);
+    assert(core.memory.read32_be(outputs[1]) == expected[1]);
+    assert(core.memory.read32_be(outputs[6]) == expected[6]);
+
+    for (std::size_t index = 0U; index < 7U; ++index)
+    {
+        core.memory.write32_be(outputs[index], 0x11111111U +
+            static_cast<std::uint32_t>(index));
+        core.state.gpr[index + 4U] = outputs[index];
+    }
+    core.memory.write32_be(stack_pointer + 8U, 0x10000U);
+    const RunResult late_output_fault = invoke(import);
+    assert(late_output_fault.reason == StopReason::memory_fault);
+    for (std::size_t index = 0U; index < 7U; ++index)
+    {
+        assert(core.memory.read32_be(outputs[index]) ==
+               0x11111111U + static_cast<std::uint32_t>(index));
+    }
+
+    core.memory.write32_be(stack_pointer + 8U, outputs[7]);
+    core.state.gpr[1] = 0xFFFFFFFCU;
+    const RunResult stack_wrap = invoke(import);
+    assert(stack_wrap.reason == StopReason::hle_error);
+    assert(stack_wrap.detail.find("stack output wraps") != std::string::npos);
+
+    core.state.gpr[1] = stack_pointer;
+    core.state.gpr[3] = 0xFFFFFFFCU;
+    const RunResult input_wrap = invoke(import);
+    assert(input_wrap.reason == StopReason::hle_error);
+    assert(input_wrap.detail.find("input range wraps") != std::string::npos);
+
+    const RunResult wrong_library_result = invoke(wrong_library);
+    assert(wrong_library_result.reason == StopReason::unimplemented_hle_call);
+    assert(wrong_library_result.hle_call == "coreinit::GX2GetBlendControlReg");
+}
+
 void gx2_set_blend_constant_color_hle_tests()
 {
     constexpr std::uint32_t return_address = 0x027508B4U;
@@ -40097,6 +40199,7 @@ int main(int argc, char* argv[])
     gx2_get_color_control_reg_hle_tests();
     gx2_set_blend_control_hle_tests();
     gx2_init_blend_control_reg_hle_tests();
+    gx2_get_blend_control_reg_hle_tests();
     gx2_set_blend_constant_color_hle_tests();
     gx2_init_blend_constant_color_reg_hle_tests();
     gx2_get_blend_constant_color_reg_hle_tests();
