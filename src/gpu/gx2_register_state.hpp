@@ -53,6 +53,7 @@ public:
                 // command translator; recording is not GPU execution.
                 draw_calls_.push_back(command);
                 draw_vertex_buffers_.push_back(vertex_buffers_);
+                draw_fetch_shaders_.push_back(fetch_shader_);
                 continue;
             }
             if (command.type == cpu::espresso::Gx2CommandType::set_vertex_buffer)
@@ -63,6 +64,11 @@ public:
                     vertex_buffers_[command.vertex_buffer->index] =
                         command.vertex_buffer;
                 }
+                continue;
+            }
+            if (command.type == cpu::espresso::Gx2CommandType::set_fetch_shader)
+            {
+                fetch_shader_ = command.fetch_shader;
                 continue;
             }
             if (command.type == cpu::espresso::Gx2CommandType::flush ||
@@ -214,6 +220,19 @@ public:
         return draw_vertex_buffers_;
     }
 
+    [[nodiscard]] const std::optional<cpu::espresso::Gx2FetchShaderBinding>&
+    fetch_shader() const noexcept
+    {
+        return fetch_shader_;
+    }
+
+    [[nodiscard]] std::span<const std::optional<
+        cpu::espresso::Gx2FetchShaderBinding>>
+    draw_fetch_shaders() const noexcept
+    {
+        return draw_fetch_shaders_;
+    }
+
 private:
     struct RegisterValue
     {
@@ -230,6 +249,9 @@ private:
     std::vector<std::array<
         std::optional<cpu::espresso::Gx2VertexBufferBinding>, 16U>>
         draw_vertex_buffers_;
+    std::optional<cpu::espresso::Gx2FetchShaderBinding> fetch_shader_;
+    std::vector<std::optional<cpu::espresso::Gx2FetchShaderBinding>>
+        draw_fetch_shaders_;
 };
 
 }

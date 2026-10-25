@@ -3441,6 +3441,87 @@ void register_gx2_hle(HleDispatcher& dispatcher)
 
     dispatcher.register_function(
         "gx2",
+        "GX2SetFetchShader",
+        [](EspressoCore& core) {
+            constexpr const char* api_name = "gx2::GX2SetFetchShader";
+            constexpr std::uint32_t maximum_program_size =
+                gx2_max_fetch_attributes * gx2_fetch_shader_instruction_size;
+            const std::uint32_t descriptor_address = core.state.gpr[3];
+            if (descriptor_address == 0U || (descriptor_address & 3U) != 0U)
+            {
+                throw HleExecutionError(
+                    std::string(api_name) + ": descriptor is null or misaligned");
+            }
+            if (static_cast<std::uint64_t>(descriptor_address) +
+                    gx2_fetch_shader_struct_size >
+                guest_address_space_end)
+            {
+                throw HleExecutionError(
+                    std::string(api_name) + ": descriptor range wraps guest address space");
+            }
+
+            Gx2FetchShaderBinding binding{};
+            binding.descriptor_address = descriptor_address;
+            binding.type = core.memory.read32_be(descriptor_address + 0x00U);
+            binding.program_resources = core.memory.read32_be(descriptor_address + 0x04U);
+            binding.program_size = core.memory.read32_be(descriptor_address + 0x08U);
+            binding.program_address = core.memory.read32_be(descriptor_address + 0x0CU);
+            binding.attribute_count = core.memory.read32_be(descriptor_address + 0x10U);
+            binding.divisor_count = core.memory.read32_be(descriptor_address + 0x14U);
+            binding.divisors[0] = core.memory.read32_be(descriptor_address + 0x18U);
+            binding.divisors[1] = core.memory.read32_be(descriptor_address + 0x1CU);
+
+            if (binding.type != 0U)
+            {
+                throw HleExecutionError(
+                    std::string(api_name) + ": only non-tessellated fetch shaders are supported");
+            }
+            if (binding.attribute_count > gx2_max_fetch_attributes ||
+                binding.divisor_count > binding.divisors.size() ||
+                binding.program_size > maximum_program_size ||
+                (binding.program_size % gx2_fetch_shader_instruction_size) != 0U)
+            {
+                throw HleExecutionError(
+                    std::string(api_name) + ": invalid fetch-shader descriptor dimensions");
+            }
+            if (binding.program_size != 0U &&
+                (binding.program_address == 0U ||
+                 (binding.program_address & 3U) != 0U))
+            {
+                throw HleExecutionError(
+                    std::string(api_name) + ": program is null or misaligned");
+            }
+            if (static_cast<std::uint64_t>(binding.program_address) +
+                    binding.program_size >
+                guest_address_space_end)
+            {
+                throw HleExecutionError(
+                    std::string(api_name) + ": program range wraps guest address space");
+            }
+
+            binding.program_words.reserve(binding.program_size / sizeof(std::uint32_t));
+            for (std::uint32_t offset = 0U; offset < binding.program_size;
+                 offset += sizeof(std::uint32_t))
+            {
+                binding.program_words.push_back(
+                    core.memory.read32_be(binding.program_address + offset));
+            }
+
+            core.gx2.pending_commands.push_back({
+                Gx2CommandType::set_fetch_shader,
+                0U,
+                0U,
+                0U,
+                0U,
+                0U,
+                std::nullopt,
+                std::nullopt,
+                binding});
+            core.gx2.fetch_shader = std::move(binding);
+        });
+
+    dispatcher.register_function(
+        "gx2",
         "GX2SetAttribBuffer",
         [](EspressoCore& core) {
             const std::uint32_t index = core.state.gpr[3];

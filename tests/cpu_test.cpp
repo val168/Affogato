@@ -24283,6 +24283,115 @@ void gx2_draw_ex_hle_tests()
     assert(take_gx2_commands(core.gx2).empty());
     assert(core.gx2.vertex_buffers[vertex_buffer.index] ==
            replacement_vertex_buffer);
+
+    constexpr std::uint32_t fetch_shader_descriptor_address = 0x300U;
+    constexpr std::uint32_t fetch_shader_program_address = 0x400U;
+    const std::array<std::uint32_t, 8U> fetch_shader_descriptor{
+        0U, 0xA5U, 16U, fetch_shader_program_address, 1U, 0U, 0U, 0U};
+    const std::array<std::uint32_t, 4U> fetch_shader_program{
+        0x01234567U, 0x89ABCDEFU, 0xFEDCBA98U, 0x76543210U};
+    for (std::size_t index = 0U; index < fetch_shader_descriptor.size(); ++index)
+    {
+        core.memory.write32_be(
+            fetch_shader_descriptor_address +
+                static_cast<std::uint32_t>(index * sizeof(std::uint32_t)),
+            fetch_shader_descriptor[index]);
+    }
+    for (std::size_t index = 0U; index < fetch_shader_program.size(); ++index)
+    {
+        core.memory.write32_be(
+            fetch_shader_program_address +
+                static_cast<std::uint32_t>(index * sizeof(std::uint32_t)),
+            fetch_shader_program[index]);
+    }
+    core.state.gpr[3] = fetch_shader_descriptor_address;
+    core.state.lr = return_address;
+    core.state.cia = core.hle.bind_import("gx2", "GX2SetFetchShader");
+    const auto fetch_shader_gprs_before = core.state.gpr;
+    assert(core.run(1U).reason == StopReason::instruction_limit);
+    assert(core.state.gpr == fetch_shader_gprs_before);
+    const auto fetch_shader_commands = take_gx2_commands(core.gx2);
+    assert(fetch_shader_commands.size() == 1U);
+    assert(fetch_shader_commands.front().type ==
+           Gx2CommandType::set_fetch_shader);
+    Gx2FetchShaderBinding expected_fetch_shader{};
+    expected_fetch_shader.descriptor_address = fetch_shader_descriptor_address;
+    expected_fetch_shader.type = fetch_shader_descriptor[0U];
+    expected_fetch_shader.program_resources = fetch_shader_descriptor[1U];
+    expected_fetch_shader.program_size = fetch_shader_descriptor[2U];
+    expected_fetch_shader.program_address = fetch_shader_program_address;
+    expected_fetch_shader.attribute_count = fetch_shader_descriptor[4U];
+    expected_fetch_shader.divisor_count = fetch_shader_descriptor[5U];
+    expected_fetch_shader.program_words.assign(
+        fetch_shader_program.begin(), fetch_shader_program.end());
+    assert(fetch_shader_commands.front().fetch_shader == expected_fetch_shader);
+    assert(core.gx2.fetch_shader == expected_fetch_shader);
+    register_state.apply(fetch_shader_commands);
+    assert(register_state.fetch_shader() == expected_fetch_shader);
+
+    run_draw_variant(
+        "GX2DrawEx",
+        {5U, 2U, 0U, 1U, 0U, 0U, 0U},
+        Gx2DrawCall{5U, 2U, false, 0U, 0U, 0U, 1U, 0U});
+    assert(register_state.draw_fetch_shaders().size() == 8U);
+    assert(register_state.draw_fetch_shaders()[7U] == expected_fetch_shader);
+
+    constexpr std::uint32_t replacement_descriptor_address = 0x340U;
+    constexpr std::uint32_t replacement_program_address = 0x440U;
+    const std::array<std::uint32_t, 8U> replacement_descriptor{
+        0U, 0x5AU, 16U, replacement_program_address, 2U, 2U, 7U, 11U};
+    const std::array<std::uint32_t, 4U> replacement_program{
+        0xAAAAAAAAU, 0xBBBBBBBBU, 0xCCCCCCCCU, 0xDDDDDDDDU};
+    for (std::size_t index = 0U; index < replacement_descriptor.size(); ++index)
+    {
+        core.memory.write32_be(
+            replacement_descriptor_address +
+                static_cast<std::uint32_t>(index * sizeof(std::uint32_t)),
+            replacement_descriptor[index]);
+    }
+    for (std::size_t index = 0U; index < replacement_program.size(); ++index)
+    {
+        core.memory.write32_be(
+            replacement_program_address +
+                static_cast<std::uint32_t>(index * sizeof(std::uint32_t)),
+            replacement_program[index]);
+    }
+    core.state.gpr[3] = replacement_descriptor_address;
+    core.state.lr = return_address;
+    core.state.cia = core.hle.bind_import("gx2", "GX2SetFetchShader");
+    assert(core.run(1U).reason == StopReason::instruction_limit);
+    const auto replacement_fetch_commands = take_gx2_commands(core.gx2);
+    assert(replacement_fetch_commands.size() == 1U);
+    register_state.apply(replacement_fetch_commands);
+    Gx2FetchShaderBinding expected_replacement_fetch{};
+    expected_replacement_fetch.descriptor_address = replacement_descriptor_address;
+    expected_replacement_fetch.type = replacement_descriptor[0U];
+    expected_replacement_fetch.program_resources = replacement_descriptor[1U];
+    expected_replacement_fetch.program_size = replacement_descriptor[2U];
+    expected_replacement_fetch.program_address = replacement_program_address;
+    expected_replacement_fetch.attribute_count = replacement_descriptor[4U];
+    expected_replacement_fetch.divisor_count = replacement_descriptor[5U];
+    expected_replacement_fetch.divisors = {7U, 11U};
+    expected_replacement_fetch.program_words.assign(
+        replacement_program.begin(), replacement_program.end());
+    assert(register_state.fetch_shader() == expected_replacement_fetch);
+    assert(register_state.draw_fetch_shaders()[7U] == expected_fetch_shader);
+
+    run_draw_variant(
+        "GX2DrawEx",
+        {5U, 1U, 0U, 1U, 0U, 0U, 0U},
+        Gx2DrawCall{5U, 1U, false, 0U, 0U, 0U, 1U, 0U});
+    assert(register_state.draw_fetch_shaders().size() == 9U);
+    assert(register_state.draw_fetch_shaders()[8U] ==
+           expected_replacement_fetch);
+
+    core.memory.write32_be(replacement_descriptor_address + 8U, 12U);
+    core.state.gpr[3] = replacement_descriptor_address;
+    core.state.lr = return_address;
+    core.state.cia = core.hle.bind_import("gx2", "GX2SetFetchShader");
+    assert(core.run(1U).reason == StopReason::hle_error);
+    assert(take_gx2_commands(core.gx2).empty());
+    assert(core.gx2.fetch_shader == expected_replacement_fetch);
 }
 
 void gx2_gpu_time_to_cpu_time_hle_tests()
