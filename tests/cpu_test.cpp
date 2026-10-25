@@ -770,7 +770,13 @@ void decoder_tests()
     assert(psq_stx.fp_register == 13U && psq_stx.base == 9U && psq_stx.source == 8U);
     assert(psq_stx.quantized_register == 5U && psq_stx.paired_single_w);
     assert(decode(psq_stx_word | 1U).opcode == Opcode::unsupported);
-    assert(decode(psq_stx_word | (1U << 6U)).opcode == Opcode::unsupported);
+    const std::uint32_t psq_stux_word = psq_stx_word | (1U << 6U);
+    const DecodedInstruction psq_stux = decode(psq_stux_word);
+    assert(psq_stux.opcode == Opcode::paired_single_quantized_store_indexed_update);
+    assert(psq_stux.fp_register == 13U && psq_stux.base == 9U && psq_stux.source == 8U);
+    assert(psq_stux.quantized_register == 5U && psq_stux.paired_single_w);
+    assert(decode(psq_stux_word | 1U).opcode == Opcode::unsupported);
+    assert(decode(psq_stux_word & ~(0x1FU << 16U)).opcode == Opcode::unsupported);
 
     const DecodedInstruction lha = decode(0xA98A0000U); // lha r12, 0(r10)
     assert(lha.opcode == Opcode::load_halfword_algebraic);
@@ -30808,6 +30814,23 @@ void paired_single_quantized_store_indexed_tests()
     assert(zero_base.memory.read32_be(0x40U) == std::bit_cast<std::uint32_t>(-3.0F));
     assert(zero_base.memory.read32_be(0x44U) == std::bit_cast<std::uint32_t>(7.0F));
 
+    // Update writes the effective address back only after a complete store.
+    EspressoCore update(0x1000U);
+    update.state.gpr[5] = 0x100U;
+    update.state.gpr[6] = 0x20U;
+    update.state.fpr[7] = double_bits(2.5);
+    update.state.fpr_ps1[7] = double_bits(-1.25);
+    update.memory.write32_be(0U, encode_psq_stx(7U, 5U, 6U, false, 0U) | (1U << 6U));
+    assert(update.step() == StepResult::executed);
+    assert(update.memory.read32_be(0x120U) == std::bit_cast<std::uint32_t>(2.5F));
+    assert(update.memory.read32_be(0x124U) == std::bit_cast<std::uint32_t>(-1.25F));
+    assert(update.state.gpr[5] == 0x120U);
+    const RunResult update_trace = update.run(0U);
+    assert(update_trace.instruction_history.back().opcode_name == "psq_stux");
+    assert(update_trace.instruction_history.back().has_destination);
+    assert(update_trace.instruction_history.back().destination_register == 5U);
+    assert(update_trace.instruction_history.back().destination_value == 0x120U);
+
     // An unmapped second lane faults before either lane is written.
     EspressoCore fault(0x1000U);
     fault.memory.map_region(0x2000U, 4U);
@@ -30825,6 +30848,30 @@ void paired_single_quantized_store_indexed_tests()
     assert(fault_result.instruction_history.front().opcode_name == "psq_stx");
     assert(!fault_result.instruction_history.front().completed);
     assert(fault_result.instruction_history.front().effective_address == 0x2000U);
+
+    EspressoCore update_fault(0x1000U);
+    update_fault.memory.map_region(0x2000U, 4U);
+    update_fault.memory.write32_be(0x2000U, 0x12345678U);
+    update_fault.state.gpr[5] = 0x1FF0U;
+    update_fault.state.gpr[6] = 0x10U;
+    update_fault.state.fpr[7] = double_bits(1.0);
+    update_fault.state.fpr_ps1[7] = double_bits(2.0);
+    update_fault.memory.write32_be(0U,
+        encode_psq_stx(7U, 5U, 6U, false, 0U) | (1U << 6U));
+    assert(update_fault.run(1U).reason == StopReason::memory_fault);
+    assert(update_fault.state.gpr[5] == 0x1FF0U);
+    assert(update_fault.memory.read32_be(0x2000U) == 0x12345678U);
+
+    EspressoCore invalid_gqr(0x1000U);
+    invalid_gqr.state.gpr[5] = 0x180U;
+    invalid_gqr.state.gpr[6] = 0x10U;
+    invalid_gqr.state.gqr[2] = 2U;
+    invalid_gqr.memory.write8(0x190U, 0xA5U);
+    invalid_gqr.memory.write32_be(0U,
+        encode_psq_stx(7U, 5U, 6U, true, 2U) | (1U << 6U));
+    assert(invalid_gqr.run(1U).reason == StopReason::unsupported_instruction);
+    assert(invalid_gqr.state.gpr[5] == 0x180U);
+    assert(invalid_gqr.memory.read8(0x190U) == 0xA5U);
 }
 
 void paired_single_merge00_tests()

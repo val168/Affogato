@@ -10839,6 +10839,28 @@ void recompiler_psq_stx_differential_tests()
     assert(history.has_paired_fp_state && history.paired_fp_quantized_store);
     assert(history.paired_fp_store_value0 == std::bit_cast<std::uint32_t>(1.25F));
 
+    EspressoCore update_interpreted(0x1000U);
+    EspressoCore update_compiled(0x1000U);
+    for (EspressoCore* core : {&update_interpreted, &update_compiled})
+    {
+        core->state.gpr[5] = 0x300U;
+        core->state.gpr[6] = 0x24U;
+        core->state.fpr[8] = double_bits(-3.0);
+        core->state.fpr_ps1[8] = double_bits(4.5);
+    }
+    const auto [update_result, update_stats] = run_pair(
+        update_interpreted, update_compiled,
+        encode_psq_stx(8U, 5U, 6U, false, 0U) | (1U << 6U));
+    assert(update_result.reason == StopReason::instruction_limit && update_result.steps == 1U);
+    assert(update_compiled.memory.read32_be(0x324U) == std::bit_cast<std::uint32_t>(-3.0F));
+    assert(update_compiled.memory.read32_be(0x328U) == std::bit_cast<std::uint32_t>(4.5F));
+    assert(update_compiled.state.gpr[5] == 0x324U);
+    assert(update_stats.native_instructions == 1U && update_stats.interpreter_fallbacks == 0U);
+    const InstructionHistoryEntry& update_history = update_result.instruction_history.back();
+    assert(update_history.opcode_name == "psq_stux" && update_history.completed);
+    assert(update_history.has_destination && update_history.destination_register == 5U);
+    assert(update_history.destination_value == 0x324U);
+
     // RA=0 is literal zero while RB=0 remains the real GPR0 index; W=1 stores
     // only PS0 and the existing GQR U8 quantizer is shared with psq_st.
     EspressoCore scalar_interpreted(0x1000U);
@@ -10874,14 +10896,15 @@ void recompiler_psq_stx_differential_tests()
     }
     const auto [fault, fault_stats] = run_pair(
         fault_interpreted, fault_compiled,
-        encode_psq_stx(8U, 5U, 6U, false, 0U));
+        encode_psq_stx(8U, 5U, 6U, false, 0U) | (1U << 6U));
     assert(fault.reason == StopReason::memory_fault);
     assert(fault.detail.find("write 8 byte(s) at guest address 0x00002000") !=
         std::string::npos);
     assert(fault_compiled.memory.read32_be(0x2000U) == 0xAABBCCDDU);
     assert(fault_compiled.state.cia == start);
     assert(!fault.instruction_history.back().completed);
-    assert(fault.instruction_history.back().opcode_name == "psq_stx");
+    assert(fault.instruction_history.back().opcode_name == "psq_stux");
+    assert(fault_compiled.state.gpr[5] == 0x1FF0U);
     assert(fault.instruction_history.back().has_effective_address &&
         fault.instruction_history.back().effective_address == 0x2000U);
     assert(fault_stats.native_instructions == 0U && fault_stats.interpreter_fallbacks == 0U);

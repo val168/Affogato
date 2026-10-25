@@ -517,6 +517,7 @@ void set_xer_carry(CpuState& state, bool carry) noexcept
             instruction.opcode == Opcode::paired_single_quantized_load_indexed_update ||
             instruction.opcode == Opcode::paired_single_quantized_store ||
             instruction.opcode == Opcode::paired_single_quantized_store_indexed ||
+            instruction.opcode == Opcode::paired_single_quantized_store_indexed_update ||
             instruction.opcode == Opcode::load_halfword_algebraic ||
             instruction.opcode == Opcode::store_halfword ||
             instruction.opcode == Opcode::store_halfword_update ||
@@ -781,6 +782,7 @@ void set_xer_carry(CpuState& state, bool carry) noexcept
     case Opcode::paired_single_quantized_load_indexed_update: return "psq_lux";
     case Opcode::paired_single_quantized_store: return "psq_st";
     case Opcode::paired_single_quantized_store_indexed: return "psq_stx";
+    case Opcode::paired_single_quantized_store_indexed_update: return "psq_stux";
     case Opcode::condition_bit_and: return "crand";
     case Opcode::condition_bit_and_complement: return "crandc";
     case Opcode::condition_bit_or: return "cror";
@@ -1105,9 +1107,12 @@ void add_history_source(
         return entry;
     }
     if (opcode == Opcode::paired_single_quantized_store ||
-        opcode == Opcode::paired_single_quantized_store_indexed)
+        opcode == Opcode::paired_single_quantized_store_indexed ||
+        opcode == Opcode::paired_single_quantized_store_indexed_update)
     {
-        const bool indexed = opcode == Opcode::paired_single_quantized_store_indexed;
+        const bool indexed = opcode != Opcode::paired_single_quantized_store;
+        const bool update = opcode ==
+            Opcode::paired_single_quantized_store_indexed_update;
         entry.has_effective_address = true;
         const std::uint32_t base = instruction.base == 0U
             ? 0U : state.gpr[instruction.base];
@@ -1132,6 +1137,11 @@ void add_history_source(
         entry.paired_fp_store_type = static_cast<std::uint8_t>(
             state.gqr[instruction.quantized_register] & 0x7U);
         entry.paired_fp_store_w = instruction.paired_single_w;
+        if (update)
+        {
+            entry.has_destination = true;
+            entry.destination_register = instruction.base;
+        }
         return entry;
     }
     if (opcode == Opcode::move_condition_register_from_xer)
@@ -6006,11 +6016,13 @@ StepResult EspressoCore::step()
 
     case Opcode::paired_single_quantized_store:
     case Opcode::paired_single_quantized_store_indexed:
+    case Opcode::paired_single_quantized_store_indexed_update:
     {
         const std::uint32_t base = instruction.base == 0U
             ? 0U : state.gpr[instruction.base];
-        const std::uint32_t address = instruction.opcode ==
-            Opcode::paired_single_quantized_store_indexed
+        const bool indexed = instruction.opcode !=
+            Opcode::paired_single_quantized_store;
+        const std::uint32_t address = indexed
                 ? base + state.gpr[instruction.source]
                 : base + static_cast<std::uint32_t>(instruction.immediate);
         const std::uint32_t gqr = state.gqr[instruction.quantized_register];
@@ -6097,6 +6109,10 @@ StepResult EspressoCore::step()
         if (!instruction.paired_single_w)
         {
             store_lane(address + static_cast<std::uint32_t>(lane_width), *value1);
+        }
+        if (instruction.opcode == Opcode::paired_single_quantized_store_indexed_update)
+        {
+            state.gpr[instruction.base] = address;
         }
         pending_history_entry_.paired_fp_store_value0 = *value0;
         pending_history_entry_.paired_fp_store_value1 = *value1;

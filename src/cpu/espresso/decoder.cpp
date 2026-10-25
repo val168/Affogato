@@ -59,6 +59,18 @@ DecodedInstruction decode(std::uint32_t raw) noexcept
             instruction.paired_single_w = field(raw, 10U, 1U) != 0U;
             instruction.quantized_register = static_cast<std::uint8_t>(field(raw, 7U, 0x7U));
         }
+        else if (field(raw, 1U, 0x3FU) == 39U && (raw & 1U) == 0U)
+        {
+            instruction.base = static_cast<std::uint8_t>(field(raw, 16U, 0x1FU));
+            if (instruction.base != 0U)
+            {
+                instruction.opcode = Opcode::paired_single_quantized_store_indexed_update;
+                instruction.fp_register = static_cast<std::uint8_t>(field(raw, 21U, 0x1FU));
+                instruction.source = static_cast<std::uint8_t>(field(raw, 11U, 0x1FU));
+                instruction.paired_single_w = field(raw, 10U, 1U) != 0U;
+                instruction.quantized_register = static_cast<std::uint8_t>(field(raw, 7U, 0x7U));
+            }
+        }
         else if ((field(raw, 1, 0x3FFU) == 40U ||
              field(raw, 1, 0x3FFU) == 136U ||
              field(raw, 1, 0x3FFU) == 264U) &&
