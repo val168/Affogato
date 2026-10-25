@@ -292,6 +292,14 @@ struct NativeAddzeRecord
 
 using NativeSubfzeRecord = NativeAddzeRecord;
 
+struct NativeSrawRecord
+{
+    std::uint32_t source{};
+    std::uint32_t shift{};
+    std::uint32_t result{};
+    std::uint32_t carry_out{};
+};
+
 struct NativeExtsbRecord
 {
     std::uint32_t source{};
@@ -355,6 +363,7 @@ struct NativeExecutionContext
     std::array<NativeAddzeRecord, 64> addme_records{};
     std::array<NativeAddzeRecord, 64> subfme_records{};
     std::array<NativeSubfzeRecord, 64> subfze_records{};
+    std::array<NativeSrawRecord, 64> sraw_records{};
     std::array<NativeExtsbRecord, 64> extsb_records{};
     std::array<NativeExtshRecord, 64> extsh_records{};
     std::uint64_t memory_access_calls{};
@@ -4016,6 +4025,10 @@ struct BlockCode
     {
         return true;
     }
+    if (insn.opcode == Opcode::arithmetic_shift_right_word)
+    {
+        return true;
+    }
     if (insn.opcode == Opcode::extend_sign_byte ||
         insn.opcode == Opcode::extend_sign_halfword)
     {
@@ -4333,6 +4346,7 @@ struct BlockCode
     case Opcode::paired_single_negative_multiply_subtract: return "ps_nmsub";
     case Opcode::shift_left_word: return "slw";
     case Opcode::shift_right_word: return "srw";
+    case Opcode::arithmetic_shift_right_word: return "sraw";
     case Opcode::arithmetic_shift_right_immediate: return "srawi";
     case Opcode::count_leading_zeros: return "cntlzw";
     case Opcode::load_word_zero: return "lwz";
@@ -4847,6 +4861,111 @@ struct Recompiler::Impl
                     compiler.or_(less, xer_so);
                     compiler.shl(less, imm(28U));
                     x86::Gp cr = compiler.new_gp32("slw_cr0");
+                    compiler.mov(cr, x86::dword_ptr(
+                        state, static_cast<std::int32_t>(offsetof(CpuState, cr))));
+                    compiler.and_(cr, imm(0x0FFFFFFFU));
+                    compiler.or_(cr, less);
+                    compiler.mov(x86::dword_ptr(
+                        state, static_cast<std::int32_t>(offsetof(CpuState, cr))), cr);
+                }
+                break;
+            }
+            case Opcode::arithmetic_shift_right_word:
+            {
+                const std::size_t record_offset = offsetof(NativeExecutionContext,
+                    sraw_records) + index * sizeof(NativeSrawRecord);
+                constexpr std::size_t xer_offset = offsetof(CpuState, xer);
+                x86::Gp source = read_guest_gpr(insn.source);
+                x86::Gp shift = compiler.new_gp32("sraw_shift");
+                compiler.mov(shift, read_guest_gpr(insn.base));
+                compiler.mov(x86::dword_ptr(context,
+                    static_cast<std::int32_t>(record_offset +
+                        offsetof(NativeSrawRecord, source))), source);
+                compiler.mov(x86::dword_ptr(context,
+                    static_cast<std::int32_t>(record_offset +
+                        offsetof(NativeSrawRecord, shift))), shift);
+                compiler.and_(shift, imm(0x3FU));
+
+                x86::Gp result = compiler.new_gp32("sraw_result");
+                compiler.mov(result, source);
+                Label large_result_shift = compiler.new_label();
+                Label result_shift_done = compiler.new_label();
+                compiler.test(shift, imm(0x20U));
+                compiler.jnz(large_result_shift);
+                compiler.sar(result, shift);
+                compiler.jmp(result_shift_done);
+                compiler.bind(large_result_shift);
+                compiler.sar(result, imm(31U));
+                compiler.bind(result_shift_done);
+
+                x86::Gp carry_out = compiler.new_gp32("sraw_carry_out");
+                compiler.mov(carry_out, imm(0U));
+                Label large_carry_shift = compiler.new_label();
+                Label carry_done = compiler.new_label();
+                compiler.test(shift, shift);
+                compiler.jz(carry_done);
+                compiler.test(shift, imm(0x20U));
+                compiler.jnz(large_carry_shift);
+                x86::Gp dropped = compiler.new_gp32("sraw_dropped_bits");
+                compiler.mov(dropped, source);
+                x86::Gp left_shift = compiler.new_gp32("sraw_drop_shift");
+                compiler.mov(left_shift, imm(32U));
+                compiler.sub(left_shift, shift);
+                compiler.shl(dropped, left_shift);
+                compiler.test(dropped, dropped);
+                compiler.setne(carry_out.r8());
+                x86::Gp sign = compiler.new_gp32("sraw_sign");
+                compiler.mov(sign, source);
+                compiler.shr(sign, imm(31U));
+                compiler.and_(carry_out, sign);
+                compiler.jmp(carry_done);
+                compiler.bind(large_carry_shift);
+                compiler.mov(carry_out, source);
+                compiler.shr(carry_out, imm(31U));
+                compiler.bind(carry_done);
+
+                compiler.mov(x86::dword_ptr(context,
+                    static_cast<std::int32_t>(record_offset +
+                        offsetof(NativeSrawRecord, result))), result);
+                compiler.mov(x86::dword_ptr(context,
+                    static_cast<std::int32_t>(record_offset +
+                        offsetof(NativeSrawRecord, carry_out))), carry_out);
+                x86::Gp xer = compiler.new_gp32("sraw_xer");
+                compiler.mov(xer, x86::dword_ptr(
+                    state, static_cast<std::int32_t>(xer_offset)));
+                compiler.and_(xer, imm(~xer_carry_mask));
+                x86::Gp carry_bit = compiler.new_gp32("sraw_carry_bit");
+                compiler.mov(carry_bit, carry_out);
+                compiler.shl(carry_bit, imm(29U));
+                compiler.or_(xer, carry_bit);
+                compiler.mov(x86::dword_ptr(
+                    state, static_cast<std::int32_t>(xer_offset)), xer);
+                write_guest_gpr(insn.destination, result);
+
+                if (insn.record)
+                {
+                    compiler.test(result, result);
+                    x86::Gp less = compiler.new_gp32("sraw_cr0_lt");
+                    x86::Gp greater = compiler.new_gp32("sraw_cr0_gt");
+                    x86::Gp equal = compiler.new_gp32("sraw_cr0_eq");
+                    compiler.mov(less, imm(0U));
+                    compiler.setl(less.r8());
+                    compiler.mov(greater, imm(0U));
+                    compiler.setg(greater.r8());
+                    compiler.mov(equal, imm(0U));
+                    compiler.sete(equal.r8());
+                    compiler.shl(less, imm(3U));
+                    compiler.shl(greater, imm(2U));
+                    compiler.shl(equal, imm(1U));
+                    compiler.or_(less, greater);
+                    compiler.or_(less, equal);
+                    x86::Gp xer_so = compiler.new_gp32("sraw_cr0_so");
+                    compiler.mov(xer_so, x86::dword_ptr(
+                        state, static_cast<std::int32_t>(xer_offset)));
+                    compiler.shr(xer_so, imm(31U));
+                    compiler.or_(less, xer_so);
+                    compiler.shl(less, imm(28U));
+                    x86::Gp cr = compiler.new_gp32("sraw_cr0");
                     compiler.mov(cr, x86::dword_ptr(
                         state, static_cast<std::int32_t>(offsetof(CpuState, cr))));
                     compiler.and_(cr, imm(0x0FFFFFFFU));
@@ -9391,6 +9510,27 @@ RunResult Recompiler::run(EspressoCore& core, std::size_t max_steps)
                 entry.destination_value = record.result;
                 entry.has_carry_input = true;
                 entry.carry_input = record.carry_in != 0U;
+                entry.has_carry_result = true;
+                entry.carry_result = record.carry_out != 0U;
+                core.append_instruction_history(std::move(entry));
+                continue;
+            }
+            if (insn.opcode == Opcode::arithmetic_shift_right_word)
+            {
+                InstructionHistoryEntry entry = native_history(insn, cia);
+                const NativeSrawRecord& record = context.sraw_records[i];
+                entry.source_registers[0] = insn.source;
+                entry.source_values[0] = record.source;
+                entry.source_count = 1U;
+                if (insn.base != insn.source)
+                {
+                    entry.source_registers[1] = insn.base;
+                    entry.source_values[1] = record.shift;
+                    entry.source_count = 2U;
+                }
+                entry.has_destination = true;
+                entry.destination_register = insn.destination;
+                entry.destination_value = record.result;
                 entry.has_carry_result = true;
                 entry.carry_result = record.carry_out != 0U;
                 core.append_instruction_history(std::move(entry));

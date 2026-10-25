@@ -1756,6 +1756,109 @@ void recompiler_subfme_differential_test()
     }
 }
 
+void recompiler_sraw_differential_test()
+{
+    struct Case
+    {
+        std::uint8_t source_register;
+        std::uint8_t destination;
+        std::uint8_t shift_register;
+        std::uint32_t source;
+        std::uint32_t shift;
+        bool record;
+        std::uint32_t initial_xer;
+        std::uint32_t initial_cr;
+        std::uint32_t expected_result;
+        bool expected_carry;
+    };
+    constexpr std::array cases{
+        Case{4U, 3U, 5U, 0x80000001U, 1U, false, 0xA00000A5U,
+            0x12345678U, 0xC0000000U, true},
+        Case{4U, 3U, 5U, 0x80000000U, 1U, false, 0x400000A5U,
+            0xA5C36E91U, 0xC0000000U, false},
+        Case{4U, 3U, 5U, 0x7FFFFFFFU, 1U, false, 0x800000A5U,
+            0xA5C36E91U, 0x3FFFFFFFU, false},
+        Case{4U, 3U, 5U, 0x80000001U, 0U, false, 0xA00000A5U,
+            0x87654321U, 0x80000001U, false},
+        Case{4U, 3U, 5U, 0x80000000U, 32U, true, 0x800000A5U,
+            0xA5C36E91U, 0xFFFFFFFFU, true},
+        Case{4U, 3U, 5U, 0x7FFFFFFFU, 32U, false, 0x400000A5U,
+            0x12345678U, 0U, false},
+        Case{4U, 3U, 5U, 0x80000001U, 63U, false, 0x200000A5U,
+            0x87654321U, 0xFFFFFFFFU, true},
+        Case{4U, 3U, 5U, 0x80000001U, 64U, false, 0xA00000A5U,
+            0xA5C36E91U, 0x80000001U, false},
+        Case{3U, 3U, 3U, 0x80000001U, 0x80000001U, true, 0x80000000U,
+            0x13579BDFU, 0xC0000000U, true},
+    };
+    static_assert(x_form(4U, 3U, 5U, 792U) == 0x7C832E30U);
+
+    for (const Case& test : cases)
+    {
+        EspressoCore interpreted(0x1000U);
+        EspressoCore compiled(0x1000U);
+        const std::uint32_t instruction = x_form(test.source_register,
+            test.destination, test.shift_register, 792U, test.record);
+        for (EspressoCore* core : {&interpreted, &compiled})
+        {
+            core->memory.write32_be(0x100U, instruction);
+            core->state.cia = 0x100U;
+            core->state.gpr.fill(0x10203040U);
+            core->state.gpr[test.source_register] = test.source;
+            core->state.gpr[test.shift_register] = test.shift;
+            core->state.xer = test.initial_xer;
+            core->state.cr = test.initial_cr;
+            core->state.lr = 0x12345678U;
+            core->state.ctr = 0x87654321U;
+            core->state.fpscr = 0x89ABCDEFU;
+        }
+
+        const RunResult oracle = interpreted.run(1U);
+        Recompiler recompiler;
+        const RunResult actual = recompiler.run(compiled, 1U);
+        assert(actual.reason == oracle.reason);
+        assert(actual.steps == oracle.steps && actual.steps == 1U);
+        assert(actual.cia == oracle.cia);
+        assert(compiled.state.gpr == interpreted.state.gpr);
+        assert(compiled.state.cr == interpreted.state.cr);
+        assert(compiled.state.xer == interpreted.state.xer);
+        assert(compiled.state.lr == interpreted.state.lr);
+        assert(compiled.state.ctr == interpreted.state.ctr);
+        assert(compiled.state.fpscr == interpreted.state.fpscr);
+        assert(compiled.state.gpr[test.destination] == test.expected_result);
+        assert(((compiled.state.xer & 0x20000000U) != 0U) == test.expected_carry);
+        assert((compiled.state.xer & ~0x20000000U) ==
+            (test.initial_xer & ~0x20000000U));
+        if (test.record)
+        {
+            const std::uint32_t expected_cr0 = test.expected_result == 0U ? 2U
+                : (test.expected_result & 0x80000000U) != 0U ? 8U : 4U;
+            assert((compiled.state.cr >> 28U) ==
+                (expected_cr0 | (test.initial_xer >> 31U)));
+        }
+        else
+        {
+            assert(compiled.state.cr == test.initial_cr);
+        }
+        assert(recompiler.statistics().native_instructions == 1U);
+        assert(recompiler.statistics().interpreter_fallbacks == 0U);
+        assert(actual.instruction_history.size() == 1U);
+        const InstructionHistoryEntry& history = actual.instruction_history.back();
+        assert(history.completed && history.opcode_name ==
+            (test.record ? "sraw." : "sraw"));
+        assert(history.source_count ==
+            (test.source_register == test.shift_register ? 1U : 2U));
+        assert(history.source_registers[0] == test.source_register);
+        assert(history.source_values[0] == test.source);
+        if (test.source_register != test.shift_register)
+        {
+            assert(history.source_registers[1] == test.shift_register);
+            assert(history.source_values[1] == test.shift);
+        }
+        assert(history.has_carry_result && history.carry_result == test.expected_carry);
+    }
+}
+
 void recompiler_subfze_differential_test()
 {
     struct Case
@@ -8457,6 +8560,7 @@ int main()
     recompiler_adde_differential_test();
     recompiler_addme_differential_test();
     recompiler_subfme_differential_test();
+    recompiler_sraw_differential_test();
     recompiler_subfze_differential_test();
     recompiler_addic_differential_test();
     recompiler_destination_aliases_second_source_test();
