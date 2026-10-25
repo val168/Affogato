@@ -3024,6 +3024,139 @@ extern "C" std::uint32_t native_memory_access(
     }
 }
 
+extern "C" void native_load_word_reserve(
+    NativeExecutionContext* context,
+    CpuState* state,
+    std::uint32_t address,
+    std::uint32_t destination,
+    std::uint32_t instruction_index) noexcept
+{
+    const std::uint32_t flags = 4U; // indexed read
+    constexpr std::uint32_t width = sizeof(std::uint32_t);
+    try
+    {
+        ++context->memory_access_calls;
+        if (destination >= state->gpr.size() ||
+            instruction_index >= context->memory_records.size())
+        {
+            context->failed = true;
+            context->failed_address = address;
+            context->failed_width = width;
+            context->failed_flags = flags;
+            context->failed_instruction_index = instruction_index;
+            return;
+        }
+        NativeMemoryRecord& record = context->memory_records[instruction_index];
+        record.address = address;
+        record.indexed = true;
+        if ((address & 3U) != 0U)
+        {
+            throw GuestMemoryFault(address, width, GuestMemoryAccess::read);
+        }
+        const std::uint32_t value = context->memory->read32_be(address);
+        record.value = value;
+        state->gpr[destination] = value;
+        state->reservation_address = context->memory->reservation_address(address);
+        state->reservation_valid = true;
+    }
+    catch (...)
+    {
+        context->failed = true;
+        context->failed_address = address;
+        context->failed_width = width;
+        context->failed_flags = flags;
+        context->failed_instruction_index = instruction_index;
+        context->fault_cia = context->block_cia + instruction_index * 4U;
+        context->exception = std::current_exception();
+        try
+        {
+            std::rethrow_exception(context->exception);
+        }
+        catch (const GuestMemoryFault& fault)
+        {
+            context->guest_memory_fault = true;
+            context->failed_address = fault.address();
+        }
+        catch (...)
+        {
+        }
+    }
+}
+
+extern "C" void native_store_word_conditional(
+    NativeExecutionContext* context,
+    CpuState* state,
+    std::uint32_t address,
+    std::uint32_t value,
+    std::uint32_t instruction_index) noexcept
+{
+    constexpr std::uint32_t width = sizeof(std::uint32_t);
+    constexpr std::uint32_t flags = 5U; // indexed write
+    try
+    {
+        ++context->memory_access_calls;
+        if (instruction_index >= context->memory_records.size())
+        {
+            context->failed = true;
+            context->failed_address = address;
+            context->failed_width = width;
+            context->failed_flags = flags;
+            context->failed_instruction_index = instruction_index;
+            return;
+        }
+        NativeMemoryRecord& record = context->memory_records[instruction_index];
+        record.address = address;
+        record.value = value;
+        record.indexed = true;
+        if ((address & 3U) != 0U)
+        {
+            throw GuestMemoryFault(address, width, GuestMemoryAccess::write);
+        }
+
+        const std::uint32_t canonical_address = context->memory->reservation_address(address);
+        const bool success = state->reservation_valid &&
+            state->reservation_address == canonical_address;
+        if (success)
+        {
+            if (context->memory->has_write_watchpoint())
+            {
+                context->memory->set_current_guest_cia(
+                    context->block_cia + instruction_index * 4U);
+            }
+            context->memory->write32_be(address, value);
+        }
+
+        // Match the interpreter: a completed conditional-store attempt consumes
+        // the reservation whether or not its address matched.
+        state->reservation_valid = false;
+        const std::uint32_t cr0 =
+            (success ? 0x2U : 0U) | ((state->xer & 0x80000000U) != 0U ? 1U : 0U);
+        state->cr = (state->cr & 0x0FFFFFFFU) | (cr0 << 28U);
+    }
+    catch (...)
+    {
+        context->failed = true;
+        context->failed_address = address;
+        context->failed_width = width;
+        context->failed_flags = flags;
+        context->failed_instruction_index = instruction_index;
+        context->fault_cia = context->block_cia + instruction_index * 4U;
+        context->exception = std::current_exception();
+        try
+        {
+            std::rethrow_exception(context->exception);
+        }
+        catch (const GuestMemoryFault& fault)
+        {
+            context->guest_memory_fault = true;
+            context->failed_address = fault.address();
+        }
+        catch (...)
+        {
+        }
+    }
+}
+
 extern "C" void native_load_multiple_words(
     NativeExecutionContext* context,
     CpuState* state,
@@ -3669,10 +3802,12 @@ struct BlockCode
     case Opcode::store_double_update:
     case Opcode::store_floating_as_integer_word_indexed:
     case Opcode::load_word_indexed:
+    case Opcode::load_word_reserve_indexed:
     case Opcode::load_byte_zero_indexed:
     case Opcode::load_halfword_zero_indexed:
     case Opcode::load_halfword_algebraic_indexed:
     case Opcode::store_word_indexed:
+    case Opcode::store_word_conditional_indexed:
     case Opcode::store_byte_indexed:
     case Opcode::store_halfword_indexed:
     case Opcode::data_cache_block_store:
@@ -3790,6 +3925,7 @@ struct BlockCode
     case Opcode::arithmetic_shift_right_immediate: return "srawi";
     case Opcode::count_leading_zeros: return "cntlzw";
     case Opcode::load_word_zero: return "lwz";
+    case Opcode::load_word_reserve_indexed: return "lwarx";
     case Opcode::load_multiple_word: return "lmw";
     case Opcode::load_string_word_immediate: return "lswi";
     case Opcode::store_string_word_immediate: return "stswi";
@@ -3805,6 +3941,7 @@ struct BlockCode
     case Opcode::load_double: return "lfd";
     case Opcode::load_double_update: return "lfdu";
     case Opcode::store_word: return "stw";
+    case Opcode::store_word_conditional_indexed: return "stwcx.";
     case Opcode::store_word_update: return "stwu";
     case Opcode::store_byte: return "stb";
     case Opcode::store_byte_update: return "stbu";
@@ -3868,10 +4005,12 @@ struct BlockCode
     case Opcode::store_halfword:
     case Opcode::store_halfword_update:
     case Opcode::load_word_indexed:
+    case Opcode::load_word_reserve_indexed:
     case Opcode::load_byte_zero_indexed:
     case Opcode::load_halfword_zero_indexed:
     case Opcode::load_halfword_algebraic_indexed:
     case Opcode::store_word_indexed:
+    case Opcode::store_word_conditional_indexed:
     case Opcode::store_byte_indexed:
     case Opcode::store_halfword_indexed:
     case Opcode::paired_single_quantized_store:
@@ -3919,6 +4058,7 @@ struct BlockCode
     return opcode == Opcode::store_word || opcode == Opcode::store_byte ||
         opcode == Opcode::store_halfword || opcode == Opcode::store_halfword_update ||
         opcode == Opcode::store_word_indexed ||
+        opcode == Opcode::store_word_conditional_indexed ||
         opcode == Opcode::store_byte_update || opcode == Opcode::store_byte_indexed ||
         opcode == Opcode::store_halfword_indexed ||
         opcode == Opcode::store_single || opcode == Opcode::store_single_indexed ||
@@ -3929,10 +4069,14 @@ struct BlockCode
 
 [[nodiscard]] bool is_indexed_memory(Opcode opcode) noexcept
 {
-    return opcode == Opcode::load_word_indexed || opcode == Opcode::load_byte_zero_indexed ||
+    return opcode == Opcode::load_word_indexed ||
+        opcode == Opcode::load_word_reserve_indexed ||
+        opcode == Opcode::load_byte_zero_indexed ||
         opcode == Opcode::load_halfword_zero_indexed ||
         opcode == Opcode::load_halfword_algebraic_indexed ||
-        opcode == Opcode::store_word_indexed || opcode == Opcode::store_byte_indexed ||
+        opcode == Opcode::store_word_indexed ||
+        opcode == Opcode::store_word_conditional_indexed ||
+        opcode == Opcode::store_byte_indexed ||
         opcode == Opcode::store_halfword_indexed ||
         opcode == Opcode::store_single_indexed ||
         opcode == Opcode::store_floating_as_integer_word_indexed ||
@@ -6761,10 +6905,12 @@ struct Recompiler::Impl
             case Opcode::store_double_update:
             case Opcode::store_floating_as_integer_word_indexed:
             case Opcode::load_word_indexed:
+            case Opcode::load_word_reserve_indexed:
             case Opcode::load_byte_zero_indexed:
             case Opcode::load_halfword_zero_indexed:
             case Opcode::load_halfword_algebraic_indexed:
             case Opcode::store_word_indexed:
+            case Opcode::store_word_conditional_indexed:
             case Opcode::store_byte_indexed:
             case Opcode::store_halfword_indexed:
             case Opcode::data_cache_block_store:
@@ -6809,6 +6955,8 @@ struct Recompiler::Impl
                 if (insn.base == 0U)
                 {
                     compiler.mov(address, imm(0));
+                    compiler.mov(x86::dword_ptr(context, static_cast<std::int32_t>(
+                        record_base + offsetof(NativeMemoryRecord, base_value))), imm(0U));
                 }
                 else
                 {
@@ -6857,6 +7005,82 @@ struct Recompiler::Impl
                 compiler.mov(x86::byte_ptr(context, static_cast<std::int32_t>(
                     record_base + offsetof(NativeMemoryRecord, indexed))),
                     imm(indexed ? 1U : 0U));
+
+                if (insn.opcode == Opcode::load_word_reserve_indexed)
+                {
+                    // Flush before the helper updates the architectural RT. The
+                    // reservation is established only after its aligned read succeeds.
+                    flush_guest_gprs();
+                    auto* invoke = static_cast<InvokeNode*>(nullptr);
+                    const auto helper_address = static_cast<std::uint64_t>(
+                        reinterpret_cast<std::uintptr_t>(&native_load_word_reserve));
+                    compiler.invoke(Out(invoke), helper_address,
+                        FuncSignature::build<void, NativeExecutionContext*, CpuState*,
+                            std::uint32_t, std::uint32_t, std::uint32_t>(CallConvId::kCDecl));
+                    invoke->set_arg(0, context);
+                    invoke->set_arg(1, state);
+                    invoke->set_arg(2, address);
+                    invoke->set_arg(3, imm(insn.destination));
+                    invoke->set_arg(4, imm(static_cast<std::uint32_t>(index)));
+
+                    x86::Gp failed = compiler.new_gp32("lwarx_failed");
+                    compiler.mov(failed, x86::byte_ptr(context, static_cast<std::int32_t>(
+                        offsetof(NativeExecutionContext, failed))));
+                    compiler.test(failed, failed);
+                    Label fault = compiler.new_label();
+                    Label completed = compiler.new_label();
+                    compiler.jnz(fault);
+                    if (guest_gpr_initialized[insn.destination])
+                    {
+                        compiler.mov(guest_gprs[insn.destination], x86::dword_ptr(state,
+                            static_cast<std::int32_t>(gpr_offset(insn.destination))));
+                    }
+                    compiler.jmp(completed);
+                    compiler.bind(fault);
+                    compiler.mov(x86::dword_ptr(state, static_cast<std::int32_t>(
+                        offsetof(CpuState, cia))), imm(cia));
+                    x86::Gp executed = compiler.new_gp32("lwarx_failed_count");
+                    compiler.mov(executed, imm(static_cast<std::uint32_t>(index)));
+                    compiler.ret(executed);
+                    compiler.bind(completed);
+                    break;
+                }
+                if (insn.opcode == Opcode::store_word_conditional_indexed)
+                {
+                    // The block builder ends a block at stwcx., so any write to
+                    // translated code is revalidated before another native block runs.
+                    flush_guest_gprs();
+                    auto* invoke = static_cast<InvokeNode*>(nullptr);
+                    const auto helper_address = static_cast<std::uint64_t>(
+                        reinterpret_cast<std::uintptr_t>(&native_store_word_conditional));
+                    compiler.invoke(Out(invoke), helper_address,
+                        FuncSignature::build<void, NativeExecutionContext*, CpuState*,
+                            std::uint32_t, std::uint32_t,
+                            std::uint32_t>(CallConvId::kCDecl));
+                    invoke->set_arg(0, context);
+                    invoke->set_arg(1, state);
+                    invoke->set_arg(2, address);
+                    invoke->set_arg(3, stored_value);
+                    invoke->set_arg(4, imm(static_cast<std::uint32_t>(index)));
+
+                    x86::Gp failed = compiler.new_gp32("stwcx_failed");
+                    compiler.mov(failed, x86::byte_ptr(context, static_cast<std::int32_t>(
+                        offsetof(NativeExecutionContext, failed))));
+                    compiler.test(failed, failed);
+                    Label fault = compiler.new_label();
+                    Label completed = compiler.new_label();
+                    compiler.jnz(fault);
+                    compiler.jmp(completed);
+                    compiler.bind(fault);
+                    compiler.mov(x86::dword_ptr(state, static_cast<std::int32_t>(
+                        offsetof(CpuState, cia))), imm(cia));
+                    x86::Gp executed = compiler.new_gp32("stwcx_failed_count");
+                    compiler.mov(executed, imm(static_cast<std::uint32_t>(index)));
+                    compiler.ret(executed);
+                    compiler.bind(completed);
+                    break;
+                }
+
                 auto* invoke = static_cast<InvokeNode*>(nullptr);
                 const std::uint32_t flags = (store ? 1U : 0U) |
                     (sign_extend ? 2U : 0U) | (indexed ? 4U : 0U);
@@ -7266,7 +7490,8 @@ RunResult Recompiler::run(EspressoCore& core, std::size_t max_steps)
                         candidate.instructions.push_back(decoded);
                         if (decoded.opcode == Opcode::instruction_sync ||
                             decoded.opcode == Opcode::conditional_branch_to_link_register ||
-                            decoded.opcode == Opcode::conditional_branch_to_count_register)
+                            decoded.opcode == Opcode::conditional_branch_to_count_register ||
+                            decoded.opcode == Opcode::store_word_conditional_indexed)
                         {
                             break;
                         }
@@ -8254,6 +8479,7 @@ RunResult Recompiler::run(EspressoCore& core, std::size_t max_steps)
                 }
                 if (insn.opcode == Opcode::store_word ||
                     insn.opcode == Opcode::store_word_indexed ||
+                    insn.opcode == Opcode::store_word_conditional_indexed ||
                     insn.opcode == Opcode::store_word_update)
                 {
                     entry.has_stored_integer_word_value = true;

@@ -1984,6 +1984,173 @@ void recompiler_ps_add_differential_tests()
     }
 }
 
+void recompiler_reservation_instruction_differential_tests()
+{
+    constexpr std::uint32_t start = 0x100U;
+    constexpr std::uint32_t address = 0x208U;
+
+    // lwarx snapshots its effective-address inputs before writing RT, including
+    // when RT aliases either indexed-address register.
+    for (const auto [destination, base, index] : {
+             std::array<std::uint8_t, 3U>{5U, 4U, 6U},
+             std::array<std::uint8_t, 3U>{4U, 4U, 6U},
+             std::array<std::uint8_t, 3U>{6U, 4U, 6U},
+             std::array<std::uint8_t, 3U>{5U, 0U, 0U}})
+    {
+        EspressoCore interpreted(0x1000U);
+        EspressoCore compiled(0x1000U);
+        const std::uint32_t effective_address = base == 0U ? 0x208U : address;
+        const std::uint32_t word = x_form(destination, base, index, 20U);
+        for (EspressoCore* core : {&interpreted, &compiled})
+        {
+            core->memory.write32_be(start, word);
+            core->memory.write32_be(effective_address, 0xA1B2C3D4U);
+            core->state.cia = start;
+            core->state.gpr[destination] = 0xDEADBEEFU;
+            core->state.gpr[0] = 0x208U;
+            core->state.gpr[4] = 0x200U;
+            core->state.gpr[6] = 8U;
+            core->state.cr = 0xA5C39E71U;
+            core->state.xer = 0x81234567U;
+            core->state.reservation_address = 0x44U;
+            core->state.reservation_valid = false;
+        }
+        const RunResult oracle = interpreted.run(1U);
+        Recompiler recompiler;
+        const RunResult actual = recompiler.run(compiled, 1U);
+        assert(actual.reason == oracle.reason);
+        assert(actual.steps == oracle.steps && actual.steps == 1U);
+        assert(actual.cia == oracle.cia);
+        assert(compiled.state.gpr == interpreted.state.gpr);
+        assert(compiled.state.cr == interpreted.state.cr);
+        assert(compiled.state.xer == interpreted.state.xer);
+        assert(compiled.state.reservation_valid == interpreted.state.reservation_valid);
+        assert(compiled.state.reservation_address == interpreted.state.reservation_address);
+        assert(compiled.state.gpr[destination] == 0xA1B2C3D4U);
+        assert(compiled.state.reservation_valid);
+        assert(compiled.state.reservation_address == effective_address);
+        assert(recompiler.statistics().native_instructions == 1U);
+        assert(recompiler.statistics().interpreter_fallbacks == 0U);
+        assert(actual.instruction_history.back().opcode_name == "lwarx");
+        assert(actual.instruction_history.back().has_effective_address);
+        assert(actual.instruction_history.back().effective_address == effective_address);
+    }
+
+    const auto run_stwcx = [&](bool reservation_valid,
+                               std::uint32_t reservation_address,
+                               bool summary_overflow,
+                               bool misaligned) {
+        EspressoCore interpreted(0x1000U);
+        EspressoCore compiled(0x1000U);
+        for (EspressoCore* core : {&interpreted, &compiled})
+        {
+            core->memory.write32_be(start, x_form(5U, 4U, 6U, 150U, true));
+            core->memory.write32_be(address, 0x11223344U);
+            core->state.cia = start;
+            core->state.gpr[4] = 0x200U;
+            core->state.gpr[6] = misaligned ? 9U : 8U;
+            core->state.gpr[5] = 0xAABBCCDDU;
+            core->state.cr = 0x5A5AA5A5U;
+            core->state.xer = summary_overflow ? 0x80000000U : 0x01234567U;
+            core->state.reservation_address = reservation_address;
+            core->state.reservation_valid = reservation_valid;
+        }
+
+        const RunResult oracle = interpreted.run(1U);
+        Recompiler recompiler;
+        const RunResult actual = recompiler.run(compiled, 1U);
+        assert(actual.reason == oracle.reason);
+        assert(actual.steps == oracle.steps);
+        assert(actual.cia == oracle.cia);
+        assert(compiled.state.gpr == interpreted.state.gpr);
+        assert(compiled.state.cr == interpreted.state.cr);
+        assert(compiled.state.xer == interpreted.state.xer);
+        assert(compiled.state.reservation_valid == interpreted.state.reservation_valid);
+        assert(compiled.state.reservation_address == interpreted.state.reservation_address);
+        assert(compiled.memory.read32_be(address) == interpreted.memory.read32_be(address));
+        if (misaligned)
+        {
+            assert(actual.reason == StopReason::memory_fault);
+            assert(actual.detail.find("write 4 byte(s) at guest address 0x00000209") !=
+                   std::string::npos);
+            assert(compiled.state.reservation_valid);
+            assert(compiled.state.cr == 0x5A5AA5A5U);
+            assert(!actual.instruction_history.empty());
+            assert(!actual.instruction_history.back().completed);
+        }
+        else
+        {
+            assert(actual.steps == 1U);
+            assert(!compiled.state.reservation_valid);
+            const bool success = reservation_valid && reservation_address == address;
+            assert(compiled.memory.read32_be(address) ==
+                (success ? 0xAABBCCDDU : 0x11223344U));
+            const std::uint32_t expected_cr0 =
+                (success ? 0x2U : 0U) | (summary_overflow ? 1U : 0U);
+            assert((compiled.state.cr >> 28U) == expected_cr0);
+            assert(recompiler.statistics().native_instructions == 1U);
+            assert(recompiler.statistics().interpreter_fallbacks == 0U);
+            assert(actual.instruction_history.back().opcode_name == "stwcx.");
+            assert(actual.instruction_history.back().effective_address == address);
+        }
+    };
+
+    run_stwcx(true, address, false, false);
+    run_stwcx(true, address, true, false);
+    run_stwcx(false, address, true, false);
+    run_stwcx(true, address + 4U, false, false);
+    run_stwcx(true, address, false, true);
+
+    // A failed lwarx read leaves both RT and any previous reservation intact.
+    EspressoCore interpreted_fault(0x1000U);
+    EspressoCore compiled_fault(0x1000U);
+    for (EspressoCore* core : {&interpreted_fault, &compiled_fault})
+    {
+        core->memory.write32_be(start, x_form(5U, 4U, 6U, 20U));
+        core->state.cia = start;
+        core->state.gpr[4] = 0x1000U;
+        core->state.gpr[6] = 0U;
+        core->state.gpr[5] = 0xDEADBEEFU;
+        core->state.reservation_address = 0x88U;
+        core->state.reservation_valid = true;
+    }
+    const RunResult fault_oracle = interpreted_fault.run(1U);
+    Recompiler fault_recompiler;
+    const RunResult fault_actual = fault_recompiler.run(compiled_fault, 1U);
+    assert(fault_actual.reason == fault_oracle.reason);
+    assert(fault_actual.detail.find("read 4 byte(s)") != std::string::npos);
+    assert(compiled_fault.state.gpr == interpreted_fault.state.gpr);
+    assert(compiled_fault.state.gpr[5] == 0xDEADBEEFU);
+    assert(compiled_fault.state.reservation_valid);
+    assert(compiled_fault.state.reservation_address == 0x88U);
+    assert(!fault_actual.instruction_history.empty());
+    assert(!fault_actual.instruction_history.back().completed);
+
+    EspressoCore misaligned_interpreted(0x1000U);
+    EspressoCore misaligned_compiled(0x1000U);
+    for (EspressoCore* core : {&misaligned_interpreted, &misaligned_compiled})
+    {
+        core->memory.write32_be(start, x_form(5U, 4U, 6U, 20U));
+        core->state.cia = start;
+        core->state.gpr[4] = 0x200U;
+        core->state.gpr[6] = 1U;
+        core->state.gpr[5] = 0xDEADBEEFU;
+        core->state.reservation_address = 0x88U;
+        core->state.reservation_valid = true;
+    }
+    const RunResult misaligned_oracle = misaligned_interpreted.run(1U);
+    Recompiler misaligned_recompiler;
+    const RunResult misaligned_actual = misaligned_recompiler.run(misaligned_compiled, 1U);
+    assert(misaligned_actual.reason == misaligned_oracle.reason);
+    assert(misaligned_actual.detail.find("read 4 byte(s) at guest address 0x00000201") !=
+           std::string::npos);
+    assert(misaligned_compiled.state.gpr == misaligned_interpreted.state.gpr);
+    assert(misaligned_compiled.state.gpr[5] == 0xDEADBEEFU);
+    assert(misaligned_compiled.state.reservation_valid);
+    assert(misaligned_compiled.state.reservation_address == 0x88U);
+    assert(!misaligned_actual.instruction_history.back().completed);
+}
+
 void recompiler_ps_merge10_differential_tests()
 {
     constexpr std::uint32_t start = 0x100U;
@@ -4805,6 +4972,7 @@ int main()
     recompiler_fctiwz_differential_tests();
     recompiler_fabs_differential_tests();
     recompiler_ps_add_differential_tests();
+    recompiler_reservation_instruction_differential_tests();
     recompiler_ps_merge10_differential_tests();
     recompiler_ps_merge00_differential_tests();
     recompiler_stfs_differential_tests();
