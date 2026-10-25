@@ -3439,6 +3439,32 @@ void register_gx2_hle(HleDispatcher& dispatcher)
 
     dispatcher.register_function(
         "gx2",
+        "GX2SetScissorReg",
+        [](EspressoCore& core) {
+            if (!core.gx2.initialized)
+            {
+                throw HleExecutionError(
+                    "gx2::GX2SetScissorReg: GX2 has not been initialized");
+            }
+
+            const std::uint32_t input = core.state.gpr[3];
+            const std::uint32_t top_left = core.memory.read32_be(input);
+            const std::uint32_t bottom_right =
+                core.memory.read32_be(input + 4U);
+            auto& commands = core.gx2.pending_commands;
+            commands.reserve(commands.size() + 2U);
+            commands.push_back({
+                Gx2CommandType::set_context_register,
+                pa_sc_generic_scissor_tl_register,
+                top_left});
+            commands.push_back({
+                Gx2CommandType::set_context_register,
+                pa_sc_generic_scissor_br_register,
+                bottom_right});
+        });
+
+    dispatcher.register_function(
+        "gx2",
         "GX2SetWindowOffset",
         [](EspressoCore& core) {
             if (!core.gx2.initialized)
