@@ -8608,12 +8608,15 @@ void recompiler_memory_tests()
     // the architectural zero base. Check both BE data and sign extension.
     EspressoCore indexed_interpreted(0x1000U);
     EspressoCore indexed_compiled(0x1000U);
-    const std::array<std::uint32_t, 4> indexed_program{
+    const std::array<std::uint32_t, 6> indexed_program{
         x_form(3, 4, 0, 23),  // lwzx r3,r4,r0 (r0 is an ordinary index)
         x_form(3, 4, 0, 151), // stwx r3,r4,r0
         x_form(6, 4, 0, 87),  // lbzx r6,r4,r0
         x_form(7, 4, 5, 343),// lhax r7,r4,r5
+        x_form(8, 4, 0, 534), // lwbrx r8,r4,r0
+        x_form(4, 4, 0, 534), // lwbrx r4,r4,r0 (RA/destination alias)
     };
+    static_assert(x_form(8, 4, 0, 534) == 0x7D04042CU);
     for (EspressoCore* core : {&indexed_interpreted, &indexed_compiled})
     {
         for (std::size_t i = 0; i < indexed_program.size(); ++i)
@@ -8636,6 +8639,10 @@ void recompiler_memory_tests()
     assert(indexed_compiled.state.gpr[3] == 0xFEDCBA98U);
     assert(indexed_compiled.state.gpr[6] == 0x000000FEU);
     assert(indexed_compiled.state.gpr[7] == 0xFFFF8001U);
+    assert(indexed_compiled.state.gpr[8] == 0x98BADCFEU);
+    assert(indexed_compiled.state.gpr[4] == 0x98BADCFEU);
+    assert(indexed_recompiler.statistics().native_instructions == indexed_program.size());
+    assert(indexed_recompiler.statistics().interpreter_fallbacks == 0U);
 
     // A checked store crossing a page boundary advances both page generations
     // and the global write generation exactly once.
