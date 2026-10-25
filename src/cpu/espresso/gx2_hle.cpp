@@ -3109,6 +3109,28 @@ void register_gx2_hle(HleDispatcher& dispatcher)
 
     dispatcher.register_function(
         "gx2",
+        "GX2SetPolygonControlReg",
+        [](EspressoCore& core) {
+            if (!core.gx2.initialized)
+            {
+                throw HleExecutionError(
+                    "gx2::GX2SetPolygonControlReg: GX2 has not been initialized");
+            }
+
+            const std::uint32_t control =
+                core.memory.read32_be(core.state.gpr[3]);
+            auto& commands = core.gx2.pending_commands;
+            commands.reserve(commands.size() + 1U);
+            core.gx2.pa_su_sc_mode_cntl = control;
+            core.gx2.pa_su_sc_mode_cntl_valid = true;
+            commands.push_back({
+                Gx2CommandType::set_context_register,
+                pa_su_sc_mode_cntl_register,
+                control});
+        });
+
+    dispatcher.register_function(
+        "gx2",
         "GX2SetColorControl",
         [](EspressoCore& core) {
             if (!core.gx2.initialized)
