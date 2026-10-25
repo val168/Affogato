@@ -303,6 +303,7 @@ struct NativeExecutionContext
     std::array<NativePsMergeRecord, 64> ps_abs_records{};
     std::array<NativePsMergeRecord, 64> ps_nabs_records{};
     std::array<NativePsMergeRecord, 64> ps_res_records{};
+    std::array<NativePsMergeRecord, 64> ps_rsqrte_records{};
     std::array<NativePsMulRecord, 64> ps_mul_records{};
     std::array<NativePsMulRecord, 64> ps_muls0_records{};
     std::array<NativePsMaddRecord, 64> ps_madd_records{};
@@ -2099,6 +2100,35 @@ extern "C" void native_ps_res(
     state->fpr_ps1[destination] = record.destination_ps1;
 }
 
+extern "C" void native_ps_rsqrte(
+    NativeExecutionContext* context,
+    CpuState* state,
+    std::uint32_t destination,
+    std::uint32_t source,
+    std::uint32_t instruction_index) noexcept
+{
+    if (destination >= state->fpr.size() || source >= state->fpr.size() ||
+        instruction_index >= context->ps_rsqrte_records.size())
+    {
+        context->failed = true;
+        context->failed_instruction_index = instruction_index;
+        return;
+    }
+
+    NativePsMergeRecord& record = context->ps_rsqrte_records[instruction_index];
+    record.source_a_ps0 = state->fpr[source];
+    record.source_a_ps1 = state->fpr_ps1[source];
+    const auto estimate = [](std::uint64_t raw) {
+        const double value = std::bit_cast<double>(raw);
+        const float reciprocal_sqrt = static_cast<float>(1.0 / std::sqrt(value));
+        return std::bit_cast<std::uint64_t>(static_cast<double>(reciprocal_sqrt));
+    };
+    record.destination_ps0 = estimate(record.source_a_ps0);
+    record.destination_ps1 = estimate(record.source_a_ps1);
+    state->fpr[destination] = record.destination_ps0;
+    state->fpr_ps1[destination] = record.destination_ps1;
+}
+
 extern "C" void native_ps_sub(
     NativeExecutionContext* context,
     CpuState* state,
@@ -3809,6 +3839,7 @@ struct BlockCode
     case Opcode::paired_single_absolute_value:
     case Opcode::paired_single_negative_absolute_value:
     case Opcode::paired_single_reciprocal_estimate:
+    case Opcode::paired_single_reciprocal_square_root_estimate:
     case Opcode::paired_single_quantized_load:
     case Opcode::paired_single_quantized_store:
     case Opcode::instruction_sync:
@@ -3931,6 +3962,7 @@ struct BlockCode
     case Opcode::paired_single_absolute_value: return "ps_abs";
     case Opcode::paired_single_negative_absolute_value: return "ps_nabs";
     case Opcode::paired_single_reciprocal_estimate: return "ps_res";
+    case Opcode::paired_single_reciprocal_square_root_estimate: return "ps_rsqrte";
     case Opcode::paired_single_quantized_store: return "psq_st";
     case Opcode::paired_single_quantized_load: return "psq_l";
     case Opcode::instruction_sync: return "isync";
@@ -6346,6 +6378,21 @@ struct Recompiler::Impl
                 invoke->set_arg(4, imm(static_cast<std::uint32_t>(index)));
                 break;
             }
+            case Opcode::paired_single_reciprocal_square_root_estimate:
+            {
+                auto* invoke = static_cast<InvokeNode*>(nullptr);
+                const auto helper_address = static_cast<std::uint64_t>(
+                    reinterpret_cast<std::uintptr_t>(&native_ps_rsqrte));
+                compiler.invoke(Out(invoke), helper_address,
+                    FuncSignature::build<void, NativeExecutionContext*, CpuState*,
+                        std::uint32_t, std::uint32_t, std::uint32_t>(CallConvId::kCDecl));
+                invoke->set_arg(0, context);
+                invoke->set_arg(1, state);
+                invoke->set_arg(2, imm(insn.fp_register));
+                invoke->set_arg(3, imm(insn.fp_source_b));
+                invoke->set_arg(4, imm(static_cast<std::uint32_t>(index)));
+                break;
+            }
             case Opcode::paired_single_subtract:
             {
                 auto* invoke = static_cast<InvokeNode*>(nullptr);
@@ -8113,6 +8160,24 @@ RunResult Recompiler::run(EspressoCore& core, std::size_t max_steps)
             {
                 InstructionHistoryEntry entry = native_history(insn, cia);
                 const NativePsMergeRecord& record = context.ps_res_records[i];
+                entry.has_paired_fp_state = true;
+                entry.paired_fp_unary = true;
+                entry.paired_fp_destination_register = insn.fp_register;
+                entry.paired_fp_source_a_register = insn.fp_source_b;
+                entry.paired_fp_source_b_register = insn.fp_source_b;
+                entry.paired_fp_source_a_ps0 = record.source_a_ps0;
+                entry.paired_fp_source_a_ps1 = record.source_a_ps1;
+                entry.paired_fp_source_b_ps0 = record.source_a_ps0;
+                entry.paired_fp_source_b_ps1 = record.source_a_ps1;
+                entry.paired_fp_destination_ps0 = record.destination_ps0;
+                entry.paired_fp_destination_ps1 = record.destination_ps1;
+                core.append_instruction_history(std::move(entry));
+                continue;
+            }
+            if (insn.opcode == Opcode::paired_single_reciprocal_square_root_estimate)
+            {
+                InstructionHistoryEntry entry = native_history(insn, cia);
+                const NativePsMergeRecord& record = context.ps_rsqrte_records[i];
                 entry.has_paired_fp_state = true;
                 entry.paired_fp_unary = true;
                 entry.paired_fp_destination_register = insn.fp_register;
