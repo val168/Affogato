@@ -88,6 +88,17 @@ namespace
            (static_cast<std::uint32_t>(end) << 1U) | (record ? 1U : 0U);
 }
 
+[[nodiscard]] constexpr std::uint32_t rlwnm_form(
+    std::uint8_t destination, std::uint8_t source, std::uint8_t shift_register,
+    std::uint8_t begin, std::uint8_t end, bool record = false)
+{
+    return (23U << 26U) | (static_cast<std::uint32_t>(source) << 21U) |
+           (static_cast<std::uint32_t>(destination) << 16U) |
+           (static_cast<std::uint32_t>(shift_register) << 11U) |
+           (static_cast<std::uint32_t>(begin) << 6U) |
+           (static_cast<std::uint32_t>(end) << 1U) | (record ? 1U : 0U);
+}
+
 [[nodiscard]] constexpr std::uint32_t rlwimi_form(
     std::uint8_t destination, std::uint8_t source, std::uint8_t shift,
     std::uint8_t begin, std::uint8_t end, bool record)
@@ -3066,6 +3077,85 @@ void recompiler_rlwinm_differential_tests()
     }
 }
 
+void recompiler_rlwnm_differential_tests()
+{
+    constexpr std::uint32_t start = 0x100U;
+    constexpr std::array<std::uint32_t, 5U> inputs{
+        0U, 1U, 0x80000000U, 0xA5C39E71U, 0xFFFFFFFFU};
+    constexpr std::array<std::uint32_t, 6U> shifts{
+        0U, 1U, 31U, 32U, 33U, 0xFFFFFFFFU};
+    constexpr std::array<std::array<std::uint8_t, 2U>, 4U> masks{{
+        {{0U, 31U}}, {{0U, 0U}}, {{8U, 15U}}, {{28U, 3U}}}};
+
+    for (const std::uint32_t input : inputs)
+    {
+        for (const std::uint32_t shift_value : shifts)
+        {
+            for (const auto [begin, end] : masks)
+            {
+                for (const bool record : {false, true})
+                {
+                    for (const std::uint8_t alias_case : {0U, 1U, 2U, 3U})
+                    {
+                        constexpr std::uint8_t source_register = 3U;
+                        constexpr std::uint8_t shift_register = 5U;
+                        const std::uint8_t destination = alias_case == 1U
+                            ? source_register
+                            : alias_case == 2U
+                                ? shift_register
+                                : alias_case == 3U ? source_register : 7U;
+                        const std::uint8_t actual_shift_register = alias_case == 3U
+                            ? source_register
+                            : shift_register;
+                        const std::uint32_t instruction = rlwnm_form(
+                            destination, source_register, actual_shift_register,
+                            begin, end, record);
+
+                        EspressoCore interpreted(0x1000U);
+                        EspressoCore compiled(0x1000U);
+                        for (EspressoCore* machine : {&interpreted, &compiled})
+                        {
+                            machine->memory.write32_be(start, instruction);
+                            machine->state.cia = start;
+                            machine->state.gpr.fill(0x6A5B4C3DU);
+                            machine->state.gpr[source_register] = input;
+                            machine->state.gpr[actual_shift_register] =
+                                alias_case == 3U ? input : shift_value;
+                            machine->state.gpr[destination] =
+                                alias_case == 1U || alias_case == 3U
+                                    ? input
+                                    : alias_case == 2U ? shift_value : 0xDEADBEEFU;
+                            machine->state.cr = 0xA5C39E71U;
+                            machine->state.xer = 0x80000000U;
+                            machine->state.lr = 0x12345678U;
+                            machine->state.ctr = 0x87654321U;
+                            machine->state.fpscr = 0x13579BDFU;
+                        }
+
+                        const RunResult oracle = interpreted.run(1U);
+                        Recompiler recompiler;
+                        const RunResult actual = recompiler.run(compiled, 1U);
+                        assert(actual.steps == oracle.steps && actual.steps == 1U);
+                        assert(actual.reason == oracle.reason);
+                        assert(actual.cia == oracle.cia);
+                        assert(compiled.state.gpr == interpreted.state.gpr);
+                        assert(compiled.state.cr == interpreted.state.cr);
+                        assert(compiled.state.xer == interpreted.state.xer);
+                        assert(compiled.state.lr == interpreted.state.lr);
+                        assert(compiled.state.ctr == interpreted.state.ctr);
+                        assert(compiled.state.fpscr == interpreted.state.fpscr);
+                        assert(recompiler.statistics().native_instructions == 1U);
+                        assert(recompiler.statistics().interpreter_fallbacks == 0U);
+                        assert(!actual.instruction_history.empty());
+                        assert(actual.instruction_history.back().opcode_name ==
+                            (record ? "rlwnm." : "rlwnm"));
+                    }
+                }
+            }
+        }
+    }
+}
+
 void recompiler_lfd_differential_tests()
 {
     constexpr std::uint32_t start = 0x100U;
@@ -4986,6 +5076,7 @@ int main()
     recompiler_rlwimi_differential_tests();
     recompiler_cntlzw_differential_tests();
     recompiler_rlwinm_differential_tests();
+    recompiler_rlwnm_differential_tests();
     recompiler_lfd_differential_tests();
     recompiler_lfdu_differential_tests();
     recompiler_lfs_differential_tests();

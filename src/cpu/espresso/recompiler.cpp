@@ -3823,6 +3823,8 @@ struct BlockCode
         return !insn.record;
     case Opcode::rotate_left_word_and_mask:
         return true;
+    case Opcode::rotate_left_word_and_mask_register:
+        return true;
     case Opcode::and_immediate_record:
         return true;
     default:
@@ -3859,6 +3861,7 @@ struct BlockCode
     case Opcode::subtract_from_zero_extended: return "subfze";
     case Opcode::subtract_from_extended: return "subfe";
     case Opcode::rotate_left_word_and_mask_insert: return "rlwimi";
+    case Opcode::rotate_left_word_and_mask_register: return "rlwnm";
     case Opcode::paired_single_merge00: return "ps_merge00";
     case Opcode::paired_single_merge01: return "ps_merge01";
     case Opcode::paired_single_merge10: return "ps_merge10";
@@ -5680,10 +5683,13 @@ struct Recompiler::Impl
                 break;
             }
             case Opcode::rotate_left_word_and_mask:
+            case Opcode::rotate_left_word_and_mask_register:
             case Opcode::rotate_left_word_and_mask_insert:
             {
                 const bool insert =
                     insn.opcode == Opcode::rotate_left_word_and_mask_insert;
+                const bool register_shift =
+                    insn.opcode == Opcode::rotate_left_word_and_mask_register;
                 x86::Gp old_destination{};
                 x86::Gp value = compiler.new_gp32("rotate_mask_value");
                 if (insert)
@@ -5691,7 +5697,14 @@ struct Recompiler::Impl
                     old_destination = read_guest_gpr(insn.destination);
                 }
                 compiler.mov(value, read_guest_gpr(insn.source));
-                if (insn.shift != 0U)
+                if (register_shift)
+                {
+                    x86::Gp shift = compiler.new_gp32("rotate_mask_shift");
+                    compiler.mov(shift, read_guest_gpr(insn.base));
+                    compiler.and_(shift, imm(0x1FU));
+                    compiler.rol(value, shift);
+                }
+                else if (insn.shift != 0U)
                 {
                     compiler.rol(value, imm(insn.shift));
                 }
