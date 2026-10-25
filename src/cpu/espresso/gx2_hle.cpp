@@ -3036,6 +3036,63 @@ void register_gx2_hle(HleDispatcher& dispatcher)
 
     dispatcher.register_function(
         "gx2",
+        "GX2GetPolygonControlReg",
+        [](EspressoCore& core) {
+            constexpr std::uint32_t stack_arguments_offset = 0x08U;
+            constexpr std::uint32_t stack_argument_count = 2U;
+            const std::uint64_t stack_pointer = core.state.gpr[1];
+            const std::uint64_t stack_arguments_end =
+                stack_pointer + stack_arguments_offset +
+                stack_argument_count * sizeof(std::uint32_t);
+            if (stack_arguments_end > guest_address_space_end)
+            {
+                throw HleExecutionError(
+                    "gx2::GX2GetPolygonControlReg: stack arguments wrap guest address space");
+            }
+
+            const std::uint32_t output_7 = core.memory.read32_be(
+                static_cast<std::uint32_t>(stack_pointer + stack_arguments_offset));
+            const std::uint32_t output_8 = core.memory.read32_be(
+                static_cast<std::uint32_t>(
+                    stack_pointer + stack_arguments_offset + sizeof(std::uint32_t)));
+            const std::uint32_t control =
+                core.memory.read32_be(core.state.gpr[3]);
+            const std::array<std::uint32_t, 9U> output_addresses{
+                core.state.gpr[4],
+                core.state.gpr[5],
+                core.state.gpr[6],
+                core.state.gpr[7],
+                core.state.gpr[8],
+                core.state.gpr[9],
+                core.state.gpr[10],
+                output_7,
+                output_8,
+            };
+            for (const std::uint32_t address : output_addresses)
+            {
+                core.memory.validate_write_range(
+                    address, sizeof(std::uint32_t));
+            }
+
+            const std::array<std::uint32_t, 9U> values{
+                (control >> 2U) & 0x1U,
+                control & 0x1U,
+                (control >> 1U) & 0x1U,
+                (control >> 3U) & 0x3U,
+                (control >> 5U) & 0x7U,
+                (control >> 8U) & 0x7U,
+                (control >> 11U) & 0x1U,
+                (control >> 12U) & 0x1U,
+                (control >> 13U) & 0x1U,
+            };
+            for (std::size_t index = 0U; index < output_addresses.size(); ++index)
+            {
+                core.memory.write32_be(output_addresses[index], values[index]);
+            }
+        });
+
+    dispatcher.register_function(
+        "gx2",
         "GX2SetColorControl",
         [](EspressoCore& core) {
             if (!core.gx2.initialized)

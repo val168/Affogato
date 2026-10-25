@@ -21240,6 +21240,108 @@ void gx2_init_polygon_control_reg_hle_tests()
     assert(core.memory.read32_be(output_address) == 0x00003EADU);
 }
 
+void gx2_get_polygon_control_reg_hle_tests()
+{
+    constexpr std::uint32_t return_address = 0x027505F0U;
+    constexpr std::uint32_t input_address = 0x500U;
+    constexpr std::uint32_t stack_pointer = 0x8000U;
+    constexpr std::array<std::uint32_t, 9U> outputs{
+        0x1001U, 0x1103U, 0x1205U, 0x1307U, 0x1409U,
+        0x150BU, 0x160DU, 0x170FU, 0x1811U};
+    constexpr std::array<std::uint32_t, 9U> expected{
+        1U, 1U, 0U, 1U, 5U, 6U, 1U, 1U, 1U};
+    EspressoCore core(0x20000U);
+    register_gx2_hle(core.hle);
+    const std::uint32_t import =
+        core.hle.bind_import("gx2", "GX2GetPolygonControlReg");
+    const std::uint32_t wrong_library =
+        core.hle.bind_import("coreinit", "GX2GetPolygonControlReg");
+    assert(import != 0U && wrong_library != 0U);
+    assert(!core.gx2.initialized);
+
+    core.memory.write32_be(input_address, 0x00003EADU);
+    core.memory.write32_be(stack_pointer + 8U, outputs[7]);
+    core.memory.write32_be(stack_pointer + 12U, outputs[8]);
+    for (std::size_t index = 0U; index < outputs.size(); ++index)
+    {
+        core.memory.write32_be(outputs[index], 0xDEADBEEFU);
+    }
+    core.state.gpr.fill(0xAC000000U);
+    core.state.gpr[1] = stack_pointer;
+    core.state.gpr[3] = input_address;
+    for (std::size_t index = 0U; index < 7U; ++index)
+    {
+        core.state.gpr[index + 4U] = outputs[index];
+    }
+    core.state.cr = 0x12345678U;
+    core.state.xer = 0xA5A55A5AU;
+    core.state.ctr = 0x87654321U;
+    core.state.fpscr = 0x5A5AA55AU;
+    const auto gprs_before = core.state.gpr;
+    const auto fprs_before = core.state.fpr;
+    const auto ps1_before = core.state.fpr_ps1;
+    const std::uint32_t cr_before = core.state.cr;
+    const std::uint32_t xer_before = core.state.xer;
+    const std::uint32_t ctr_before = core.state.ctr;
+    const std::uint32_t fpscr_before = core.state.fpscr;
+    const auto invoke = [&](std::uint32_t address) {
+        core.state.cia = address;
+        core.state.lr = return_address;
+        return core.run(1U);
+    };
+
+    const RunResult result = invoke(import);
+    assert(result.reason == StopReason::instruction_limit);
+    assert(result.steps == 1U && core.state.cia == return_address);
+    for (std::size_t index = 0U; index < outputs.size(); ++index)
+    {
+        assert(core.memory.read32_be(outputs[index]) == expected[index]);
+    }
+    assert(core.gx2.pending_commands.empty());
+    assert(core.state.gpr == gprs_before);
+    assert(core.state.fpr == fprs_before && core.state.fpr_ps1 == ps1_before);
+    assert(core.state.cr == cr_before && core.state.xer == xer_before);
+    assert(core.state.ctr == ctr_before && core.state.fpscr == fpscr_before);
+    assert(invoke(wrong_library).hle_call == "coreinit::GX2GetPolygonControlReg");
+
+    constexpr std::array<std::uint32_t, 9U> sentinels{
+        0x11111111U, 0x22222222U, 0x33333333U,
+        0x44444444U, 0x55555555U, 0x66666666U,
+        0x77777777U, 0x88888888U, 0x99999999U};
+    for (std::size_t index = 0U; index < outputs.size(); ++index)
+    {
+        core.memory.write32_be(outputs[index], sentinels[index]);
+    }
+    core.memory.write32_be(stack_pointer + 12U, 0xFFFFFFFEU);
+    const RunResult bad_last_output = invoke(import);
+    assert(bad_last_output.reason == StopReason::memory_fault);
+    assert(bad_last_output.detail.find("write 4 byte(s)") != std::string::npos);
+    for (std::size_t index = 0U; index < outputs.size(); ++index)
+    {
+        assert(core.memory.read32_be(outputs[index]) == sentinels[index]);
+    }
+
+    core.memory.write32_be(stack_pointer + 12U, outputs[8]);
+    core.state.gpr[3] = 0xFFFFFFFCU;
+    const RunResult bad_input = invoke(import);
+    assert(bad_input.reason == StopReason::memory_fault);
+    assert(bad_input.detail.find("read 4 byte(s)") != std::string::npos);
+    for (std::size_t index = 0U; index < outputs.size(); ++index)
+    {
+        assert(core.memory.read32_be(outputs[index]) == sentinels[index]);
+    }
+
+    core.state.gpr[3] = input_address;
+    core.state.gpr[1] = 0x1FFF4U;
+    const RunResult bad_stack_pointer = invoke(import);
+    assert(bad_stack_pointer.reason == StopReason::memory_fault);
+    assert(bad_stack_pointer.detail.find("read 4 byte(s)") != std::string::npos);
+    for (std::size_t index = 0U; index < outputs.size(); ++index)
+    {
+        assert(core.memory.read32_be(outputs[index]) == sentinels[index]);
+    }
+}
+
 void gx2_init_polygon_offset_reg_hle_tests()
 {
     constexpr std::uint32_t return_address = 0x027505EDU;
@@ -37659,6 +37761,7 @@ int main(int argc, char* argv[])
     gx2_set_depth_only_control_hle_tests();
     gx2_set_polygon_offset_hle_tests();
     gx2_init_polygon_control_reg_hle_tests();
+    gx2_get_polygon_control_reg_hle_tests();
     gx2_init_polygon_offset_reg_hle_tests();
     gx2_get_polygon_offset_reg_hle_tests();
     gx2_init_point_size_reg_hle_tests();
