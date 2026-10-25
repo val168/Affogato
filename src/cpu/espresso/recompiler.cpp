@@ -910,12 +910,13 @@ extern "C" void native_raise_fpscr_compare_invalid_if_present(
     }
 }
 
-extern "C" void native_fctiwz(
+extern "C" void native_fctiw(
     NativeExecutionContext* context,
     CpuState* state,
     std::uint32_t destination,
     std::uint32_t source_register,
-    std::uint32_t instruction_index) noexcept
+    std::uint32_t instruction_index,
+    std::uint32_t round_toward_zero) noexcept
 {
     constexpr std::uint64_t exponent_mask = 0x7FF0000000000000ULL;
     constexpr std::uint64_t fraction_mask = 0x000FFFFFFFFFFFFFULL;
@@ -933,6 +934,33 @@ extern "C" void native_fctiwz(
     std::uint32_t integer_bits = 0x80000000U;
     bool invalid = false;
     bool inexact = false;
+    bool rounded_up = false;
+
+    const auto round_source = [source](std::uint32_t rounding_mode) noexcept {
+        switch (rounding_mode)
+        {
+        case 0U:
+        {
+            const double lower = std::floor(source);
+            const double fraction = source - lower;
+            if (fraction < 0.5)
+            {
+                return lower;
+            }
+            if (fraction > 0.5)
+            {
+                return lower + 1.0;
+            }
+            return std::fmod(std::fabs(lower), 2.0) == 0.0
+                ? lower
+                : lower + 1.0;
+        }
+        case 1U: return std::trunc(source);
+        case 2U: return std::ceil(source);
+        case 3U: return std::floor(source);
+        default: return source;
+        }
+    };
 
     if (is_nan)
     {
@@ -945,7 +973,10 @@ extern "C" void native_fctiwz(
     }
     else
     {
-        const double rounded = std::trunc(source);
+        const std::uint32_t rounding_mode = round_toward_zero != 0U
+            ? 1U
+            : state->fpscr & fpscr::rn_mask;
+        const double rounded = round_source(rounding_mode);
         if (rounded >= one_past_maximum_signed_word)
         {
             invalid = true;
@@ -961,6 +992,7 @@ extern "C" void native_fctiwz(
             integer_bits = std::bit_cast<std::uint32_t>(
                 static_cast<std::int32_t>(rounded));
             inexact = rounded != source;
+            rounded_up = inexact && std::fabs(rounded) > std::fabs(source);
         }
 
         if (invalid)
@@ -973,6 +1005,10 @@ extern "C" void native_fctiwz(
     if (!invalid && inexact)
     {
         state->fpscr |= fpscr::fi_mask | fpscr::xx_mask | fpscr::fx_mask;
+        if (rounded_up)
+        {
+            state->fpscr |= fpscr::fr_mask;
+        }
     }
     native_update_fpscr_summaries(state);
 
@@ -4297,6 +4333,7 @@ struct BlockCode
     case Opcode::paired_single_compare_unordered1:
     case Opcode::paired_single_compare_ordered0:
     case Opcode::paired_single_compare_ordered1:
+    case Opcode::floating_convert_to_integer_word:
     case Opcode::floating_convert_to_integer_word_zero:
     case Opcode::floating_reciprocal_square_root_estimate:
     case Opcode::floating_round_to_single:
@@ -4541,6 +4578,7 @@ struct BlockCode
     case Opcode::floating_move_to_fpscr_bit_one: return "mtfsb1";
     case Opcode::floating_move_to_fpscr_field_immediate: return "mtfsfi";
     case Opcode::floating_move_to_fpscr_fields: return "mtfsf";
+    case Opcode::floating_convert_to_integer_word: return "fctiw";
     case Opcode::floating_convert_to_integer_word_zero: return "fctiwz";
     case Opcode::floating_reciprocal_square_root_estimate: return "frsqrte";
     case Opcode::floating_round_to_single: return "frsp";
@@ -7279,19 +7317,25 @@ struct Recompiler::Impl
                     record_offset + offsetof(NativeMtfsfRecord, after))), fpscr_value);
                 break;
             }
+            case Opcode::floating_convert_to_integer_word:
             case Opcode::floating_convert_to_integer_word_zero:
             {
                 auto* invoke = static_cast<InvokeNode*>(nullptr);
                 const auto helper_address = static_cast<std::uint64_t>(
-                    reinterpret_cast<std::uintptr_t>(&native_fctiwz));
+                    reinterpret_cast<std::uintptr_t>(&native_fctiw));
                 compiler.invoke(Out(invoke), helper_address,
                     FuncSignature::build<void, NativeExecutionContext*, CpuState*,
-                        std::uint32_t, std::uint32_t, std::uint32_t>(CallConvId::kCDecl));
+                        std::uint32_t, std::uint32_t, std::uint32_t,
+                        std::uint32_t>(CallConvId::kCDecl));
                 invoke->set_arg(0, context);
                 invoke->set_arg(1, state);
                 invoke->set_arg(2, imm(insn.fp_register));
                 invoke->set_arg(3, imm(insn.fp_source_b));
                 invoke->set_arg(4, imm(static_cast<std::uint32_t>(index)));
+                invoke->set_arg(5, imm(insn.opcode ==
+                        Opcode::floating_convert_to_integer_word_zero
+                    ? 1U
+                    : 0U));
                 break;
             }
             case Opcode::floating_select:
@@ -10066,7 +10110,8 @@ RunResult Recompiler::run(EspressoCore& core, std::size_t max_steps)
                 core.append_instruction_history(std::move(entry));
                 continue;
             }
-            if (insn.opcode == Opcode::floating_convert_to_integer_word_zero)
+            if (insn.opcode == Opcode::floating_convert_to_integer_word ||
+                insn.opcode == Opcode::floating_convert_to_integer_word_zero)
             {
                 InstructionHistoryEntry entry = native_history(insn, cia);
                 const NativeFpIntegerConversionRecord& record =
