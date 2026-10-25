@@ -471,6 +471,14 @@ void get_guest_memory_bounds(EspressoCore& core)
     core.state.gpr[3] = 0U;
 }
 
+bool switch_guest_thread(
+    EspressoCore& core,
+    bool block_current,
+    std::uint64_t sleep_ticks,
+    std::optional<std::uint32_t> resume_cia,
+    std::uint32_t waiting_message_queue);
+void wake_message_queue_receiver(EspressoCore& core, std::uint32_t queue);
+
 [[nodiscard]] bool send_guest_message(
     EspressoCore& core,
     std::uint32_t queue,
@@ -558,10 +566,11 @@ void get_guest_memory_bounds(EspressoCore& core)
                                static_cast<std::uint32_t>(slot_index));
     }
     core.memory.write32_be(queue + os_message_queue_used_offset, used + 1U);
+    wake_message_queue_receiver(core, queue);
     return true;
 }
 
-[[nodiscard]] bool receive_guest_message(
+[[nodiscard]] std::optional<bool> receive_guest_message(
     EspressoCore& core,
     std::uint32_t queue,
     std::uint32_t destination,
@@ -613,8 +622,31 @@ void get_guest_memory_bounds(EspressoCore& core)
     {
         if ((flags & os_message_flag_blocking) != 0U)
         {
-            throw HleExecutionError(
-                "OSReceiveMessage would block on an empty queue; receiver scheduling is not implemented");
+            if (destination == 0U)
+            {
+                throw HleExecutionError(
+                    "OSReceiveMessage received null OSMessage output pointer");
+            }
+            try
+            {
+                core.memory.validate_write_range(destination, os_message_size);
+            }
+            catch (const GuestMemoryFault&)
+            {
+                throw HleExecutionError(
+                    "OSReceiveMessage output buffer is outside mapped guest memory");
+            }
+
+            // Resume at this import after a sender wakes the thread. Retrying
+            // the API then observes the queued message and performs the copy.
+            if (!switch_guest_thread(
+                    core, true, std::numeric_limits<std::uint64_t>::max(),
+                    core.state.cia, queue))
+            {
+                throw HleExecutionError(
+                    "OSReceiveMessage would block on an empty queue with no runnable guest thread");
+            }
+            return std::nullopt;
         }
         return false;
     }
@@ -1063,8 +1095,41 @@ GuestThreadRuntimeState& ensure_guest_thread(EspressoCore& core, std::uint32_t a
     {
         return *found;
     }
-    core.guest_threads.push_back({address, 0U, false});
+    core.guest_threads.push_back({address, 0U, false, 0U});
     return core.guest_threads.back();
+}
+
+void wake_message_queue_receiver(EspressoCore& core, std::uint32_t queue)
+{
+    auto selected = core.guest_threads.end();
+    std::uint32_t selected_priority = std::numeric_limits<std::uint32_t>::max();
+    for (auto thread = core.guest_threads.begin();
+         thread != core.guest_threads.end(); ++thread)
+    {
+        if (!thread->sleeping || thread->waiting_message_queue != queue)
+        {
+            continue;
+        }
+        const std::uint32_t priority = core.memory.read32_be(
+            thread->address + os_thread_priority_offset);
+        if (selected == core.guest_threads.end() || priority < selected_priority)
+        {
+            selected = thread;
+            selected_priority = priority;
+        }
+    }
+    if (selected == core.guest_threads.end())
+    {
+        return;
+    }
+
+    selected->sleeping = false;
+    selected->wake_tick = 0U;
+    selected->waiting_message_queue = 0U;
+    // READY and suspend-count are independent: a suspended waiter becomes
+    // runnable when resumed, but the scheduler still observes its count.
+    core.memory.write8(
+        selected->address + os_thread_state_offset, os_thread_ready);
 }
 
 void save_guest_context(
@@ -1141,7 +1206,12 @@ void load_guest_context(EspressoCore& core, std::uint32_t thread)
     }
 }
 
-bool switch_guest_thread(EspressoCore& core, bool block_current, std::uint64_t sleep_ticks)
+bool switch_guest_thread(
+    EspressoCore& core,
+    bool block_current,
+    std::uint64_t sleep_ticks,
+    std::optional<std::uint32_t> resume_cia,
+    std::uint32_t waiting_message_queue)
 {
     const std::uint32_t current = core.current_thread_address;
     if (current == 0U)
@@ -1167,23 +1237,30 @@ bool switch_guest_thread(EspressoCore& core, bool block_current, std::uint64_t s
     {
         core.memory.write8(current + os_thread_state_offset, os_thread_waiting);
         current_runtime.sleeping = true;
-        current_runtime.wake_tick = sleep_ticks >
-                std::numeric_limits<std::uint64_t>::max() - core.guest_scheduler_ticks
+        current_runtime.waiting_message_queue = waiting_message_queue;
+        current_runtime.wake_tick = waiting_message_queue != 0U
             ? std::numeric_limits<std::uint64_t>::max()
-            : core.guest_scheduler_ticks + sleep_ticks;
+            : sleep_ticks >
+                    std::numeric_limits<std::uint64_t>::max() - core.guest_scheduler_ticks
+                ? std::numeric_limits<std::uint64_t>::max()
+                : core.guest_scheduler_ticks + sleep_ticks;
     }
     else
     {
         core.memory.write8(current + os_thread_state_offset, os_thread_ready);
         current_runtime.sleeping = false;
+        current_runtime.wake_tick = 0U;
+        current_runtime.waiting_message_queue = 0U;
     }
 
     const auto wake_due_threads = [&core]() {
         for (auto& thread : core.guest_threads)
         {
-            if (thread.sleeping && thread.wake_tick <= core.guest_scheduler_ticks)
+            if (thread.sleeping && thread.waiting_message_queue == 0U &&
+                thread.wake_tick <= core.guest_scheduler_ticks)
             {
                 thread.sleeping = false;
+                thread.wake_tick = 0U;
                 core.memory.write8(
                     thread.address + os_thread_state_offset, os_thread_ready);
             }
@@ -1249,7 +1326,7 @@ bool switch_guest_thread(EspressoCore& core, bool block_current, std::uint64_t s
         std::uint64_t next_wake = std::numeric_limits<std::uint64_t>::max();
         for (const auto& thread : core.guest_threads)
         {
-            if (thread.sleeping)
+            if (thread.sleeping && thread.waiting_message_queue == 0U)
             {
                 next_wake = std::min(next_wake, thread.wake_tick);
             }
@@ -1266,6 +1343,8 @@ bool switch_guest_thread(EspressoCore& core, bool block_current, std::uint64_t s
         if (block_current)
         {
             current_runtime.sleeping = false;
+            current_runtime.wake_tick = 0U;
+            current_runtime.waiting_message_queue = 0U;
             core.memory.write8(current + os_thread_state_offset, os_thread_running);
         }
         else
@@ -1275,7 +1354,7 @@ bool switch_guest_thread(EspressoCore& core, bool block_current, std::uint64_t s
         return false;
     }
 
-    save_guest_context(core, current, core.state.lr);
+    save_guest_context(core, current, resume_cia.value_or(core.state.lr));
     core.memory.write8(next + os_thread_state_offset, os_thread_running);
     load_guest_context(core, next);
     core.current_thread_address = next;
@@ -2029,10 +2108,9 @@ void register_coreinit_hle(HleDispatcher& dispatcher)
         "OSSleepTicks",
         [](EspressoCore& core) {
             // OSTime is a signed 64-bit PPC ABI argument in r3:r4. A deadline
-            // at or before the current time is already expired. Affogato has
-            // one synchronously executing guest thread and no scheduler yet;
-            // advance the emulated time exposed by OSGetSystemTime instead of
-            // blocking the host or pretending to switch guest threads.
+            // at or before the current time is already expired. Account for
+            // the elapsed guest time and let the cooperative scheduler switch
+            // to another runnable thread when one exists.
             const std::uint64_t raw_ticks =
                 (static_cast<std::uint64_t>(core.state.gpr[3]) << 32U) |
                 core.state.gpr[4];
@@ -2049,14 +2127,15 @@ void register_coreinit_hle(HleDispatcher& dispatcher)
                         : core.os_sleep_ticks_offset + positive_ticks;
             }
             (void)switch_guest_thread(
-                core, ticks > 0, ticks > 0 ? static_cast<std::uint64_t>(ticks) : 0U);
+                core, ticks > 0, ticks > 0 ? static_cast<std::uint64_t>(ticks) : 0U,
+                std::nullopt, 0U);
         });
 
     dispatcher.register_function(
         "coreinit",
         "OSYieldThread",
         [](EspressoCore& core) {
-            (void)switch_guest_thread(core, false, 0U);
+            (void)switch_guest_thread(core, false, 0U, std::nullopt, 0U);
         });
     dispatcher.register_function(
         "coreinit",
@@ -3706,9 +3785,12 @@ void register_coreinit_hle(HleDispatcher& dispatcher)
         "coreinit",
         "OSReceiveMessage",
         [](EspressoCore& core) {
-            const bool received = receive_guest_message(
+            const std::optional<bool> received = receive_guest_message(
                 core, core.state.gpr[3], core.state.gpr[4], core.state.gpr[5]);
-            core.state.gpr[3] = received ? 1U : 0U;
+            if (received.has_value())
+            {
+                core.state.gpr[3] = *received ? 1U : 0U;
+            }
         });
     dispatcher.register_function(
         "coreinit",

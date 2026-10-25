@@ -262,6 +262,7 @@ struct GuestThreadRuntimeState
     std::uint32_t address{};
     std::uint64_t wake_tick{};
     bool sleeping{};
+    std::uint32_t waiting_message_queue{};
 };
 
 struct ProcUiCallbackRegistration

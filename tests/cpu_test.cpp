@@ -17210,6 +17210,130 @@ void os_receive_message_hle_tests()
     }
     assert(core.memory.read32_be(queue + 0x34U) == 1U);
     assert(core.memory.read32_be(queue + 0x38U) == 0U);
+
+    // Blocking remains explicit when no current guest thread/scheduler
+    // context exists; it must not fabricate a successful receive.
+    core.state.cia = receive;
+    core.state.lr = return_address;
+    core.state.gpr[3] = queue;
+    core.state.gpr[4] = destination;
+    core.state.gpr[5] = 1U;
+    const RunResult no_runnable_thread = core.run(1U);
+    assert(no_runnable_thread.reason == StopReason::hle_error);
+    assert(no_runnable_thread.steps == 0U);
+    assert(no_runnable_thread.detail.find("no runnable guest thread") !=
+           std::string::npos);
+    assert(core.memory.read32_be(queue + 0x38U) == 0U);
+}
+
+void os_receive_message_guest_thread_wakeup_tests()
+{
+    constexpr std::uint32_t queue = 0x6000U;
+    constexpr std::uint32_t messages = 0x6100U;
+    constexpr std::uint32_t source = 0x6200U;
+    constexpr std::uint32_t destination = 0x6300U;
+    constexpr std::uint32_t worker = 0x2800U;
+    constexpr std::uint32_t worker_stack_bottom = 0x4000U;
+    constexpr std::uint32_t worker_stack_top = 0x5000U;
+    constexpr std::uint32_t return_address = 0x02760C1CU;
+    constexpr std::uint32_t message_size = 0x10U;
+
+    EspressoCore core(0x10000U);
+    register_coreinit_hle(core.hle);
+    core.configure_guest_heap(0x1000U, 0x2000U);
+    const std::uint32_t main_thread = initialize_default_guest_thread(
+        core, 0xE000U, 0xD000U);
+    const std::uint32_t initialize =
+        core.hle.bind_import("coreinit", "OSInitMessageQueue");
+    const std::uint32_t create =
+        core.hle.bind_import("coreinit", "OSCreateThread");
+    const std::uint32_t resume =
+        core.hle.bind_import("coreinit", "OSResumeThread");
+    const std::uint32_t send =
+        core.hle.bind_import("coreinit", "OSSendMessage");
+    const std::uint32_t receive =
+        core.hle.bind_import("coreinit", "OSReceiveMessage");
+    const std::uint32_t yield =
+        core.hle.bind_import("coreinit", "OSYieldThread");
+
+    core.state.cia = initialize;
+    core.state.lr = return_address;
+    core.state.gpr[3] = queue;
+    core.state.gpr[4] = messages;
+    core.state.gpr[5] = 1U;
+    assert(core.run(1U).reason == StopReason::instruction_limit);
+
+    for (std::uint32_t offset = 0U; offset < message_size; offset += 4U)
+    {
+        core.memory.write32_be(source + offset, 0xD00D0000U + offset);
+    }
+    core.state.cia = create;
+    core.state.lr = return_address;
+    core.state.gpr[3] = worker;
+    core.state.gpr[4] = send;
+    core.state.gpr[5] = 0U;
+    core.state.gpr[6] = 0U;
+    core.state.gpr[7] = worker_stack_top;
+    core.state.gpr[8] = worker_stack_top - worker_stack_bottom;
+    core.state.gpr[9] = 17U;
+    core.state.gpr[10] = 0U;
+    assert(core.run(1U).reason == StopReason::instruction_limit);
+    assert(core.state.gpr[3] == 1U);
+
+    // Arrange this worker's initial context to enqueue one message and then
+    // yield, allowing the newly-ready higher-priority receiver to retry.
+    core.memory.write32_be(worker + 0x14U, queue); // context GPR3
+    core.memory.write32_be(worker + 0x18U, source); // context GPR4
+    core.memory.write32_be(worker + 0x1CU, 0U); // context GPR5: nonblocking send
+    core.memory.write32_be(worker + 0x8CU, yield); // send returns to OSYieldThread
+    core.state.cia = resume;
+    core.state.lr = return_address;
+    core.state.gpr[3] = worker;
+    assert(core.run(1U).reason == StopReason::instruction_limit);
+    assert(core.state.gpr[3] == 1U);
+
+    core.memory.fill_bytes(destination, message_size, 0xCCU);
+    core.state.cia = receive;
+    core.state.lr = return_address;
+    core.state.gpr[3] = queue;
+    core.state.gpr[4] = destination;
+    core.state.gpr[5] = 1U;
+    const RunResult blocked = core.run(1U);
+    assert(blocked.reason == StopReason::instruction_limit);
+    assert(core.current_thread_address == worker);
+    assert(core.state.cia == send);
+    assert(core.memory.read8(main_thread + 0x324U) == 4U); // WAITING
+    assert(core.guest_threads[0U].sleeping);
+    assert(core.guest_threads[0U].waiting_message_queue == queue);
+    assert(core.memory.read32_be(queue + 0x38U) == 0U);
+
+    const RunResult sent = core.run(1U);
+    assert(sent.reason == StopReason::instruction_limit);
+    assert(core.state.gpr[3] == 1U);
+    assert(core.memory.read32_be(queue + 0x38U) == 1U);
+    assert(!core.guest_threads[0U].sleeping);
+    assert(core.guest_threads[0U].waiting_message_queue == 0U);
+    assert(core.memory.read8(main_thread + 0x324U) == 1U); // READY
+
+    const RunResult yielded = core.run(1U);
+    assert(yielded.reason == StopReason::instruction_limit);
+    assert(core.current_thread_address == main_thread);
+    assert(core.state.cia == receive);
+
+    const RunResult received = core.run(1U);
+    assert(received.reason == StopReason::instruction_limit);
+    assert(core.current_thread_address == main_thread);
+    assert(core.state.cia == return_address);
+    assert(core.state.gpr[3] == 1U);
+    for (std::uint32_t offset = 0U; offset < message_size; offset += 4U)
+    {
+        assert(core.memory.read32_be(destination + offset) ==
+               0xD00D0000U + offset);
+    }
+    assert(core.memory.read32_be(queue + 0x34U) == 0U);
+    assert(core.memory.read32_be(queue + 0x38U) == 0U);
+    assert(core.memory.read8(main_thread + 0x324U) == 2U); // RUNNING
+    assert(core.guest_thread_switches == 2U);
 }
 
 void mem_get_base_heap_handle_hle_tests()
@@ -34020,6 +34144,7 @@ int main(int argc, char* argv[])
     os_is_enabled_overlay_arena_hle_tests();
     os_send_message_hle_tests();
     os_receive_message_hle_tests();
+    os_receive_message_guest_thread_wakeup_tests();
     mem_get_base_heap_handle_hle_tests();
     mem_get_allocatable_size_for_frm_heap_ex_hle_tests();
     mem_alloc_from_frm_heap_ex_hle_tests();
