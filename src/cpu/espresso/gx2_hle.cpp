@@ -2999,6 +2999,43 @@ void register_gx2_hle(HleDispatcher& dispatcher)
 
     dispatcher.register_function(
         "gx2",
+        "GX2InitPolygonControlReg",
+        [](EspressoCore& core) {
+            constexpr std::uint32_t stack_arguments_offset = 0x08U;
+            constexpr std::uint32_t stack_argument_count = 2U;
+            const std::uint64_t stack_pointer = core.state.gpr[1];
+            const std::uint64_t stack_arguments_end =
+                stack_pointer + stack_arguments_offset +
+                stack_argument_count * sizeof(std::uint32_t);
+            if (stack_arguments_end > guest_address_space_end)
+            {
+                throw HleExecutionError(
+                    "gx2::GX2InitPolygonControlReg: stack arguments wrap guest address space");
+            }
+
+            // r3 is the output structure, so the first seven scalar arguments
+            // occupy r4-r10 and the remaining two are at SP+8 and SP+12.
+            const std::uint32_t polygon_offset_back_enable =
+                core.memory.read32_be(static_cast<std::uint32_t>(
+                    stack_pointer + stack_arguments_offset));
+            const std::uint32_t polygon_offset_parallel_enable =
+                core.memory.read32_be(static_cast<std::uint32_t>(
+                    stack_pointer + stack_arguments_offset + sizeof(std::uint32_t)));
+            const std::uint32_t packed = pack_polygon_control(
+                core.state.gpr[4],
+                core.state.gpr[5],
+                core.state.gpr[6],
+                core.state.gpr[7],
+                core.state.gpr[8],
+                core.state.gpr[9],
+                core.state.gpr[10],
+                polygon_offset_back_enable,
+                polygon_offset_parallel_enable);
+            core.memory.write32_be(core.state.gpr[3], packed);
+        });
+
+    dispatcher.register_function(
+        "gx2",
         "GX2SetColorControl",
         [](EspressoCore& core) {
             if (!core.gx2.initialized)
