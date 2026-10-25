@@ -4747,6 +4747,7 @@ struct BlockCode
     case Opcode::paired_single_quantized_load:
     case Opcode::paired_single_quantized_store:
     case Opcode::instruction_sync:
+    case Opcode::enforce_in_order_io:
     case Opcode::shift_left_word:
     case Opcode::shift_right_word:
     case Opcode::arithmetic_shift_right_immediate:
@@ -4881,6 +4882,7 @@ struct BlockCode
     case Opcode::paired_single_quantized_store: return "psq_st";
     case Opcode::paired_single_quantized_load: return "psq_l";
     case Opcode::instruction_sync: return "isync";
+    case Opcode::enforce_in_order_io: return "eieio";
     case Opcode::bitwise_or: return "or";
     case Opcode::bitwise_and: return "and";
     case Opcode::bitwise_and_complement: return "andc";
@@ -7363,6 +7365,10 @@ struct Recompiler::Impl
                 // Guest memory writes and instruction fetch are synchronous
                 // on this core. Block construction terminates at isync so
                 // subsequent instructions are resolved from current memory.
+                break;
+            case Opcode::enforce_in_order_io:
+                // Guest RAM accesses are synchronous and there is no separate
+                // cache-inhibited I/O queue in the current memory model.
                 break;
             case Opcode::branch:
             {
