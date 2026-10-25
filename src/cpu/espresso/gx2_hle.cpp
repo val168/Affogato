@@ -3365,6 +3365,25 @@ void register_gx2_hle(HleDispatcher& dispatcher)
 
     dispatcher.register_function(
         "gx2",
+        "GX2SetPointSizeReg",
+        [](EspressoCore& core) {
+            if (!core.gx2.initialized)
+            {
+                throw HleExecutionError(
+                    "gx2::GX2SetPointSizeReg: GX2 has not been initialized");
+            }
+
+            // GX2PointSizeReg contains one already-packed pa_su_point_size word.
+            const std::uint32_t point_size =
+                core.memory.read32_be(core.state.gpr[3]);
+            core.gx2.pending_commands.push_back({
+                Gx2CommandType::set_context_register,
+                pa_su_point_size_register,
+                point_size});
+        });
+
+    dispatcher.register_function(
+        "gx2",
         "GX2SetPointLimits",
         [](EspressoCore& core) {
             if (!core.gx2.initialized)
