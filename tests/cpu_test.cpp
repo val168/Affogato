@@ -14210,6 +14210,89 @@ void proc_ui_init_hle_tests()
     assert(other.proc_ui_in_foreground);
 }
 
+void proc_ui_process_messages_hle_tests()
+{
+    constexpr std::uint32_t return_address = 0x02740200U;
+
+    EspressoCore core(0x4000U);
+    register_coreinit_hle(core.hle);
+    const std::uint32_t import = core.hle.bind_import(
+        "proc_ui", "ProcUIProcessMessages");
+
+    // Cemu's compatibility behavior is foreground when ProcUI has not been
+    // initialized. The call returns a status in r3 and otherwise has no side
+    // effects in Affogato's current no-message-queue model.
+    core.state.gpr[3] = 1U;
+    core.state.gpr[4] = 0xAABBCCDDU;
+    core.state.gpr[5] = 0x12345678U;
+    core.state.lr = return_address;
+    core.state.cr = 0x12345678U;
+    core.state.xer = 0xA00000A5U;
+    core.state.ctr = 0xCAFEBABEU;
+    core.state.fpscr = 0x5A5AA55AU;
+    const auto initial_gprs = core.state.gpr;
+    const auto initial_fprs = core.state.fpr;
+    const auto initial_ps1 = core.state.fpr_ps1;
+    core.state.cia = import;
+    assert(core.step() == StepResult::executed);
+    assert(core.state.cia == return_address);
+    assert(core.state.gpr[3] == 0U);
+    for (std::size_t reg = 0U; reg < core.state.gpr.size(); ++reg)
+    {
+        if (reg != 3U)
+        {
+            assert(core.state.gpr[reg] == initial_gprs[reg]);
+        }
+    }
+    assert(core.state.fpr == initial_fprs);
+    assert(core.state.fpr_ps1 == initial_ps1);
+    assert(core.state.cr == 0x12345678U);
+    assert(core.state.xer == 0xA00000A5U);
+    assert(core.state.ctr == 0xCAFEBABEU);
+    assert(core.state.fpscr == 0x5A5AA55AU);
+
+    // The real BOTW call is blocking-in-background, but while foreground the
+    // API returns immediately with PROCUI_STATUS_IN_FOREGROUND.
+    core.proc_ui_initialized = true;
+    core.proc_ui_in_foreground = true;
+    core.proc_ui_status = 0U;
+    core.state.gpr[3] = 1U;
+    core.state.gpr[4] = 0xFFFFFFFFU;
+    core.state.gpr[5] = 6U;
+    core.state.gpr[6] = 2U;
+    core.state.lr = return_address + 4U;
+    core.state.cia = import;
+    assert(core.step() == StepResult::executed);
+    assert(core.state.cia == return_address + 4U);
+    assert(core.state.gpr[3] == 0U);
+    assert(core.state.gpr[4] == 0xFFFFFFFFU);
+    assert(core.state.gpr[5] == 6U);
+    assert(core.state.gpr[6] == 2U);
+    assert(core.proc_ui_status == 0U);
+
+    // A nonblocking poll in background reports the existing status without
+    // pretending a queued foreground event has been received.
+    core.proc_ui_in_foreground = false;
+    core.proc_ui_status = 1U;
+    core.state.gpr[3] = 0U;
+    core.state.lr = return_address + 8U;
+    core.state.cia = import;
+    assert(core.step() == StepResult::executed);
+    assert(core.state.cia == return_address + 8U);
+    assert(core.state.gpr[3] == 1U);
+    assert(core.proc_ui_status == 1U);
+
+    // A blocking background poll cannot complete without message delivery and
+    // is surfaced as an HLE error instead of returning fabricated success.
+    core.state.gpr[3] = 1U;
+    core.state.lr = return_address + 12U;
+    core.state.cia = import;
+    const auto blocked = core.run(1U);
+    assert(blocked.reason == StopReason::hle_error);
+    assert(blocked.detail.find("cannot block in background") != std::string::npos);
+    assert(core.state.gpr[3] == 1U);
+}
+
 void proc_ui_register_callback_hle_tests()
 {
     constexpr std::uint32_t return_address = 0x02740124U;
@@ -34848,6 +34931,7 @@ int main(int argc, char* argv[])
     hle_dispatch_tests();
     nn_olv_hle_tests();
     proc_ui_init_hle_tests();
+    proc_ui_process_messages_hle_tests();
     proc_ui_register_callback_hle_tests();
     im_dim_state_hle_tests();
     home_button_menu_state_hle_tests();

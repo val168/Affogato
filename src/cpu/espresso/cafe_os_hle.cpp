@@ -1682,6 +1682,38 @@ void register_coreinit_hle(HleDispatcher& dispatcher)
 
     dispatcher.register_function(
         "proc_ui",
+        "ProcUIProcessMessages",
+        [](EspressoCore& core) {
+            constexpr std::uint32_t status_in_foreground = 0U;
+            constexpr std::uint32_t status_in_background = 1U;
+            const bool block_in_background = core.state.gpr[3] != 0U;
+
+            // Cemu returns foreground if ProcUI was never initialized. The
+            // current Affogato model has no ProcUI OS-message queue, so it can
+            // report the modeled state but cannot manufacture transitions.
+            if (!core.proc_ui_initialized)
+            {
+                core.state.gpr[3] = status_in_foreground;
+                return;
+            }
+
+            if (!core.proc_ui_in_foreground && block_in_background)
+            {
+                // A real blocking call waits for a foreground/background
+                // message. Returning a fabricated status would let guest code
+                // continue while it should be asleep.
+                throw HleExecutionError(
+                    "ProcUIProcessMessages cannot block in background without ProcUI message delivery");
+            }
+
+            core.proc_ui_status = core.proc_ui_in_foreground
+                ? status_in_foreground
+                : status_in_background;
+            core.state.gpr[3] = core.proc_ui_status;
+        });
+
+    dispatcher.register_function(
+        "proc_ui",
         "ProcUIRegisterCallback",
         [](EspressoCore& core) {
             // This API registers an event callback; it does not invoke it.
