@@ -860,6 +860,30 @@ void create_gx2_surface_user_memory(
     core.memory.write32_be(surface_address + 0x2CU, mipmap_address);
 }
 
+std::uint32_t gx2r_lock_surface(
+    EspressoCore& core,
+    std::uint32_t surface_address)
+{
+    constexpr const char* api_name = "gx2::GX2RLockSurfaceEx";
+    if (surface_address == 0U || (surface_address & 3U) != 0U ||
+        surface_address > std::numeric_limits<std::uint32_t>::max() -
+                              gx2_surface_size)
+    {
+        throw HleExecutionError(std::string(api_name) +
+                                ": surface pointer is null, misaligned, or wraps");
+    }
+
+    core.memory.validate_write_range(surface_address, gx2_surface_size);
+    const std::uint32_t resource_flags = core.memory.read32_be(surface_address + 0x1CU);
+    const std::uint32_t image_address = core.memory.read32_be(surface_address + 0x24U);
+    core.memory.write32_be(
+        surface_address + 0x1CU,
+        resource_flags | gx2r_resflag_locked);
+    // Current GX2 semantics return the base image pointer even for nonzero
+    // mip levels; per-mip pointer adjustment/invalidation is not modeled yet.
+    return image_address;
+}
+
 void create_gx2_buffer_user_memory(
     EspressoCore& core,
     std::uint32_t buffer_address,
@@ -2897,6 +2921,13 @@ void register_gx2_hle(HleDispatcher& dispatcher)
                 core.state.gpr[5],
                 core.state.gpr[6]);
             core.state.gpr[3] = 1U;
+        });
+
+    dispatcher.register_function(
+        "gx2",
+        "GX2RLockSurfaceEx",
+        [](EspressoCore& core) {
+            core.state.gpr[3] = gx2r_lock_surface(core, core.state.gpr[3]);
         });
 
     dispatcher.register_function(
