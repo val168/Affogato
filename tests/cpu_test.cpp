@@ -14678,6 +14678,51 @@ void vpad_read_hle_tests()
     assert(bad_pointer.detail.find("vpad::VPADRead") != std::string::npos);
     assert(core.state.gpr == gprs_before_bad_pointer);
     assert(core.memory.read8(status_buffer) == 0xC3U);
+
+    core.virtual_vpad_connected = true;
+    core.virtual_vpad_buttons = 0x0000C000U; // VPAD A and B.
+    core.state.cia = import;
+    core.state.lr = return_address;
+    core.state.gpr[3] = 0U;
+    core.state.gpr[4] = status_buffer;
+    core.state.gpr[5] = status_count;
+    core.state.gpr[6] = error_output;
+    core.memory.fill_bytes(status_buffer, status_size, 0xA5U);
+    core.memory.write32_be(error_output, 0x12345678U);
+    const auto connected_gprs_before = core.state.gpr;
+    assert(core.run(1U).reason == StopReason::instruction_limit);
+    assert(core.state.gpr[3] == 1U);
+    for (std::size_t index = 1U; index < core.state.gpr.size(); ++index)
+    {
+        if (index != 3U)
+        {
+            assert(core.state.gpr[index] == connected_gprs_before[index]);
+        }
+    }
+    assert(core.memory.read32_be(status_buffer) == 0x0000C000U);
+    assert(core.memory.read32_be(status_buffer + 4U) == 0x0000C000U);
+    assert(core.memory.read32_be(status_buffer + 8U) == 0U);
+    assert(core.memory.read32_be(error_output) == 0U);
+    assert(core.memory.read8(status_buffer + 12U) == 0U);
+    assert(core.memory.read8(status_buffer + status_size) == 0xA5U);
+
+    // A held button produces a trigger only on the first sample. Releasing B
+    // reports the release while A remains held.
+    core.state.cia = import;
+    core.state.lr = return_address;
+    core.state.gpr[3] = 0U;
+    assert(core.run(1U).reason == StopReason::instruction_limit);
+    assert(core.state.gpr[3] == 1U);
+    assert(core.memory.read32_be(status_buffer) == 0x0000C000U);
+    assert(core.memory.read32_be(status_buffer + 4U) == 0U);
+    core.virtual_vpad_buttons = 0x00008000U;
+    core.state.cia = import;
+    core.state.lr = return_address;
+    core.state.gpr[3] = 0U;
+    assert(core.run(1U).reason == StopReason::instruction_limit);
+    assert(core.memory.read32_be(status_buffer) == 0x00008000U);
+    assert(core.memory.read32_be(status_buffer + 4U) == 0U);
+    assert(core.memory.read32_be(status_buffer + 8U) == 0x00004000U);
 }
 
 void os_create_thread_hle_tests()

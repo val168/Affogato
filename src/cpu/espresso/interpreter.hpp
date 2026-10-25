@@ -390,6 +390,9 @@ public:
     bool home_button_menu_enabled{true};
     bool wpad_urcc_enabled{};
     bool wpad_wii_remote_enabled{};
+    bool virtual_vpad_connected{};
+    std::uint32_t virtual_vpad_buttons{};
+    std::uint32_t virtual_vpad_previous_buttons{};
     bool kpad_initialized{};
     std::uint32_t kpad_unified_status_buffer{};
     std::uint32_t kpad_unified_status_count{};

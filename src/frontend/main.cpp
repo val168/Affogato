@@ -378,6 +378,7 @@ int run_rpx_diagnostic(int argc, char* argv[])
     {
         std::cerr << "Usage: AffogatoFrontend.exe --run-rpx <file.rpx> "
                      "[--recompiler] [--limit <instructions>] "
+                     "[--vpad-buttons <mask>] "
                      "[--watch-write <guest-address>] "
                      "[--trace-hle <library::symbol>] "
                      "[--dump-memory <address> <bytes>]... "
@@ -387,6 +388,7 @@ int run_rpx_diagnostic(int argc, char* argv[])
 
     affogato::ExecutionMode mode = affogato::ExecutionMode::interpreter;
     std::size_t instruction_limit = 5'000'000'000ULL;
+    std::optional<std::uint32_t> virtual_vpad_buttons;
     std::optional<std::uint32_t> watched_guest_write_address;
     std::optional<std::string> hle_trace_filter;
     std::vector<std::pair<std::uint32_t, std::uint32_t>> guest_memory_dumps;
@@ -406,6 +408,20 @@ int run_rpx_diagnostic(int argc, char* argv[])
                 throw std::invalid_argument("--limit must be in [1, SIZE_MAX]");
             }
             instruction_limit = static_cast<std::size_t>(parsed);
+        }
+        else if (argument == "--vpad-buttons" && index + 1 < argc)
+        {
+            const std::string_view mask_text(argv[++index]);
+            std::size_t parsed_length = 0U;
+            const unsigned long long parsed =
+                std::stoull(std::string(mask_text), &parsed_length, 0);
+            if (parsed_length != mask_text.size() ||
+                parsed > std::numeric_limits<std::uint32_t>::max())
+            {
+                throw std::invalid_argument(
+                    "--vpad-buttons requires a 32-bit integer mask");
+            }
+            virtual_vpad_buttons = static_cast<std::uint32_t>(parsed);
         }
         else if (argument == "--watch-write" && index + 1 < argc)
         {
@@ -516,6 +532,11 @@ int run_rpx_diagnostic(int argc, char* argv[])
     // The command-line diagnostic has no scanout/display thread. Keep virtual
     // vsync accounting, but avoid a host sleep per guest frame.
     emulator.core().gx2.host_vsync_pacing_enabled = false;
+    if (virtual_vpad_buttons.has_value())
+    {
+        emulator.core().virtual_vpad_connected = true;
+        emulator.core().virtual_vpad_buttons = *virtual_vpad_buttons;
+    }
     if (watched_guest_write_address.has_value())
     {
         emulator.core().memory.set_write_watchpoint(
@@ -545,6 +566,11 @@ int run_rpx_diagnostic(int argc, char* argv[])
                     ? "recompiler" : "interpreter")
               << "\nVSync pacing: disabled (headless diagnostic)"
               << "\nInstruction limit: " << instruction_limit << '\n';
+    if (virtual_vpad_buttons.has_value())
+    {
+        std::cout << "Virtual VPAD button mask: 0x" << std::hex << std::uppercase
+                  << *virtual_vpad_buttons << std::dec << '\n';
+    }
 
     constexpr std::size_t chunk_size = 1'000'000U;
     constexpr std::size_t progress_interval = 10'000'000U;

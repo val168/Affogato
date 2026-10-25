@@ -1923,12 +1923,29 @@ void register_coreinit_hle(HleDispatcher& dispatcher)
             {
                 core.memory.zero_fill(status_buffer, vpad_status_size);
             }
+            if (count != 0U && channel == 0U && core.virtual_vpad_connected)
+            {
+                const std::uint32_t previous_buttons =
+                    core.virtual_vpad_previous_buttons;
+                const std::uint32_t held_buttons = core.virtual_vpad_buttons;
+                core.memory.write32_be(status_buffer, held_buttons);
+                core.memory.write32_be(
+                    status_buffer + 4U, held_buttons & ~previous_buttons);
+                core.memory.write32_be(
+                    status_buffer + 8U, previous_buttons & ~held_buttons);
+                core.virtual_vpad_previous_buttons = held_buttons;
+                read_error = 0;
+                core.state.gpr[3] = 1U;
+            }
+            else
+            {
+                core.state.gpr[3] = 0U;
+            }
             if (error_output != 0U)
             {
                 core.memory.write32_be(
                     error_output, static_cast<std::uint32_t>(read_error));
             }
-            core.state.gpr[3] = 0U;
         });
 
     dispatcher.register_function(
