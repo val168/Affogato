@@ -1832,6 +1832,73 @@ void register_coreinit_hle(HleDispatcher& dispatcher)
         });
 
     dispatcher.register_function(
+        "vpad",
+        "VPADRead",
+        [](EspressoCore& core) {
+            constexpr std::uint32_t vpad_status_size = 0xACU;
+            constexpr std::int32_t no_samples_error = -1;
+            constexpr std::int32_t invalid_controller_error = -2;
+            const std::uint32_t channel = core.state.gpr[3];
+            const std::uint32_t status_buffer = core.state.gpr[4];
+            const std::uint32_t count = core.state.gpr[5];
+            const std::uint32_t error_output = core.state.gpr[6];
+
+            std::int32_t read_error{};
+            bool clear_first_status = false;
+            if (count == 0U)
+            {
+                read_error = no_samples_error;
+            }
+            else if (channel != 0U)
+            {
+                read_error = invalid_controller_error;
+            }
+            else
+            {
+                read_error = invalid_controller_error;
+                clear_first_status = true;
+            }
+
+            // Validate all requested outputs before making either guest write.
+            // On the supported channel, Cafe clears only the first status
+            // record when no controller is connected; later slots are intact.
+            try
+            {
+                if (clear_first_status)
+                {
+                    if (status_buffer == 0U)
+                    {
+                        throw HleExecutionError(
+                            "vpad::VPADRead status buffer is null");
+                    }
+                    core.memory.validate_write_range(
+                        status_buffer, vpad_status_size);
+                }
+                if (error_output != 0U)
+                {
+                    core.memory.validate_write_range(
+                        error_output, sizeof(std::uint32_t));
+                }
+            }
+            catch (const GuestMemoryFault&)
+            {
+                throw HleExecutionError(
+                    "vpad::VPADRead output is outside mapped guest memory");
+            }
+
+            if (clear_first_status)
+            {
+                core.memory.zero_fill(status_buffer, vpad_status_size);
+            }
+            if (error_output != 0U)
+            {
+                core.memory.write32_be(
+                    error_output, static_cast<std::uint32_t>(read_error));
+            }
+            core.state.gpr[3] = 0U;
+        });
+
+    dispatcher.register_function(
         "coreinit",
         "OSCreateThread",
         [](EspressoCore& core) {

@@ -14437,6 +14437,109 @@ void kpad_read_ex_hle_tests()
     assert(core.memory.read8(status_buffer) == 0xA5U);
 }
 
+void vpad_read_hle_tests()
+{
+    constexpr std::uint32_t status_buffer = 0x100U;
+    constexpr std::uint32_t status_size = 0xACU;
+    constexpr std::uint32_t error_output = 0x800U;
+    constexpr std::uint32_t return_address = 0x02740130U;
+    constexpr std::uint32_t status_count = 16U;
+
+    EspressoCore core(0x2000U);
+    register_coreinit_hle(core.hle);
+    core.memory.fill_bytes(
+        status_buffer, 2U * status_size, 0xA5U);
+    core.memory.write32_be(error_output, 0x12345678U);
+    core.state.gpr.fill(0xD3000000U);
+    core.state.gpr[3] = 0U;
+    core.state.gpr[4] = status_buffer;
+    core.state.gpr[5] = status_count;
+    core.state.gpr[6] = error_output;
+    core.state.lr = return_address;
+    core.state.cr = 0x12345678U;
+    core.state.xer = 0x87654321U;
+    core.state.ctr = 0xABCDEF01U;
+    core.state.fpscr = 0x5A5AA5A5U;
+    const auto gprs_before = core.state.gpr;
+    const auto fprs_before = core.state.fpr;
+    const auto ps1_before = core.state.fpr_ps1;
+    const std::uint32_t import = core.hle.bind_import("vpad", "VPADRead");
+    core.state.cia = import;
+
+    const RunResult disconnected = core.run(1U);
+    assert(disconnected.reason == StopReason::instruction_limit);
+    assert(core.state.cia == return_address && core.state.lr == return_address);
+    assert(core.state.gpr[3] == 0U);
+    for (std::size_t index = 1U; index < core.state.gpr.size(); ++index)
+    {
+        assert(core.state.gpr[index] == gprs_before[index]);
+    }
+    assert(core.state.fpr == fprs_before && core.state.fpr_ps1 == ps1_before);
+    assert(core.state.cr == 0x12345678U);
+    assert(core.state.xer == 0x87654321U);
+    assert(core.state.ctr == 0xABCDEF01U);
+    assert(core.state.fpscr == 0x5A5AA5A5U);
+    assert(core.memory.read32_be(error_output) == 0xFFFFFFFEU);
+    for (std::uint32_t index = 0U; index < status_size; ++index)
+    {
+        assert(core.memory.read8(status_buffer + index) == 0U);
+    }
+    assert(core.memory.read8(status_buffer + status_size) == 0xA5U);
+    assert(core.memory.read8(status_buffer + 2U * status_size - 1U) == 0xA5U);
+
+    // A zero-capacity read reports NO_SAMPLES and does not touch buffers,
+    // irrespective of the channel value.
+    core.memory.fill_bytes(status_buffer, status_size, 0x5AU);
+    core.state.cia = import;
+    core.state.lr = return_address;
+    core.state.gpr[3] = 0xFFFFFFFFU;
+    core.state.gpr[4] = 0xFFFFFFFCU;
+    core.state.gpr[5] = 0U;
+    core.state.gpr[6] = error_output;
+    assert(core.run(1U).reason == StopReason::instruction_limit);
+    assert(core.state.gpr[3] == 0U);
+    assert(core.memory.read32_be(error_output) == 0xFFFFFFFFU);
+    assert(core.memory.read8(status_buffer) == 0x5AU);
+
+    // Unsupported channel 1 is rejected without clearing a status slot.
+    core.state.cia = import;
+    core.state.lr = return_address;
+    core.state.gpr[3] = 1U;
+    core.state.gpr[4] = status_buffer;
+    core.state.gpr[5] = status_count;
+    core.state.gpr[6] = error_output;
+    assert(core.run(1U).reason == StopReason::instruction_limit);
+    assert(core.state.gpr[3] == 0U);
+    assert(core.memory.read32_be(error_output) == 0xFFFFFFFEU);
+    assert(core.memory.read8(status_buffer) == 0x5AU);
+
+    // Error output is optional. Invalid output ranges fail before any output
+    // mutation, including the channel-zero status clear.
+    core.state.cia = import;
+    core.state.lr = return_address;
+    core.state.gpr[3] = 0U;
+    core.state.gpr[4] = status_buffer;
+    core.state.gpr[5] = status_count;
+    core.state.gpr[6] = 0U;
+    assert(core.run(1U).reason == StopReason::instruction_limit);
+    assert(core.memory.read8(status_buffer) == 0U);
+
+    core.memory.fill_bytes(status_buffer, status_size, 0xC3U);
+    core.state.cia = import;
+    core.state.lr = return_address;
+    core.state.gpr[3] = 0U;
+    core.state.gpr[4] = status_buffer;
+    core.state.gpr[5] = status_count;
+    core.state.gpr[6] = 0x50000U;
+    core.state.gpr[3] = 0xCAFEBABEU;
+    const auto gprs_before_bad_pointer = core.state.gpr;
+    const RunResult bad_pointer = core.run(1U);
+    assert(bad_pointer.reason == StopReason::hle_error);
+    assert(bad_pointer.detail.find("vpad::VPADRead") != std::string::npos);
+    assert(core.state.gpr == gprs_before_bad_pointer);
+    assert(core.memory.read8(status_buffer) == 0xC3U);
+}
+
 void os_create_thread_hle_tests()
 {
     constexpr std::uint32_t thread = 0x1000U;
@@ -34447,6 +34550,7 @@ int main(int argc, char* argv[])
     wpad_enable_urcc_hle_tests();
     kpad_init_ex_hle_tests();
     kpad_read_ex_hle_tests();
+    vpad_read_hle_tests();
     os_create_thread_hle_tests();
     os_set_thread_name_hle_tests();
     os_set_thread_affinity_hle_tests();
