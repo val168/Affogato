@@ -25027,6 +25027,117 @@ void gx2_init_target_channel_masks_reg_hle_tests()
     assert(core.memory.read32_be(output_address) == 0x7654321FU);
 }
 
+void gx2_get_target_channel_masks_reg_hle_tests()
+{
+    constexpr std::uint32_t return_address = 0x027505F5U;
+    constexpr std::uint32_t input_address = 0x503U;
+    constexpr std::uint32_t stack_pointer = 0x7000U;
+    constexpr std::array<std::uint32_t, 8U> outputs{
+        0x1001U, 0x1103U, 0x1205U, 0x1307U,
+        0x1409U, 0x150BU, 0x160DU, 0x170FU};
+    constexpr std::array<std::uint32_t, 8U> expected{
+        0xFU, 1U, 2U, 3U, 4U, 5U, 6U, 7U};
+    EspressoCore core(0x10000U);
+    register_gx2_hle(core.hle);
+    const std::uint32_t import =
+        core.hle.bind_import("gx2", "GX2GetTargetChannelMasksReg");
+    const std::uint32_t wrong_library =
+        core.hle.bind_import("coreinit", "GX2GetTargetChannelMasksReg");
+    assert(import != 0U && wrong_library != 0U);
+    assert(!core.gx2.initialized);
+
+    core.memory.write32_be(input_address, 0x7654321FU);
+    core.memory.write32_be(stack_pointer + 8U, outputs[7]);
+    for (const std::uint32_t output : outputs)
+    {
+        core.memory.write32_be(output, 0xDEADBEEFU);
+    }
+    core.state.gpr.fill(0xB1000000U);
+    core.state.gpr[1] = stack_pointer;
+    core.state.gpr[3] = input_address;
+    for (std::size_t index = 0U; index < 7U; ++index)
+    {
+        core.state.gpr[index + 4U] = outputs[index];
+    }
+    core.state.cr = 0x12345678U;
+    core.state.xer = 0xA5A55A5AU;
+    core.state.ctr = 0x87654321U;
+    core.state.fpscr = 0x5A5AA55AU;
+    const auto gprs_before = core.state.gpr;
+    const auto fprs_before = core.state.fpr;
+    const auto ps1_before = core.state.fpr_ps1;
+    const std::uint32_t cr_before = core.state.cr;
+    const std::uint32_t xer_before = core.state.xer;
+    const std::uint32_t ctr_before = core.state.ctr;
+    const std::uint32_t fpscr_before = core.state.fpscr;
+    const auto invoke = [&](std::uint32_t address) {
+        core.state.cia = address;
+        core.state.lr = return_address;
+        return core.run(1U);
+    };
+
+    const RunResult result = invoke(import);
+    assert(result.reason == StopReason::instruction_limit);
+    assert(result.steps == 1U && core.state.cia == return_address);
+    for (std::size_t index = 0U; index < outputs.size(); ++index)
+    {
+        assert(core.memory.read32_be(outputs[index]) == expected[index]);
+    }
+    assert(core.memory.read32_be(input_address) == 0x7654321FU);
+    assert(core.gx2.pending_commands.empty());
+    assert(core.state.gpr == gprs_before);
+    assert(core.state.fpr == fprs_before && core.state.fpr_ps1 == ps1_before);
+    assert(core.state.cr == cr_before && core.state.xer == xer_before);
+    assert(core.state.ctr == ctr_before && core.state.fpscr == fpscr_before);
+    assert(invoke(wrong_library).hle_call ==
+           "coreinit::GX2GetTargetChannelMasksReg");
+
+    constexpr std::array<std::uint32_t, 8U> sentinels{
+        0x11111111U, 0x22222222U, 0x33333333U, 0x44444444U,
+        0x55555555U, 0x66666666U, 0x77777777U, 0x88888888U};
+    for (std::size_t index = 0U; index < outputs.size(); ++index)
+    {
+        core.memory.write32_be(outputs[index], sentinels[index]);
+    }
+    core.memory.write32_be(stack_pointer + 8U, 0xFFFFFFFEU);
+    const RunResult bad_last_output = invoke(import);
+    assert(bad_last_output.reason == StopReason::memory_fault);
+    assert(bad_last_output.detail.find("write 4 byte(s)") != std::string::npos);
+    for (std::size_t index = 0U; index < outputs.size(); ++index)
+    {
+        assert(core.memory.read32_be(outputs[index]) == sentinels[index]);
+    }
+
+    core.memory.write32_be(stack_pointer + 8U, outputs[7]);
+    core.state.gpr[3] = 0xFFFFFFFCU;
+    const RunResult bad_input = invoke(import);
+    assert(bad_input.reason == StopReason::memory_fault);
+    assert(bad_input.detail.find("read 4 byte(s)") != std::string::npos);
+    for (std::size_t index = 0U; index < outputs.size(); ++index)
+    {
+        assert(core.memory.read32_be(outputs[index]) == sentinels[index]);
+    }
+
+    core.state.gpr[3] = input_address;
+    core.state.gpr[1] = 0xFFF8U;
+    const RunResult bad_stack = invoke(import);
+    assert(bad_stack.reason == StopReason::memory_fault);
+    assert(bad_stack.detail.find("read 4 byte(s)") != std::string::npos);
+    for (std::size_t index = 0U; index < outputs.size(); ++index)
+    {
+        assert(core.memory.read32_be(outputs[index]) == sentinels[index]);
+    }
+
+    core.state.gpr[1] = 0xFFFFFFF8U;
+    const RunResult wrapped_stack = invoke(import);
+    assert(wrapped_stack.reason == StopReason::hle_error);
+    assert(wrapped_stack.detail.find("stack argument wraps") != std::string::npos);
+    for (std::size_t index = 0U; index < outputs.size(); ++index)
+    {
+        assert(core.memory.read32_be(outputs[index]) == sentinels[index]);
+    }
+}
+
 void gx2_set_target_channel_masks_hle_tests()
 {
     constexpr std::uint32_t return_address = 0x0275090CU;
@@ -38109,6 +38220,7 @@ int main(int argc, char* argv[])
     gx2_set_blend_constant_color_hle_tests();
     gx2_set_alpha_test_hle_tests();
     gx2_init_target_channel_masks_reg_hle_tests();
+    gx2_get_target_channel_masks_reg_hle_tests();
     gx2_set_target_channel_masks_hle_tests();
     gx2_set_alpha_to_mask_hle_tests();
     gx2_setup_context_state_ex_hle_tests();
