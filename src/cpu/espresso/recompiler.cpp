@@ -4869,6 +4869,7 @@ struct BlockCode
     case Opcode::store_halfword_indexed:
     case Opcode::store_halfword_indexed_update:
     case Opcode::store_halfword_byte_reverse_indexed:
+    case Opcode::instruction_cache_block_invalidate:
     case Opcode::data_cache_block_store:
     case Opcode::data_cache_block_flush:
     case Opcode::data_cache_block_touch:
@@ -5087,6 +5088,7 @@ struct BlockCode
     case Opcode::store_halfword_indexed: return "sthx";
     case Opcode::store_halfword_indexed_update: return "sthux";
     case Opcode::store_halfword_byte_reverse_indexed: return "sthbrx";
+    case Opcode::instruction_cache_block_invalidate: return "icbi";
     case Opcode::data_cache_block_store: return "dcbst";
     case Opcode::data_cache_block_flush: return "dcbf";
     case Opcode::data_cache_block_touch: return "dcbt";
@@ -5163,6 +5165,7 @@ struct BlockCode
     case Opcode::store_halfword_byte_reverse_indexed:
     case Opcode::paired_single_quantized_store:
     case Opcode::paired_single_quantized_load:
+    case Opcode::instruction_cache_block_invalidate:
     case Opcode::data_cache_block_store:
     case Opcode::data_cache_block_flush:
     case Opcode::data_cache_block_touch:
@@ -5269,6 +5272,7 @@ struct BlockCode
         opcode == Opcode::store_double_indexed ||
         opcode == Opcode::store_double_indexed_update ||
         opcode == Opcode::store_floating_as_integer_word_indexed ||
+        opcode == Opcode::instruction_cache_block_invalidate ||
         opcode == Opcode::data_cache_block_touch ||
         opcode == Opcode::data_cache_block_touch_for_store ||
         opcode == Opcode::data_cache_block_store ||
@@ -9149,12 +9153,13 @@ struct Recompiler::Impl
                 compiler.bind(completed);
                 break;
             }
+            case Opcode::instruction_cache_block_invalidate:
             case Opcode::data_cache_block_touch:
             case Opcode::data_cache_block_touch_for_store:
             {
                 const std::size_t record_base = offsetof(NativeExecutionContext,
                     memory_records) + index * sizeof(NativeMemoryRecord);
-                x86::Gp base_value = compiler.new_gp32("dcbt_base");
+                x86::Gp base_value = compiler.new_gp32("cache_hint_base");
                 if (insn.base == 0U)
                 {
                     compiler.mov(base_value, imm(0U));
@@ -9163,9 +9168,9 @@ struct Recompiler::Impl
                 {
                     compiler.mov(base_value, read_guest_gpr(insn.base));
                 }
-                x86::Gp index_value = compiler.new_gp32("dcbt_index");
+                x86::Gp index_value = compiler.new_gp32("cache_hint_index");
                 compiler.mov(index_value, read_guest_gpr(insn.source));
-                x86::Gp address = compiler.new_gp32("dcbt_address");
+                x86::Gp address = compiler.new_gp32("cache_hint_address");
                 compiler.mov(address, base_value);
                 compiler.add(address, index_value);
                 compiler.mov(x86::dword_ptr(context, static_cast<std::int32_t>(
@@ -11158,15 +11163,17 @@ RunResult Recompiler::run(EspressoCore& core, std::size_t max_steps)
                     entry.immediate = insn.immediate;
                 }
             }
-            if (insn.opcode == Opcode::data_cache_block_touch ||
+            if (insn.opcode == Opcode::instruction_cache_block_invalidate ||
+                insn.opcode == Opcode::data_cache_block_touch ||
                 insn.opcode == Opcode::data_cache_block_touch_for_store ||
                 insn.opcode == Opcode::data_cache_block_store ||
                 insn.opcode == Opcode::data_cache_block_flush ||
                 insn.opcode == Opcode::data_cache_block_zero)
             {
                 // Cache hints/maintenance instructions have no architectural
-                // destination. dcbt/dcbtst are non-faulting; in the coherent-
-                // memory model dcbz writes its line while dcbst/dcbf validate.
+                // destination. icbi/dcbt/dcbtst have no separate cache state
+                // in the coherent-memory model; dcbz writes its line while
+                // dcbst/dcbf validate.
                 core.append_instruction_history(std::move(entry));
                 continue;
             }

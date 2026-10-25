@@ -7392,6 +7392,77 @@ void recompiler_dcbtst_differential_test()
     assert(!history.has_destination);
 }
 
+void recompiler_icbi_differential_test()
+{
+    constexpr std::uint32_t start = 0x100U;
+    constexpr std::uint32_t icbi_r4_r0 = x_form(0U, 4U, 0U, 982U);
+    static_assert(icbi_r4_r0 == 0x7C0407ACU);
+    EspressoCore interpreted(0x1000U);
+    EspressoCore compiled(0x1000U);
+    for (EspressoCore* core : {&interpreted, &compiled})
+    {
+        core->memory.write32_be(start, icbi_r4_r0);
+        core->memory.write32_be(start + 4U, 0x38C0002AU); // addi r6,r0,42
+        core->state.cia = start;
+        core->state.gpr.fill(0xA5A5A5A5U);
+        core->state.gpr[0] = 0x20U;
+        core->state.gpr[4] = 0x6000U;
+        core->state.cr = 0x91827364U;
+        core->state.xer = 0xA0000042U;
+        core->state.lr = 0x10203040U;
+        core->state.ctr = 0x50607080U;
+        core->state.fpscr = 0xCAFEBABEU;
+    }
+
+    const RunResult oracle = interpreted.run(2U);
+    Recompiler recompiler;
+    const RunResult actual = recompiler.run(compiled, 2U);
+    assert(actual.reason == oracle.reason && actual.steps == oracle.steps);
+    assert(actual.steps == 2U && actual.cia == oracle.cia);
+    assert(compiled.state.gpr == interpreted.state.gpr);
+    assert(compiled.state.fpr == interpreted.state.fpr);
+    assert(compiled.state.fpr_ps1 == interpreted.state.fpr_ps1);
+    assert(compiled.state.cr == interpreted.state.cr);
+    assert(compiled.state.xer == interpreted.state.xer);
+    assert(compiled.state.lr == interpreted.state.lr);
+    assert(compiled.state.ctr == interpreted.state.ctr);
+    assert(compiled.state.fpscr == interpreted.state.fpscr);
+    assert(compiled.state.gpr[6] == 42U);
+    assert(recompiler.statistics().native_instructions == 2U);
+    assert(recompiler.statistics().interpreter_fallbacks == 0U);
+    assert(recompiler.statistics().memory_slow_path_calls == 0U);
+    assert(actual.instruction_history.size() == 2U);
+    const InstructionHistoryEntry& history = actual.instruction_history.front();
+    assert(history.opcode_name == "icbi" && history.completed);
+    assert(history.has_effective_address && history.effective_address == 0x6020U);
+    assert(history.source_count == 2U);
+    assert(history.source_registers[0] == 4U && history.source_values[0] == 0x6000U);
+    assert(history.source_registers[1] == 0U && history.source_values[1] == 0x20U);
+    assert(!history.has_destination);
+
+    // Guest writes publish code-page generations, so the next dispatch after
+    // icbi must not reuse a previously translated version of the target.
+    EspressoCore self_modified(0x1000U);
+    self_modified.memory.write32_be(0x100U, 0x90850000U); // stw r4,0(r5)
+    self_modified.memory.write32_be(0x104U, x_form(0U, 5U, 0U, 982U)); // icbi r5,r0
+    self_modified.memory.write32_be(0x108U, 0x480000F8U); // b 0x200
+    self_modified.memory.write32_be(0x200U, 0x38C00001U); // addi r6,r0,1
+    self_modified.state.cia = 0x200U;
+    Recompiler coherent_code_recompiler;
+    assert(coherent_code_recompiler.run(self_modified, 1U).steps == 1U);
+    assert(self_modified.state.gpr[6] == 1U);
+
+    self_modified.state.gpr[0] = 0U;
+    self_modified.state.gpr[4] = 0x38C00002U; // replacement: addi r6,r0,2
+    self_modified.state.gpr[5] = 0x200U;
+    self_modified.state.cia = 0x100U;
+    const RunResult writer = coherent_code_recompiler.run(self_modified, 3U);
+    assert(writer.steps == 3U && self_modified.state.cia == 0x200U);
+    assert(self_modified.memory.read32_be(0x200U) == 0x38C00002U);
+    assert(coherent_code_recompiler.run(self_modified, 1U).steps == 1U);
+    assert(self_modified.state.gpr[6] == 2U);
+}
+
 void recompiler_branch_test()
 {
     EspressoCore core(0x1000U);
@@ -10277,6 +10348,7 @@ int main()
     recompiler_eieio_differential_test();
     recompiler_dcbt_differential_test();
     recompiler_dcbtst_differential_test();
+    recompiler_icbi_differential_test();
     recompiler_lbzu_differential_tests();
     recompiler_direct_flat_halfword_load_tests();
     recompiler_lwzu_differential_tests();
