@@ -3798,6 +3798,7 @@ struct BlockCode
     case Opcode::store_single:
     case Opcode::store_single_update:
     case Opcode::store_single_indexed:
+    case Opcode::store_single_indexed_update:
     case Opcode::store_double:
     case Opcode::store_double_update:
     case Opcode::store_floating_as_integer_word_indexed:
@@ -3963,6 +3964,7 @@ struct BlockCode
     case Opcode::store_single: return "stfs";
     case Opcode::store_single_update: return "stfsu";
     case Opcode::store_single_indexed: return "stfsx";
+    case Opcode::store_single_indexed_update: return "stfsux";
     case Opcode::store_double: return "stfd";
     case Opcode::store_double_update: return "stfdu";
     case Opcode::store_floating_as_integer_word_indexed: return "stfiwx";
@@ -4015,6 +4017,7 @@ struct BlockCode
     case Opcode::store_single:
     case Opcode::store_single_update:
     case Opcode::store_single_indexed:
+    case Opcode::store_single_indexed_update:
     case Opcode::store_double:
     case Opcode::store_double_update:
     case Opcode::store_floating_as_integer_word_indexed:
@@ -4097,6 +4100,7 @@ struct BlockCode
         opcode == Opcode::store_halfword_indexed ||
         opcode == Opcode::store_halfword_indexed_update ||
         opcode == Opcode::store_single || opcode == Opcode::store_single_indexed ||
+        opcode == Opcode::store_single_indexed_update ||
         opcode == Opcode::store_double || opcode == Opcode::store_double_update ||
         opcode == Opcode::store_word_update || opcode == Opcode::store_single_update ||
         opcode == Opcode::store_floating_as_integer_word_indexed;
@@ -4121,6 +4125,7 @@ struct BlockCode
         opcode == Opcode::store_halfword_indexed ||
         opcode == Opcode::store_halfword_indexed_update ||
         opcode == Opcode::store_single_indexed ||
+        opcode == Opcode::store_single_indexed_update ||
         opcode == Opcode::store_floating_as_integer_word_indexed ||
         opcode == Opcode::data_cache_block_store ||
         opcode == Opcode::data_cache_block_flush;
@@ -6960,6 +6965,7 @@ struct Recompiler::Impl
             case Opcode::store_single:
             case Opcode::store_single_update:
             case Opcode::store_single_indexed:
+            case Opcode::store_single_indexed_update:
             case Opcode::store_double:
             case Opcode::store_double_update:
             case Opcode::store_floating_as_integer_word_indexed:
@@ -6992,7 +6998,8 @@ struct Recompiler::Impl
                     guest_gpr_initialized[insn.destination];
                 const bool single_store = insn.opcode == Opcode::store_single ||
                     insn.opcode == Opcode::store_single_update ||
-                    insn.opcode == Opcode::store_single_indexed;
+                    insn.opcode == Opcode::store_single_indexed ||
+                    insn.opcode == Opcode::store_single_indexed_update;
                 const bool double_store = insn.opcode == Opcode::store_double ||
                     insn.opcode == Opcode::store_double_update;
                 const bool fp_integer_store = insn.opcode ==
@@ -7011,6 +7018,7 @@ struct Recompiler::Impl
                     insn.opcode == Opcode::store_byte_indexed_update ||
                     insn.opcode == Opcode::store_halfword_indexed_update ||
                     insn.opcode == Opcode::store_single_update ||
+                    insn.opcode == Opcode::store_single_indexed_update ||
                     insn.opcode == Opcode::store_double_update;
                 const bool sign_extend =
                     insn.opcode == Opcode::load_halfword_algebraic ||
@@ -8490,14 +8498,16 @@ RunResult Recompiler::run(EspressoCore& core, std::size_t max_steps)
             }
             else if (insn.opcode == Opcode::store_single ||
                 insn.opcode == Opcode::store_single_update ||
-                insn.opcode == Opcode::store_single_indexed)
+                insn.opcode == Opcode::store_single_indexed ||
+                insn.opcode == Opcode::store_single_indexed_update)
             {
                 entry.has_fp_source = true;
                 entry.fp_source_register = insn.fp_register;
                 entry.fp_source_value = record.fp_value;
                 entry.has_stored_single_value = true;
                 entry.stored_single_value = record.value;
-                if (insn.opcode == Opcode::store_single_update)
+                if (insn.opcode == Opcode::store_single_update ||
+                    insn.opcode == Opcode::store_single_indexed_update)
                 {
                     entry.has_destination = true;
                     entry.destination_register = insn.base;
