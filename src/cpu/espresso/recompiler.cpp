@@ -5771,6 +5771,7 @@ struct Recompiler::Impl
         using namespace asmjit;
         std::array<x86::Gp, 32> guest_gprs{};
         std::array<bool, 32> guest_gpr_initialized{};
+        std::array<bool, 32> guest_gpr_dirty{};
         const auto read_guest_gpr = [&](std::uint8_t reg) -> x86::Gp {
             if (!guest_gpr_initialized[reg])
             {
@@ -5788,11 +5789,12 @@ struct Recompiler::Impl
                 guest_gpr_initialized[reg] = true;
             }
             compiler.mov(guest_gprs[reg], value);
+            guest_gpr_dirty[reg] = true;
         };
         const auto flush_guest_gprs = [&]() {
             for (std::uint8_t reg = 0; reg < guest_gprs.size(); ++reg)
             {
-                if (guest_gpr_initialized[reg])
+                if (guest_gpr_dirty[reg])
                 {
                     compiler.mov(x86::dword_ptr(
                         state, static_cast<std::int32_t>(gpr_offset(reg))), guest_gprs[reg]);
@@ -5813,6 +5815,7 @@ struct Recompiler::Impl
                 {
                     compiler.add(read_guest_gpr(insn.destination),
                                  imm(immediate_value(insn)));
+                    guest_gpr_dirty[insn.destination] = true;
                     break;
                 }
                 x86::Gp value = compiler.new_gp32("value");
@@ -9841,6 +9844,7 @@ struct Recompiler::Impl
                 invoke->set_arg(5, imm(static_cast<std::uint32_t>(index)));
 
                 guest_gpr_initialized.fill(false);
+                guest_gpr_dirty.fill(false);
                 x86::Gp failed = compiler.new_gp32("lswi_failed");
                 compiler.mov(failed, x86::byte_ptr(context, static_cast<std::int32_t>(
                     offsetof(NativeExecutionContext, failed))));
@@ -9884,6 +9888,7 @@ struct Recompiler::Impl
                 invoke->set_arg(5, imm(static_cast<std::uint32_t>(index)));
 
                 guest_gpr_initialized.fill(false);
+                guest_gpr_dirty.fill(false);
                 x86::Gp failed = compiler.new_gp32("lswx_failed");
                 compiler.mov(failed, x86::byte_ptr(context, static_cast<std::int32_t>(
                     offsetof(NativeExecutionContext, failed))));
@@ -9938,6 +9943,7 @@ struct Recompiler::Impl
                 invoke->set_arg(4, imm(static_cast<std::uint32_t>(index)));
 
                 guest_gpr_initialized.fill(false);
+                guest_gpr_dirty.fill(false);
                 x86::Gp failed = compiler.new_gp32("lmw_failed");
                 compiler.mov(failed, x86::byte_ptr(context, static_cast<std::int32_t>(
                     offsetof(NativeExecutionContext, failed))));
@@ -10153,6 +10159,7 @@ struct Recompiler::Impl
                 invoke->set_arg(4, imm(static_cast<std::uint32_t>(index)));
 
                 guest_gpr_initialized.fill(false);
+                guest_gpr_dirty.fill(false);
                 x86::Gp failed = compiler.new_gp32("stmw_failed");
                 compiler.mov(failed, x86::byte_ptr(context, static_cast<std::int32_t>(
                     offsetof(NativeExecutionContext, failed))));
