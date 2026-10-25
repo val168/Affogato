@@ -75,6 +75,8 @@ constexpr std::uint32_t gx2_attrib_stream_size = 0x20U;
 constexpr std::uint32_t gx2_max_fetch_attributes = 64U;
 constexpr std::uint32_t gx2_sampler_size = 0x0CU;
 constexpr std::uint32_t gx2_surface_size = 0x74U;
+constexpr std::uint32_t gx2r_resflag_allocated_by_gx2r = 1U << 29U;
+constexpr std::uint32_t gx2r_resflag_locked = 1U << 30U;
 constexpr std::uint32_t gx2_texture_size = 0x9CU;
 constexpr std::uint32_t gx2_surface_use_color_buffer = 0x02U;
 constexpr std::uint32_t gx2_surface_use_depth_buffer = 0x04U;
@@ -816,6 +818,46 @@ void calculate_gx2_surface_size_and_alignment(
             surface_address + 0x40U + static_cast<std::uint32_t>(index * 4U),
             mip_offsets[index]);
     }
+}
+
+void create_gx2_surface_user_memory(
+    EspressoCore& core,
+    std::uint32_t surface_address,
+    std::uint32_t image_address,
+    std::uint32_t mipmap_address,
+    std::uint32_t resource_flags)
+{
+    constexpr const char* api_name = "gx2::GX2RCreateSurfaceUserMemory";
+    if (surface_address == 0U || (surface_address & 3U) != 0U ||
+        surface_address > std::numeric_limits<std::uint32_t>::max() -
+                              gx2_surface_size)
+    {
+        throw HleExecutionError(std::string(api_name) +
+                                ": surface pointer is null, misaligned, or wraps");
+    }
+
+    // This API stores guest virtual addresses supplied by the caller; the
+    // image allocations are not accessed while creating the descriptor.
+    core.memory.validate_write_range(surface_address, gx2_surface_size);
+    const std::uint32_t previous_use = core.memory.read32_be(surface_address + 0x1CU);
+    const std::uint32_t user_memory_flags = resource_flags &
+        ~(gx2r_resflag_locked | gx2r_resflag_allocated_by_gx2r);
+
+    // GX2CalcSurfaceSizeAndAlignment uses the resource-use bits in this same
+    // field. Restore the original word if its format/layout validation fails.
+    core.memory.write32_be(surface_address + 0x1CU, user_memory_flags);
+    try
+    {
+        calculate_gx2_surface_size_and_alignment(core, surface_address);
+    }
+    catch (...)
+    {
+        core.memory.write32_be(surface_address + 0x1CU, previous_use);
+        throw;
+    }
+
+    core.memory.write32_be(surface_address + 0x24U, image_address);
+    core.memory.write32_be(surface_address + 0x2CU, mipmap_address);
 }
 
 std::uint32_t gx2_texture_endian_swap(std::uint32_t format)
@@ -2698,6 +2740,19 @@ void register_gx2_hle(HleDispatcher& dispatcher)
         "GX2CalcSurfaceSizeAndAlignment",
         [](EspressoCore& core) {
             calculate_gx2_surface_size_and_alignment(core, core.state.gpr[3]);
+        });
+
+    dispatcher.register_function(
+        "gx2",
+        "GX2RCreateSurfaceUserMemory",
+        [](EspressoCore& core) {
+            create_gx2_surface_user_memory(
+                core,
+                core.state.gpr[3],
+                core.state.gpr[4],
+                core.state.gpr[5],
+                core.state.gpr[6]);
+            core.state.gpr[3] = 1U;
         });
 
     dispatcher.register_function(

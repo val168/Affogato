@@ -23025,6 +23025,123 @@ void gx2_calc_surface_size_and_alignment_hle_tests()
     assert(core.memory.read32_be(surface_address + 0x3CU) == 256U);
 }
 
+void gx2r_create_surface_user_memory_hle_tests()
+{
+    constexpr std::uint32_t surface_address = 0x4000U;
+    constexpr std::uint32_t return_address = 0x02751AC8U;
+    constexpr std::uint32_t surface_size = 0x74U;
+    constexpr std::uint32_t color_buffer_flag = 1U << 1U;
+    constexpr std::uint32_t rgba8_format = 0x1AU;
+
+    EspressoCore core(0x10000U);
+    register_gx2_hle(core.hle);
+    const std::uint32_t import = core.hle.bind_import(
+        "gx2", "GX2RCreateSurfaceUserMemory");
+    assert(import != 0U);
+
+    const auto invoke = [&]() {
+        core.state.cia = import;
+        core.state.lr = return_address;
+        return core.run(1U);
+    };
+    const auto write_surface = [&](std::uint32_t format,
+                                   std::uint32_t original_flags) {
+        std::array<std::uint32_t, surface_size / 4U> words{};
+        words[0] = 1U; // GX2_SURFACE_DIM_2D
+        words[1] = 1280U;
+        words[2] = 720U;
+        words[3] = 1U;
+        words[4] = 1U;
+        words[5] = format;
+        words[7] = original_flags;
+        words[9] = 0x11111111U;
+        words[11] = 0x22222222U;
+        for (std::size_t index = 0U; index < words.size(); ++index)
+        {
+            core.memory.write32_be(
+                surface_address + static_cast<std::uint32_t>(index * 4U),
+                words[index]);
+        }
+    };
+
+    constexpr std::uint32_t image_address = 0xDEADBEEFU;
+    constexpr std::uint32_t mipmap_address = 0xCAFEBABEU;
+    constexpr std::uint32_t resource_flags =
+        0x60010000U | color_buffer_flag;
+    constexpr std::uint32_t expected_flags = 0x00010000U | color_buffer_flag;
+
+    // The user-owned image/mip addresses are retained verbatim, and only the
+    // GX2R LOCKED/ALLOCATED bits are cleared from the supplied resource flags.
+    write_surface(rgba8_format, 0xA5A5A5A5U);
+    core.state.gpr.fill(0xB6000000U);
+    core.state.gpr[3] = surface_address;
+    core.state.gpr[4] = image_address;
+    core.state.gpr[5] = mipmap_address;
+    core.state.gpr[6] = resource_flags;
+    core.state.cr = 0x12345678U;
+    core.state.xer = 0xA5A55A5AU;
+    core.state.ctr = 0x87654321U;
+    core.state.fpscr = 0x5A5AA55AU;
+    const auto gprs_before = core.state.gpr;
+    const auto fprs_before = core.state.fpr;
+    const auto ps1_before = core.state.fpr_ps1;
+    const std::uint32_t cr_before = core.state.cr;
+    const std::uint32_t xer_before = core.state.xer;
+    const std::uint32_t ctr_before = core.state.ctr;
+    const std::uint32_t fpscr_before = core.state.fpscr;
+
+    auto result = invoke();
+    assert(result.reason == StopReason::instruction_limit);
+    assert(result.steps == 1U && core.state.cia == return_address);
+    assert(core.state.gpr[3] == 1U);
+    assert(core.state.gpr[4] == image_address &&
+           core.state.gpr[5] == mipmap_address &&
+           core.state.gpr[6] == resource_flags);
+    assert(core.memory.read32_be(surface_address + 0x1CU) == expected_flags);
+    assert(core.memory.read32_be(surface_address + 0x20U) == 3'686'400U);
+    assert(core.memory.read32_be(surface_address + 0x24U) == image_address);
+    assert(core.memory.read32_be(surface_address + 0x28U) == 0U);
+    assert(core.memory.read32_be(surface_address + 0x2CU) == mipmap_address);
+    assert(core.memory.read32_be(surface_address + 0x38U) == 2048U);
+    assert(core.memory.read32_be(surface_address + 0x3CU) == 1280U);
+    assert(core.state.gpr[0] == gprs_before[0]);
+    for (std::size_t index = 1U; index < core.state.gpr.size(); ++index)
+    {
+        if (index != 3U)
+            assert(core.state.gpr[index] == gprs_before[index]);
+    }
+    assert(core.state.fpr == fprs_before && core.state.fpr_ps1 == ps1_before);
+    assert(core.state.cr == cr_before && core.state.xer == xer_before);
+    assert(core.state.ctr == ctr_before && core.state.fpscr == fpscr_before);
+
+    // Null image or mip pointers are valid and must not be dereferenced here.
+    write_surface(rgba8_format, 0U);
+    core.state.gpr[3] = surface_address;
+    core.state.gpr[4] = 0U;
+    core.state.gpr[5] = 0U;
+    core.state.gpr[6] = color_buffer_flag;
+    result = invoke();
+    assert(result.reason == StopReason::instruction_limit);
+    assert(core.state.gpr[3] == 1U);
+    assert(core.memory.read32_be(surface_address + 0x24U) == 0U);
+    assert(core.memory.read32_be(surface_address + 0x2CU) == 0U);
+
+    // An unsupported format fails before the user descriptor's flags or
+    // backing pointers are changed.
+    write_surface(0x3FU, 0x11223344U);
+    core.memory.write32_be(surface_address + 0x24U, 0x55667788U);
+    core.memory.write32_be(surface_address + 0x2CU, 0x99AABBCCU);
+    core.state.gpr[3] = surface_address;
+    core.state.gpr[4] = image_address;
+    core.state.gpr[5] = mipmap_address;
+    core.state.gpr[6] = resource_flags;
+    result = invoke();
+    assert(result.reason == StopReason::hle_error);
+    assert(core.memory.read32_be(surface_address + 0x1CU) == 0x11223344U);
+    assert(core.memory.read32_be(surface_address + 0x24U) == 0x55667788U);
+    assert(core.memory.read32_be(surface_address + 0x2CU) == 0x99AABBCCU);
+}
+
 void gx2_init_texture_regs_hle_tests()
 {
     constexpr std::uint32_t texture_address = 0x5000U;
@@ -32488,6 +32605,7 @@ int main(int argc, char* argv[])
     gx2_setup_context_state_ex_hle_tests();
     gx2_get_context_state_display_list_hle_tests();
     gx2_calc_surface_size_and_alignment_hle_tests();
+    gx2r_create_surface_user_memory_hle_tests();
     gx2_init_texture_regs_hle_tests();
     gx2_set_pixel_texture_hle_tests();
     gx2_set_vertex_and_geometry_texture_hle_tests();
