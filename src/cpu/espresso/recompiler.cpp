@@ -294,7 +294,7 @@ struct NativeExecutionContext
     std::array<NativeFrsqrteRecord, 64> frsqrte_records{};
     std::array<NativeFmulRecord, 64> fmul_records{};
     std::array<NativeFsubRecord, 64> fdiv_records{};
-    std::array<NativePsSumRecord, 64> ps_sum0_records{};
+    std::array<NativePsSumRecord, 64> ps_sum_records{};
     std::array<NativePsBinaryRecord, 64> ps_add_records{};
     std::array<NativePsBinaryRecord, 64> ps_sub_records{};
     std::array<NativePsMergeRecord, 64> ps_merge_records{};
@@ -2029,25 +2029,26 @@ extern "C" void native_fdiv(
     commit(raw_result, inexact, rounded_up);
 }
 
-extern "C" void native_ps_sum0(
+extern "C" void native_ps_sum(
     NativeExecutionContext* context,
     CpuState* state,
     std::uint32_t destination,
     std::uint32_t source_a,
     std::uint32_t source_b,
     std::uint32_t source_c,
+    std::uint32_t sum0,
     std::uint32_t instruction_index) noexcept
 {
     if (destination >= state->fpr.size() || source_a >= state->fpr.size() ||
         source_b >= state->fpr.size() || source_c >= state->fpr.size() ||
-        instruction_index >= context->ps_sum0_records.size())
+        instruction_index >= context->ps_sum_records.size())
     {
         context->failed = true;
         context->failed_instruction_index = instruction_index;
         return;
     }
 
-    NativePsSumRecord& record = context->ps_sum0_records[instruction_index];
+    NativePsSumRecord& record = context->ps_sum_records[instruction_index];
     record.source_a_ps0 = state->fpr[source_a];
     record.source_a_ps1 = state->fpr_ps1[source_a];
     record.source_b_ps0 = state->fpr[source_b];
@@ -2055,10 +2056,11 @@ extern "C" void native_ps_sum0(
     record.source_c_ps0 = state->fpr[source_c];
     record.source_c_ps1 = state->fpr_ps1[source_c];
     const double a_ps0 = std::bit_cast<double>(record.source_a_ps0);
+    const double c_ps0 = std::bit_cast<double>(record.source_c_ps0);
     const double b_ps1 = std::bit_cast<double>(record.source_b_ps1);
     const double c_ps1 = std::bit_cast<double>(record.source_c_ps1);
-    const float result_ps0 = static_cast<float>(a_ps0 + b_ps1);
-    const float result_ps1 = static_cast<float>(c_ps1);
+    const float result_ps0 = static_cast<float>(sum0 != 0U ? a_ps0 + b_ps1 : c_ps0);
+    const float result_ps1 = static_cast<float>(sum0 != 0U ? c_ps1 : a_ps0 + b_ps1);
     record.destination_ps0 = std::bit_cast<std::uint64_t>(
         static_cast<double>(result_ps0));
     record.destination_ps1 = std::bit_cast<std::uint64_t>(
@@ -3746,6 +3748,7 @@ struct BlockCode
     case Opcode::floating_divide_double:
     case Opcode::floating_add_double:
     case Opcode::paired_single_sum0:
+    case Opcode::paired_single_sum1:
     case Opcode::paired_single_add:
     case Opcode::paired_single_subtract:
     case Opcode::paired_single_multiply:
@@ -3946,6 +3949,7 @@ struct BlockCode
     case Opcode::floating_divide_double: return "fdiv";
     case Opcode::floating_add_double: return "fadd";
     case Opcode::paired_single_sum0: return "ps_sum0";
+    case Opcode::paired_single_sum1: return "ps_sum1";
     case Opcode::paired_single_add: return "ps_add";
     case Opcode::paired_single_subtract: return "ps_sub";
     case Opcode::paired_single_multiply: return "ps_mul";
@@ -6276,21 +6280,23 @@ struct Recompiler::Impl
                 break;
             }
             case Opcode::paired_single_sum0:
+            case Opcode::paired_single_sum1:
             {
                 auto* invoke = static_cast<InvokeNode*>(nullptr);
                 const auto helper_address = static_cast<std::uint64_t>(
-                    reinterpret_cast<std::uintptr_t>(&native_ps_sum0));
+                    reinterpret_cast<std::uintptr_t>(&native_ps_sum));
                 compiler.invoke(Out(invoke), helper_address,
                     FuncSignature::build<void, NativeExecutionContext*, CpuState*,
                         std::uint32_t, std::uint32_t, std::uint32_t,
-                        std::uint32_t, std::uint32_t>(CallConvId::kCDecl));
+                        std::uint32_t, std::uint32_t, std::uint32_t>(CallConvId::kCDecl));
                 invoke->set_arg(0, context);
                 invoke->set_arg(1, state);
                 invoke->set_arg(2, imm(insn.fp_register));
                 invoke->set_arg(3, imm(insn.fp_source_a));
                 invoke->set_arg(4, imm(insn.fp_source_b));
                 invoke->set_arg(5, imm(insn.fp_source_c));
-                invoke->set_arg(6, imm(static_cast<std::uint32_t>(index)));
+                invoke->set_arg(6, imm(insn.opcode == Opcode::paired_single_sum0 ? 1U : 0U));
+                invoke->set_arg(7, imm(static_cast<std::uint32_t>(index)));
                 break;
             }
             case Opcode::paired_single_subtract:
@@ -8288,12 +8294,14 @@ RunResult Recompiler::run(EspressoCore& core, std::size_t max_steps)
                 core.append_instruction_history(std::move(entry));
                 continue;
             }
-            if (insn.opcode == Opcode::paired_single_sum0)
+            if (insn.opcode == Opcode::paired_single_sum0 ||
+                insn.opcode == Opcode::paired_single_sum1)
             {
                 InstructionHistoryEntry entry = native_history(insn, cia);
-                const NativePsSumRecord& record = context.ps_sum0_records[i];
+                const NativePsSumRecord& record = context.ps_sum_records[i];
                 entry.has_paired_fp_state = true;
-                entry.paired_fp_sum0 = true;
+                entry.paired_fp_sum0 = insn.opcode == Opcode::paired_single_sum0;
+                entry.paired_fp_sum1 = insn.opcode == Opcode::paired_single_sum1;
                 entry.paired_fp_destination_register = insn.fp_register;
                 entry.paired_fp_source_a_register = insn.fp_source_a;
                 entry.paired_fp_source_b_register = insn.fp_source_b;

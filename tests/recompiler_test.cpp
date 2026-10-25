@@ -154,6 +154,16 @@ namespace
         (static_cast<std::uint32_t>(source) << 11U) | (136U << 1U);
 }
 
+[[nodiscard]] constexpr std::uint32_t ps_sum1_form(
+    std::uint8_t destination, std::uint8_t source_a,
+    std::uint8_t source_b, std::uint8_t source_c)
+{
+    return (4U << 26U) | (static_cast<std::uint32_t>(destination) << 21U) |
+        (static_cast<std::uint32_t>(source_a) << 16U) |
+        (static_cast<std::uint32_t>(source_b) << 11U) |
+        (static_cast<std::uint32_t>(source_c) << 6U) | (11U << 1U);
+}
+
 [[nodiscard]] constexpr std::uint32_t ps_add_form(
     std::uint8_t destination, std::uint8_t source_a, std::uint8_t source_b)
 {
@@ -2660,6 +2670,76 @@ void recompiler_ps_nabs_differential_tests()
         assert(history.paired_fp_source_b_ps1 == expected.paired_fp_source_b_ps1);
         assert(history.paired_fp_destination_register ==
             expected.paired_fp_destination_register);
+        assert(history.paired_fp_destination_ps0 == expected.paired_fp_destination_ps0);
+        assert(history.paired_fp_destination_ps1 == expected.paired_fp_destination_ps1);
+    }
+}
+
+void recompiler_ps_sum1_differential_tests()
+{
+    constexpr std::uint32_t start = 0x100U;
+    constexpr std::array program{
+        ps_sum1_form(1U, 5U, 6U, 7U),
+        ps_sum1_form(6U, 6U, 6U, 6U), // destination aliases every source
+        ps_sum1_form(5U, 0U, 0U, 5U), // destination aliases C
+    };
+    EspressoCore interpreted(0x1000U);
+    EspressoCore compiled(0x1000U);
+    for (EspressoCore* core : {&interpreted, &compiled})
+    {
+        for (std::size_t index = 0U; index < program.size(); ++index)
+        {
+            core->memory.write32_be(start + static_cast<std::uint32_t>(index * 4U),
+                program[index]);
+        }
+        core->state.cia = start;
+        core->state.fpr.fill(0xBFE0000000000000ULL);
+        core->state.fpr_ps1.fill(0x3FE0000000000000ULL);
+        core->state.fpr[5] = 0x3FF8000000000000ULL; // 1.5
+        core->state.fpr_ps1[5] = 0x4000000000000000ULL;
+        core->state.fpr[6] = 0xBFF0000000000000ULL; // -1
+        core->state.fpr_ps1[6] = 0x4002000000000000ULL; // 2.25
+        core->state.fpr[7] = 0xC012000000000000ULL; // -4.5
+        core->state.fpr_ps1[7] = 0x400A000000000000ULL; // 3.25
+        core->state.cr = 0xA5C39E71U;
+        core->state.xer = 0x87654321U;
+        core->state.lr = 0xABCDEF00U;
+        core->state.ctr = 0xFEDCBA98U;
+        core->state.fpscr = 0x89ABCDEFU;
+    }
+
+    const auto original_gprs = compiled.state.gpr;
+    const auto original_memory = compiled.memory.read32_be(start);
+    const RunResult oracle = interpreted.run(program.size());
+    Recompiler recompiler;
+    const RunResult actual = recompiler.run(compiled, program.size());
+    assert(actual.reason == oracle.reason);
+    assert(actual.steps == oracle.steps && actual.steps == program.size());
+    assert(actual.cia == oracle.cia);
+    assert(compiled.state.gpr == interpreted.state.gpr);
+    assert(compiled.state.gpr == original_gprs);
+    assert(compiled.state.fpr == interpreted.state.fpr);
+    assert(compiled.state.fpr_ps1 == interpreted.state.fpr_ps1);
+    assert(compiled.state.cr == interpreted.state.cr);
+    assert(compiled.state.xer == interpreted.state.xer);
+    assert(compiled.state.lr == interpreted.state.lr);
+    assert(compiled.state.ctr == interpreted.state.ctr);
+    assert(compiled.state.fpscr == interpreted.state.fpscr);
+    assert(compiled.memory.read32_be(start) == original_memory);
+    assert(recompiler.statistics().native_instructions == program.size());
+    assert(recompiler.statistics().interpreter_fallbacks == 0U);
+    assert(actual.instruction_history.size() == program.size());
+    for (std::size_t index = 0U; index < program.size(); ++index)
+    {
+        const InstructionHistoryEntry& expected = oracle.instruction_history[index];
+        const InstructionHistoryEntry& history = actual.instruction_history[index];
+        assert(history.opcode_name == "ps_sum1");
+        assert(history.has_paired_fp_state && history.paired_fp_sum1 &&
+            !history.paired_fp_sum0);
+        assert(history.paired_fp_source_a_ps0 == expected.paired_fp_source_a_ps0);
+        assert(history.paired_fp_source_b_ps1 == expected.paired_fp_source_b_ps1);
+        assert(history.paired_fp_source_c_ps0 == expected.paired_fp_source_c_ps0);
+        assert(history.paired_fp_source_c_ps1 == expected.paired_fp_source_c_ps1);
         assert(history.paired_fp_destination_ps0 == expected.paired_fp_destination_ps0);
         assert(history.paired_fp_destination_ps1 == expected.paired_fp_destination_ps1);
     }
@@ -6819,6 +6899,7 @@ int main()
     recompiler_ps_mr_differential_tests();
     recompiler_ps_abs_differential_tests();
     recompiler_ps_nabs_differential_tests();
+    recompiler_ps_sum1_differential_tests();
     recompiler_stfs_differential_tests();
     recompiler_stfsu_differential_tests();
     recompiler_stfd_differential_tests();
