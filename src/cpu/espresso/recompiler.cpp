@@ -4808,6 +4808,8 @@ struct BlockCode
     case Opcode::paired_single_quantized_store:
     case Opcode::instruction_sync:
     case Opcode::enforce_in_order_io:
+    case Opcode::memory_synchronize:
+    case Opcode::memory_synchronize_lightweight:
     case Opcode::shift_left_word:
     case Opcode::shift_right_word:
     case Opcode::arithmetic_shift_right_immediate:
@@ -4947,6 +4949,8 @@ struct BlockCode
     case Opcode::paired_single_quantized_load: return "psq_l";
     case Opcode::instruction_sync: return "isync";
     case Opcode::enforce_in_order_io: return "eieio";
+    case Opcode::memory_synchronize: return "sync";
+    case Opcode::memory_synchronize_lightweight: return "lwsync";
     case Opcode::bitwise_or: return "or";
     case Opcode::bitwise_and: return "and";
     case Opcode::bitwise_and_complement: return "andc";
@@ -7448,6 +7452,12 @@ struct Recompiler::Impl
             case Opcode::enforce_in_order_io:
                 // Guest RAM accesses are synchronous and there is no separate
                 // cache-inhibited I/O queue in the current memory model.
+                break;
+            case Opcode::memory_synchronize:
+            case Opcode::memory_synchronize_lightweight:
+                // x86 MFENCE provides the full ordering required by sync and
+                // is a safe stronger ordering for lwsync in this host model.
+                compiler.mfence();
                 break;
             case Opcode::branch:
             {

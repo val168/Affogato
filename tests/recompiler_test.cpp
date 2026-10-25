@@ -7259,6 +7259,63 @@ void recompiler_eieio_differential_test()
     assert(actual.instruction_history[1].opcode_name == "addi");
 }
 
+void recompiler_memory_synchronize_differential_test()
+{
+    struct FenceCase
+    {
+        std::uint32_t instruction;
+        const char* mnemonic;
+        Opcode opcode;
+    };
+    constexpr std::array cases{
+        FenceCase{0x7C0004ACU, "sync", Opcode::memory_synchronize},
+        FenceCase{0x7C2004ACU, "lwsync", Opcode::memory_synchronize_lightweight},
+    };
+    constexpr std::uint32_t start = 0x100U;
+
+    for (const FenceCase& test : cases)
+    {
+        assert(decode(test.instruction).opcode == test.opcode);
+        EspressoCore interpreted(0x1000U);
+        EspressoCore compiled(0x1000U);
+        for (EspressoCore* core : {&interpreted, &compiled})
+        {
+            core->memory.write32_be(start, 0x90830000U); // stw r4,0(r3)
+            core->memory.write32_be(start + 4U, test.instruction);
+            core->memory.write32_be(start + 8U, 0x80A30000U); // lwz r5,0(r3)
+            core->state.cia = start;
+            core->state.gpr[3] = 0x300U;
+            core->state.gpr[4] = 0xCAFEBABEU;
+            core->state.cr = 0xA5C39E71U;
+            core->state.xer = 0x87654321U;
+            core->state.lr = 0xABCDEF00U;
+            core->state.ctr = 0xFEDCBA98U;
+            core->state.fpscr = 0x89ABCDEFU;
+        }
+
+        const RunResult oracle = interpreted.run(3U);
+        Recompiler recompiler;
+        const RunResult actual = recompiler.run(compiled, 3U);
+        assert(actual.reason == oracle.reason && actual.steps == oracle.steps);
+        assert(actual.steps == 3U && actual.cia == oracle.cia);
+        assert(compiled.state.gpr == interpreted.state.gpr);
+        assert(compiled.state.fpr == interpreted.state.fpr);
+        assert(compiled.state.fpr_ps1 == interpreted.state.fpr_ps1);
+        assert(compiled.state.cr == interpreted.state.cr);
+        assert(compiled.state.xer == interpreted.state.xer);
+        assert(compiled.state.lr == interpreted.state.lr);
+        assert(compiled.state.ctr == interpreted.state.ctr);
+        assert(compiled.state.fpscr == interpreted.state.fpscr);
+        assert(compiled.state.gpr[5] == 0xCAFEBABEU);
+        assert(compiled.memory.read32_be(0x300U) == 0xCAFEBABEU);
+        assert(recompiler.statistics().native_instructions == 3U);
+        assert(recompiler.statistics().interpreter_fallbacks == 0U);
+        assert(recompiler.statistics().memory_slow_path_calls > 0U);
+        assert(actual.instruction_history.size() == 3U);
+        assert(actual.instruction_history[1].opcode_name == test.mnemonic);
+    }
+}
+
 void recompiler_dcbt_differential_test()
 {
     struct Case
@@ -10346,6 +10403,7 @@ int main()
     recompiler_recent_history_window_test();
     recompiler_isync_boundary_differential_test();
     recompiler_eieio_differential_test();
+    recompiler_memory_synchronize_differential_test();
     recompiler_dcbt_differential_test();
     recompiler_dcbtst_differential_test();
     recompiler_icbi_differential_test();
