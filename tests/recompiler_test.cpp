@@ -140,6 +140,13 @@ namespace
         (static_cast<std::uint32_t>(source) << 11U) | (72U << 1U);
 }
 
+[[nodiscard]] constexpr std::uint32_t ps_abs_form(
+    std::uint8_t destination, std::uint8_t source)
+{
+    return (4U << 26U) | (static_cast<std::uint32_t>(destination) << 21U) |
+        (static_cast<std::uint32_t>(source) << 11U) | (264U << 1U);
+}
+
 [[nodiscard]] constexpr std::uint32_t ps_add_form(
     std::uint8_t destination, std::uint8_t source_a, std::uint8_t source_b)
 {
@@ -2492,6 +2499,80 @@ void recompiler_ps_mr_differential_tests()
         const InstructionHistoryEntry& expected = oracle.instruction_history[index];
         const InstructionHistoryEntry& history = actual.instruction_history[index];
         assert(history.opcode_name == "ps_mr");
+        assert(history.has_paired_fp_state && history.paired_fp_unary);
+        assert(history.paired_fp_source_b_register == expected.paired_fp_source_b_register);
+        assert(history.paired_fp_source_b_ps0 == expected.paired_fp_source_b_ps0);
+        assert(history.paired_fp_source_b_ps1 == expected.paired_fp_source_b_ps1);
+        assert(history.paired_fp_destination_register ==
+            expected.paired_fp_destination_register);
+        assert(history.paired_fp_destination_ps0 == expected.paired_fp_destination_ps0);
+        assert(history.paired_fp_destination_ps1 == expected.paired_fp_destination_ps1);
+    }
+}
+
+void recompiler_ps_abs_differential_tests()
+{
+    constexpr std::uint32_t start = 0x100U;
+    constexpr std::array program{
+        ps_abs_form(1U, 5U),
+        ps_abs_form(6U, 6U), // full source/destination alias
+        ps_abs_form(31U, 0U),
+        ps_abs_form(0U, 31U),
+    };
+    EspressoCore interpreted(0x1000U);
+    EspressoCore compiled(0x1000U);
+    for (EspressoCore* core : {&interpreted, &compiled})
+    {
+        for (std::size_t index = 0U; index < program.size(); ++index)
+        {
+            core->memory.write32_be(start + static_cast<std::uint32_t>(index * 4U),
+                program[index]);
+        }
+        core->state.cia = start;
+        for (std::uint32_t reg = 0U; reg < 32U; ++reg)
+        {
+            core->state.fpr[reg] = 0xBFF0000000000000ULL ^
+                (static_cast<std::uint64_t>(reg) * 0x0101010101010101ULL);
+            core->state.fpr_ps1[reg] = 0xFFF0000000000001ULL ^
+                (static_cast<std::uint64_t>(reg) * 0x0001000100010001ULL);
+        }
+        core->state.fpr[5] = 0xFFF8123456789ABCULL;
+        core->state.fpr_ps1[5] = 0xFFF0123456789ABCULL;
+        core->state.fpr[6] = 0x8000000000000000ULL;
+        core->state.fpr_ps1[6] = 0xFFF8000000000000ULL;
+        core->state.cr = 0xA5C39E71U;
+        core->state.xer = 0x87654321U;
+        core->state.lr = 0xABCDEF00U;
+        core->state.ctr = 0xFEDCBA98U;
+        core->state.fpscr = 0x89ABCDEFU;
+    }
+
+    const auto original_gprs = compiled.state.gpr;
+    const auto original_memory = compiled.memory.read32_be(start);
+    const RunResult oracle = interpreted.run(program.size());
+    Recompiler recompiler;
+    const RunResult actual = recompiler.run(compiled, program.size());
+    assert(actual.reason == oracle.reason);
+    assert(actual.steps == oracle.steps && actual.steps == program.size());
+    assert(actual.cia == oracle.cia);
+    assert(compiled.state.gpr == interpreted.state.gpr);
+    assert(compiled.state.gpr == original_gprs);
+    assert(compiled.state.fpr == interpreted.state.fpr);
+    assert(compiled.state.fpr_ps1 == interpreted.state.fpr_ps1);
+    assert(compiled.state.cr == interpreted.state.cr);
+    assert(compiled.state.xer == interpreted.state.xer);
+    assert(compiled.state.lr == interpreted.state.lr);
+    assert(compiled.state.ctr == interpreted.state.ctr);
+    assert(compiled.state.fpscr == interpreted.state.fpscr);
+    assert(compiled.memory.read32_be(start) == original_memory);
+    assert(recompiler.statistics().native_instructions == program.size());
+    assert(recompiler.statistics().interpreter_fallbacks == 0U);
+    assert(actual.instruction_history.size() == program.size());
+    for (std::size_t index = 0U; index < program.size(); ++index)
+    {
+        const InstructionHistoryEntry& expected = oracle.instruction_history[index];
+        const InstructionHistoryEntry& history = actual.instruction_history[index];
+        assert(history.opcode_name == "ps_abs");
         assert(history.has_paired_fp_state && history.paired_fp_unary);
         assert(history.paired_fp_source_b_register == expected.paired_fp_source_b_register);
         assert(history.paired_fp_source_b_ps0 == expected.paired_fp_source_b_ps0);
@@ -6655,6 +6736,7 @@ int main()
     recompiler_ps_merge10_differential_tests();
     recompiler_ps_merge00_differential_tests();
     recompiler_ps_mr_differential_tests();
+    recompiler_ps_abs_differential_tests();
     recompiler_stfs_differential_tests();
     recompiler_stfsu_differential_tests();
     recompiler_stfd_differential_tests();
