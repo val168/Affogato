@@ -20,6 +20,7 @@ enum class Gx2CommandType
     draw_done,
     gpu_fence,
     scan_buffer_swap,
+    set_vertex_buffer,
     draw,
 };
 
@@ -37,6 +38,16 @@ struct Gx2DrawCall
     constexpr bool operator==(const Gx2DrawCall&) const = default;
 };
 
+struct Gx2VertexBufferBinding
+{
+    std::uint32_t index{};
+    std::uint32_t size{};
+    std::uint32_t stride{};
+    std::uint32_t guest_address{};
+
+    constexpr bool operator==(const Gx2VertexBufferBinding&) const = default;
+};
+
 struct Gx2Command
 {
     Gx2CommandType type{};
@@ -46,6 +57,7 @@ struct Gx2Command
     std::uint32_t mask{};
     std::uint32_t compare_op{};
     std::optional<Gx2DrawCall> draw_call;
+    std::optional<Gx2VertexBufferBinding> vertex_buffer;
 
     constexpr Gx2Command() = default;
     constexpr Gx2Command(
@@ -55,14 +67,16 @@ struct Gx2Command
         std::uint32_t command_guest_memory_address = 0U,
         std::uint32_t command_mask = 0U,
         std::uint32_t command_compare_op = 0U,
-        std::optional<Gx2DrawCall> command_draw_call = std::nullopt)
+        std::optional<Gx2DrawCall> command_draw_call = std::nullopt,
+        std::optional<Gx2VertexBufferBinding> command_vertex_buffer = std::nullopt)
         : type(command_type),
           register_address(command_register_address),
           value(command_value),
           guest_memory_address(command_guest_memory_address),
           mask(command_mask),
           compare_op(command_compare_op),
-          draw_call(command_draw_call)
+          draw_call(command_draw_call),
+          vertex_buffer(command_vertex_buffer)
     {
     }
 
@@ -215,6 +229,7 @@ struct Gx2RuntimeState
     std::array<std::optional<Gx2SamplerBinding>, 16U> pixel_samplers{};
     std::array<std::optional<Gx2SamplerBinding>, 16U> vertex_samplers{};
     std::array<std::optional<Gx2SamplerBinding>, 16U> geometry_samplers{};
+    std::array<std::optional<Gx2VertexBufferBinding>, 16U> vertex_buffers{};
     std::array<std::optional<std::array<std::uint32_t, 4U>>, 12U>
         pixel_sampler_border_colors{};
     std::array<std::optional<std::array<std::uint32_t, 4U>>, 12U>

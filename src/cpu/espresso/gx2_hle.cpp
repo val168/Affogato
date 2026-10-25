@@ -167,6 +167,7 @@ constexpr std::uint32_t gx2_vertex_sampler_register_base = 0x0003C0D8U;
 constexpr std::uint32_t gx2_geometry_sampler_register_base = 0x0003C1B0U;
 constexpr std::uint32_t gx2_texture_register_count = 7U;
 constexpr std::uint32_t gx2_texture_unit_count = 16U;
+constexpr std::uint32_t gx2_vertex_buffer_count = 16U;
 constexpr std::uint32_t gx2_sampler_register_count = 3U;
 constexpr std::uint32_t gx2_sampler_unit_count = 16U;
 constexpr std::uint32_t gx2_sampler_border_color_unit_count = 12U;
@@ -3436,6 +3437,34 @@ void register_gx2_hle(HleDispatcher& dispatcher)
         "GX2GetSwapInterval",
         [](EspressoCore& core) {
             core.state.gpr[3] = core.gx2.swap_interval;
+        });
+
+    dispatcher.register_function(
+        "gx2",
+        "GX2SetAttribBuffer",
+        [](EspressoCore& core) {
+            const std::uint32_t index = core.state.gpr[3];
+            if (index >= gx2_vertex_buffer_count)
+            {
+                throw HleExecutionError(
+                    "GX2SetAttribBuffer: attribute buffer index is out of range");
+            }
+
+            const Gx2VertexBufferBinding binding{
+                index,
+                core.state.gpr[4],
+                core.state.gpr[5],
+                core.state.gpr[6]};
+            core.gx2.pending_commands.push_back({
+                Gx2CommandType::set_vertex_buffer,
+                0U,
+                0U,
+                0U,
+                0U,
+                0U,
+                std::nullopt,
+                binding});
+            core.gx2.vertex_buffers[index] = binding;
         });
 
     dispatcher.register_function(

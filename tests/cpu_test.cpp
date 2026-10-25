@@ -24225,6 +24225,64 @@ void gx2_draw_ex_hle_tests()
         3U, 15U, true, 0U, 0x200U, 4U, 1U, 0U};
     assert(register_state.draw_calls().back().draw_call ==
            expected_immediate_draw);
+
+    constexpr Gx2VertexBufferBinding vertex_buffer{
+        3U, 0x180U, 24U, 0x12345000U};
+    core.state.gpr[3] = vertex_buffer.index;
+    core.state.gpr[4] = vertex_buffer.size;
+    core.state.gpr[5] = vertex_buffer.stride;
+    core.state.gpr[6] = vertex_buffer.guest_address;
+    core.state.lr = return_address;
+    core.state.cia = core.hle.bind_import("gx2", "GX2SetAttribBuffer");
+    const auto attrib_gprs_before = core.state.gpr;
+    assert(core.run(1U).reason == StopReason::instruction_limit);
+    assert(core.state.gpr == attrib_gprs_before);
+    const auto attrib_commands = take_gx2_commands(core.gx2);
+    assert(attrib_commands.size() == 1U);
+    assert(attrib_commands.front().type == Gx2CommandType::set_vertex_buffer);
+    assert(attrib_commands.front().vertex_buffer == vertex_buffer);
+    assert(core.gx2.vertex_buffers[vertex_buffer.index] == vertex_buffer);
+    register_state.apply(attrib_commands);
+    assert(register_state.vertex_buffers()[vertex_buffer.index] == vertex_buffer);
+
+    run_draw_variant(
+        "GX2DrawEx",
+        {5U, 6U, 0U, 1U, 0U, 0U, 0U},
+        Gx2DrawCall{5U, 6U, false, 0U, 0U, 0U, 1U, 0U});
+    assert(register_state.draw_vertex_buffers().size() == 6U);
+    assert(register_state.draw_vertex_buffers()[5U][vertex_buffer.index] ==
+           vertex_buffer);
+
+    constexpr Gx2VertexBufferBinding replacement_vertex_buffer{
+        3U, 0x240U, 32U, 0x23456000U};
+    core.state.gpr[3] = replacement_vertex_buffer.index;
+    core.state.gpr[4] = replacement_vertex_buffer.size;
+    core.state.gpr[5] = replacement_vertex_buffer.stride;
+    core.state.gpr[6] = replacement_vertex_buffer.guest_address;
+    core.state.lr = return_address;
+    core.state.cia = core.hle.bind_import("gx2", "GX2SetAttribBuffer");
+    assert(core.run(1U).reason == StopReason::instruction_limit);
+    register_state.apply(take_gx2_commands(core.gx2));
+    assert(register_state.vertex_buffers()[vertex_buffer.index] ==
+           replacement_vertex_buffer);
+    assert(register_state.draw_vertex_buffers()[5U][vertex_buffer.index] ==
+           vertex_buffer);
+
+    run_draw_variant(
+        "GX2DrawEx",
+        {5U, 3U, 0U, 1U, 0U, 0U, 0U},
+        Gx2DrawCall{5U, 3U, false, 0U, 0U, 0U, 1U, 0U});
+    assert(register_state.draw_vertex_buffers().size() == 7U);
+    assert(register_state.draw_vertex_buffers()[6U][vertex_buffer.index] ==
+           replacement_vertex_buffer);
+
+    core.state.gpr[3] = 16U;
+    core.state.lr = return_address;
+    core.state.cia = core.hle.bind_import("gx2", "GX2SetAttribBuffer");
+    assert(core.run(1U).reason == StopReason::hle_error);
+    assert(take_gx2_commands(core.gx2).empty());
+    assert(core.gx2.vertex_buffers[vertex_buffer.index] ==
+           replacement_vertex_buffer);
 }
 
 void gx2_gpu_time_to_cpu_time_hle_tests()

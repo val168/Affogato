@@ -52,6 +52,17 @@ public:
                 // Preserve draw-call order and arguments for the future Latte
                 // command translator; recording is not GPU execution.
                 draw_calls_.push_back(command);
+                draw_vertex_buffers_.push_back(vertex_buffers_);
+                continue;
+            }
+            if (command.type == cpu::espresso::Gx2CommandType::set_vertex_buffer)
+            {
+                if (command.vertex_buffer &&
+                    command.vertex_buffer->index < vertex_buffers_.size())
+                {
+                    vertex_buffers_[command.vertex_buffer->index] =
+                        command.vertex_buffer;
+                }
                 continue;
             }
             if (command.type == cpu::espresso::Gx2CommandType::flush ||
@@ -189,6 +200,20 @@ public:
         return draw_calls_;
     }
 
+    [[nodiscard]] const std::array<
+        std::optional<cpu::espresso::Gx2VertexBufferBinding>, 16U>&
+    vertex_buffers() const noexcept
+    {
+        return vertex_buffers_;
+    }
+
+    [[nodiscard]] std::span<const std::array<
+        std::optional<cpu::espresso::Gx2VertexBufferBinding>, 16U>>
+    draw_vertex_buffers() const noexcept
+    {
+        return draw_vertex_buffers_;
+    }
+
 private:
     struct RegisterValue
     {
@@ -200,6 +225,11 @@ private:
     std::vector<cpu::espresso::Gx2Command> gpu_fences_;
     std::vector<cpu::espresso::Gx2Command> scan_buffer_swaps_;
     std::vector<cpu::espresso::Gx2Command> draw_calls_;
+    std::array<std::optional<cpu::espresso::Gx2VertexBufferBinding>, 16U>
+        vertex_buffers_{};
+    std::vector<std::array<
+        std::optional<cpu::espresso::Gx2VertexBufferBinding>, 16U>>
+        draw_vertex_buffers_;
 };
 
 }
