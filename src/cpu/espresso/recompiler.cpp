@@ -3805,6 +3805,7 @@ struct BlockCode
     case Opcode::load_word_indexed_update:
     case Opcode::load_word_reserve_indexed:
     case Opcode::load_byte_zero_indexed:
+    case Opcode::load_byte_zero_indexed_update:
     case Opcode::load_halfword_zero_indexed:
     case Opcode::load_halfword_algebraic_indexed:
     case Opcode::store_word_indexed:
@@ -3963,6 +3964,7 @@ struct BlockCode
     case Opcode::load_word_indexed: return "lwzx";
     case Opcode::load_word_indexed_update: return "lwzux";
     case Opcode::load_byte_zero_indexed: return "lbzx";
+    case Opcode::load_byte_zero_indexed_update: return "lbzux";
     case Opcode::load_halfword_zero_indexed: return "lhzx";
     case Opcode::load_halfword_algebraic_indexed: return "lhax";
     case Opcode::store_word_indexed: return "stwx";
@@ -4016,6 +4018,7 @@ struct BlockCode
     case Opcode::load_word_indexed_update:
     case Opcode::load_word_reserve_indexed:
     case Opcode::load_byte_zero_indexed:
+    case Opcode::load_byte_zero_indexed_update:
     case Opcode::load_halfword_zero_indexed:
     case Opcode::load_halfword_algebraic_indexed:
     case Opcode::store_word_indexed:
@@ -4041,6 +4044,7 @@ struct BlockCode
     case Opcode::store_byte:
     case Opcode::store_byte_update:
     case Opcode::load_byte_zero_indexed:
+    case Opcode::load_byte_zero_indexed_update:
     case Opcode::store_byte_indexed:
     case Opcode::data_cache_block_store:
     case Opcode::data_cache_block_flush:
@@ -4082,6 +4086,7 @@ struct BlockCode
         opcode == Opcode::load_word_indexed_update ||
         opcode == Opcode::load_word_reserve_indexed ||
         opcode == Opcode::load_byte_zero_indexed ||
+        opcode == Opcode::load_byte_zero_indexed_update ||
         opcode == Opcode::load_halfword_zero_indexed ||
         opcode == Opcode::load_halfword_algebraic_indexed ||
         opcode == Opcode::store_word_indexed ||
@@ -6935,6 +6940,7 @@ struct Recompiler::Impl
             case Opcode::load_word_indexed_update:
             case Opcode::load_word_reserve_indexed:
             case Opcode::load_byte_zero_indexed:
+            case Opcode::load_byte_zero_indexed_update:
             case Opcode::load_halfword_zero_indexed:
             case Opcode::load_halfword_algebraic_indexed:
             case Opcode::store_word_indexed:
@@ -6962,6 +6968,7 @@ struct Recompiler::Impl
                 const bool update_base = insn.opcode == Opcode::load_byte_update ||
                     insn.opcode == Opcode::load_word_update ||
                     insn.opcode == Opcode::load_word_indexed_update ||
+                    insn.opcode == Opcode::load_byte_zero_indexed_update ||
                     insn.opcode == Opcode::load_halfword_zero_update ||
                     insn.opcode == Opcode::store_byte_update ||
                     insn.opcode == Opcode::store_word_update ||
