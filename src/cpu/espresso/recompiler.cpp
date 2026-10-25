@@ -318,7 +318,7 @@ struct NativeExecutionContext
     std::array<NativePsMergeRecord, 64> ps_res_records{};
     std::array<NativePsMergeRecord, 64> ps_rsqrte_records{};
     std::array<NativePsMulRecord, 64> ps_mul_records{};
-    std::array<NativePsMulRecord, 64> ps_muls0_records{};
+    std::array<NativePsMulRecord, 64> ps_muls_records{};
     std::array<NativePsMaddRecord, 64> ps_madd_records{};
     std::array<NativeFmulsRecord, 64> fmuls_records{};
     std::array<NativeFmaddsRecord, 64> fmadds_records{};
@@ -2309,23 +2309,24 @@ extern "C" void native_ps_mul(
     state->fpr_ps1[destination] = record.destination_ps1;
 }
 
-extern "C" void native_ps_muls0(
+extern "C" void native_ps_muls(
     NativeExecutionContext* context,
     CpuState* state,
     std::uint32_t destination,
     std::uint32_t source_a,
     std::uint32_t source_c,
+    std::uint32_t scalar_ps1,
     std::uint32_t instruction_index) noexcept
 {
     if (destination >= state->fpr.size() || source_a >= state->fpr.size() ||
-        source_c >= state->fpr.size() || instruction_index >= context->ps_muls0_records.size())
+        source_c >= state->fpr.size() || instruction_index >= context->ps_muls_records.size())
     {
         context->failed = true;
         context->failed_instruction_index = instruction_index;
         return;
     }
 
-    NativePsMulRecord& record = context->ps_muls0_records[instruction_index];
+    NativePsMulRecord& record = context->ps_muls_records[instruction_index];
     record.source_a_ps0 = state->fpr[source_a];
     record.source_a_ps1 = state->fpr_ps1[source_a];
     record.source_c_ps0 = state->fpr[source_c];
@@ -2346,7 +2347,9 @@ extern "C" void native_ps_muls0(
         }
         return (raw & 0xFFFFFFFFF8000000ULL) + (raw & 0x0000000008000000ULL);
     };
-    const double scalar = std::bit_cast<double>(round_operand(record.source_c_ps0));
+    const std::uint64_t scalar_raw = scalar_ps1 != 0U
+        ? record.source_c_ps1 : record.source_c_ps0;
+    const double scalar = std::bit_cast<double>(round_operand(scalar_raw));
     const auto multiply_lane = [scalar](std::uint64_t a_raw) {
         const double a = std::bit_cast<double>(a_raw);
         const float result = static_cast<float>(a * scalar);
@@ -3869,6 +3872,7 @@ struct BlockCode
     case Opcode::paired_single_subtract:
     case Opcode::paired_single_multiply:
     case Opcode::paired_single_multiply_scalar0:
+    case Opcode::paired_single_multiply_scalar1:
     case Opcode::paired_single_multiply_add:
     case Opcode::paired_single_multiply_subtract:
     case Opcode::branch:
@@ -4075,6 +4079,7 @@ struct BlockCode
     case Opcode::paired_single_subtract: return "ps_sub";
     case Opcode::paired_single_multiply: return "ps_mul";
     case Opcode::paired_single_multiply_scalar0: return "ps_muls0";
+    case Opcode::paired_single_multiply_scalar1: return "ps_muls1";
     case Opcode::paired_single_multiply_add: return "ps_madd";
     case Opcode::paired_single_multiply_subtract: return "ps_msub";
     case Opcode::shift_left_word: return "slw";
@@ -6520,20 +6525,23 @@ struct Recompiler::Impl
                 break;
             }
             case Opcode::paired_single_multiply_scalar0:
+            case Opcode::paired_single_multiply_scalar1:
             {
                 auto* invoke = static_cast<InvokeNode*>(nullptr);
                 const auto helper_address = static_cast<std::uint64_t>(
-                    reinterpret_cast<std::uintptr_t>(&native_ps_muls0));
+                    reinterpret_cast<std::uintptr_t>(&native_ps_muls));
                 compiler.invoke(Out(invoke), helper_address,
                     FuncSignature::build<void, NativeExecutionContext*, CpuState*,
                         std::uint32_t, std::uint32_t, std::uint32_t,
-                        std::uint32_t>(CallConvId::kCDecl));
+                        std::uint32_t, std::uint32_t>(CallConvId::kCDecl));
                 invoke->set_arg(0, context);
                 invoke->set_arg(1, state);
                 invoke->set_arg(2, imm(insn.fp_register));
                 invoke->set_arg(3, imm(insn.fp_source_a));
                 invoke->set_arg(4, imm(insn.fp_source_c));
-                invoke->set_arg(5, imm(static_cast<std::uint32_t>(index)));
+                invoke->set_arg(5, imm(insn.opcode ==
+                    Opcode::paired_single_multiply_scalar1 ? 1U : 0U));
+                invoke->set_arg(6, imm(static_cast<std::uint32_t>(index)));
                 break;
             }
             case Opcode::paired_single_multiply_add:
@@ -8581,12 +8589,15 @@ RunResult Recompiler::run(EspressoCore& core, std::size_t max_steps)
                 core.append_instruction_history(std::move(entry));
                 continue;
             }
-            if (insn.opcode == Opcode::paired_single_multiply_scalar0)
+            if (insn.opcode == Opcode::paired_single_multiply_scalar0 ||
+                insn.opcode == Opcode::paired_single_multiply_scalar1)
             {
                 InstructionHistoryEntry entry = native_history(insn, cia);
-                const NativePsMulRecord& record = context.ps_muls0_records[i];
+                const NativePsMulRecord& record = context.ps_muls_records[i];
                 entry.has_paired_fp_state = true;
                 entry.paired_fp_scalar_multiply = true;
+                entry.paired_fp_scalar_source_ps1 = insn.opcode ==
+                    Opcode::paired_single_multiply_scalar1;
                 entry.paired_fp_destination_register = insn.fp_register;
                 entry.paired_fp_source_a_register = insn.fp_source_a;
                 entry.paired_fp_source_b_register = insn.fp_source_c;

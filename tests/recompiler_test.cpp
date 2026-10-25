@@ -178,6 +178,14 @@ namespace
         (static_cast<std::uint32_t>(source_c) << 6U) | (23U << 1U);
 }
 
+[[nodiscard]] constexpr std::uint32_t ps_muls1_form(
+    std::uint8_t destination, std::uint8_t source_a, std::uint8_t source_c)
+{
+    return (4U << 26U) | (static_cast<std::uint32_t>(destination) << 21U) |
+        (static_cast<std::uint32_t>(source_a) << 16U) |
+        (static_cast<std::uint32_t>(source_c) << 6U) | (13U << 1U);
+}
+
 [[nodiscard]] constexpr std::uint32_t ps_sum1_form(
     std::uint8_t destination, std::uint8_t source_a,
     std::uint8_t source_b, std::uint8_t source_c)
@@ -3037,6 +3045,89 @@ void recompiler_ps_select_differential_tests()
         assert(history.paired_fp_select_c_ps1 == expected.paired_fp_select_c_ps1);
         assert(history.paired_fp_select_result_ps0 == expected.paired_fp_select_result_ps0);
         assert(history.paired_fp_select_result_ps1 == expected.paired_fp_select_result_ps1);
+    }
+}
+
+void recompiler_ps_muls1_differential_tests()
+{
+    constexpr std::uint32_t start = 0x100U;
+    constexpr std::array program{
+        ps_muls1_form(4U, 1U, 3U),
+        ps_muls1_form(3U, 1U, 3U), // destination aliases scalar source C
+        ps_muls1_form(8U, 5U, 7U), // scalar operand's low bits are rounded
+    };
+    static_assert(ps_muls1_form(4U, 1U, 3U) == 0x108100DAU);
+    EspressoCore interpreted(0x1000U);
+    EspressoCore compiled(0x1000U);
+    for (EspressoCore* core : {&interpreted, &compiled})
+    {
+        for (std::size_t index = 0U; index < program.size(); ++index)
+        {
+            core->memory.write32_be(start + static_cast<std::uint32_t>(index * 4U),
+                program[index]);
+        }
+        core->state.cia = start;
+        core->state.fpr.fill(0x4000000000000000ULL);
+        core->state.fpr_ps1.fill(0xC008000000000000ULL);
+        core->state.fpr[1] = 0x4000000000000000ULL; // 2.0
+        core->state.fpr_ps1[1] = 0xC008000000000000ULL; // -3.0
+        core->state.fpr[3] = 0x401C000000000000ULL; // 7.0
+        core->state.fpr_ps1[3] = 0x4010000000000000ULL; // scalar 4.0
+        core->state.fpr[5] = 0x3FF0000000000000ULL; // 1.0
+        core->state.fpr_ps1[5] = 0xBFF0000000000000ULL; // -1.0
+        core->state.fpr[7] = 0x0000000000000000ULL;
+        core->state.fpr_ps1[7] = 0x3FF0000004000000ULL; // 1 + 2^-26
+        core->state.cr = 0xA5C39E71U;
+        core->state.xer = 0x87654321U;
+        core->state.lr = 0xABCDEF00U;
+        core->state.ctr = 0xFEDCBA98U;
+        core->state.fpscr = 0x89ABCDEFU;
+    }
+
+    const auto original_gprs = compiled.state.gpr;
+    const auto original_memory = compiled.memory.read32_be(start);
+    const RunResult oracle = interpreted.run(program.size());
+    Recompiler recompiler;
+    const RunResult actual = recompiler.run(compiled, program.size());
+    assert(actual.reason == oracle.reason);
+    assert(actual.steps == oracle.steps && actual.steps == program.size());
+    assert(actual.cia == oracle.cia);
+    assert(compiled.state.gpr == interpreted.state.gpr);
+    assert(compiled.state.gpr == original_gprs);
+    assert(compiled.state.fpr == interpreted.state.fpr);
+    assert(compiled.state.fpr_ps1 == interpreted.state.fpr_ps1);
+    assert(compiled.state.cr == interpreted.state.cr);
+    assert(compiled.state.xer == interpreted.state.xer);
+    assert(compiled.state.lr == interpreted.state.lr);
+    assert(compiled.state.ctr == interpreted.state.ctr);
+    assert(compiled.state.fpscr == interpreted.state.fpscr);
+    assert(compiled.memory.read32_be(start) == original_memory);
+    assert(compiled.state.fpr[4] == 0x4020000000000000ULL); // 8.0
+    assert(compiled.state.fpr_ps1[4] == 0xC028000000000000ULL); // -12.0
+    assert(compiled.state.fpr[3] == 0x4020000000000000ULL);
+    assert(compiled.state.fpr_ps1[3] == 0xC028000000000000ULL);
+    assert(compiled.state.fpr[8] == 0x3FF0000000000000ULL);
+    assert(compiled.state.fpr_ps1[8] == 0xBFF0000000000000ULL);
+    assert(recompiler.statistics().native_instructions == program.size());
+    assert(recompiler.statistics().interpreter_fallbacks == 0U);
+    assert(actual.instruction_history.size() == program.size());
+    for (std::size_t index = 0U; index < program.size(); ++index)
+    {
+        const InstructionHistoryEntry& expected = oracle.instruction_history[index];
+        const InstructionHistoryEntry& history = actual.instruction_history[index];
+        assert(history.opcode_name == "ps_muls1");
+        assert(history.has_paired_fp_state && history.paired_fp_scalar_multiply);
+        assert(history.paired_fp_scalar_source_ps1);
+        assert(history.paired_fp_source_a_register == expected.paired_fp_source_a_register);
+        assert(history.paired_fp_source_a_ps0 == expected.paired_fp_source_a_ps0);
+        assert(history.paired_fp_source_a_ps1 == expected.paired_fp_source_a_ps1);
+        assert(history.paired_fp_source_b_register == expected.paired_fp_source_b_register);
+        assert(history.paired_fp_source_b_ps0 == expected.paired_fp_source_b_ps0);
+        assert(history.paired_fp_source_b_ps1 == expected.paired_fp_source_b_ps1);
+        assert(history.paired_fp_destination_register ==
+            expected.paired_fp_destination_register);
+        assert(history.paired_fp_destination_ps0 == expected.paired_fp_destination_ps0);
+        assert(history.paired_fp_destination_ps1 == expected.paired_fp_destination_ps1);
     }
 }
 
@@ -7198,6 +7289,7 @@ int main()
     recompiler_ps_res_differential_tests();
     recompiler_ps_rsqrte_differential_tests();
     recompiler_ps_select_differential_tests();
+    recompiler_ps_muls1_differential_tests();
     recompiler_stfs_differential_tests();
     recompiler_stfsu_differential_tests();
     recompiler_stfd_differential_tests();
