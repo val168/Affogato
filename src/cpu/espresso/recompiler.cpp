@@ -72,6 +72,12 @@ struct NativeMffsRecord
     std::uint64_t result{};
 };
 
+struct NativeMtfsbRecord
+{
+    std::uint32_t before{};
+    std::uint32_t after{};
+};
+
 struct NativeFrspRecord
 {
     std::uint64_t source_raw{};
@@ -326,6 +332,7 @@ struct NativeExecutionContext
     std::array<NativeFpCompareRecord, 64> fp_compare_records{};
     std::array<NativeFpIntegerConversionRecord, 64> fp_integer_conversion_records{};
     std::array<NativeMffsRecord, 64> mffs_records{};
+    std::array<NativeMtfsbRecord, 64> mtfsb_records{};
     std::array<NativeFrspRecord, 64> frsp_records{};
     std::array<NativeFrsqrteRecord, 64> frsqrte_records{};
     std::array<NativeFmulRecord, 64> fmul_records{};
@@ -4147,6 +4154,8 @@ struct BlockCode
     case Opcode::floating_absolute_value:
     case Opcode::floating_negative_absolute_value:
     case Opcode::floating_move_from_fpscr:
+    case Opcode::floating_move_to_fpscr_bit_zero:
+    case Opcode::floating_move_to_fpscr_bit_one:
     case Opcode::paired_single_merge00:
     case Opcode::paired_single_merge01:
     case Opcode::paired_single_merge10:
@@ -4326,6 +4335,8 @@ struct BlockCode
     case Opcode::floating_absolute_value: return "fabs";
     case Opcode::floating_negative_absolute_value: return "fnabs";
     case Opcode::floating_move_from_fpscr: return "mffs";
+    case Opcode::floating_move_to_fpscr_bit_zero: return "mtfsb0";
+    case Opcode::floating_move_to_fpscr_bit_one: return "mtfsb1";
     case Opcode::floating_convert_to_integer_word_zero: return "fctiwz";
     case Opcode::floating_reciprocal_square_root_estimate: return "frsqrte";
     case Opcode::floating_round_to_single: return "frsp";
@@ -6865,6 +6876,41 @@ struct Recompiler::Impl
                     record_offset + offsetof(NativeMffsRecord, fpscr))), fpscr_value);
                 compiler.mov(x86::qword_ptr(context, static_cast<std::int32_t>(
                     record_offset + offsetof(NativeMffsRecord, result))), result);
+                break;
+            }
+            case Opcode::floating_move_to_fpscr_bit_zero:
+            case Opcode::floating_move_to_fpscr_bit_one:
+            {
+                const std::size_t record_offset = offsetof(NativeExecutionContext,
+                    mtfsb_records) + index * sizeof(NativeMtfsbRecord);
+                x86::Gp fpscr_value = compiler.new_gp32("mtfsb_fpscr");
+                compiler.mov(fpscr_value, x86::dword_ptr(state,
+                    static_cast<std::int32_t>(offsetof(CpuState, fpscr))));
+                compiler.mov(x86::dword_ptr(context, static_cast<std::int32_t>(
+                    record_offset + offsetof(NativeMtfsbRecord, before))), fpscr_value);
+                if (insn.fpscr_bit != 1U && insn.fpscr_bit != 2U)
+                {
+                    const std::uint32_t mask = 1U << (31U - insn.fpscr_bit);
+                    if (insn.opcode == Opcode::floating_move_to_fpscr_bit_zero)
+                    {
+                        compiler.and_(fpscr_value, imm(~mask));
+                    }
+                    else
+                    {
+                        compiler.or_(fpscr_value, imm(mask));
+                    }
+                    compiler.mov(x86::dword_ptr(state,
+                        static_cast<std::int32_t>(offsetof(CpuState, fpscr))), fpscr_value);
+                    auto* invoke = static_cast<InvokeNode*>(nullptr);
+                    compiler.invoke(Out(invoke),
+                        reinterpret_cast<std::uintptr_t>(&native_update_fpscr_summaries),
+                        FuncSignature::build<void, CpuState*>(CallConvId::kCDecl));
+                    invoke->set_arg(0, state);
+                }
+                compiler.mov(fpscr_value, x86::dword_ptr(state,
+                    static_cast<std::int32_t>(offsetof(CpuState, fpscr))));
+                compiler.mov(x86::dword_ptr(context, static_cast<std::int32_t>(
+                    record_offset + offsetof(NativeMtfsbRecord, after))), fpscr_value);
                 break;
             }
             case Opcode::floating_convert_to_integer_word_zero:
@@ -9429,6 +9475,20 @@ RunResult Recompiler::run(EspressoCore& core, std::size_t max_steps)
                 entry.fp_status_move_result = record.result;
                 entry.fp_status_move_destination_ps1 =
                     core.state.fpr_ps1[insn.fp_register];
+                core.append_instruction_history(std::move(entry));
+                continue;
+            }
+            if (insn.opcode == Opcode::floating_move_to_fpscr_bit_zero ||
+                insn.opcode == Opcode::floating_move_to_fpscr_bit_one)
+            {
+                InstructionHistoryEntry entry = native_history(insn, cia);
+                const NativeMtfsbRecord& record = context.mtfsb_records[i];
+                entry.has_fpscr_bit_operation = true;
+                entry.fpscr_bit_set = insn.opcode ==
+                    Opcode::floating_move_to_fpscr_bit_one;
+                entry.fpscr_bit_number = insn.fpscr_bit;
+                entry.fpscr_before_bit_operation = record.before;
+                entry.fpscr_after_bit_operation = record.after;
                 core.append_instruction_history(std::move(entry));
                 continue;
             }
