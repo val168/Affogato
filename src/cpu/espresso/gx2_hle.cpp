@@ -755,6 +755,15 @@ std::uint32_t pack_aa_mask(
            ((lower_right & 0xFFU) << 24U);
 }
 
+std::uint32_t pack_gx2_point_size(float width, float height)
+{
+    return (static_cast<std::uint32_t>(
+                pack_gx2_scaled_i16_field(width, 8.0F))
+            << 16U) |
+           static_cast<std::uint32_t>(
+               pack_gx2_scaled_i16_field(height, 8.0F));
+}
+
 std::uint32_t pack_alpha_to_mask(
     std::uint32_t enabled,
     std::uint32_t mode)
@@ -3348,12 +3357,7 @@ void register_gx2_hle(HleDispatcher& dispatcher)
                 fpr_float_argument_bits(core, 1U));
             const float height = std::bit_cast<float>(
                 fpr_float_argument_bits(core, 2U));
-            const std::uint32_t packed =
-                (static_cast<std::uint32_t>(
-                     pack_gx2_scaled_i16_field(width, 8.0F))
-                 << 16U) |
-                static_cast<std::uint32_t>(
-                    pack_gx2_scaled_i16_field(height, 8.0F));
+            const std::uint32_t packed = pack_gx2_point_size(width, height);
 
             core.gx2.pending_commands.push_back({
                 Gx2CommandType::set_context_register,
@@ -3361,6 +3365,18 @@ void register_gx2_hle(HleDispatcher& dispatcher)
                 packed});
             // Width and height are full point dimensions; Latte's register
             // carries the corresponding half-width/half-height radii.
+        });
+
+    dispatcher.register_function(
+        "gx2",
+        "GX2InitPointSizeReg",
+        [](EspressoCore& core) {
+            const float width = std::bit_cast<float>(
+                fpr_float_argument_bits(core, 1U));
+            const float height = std::bit_cast<float>(
+                fpr_float_argument_bits(core, 2U));
+            core.memory.write32_be(
+                core.state.gpr[3], pack_gx2_point_size(width, height));
         });
 
     dispatcher.register_function(
