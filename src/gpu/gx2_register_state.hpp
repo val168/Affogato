@@ -23,6 +23,16 @@ enum class Gx2ShaderStage
     compute,
 };
 
+struct Gx2DrawShaderResources
+{
+    std::array<std::array<
+        std::optional<LatteTextureResourceWords>, 16U>, 3U> textures{};
+    std::array<std::array<std::optional<LatteSamplerWords>, 16U>, 3U>
+        samplers{};
+
+    bool operator==(const Gx2DrawShaderResources&) const = default;
+};
+
 // CPU-side shadow of Latte register writes consumed by the GPU backend.
 // It intentionally stores raw register words; decoding into Vulkan objects
 // belongs to later rendering stages.
@@ -55,6 +65,7 @@ public:
                 draw_vertex_buffers_.push_back(vertex_buffers_);
                 draw_fetch_shaders_.push_back(fetch_shader_);
                 draw_program_shaders_.push_back(program_shaders_);
+                draw_shader_resources_.push_back(snapshot_shader_resources());
                 continue;
             }
             if (command.type == cpu::espresso::Gx2CommandType::set_vertex_buffer)
@@ -261,7 +272,33 @@ public:
         return draw_program_shaders_;
     }
 
+    [[nodiscard]] std::span<const Gx2DrawShaderResources>
+    draw_shader_resources() const noexcept
+    {
+        return draw_shader_resources_;
+    }
+
 private:
+    [[nodiscard]] Gx2DrawShaderResources snapshot_shader_resources() const
+    {
+        constexpr std::array<Gx2ShaderStage, 3U> stages{
+            Gx2ShaderStage::pixel,
+            Gx2ShaderStage::vertex,
+            Gx2ShaderStage::geometry};
+        Gx2DrawShaderResources result{};
+        for (std::size_t stage_index = 0U; stage_index < stages.size(); ++stage_index)
+        {
+            for (std::uint32_t unit = 0U; unit < 16U; ++unit)
+            {
+                result.textures[stage_index][unit] =
+                    texture_resource(stages[stage_index], unit);
+                result.samplers[stage_index][unit] =
+                    sampler(stages[stage_index], unit);
+            }
+        }
+        return result;
+    }
+
     struct RegisterValue
     {
         cpu::espresso::Gx2CommandType type{};
@@ -285,6 +322,7 @@ private:
     std::vector<std::array<std::optional<
         cpu::espresso::Gx2ProgramShaderBinding>, 3U>>
         draw_program_shaders_;
+    std::vector<Gx2DrawShaderResources> draw_shader_resources_;
 };
 
 }

@@ -26081,6 +26081,7 @@ void gx2_set_sampler_border_color_hle_tests()
 
 void gx2_register_state_tests()
 {
+    using affogato::gpu::Gx2DrawShaderResources;
     using affogato::gpu::Gx2RegisterState;
     using affogato::gpu::LatteSamplerWords;
     using affogato::gpu::LatteTextureResourceWords;
@@ -26143,6 +26144,14 @@ void gx2_register_state_tests()
             geometry_sampler_base + static_cast<std::uint32_t>(index * 4U),
             sampler_words[index]});
     }
+    binding_commands.push_back({
+        Gx2CommandType::draw,
+        0U,
+        0U,
+        0U,
+        0U,
+        0U,
+        Gx2DrawCall{4U, 3U, false, 0U, 0U, 0U, 1U, 0U}});
 
     Gx2RegisterState bindings;
     assert(!bindings.texture_resource(Gx2ShaderStage::vertex, 0U));
@@ -26157,6 +26166,13 @@ void gx2_register_state_tests()
     assert(!bindings.sampler(Gx2ShaderStage::compute, 0U));
     assert(!bindings.texture_resource(Gx2ShaderStage::vertex, 16U));
     assert(!bindings.sampler(Gx2ShaderStage::pixel, 16U));
+    assert(bindings.draw_shader_resources().size() == 1U);
+    const Gx2DrawShaderResources first_draw_resources =
+        bindings.draw_shader_resources().front();
+    assert(first_draw_resources.textures[1U][0U] == texture_words);
+    assert(first_draw_resources.samplers[2U][0U] == sampler_words);
+    assert(!first_draw_resources.textures[0U][0U]);
+    assert(!first_draw_resources.samplers[0U][0U]);
 
     // A different command class at one word must not make a resource appear
     // complete, even if every address has a value in the raw register shadow.
@@ -26164,8 +26180,22 @@ void gx2_register_state_tests()
         Gx2CommandType::set_context_register,
         vertex_resource_base + 6U * 4U,
         texture_words[6]};
-    bindings.apply(std::span<const Gx2Command>(&overwrite_with_context, 1U));
+    const std::array<Gx2Command, 2U> overwritten_draw{
+        overwrite_with_context,
+        Gx2Command{
+            Gx2CommandType::draw,
+            0U,
+            0U,
+            0U,
+            0U,
+            0U,
+            Gx2DrawCall{4U, 3U, false, 0U, 0U, 0U, 1U, 0U}}};
+    bindings.apply(overwritten_draw);
     assert(!bindings.texture_resource(Gx2ShaderStage::vertex, 0U));
+    assert(bindings.draw_shader_resources().size() == 2U);
+    assert(bindings.draw_shader_resources()[0U] == first_draw_resources);
+    assert(!bindings.draw_shader_resources()[1U].textures[1U][0U]);
+    assert(bindings.draw_shader_resources()[1U].samplers[2U][0U] == sampler_words);
 
     constexpr LatteTextureResourceWords decoded_words{
         (1U << 0U) | (4U << 3U) | (7U << 8U) | (63U << 19U),
