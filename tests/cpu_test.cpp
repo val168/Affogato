@@ -19978,6 +19978,64 @@ void gx2r_get_buffer_allocation_size_hle_tests()
     assert(result.reason == StopReason::memory_fault);
 }
 
+void gx2r_get_buffer_alignment_hle_tests()
+{
+    constexpr std::uint32_t return_address = 0x0274BD9CU;
+    EspressoCore core(0x10000U);
+    register_gx2_hle(core.hle);
+    const std::uint32_t import = core.hle.bind_import(
+        "gx2", "GX2RGetBufferAlignment");
+    assert(import != 0U);
+    core.state.gpr.fill(0xA5000000U);
+    core.state.gpr[4] = 0x44444444U;
+    core.state.cr = 0x12345678U;
+    core.state.xer = 0xA5A55A5AU;
+    core.state.ctr = 0x87654321U;
+    core.state.fpscr = 0x5A5AA55AU;
+    const auto gprs_before = core.state.gpr;
+    const auto fprs_before = core.state.fpr;
+    const auto ps1_before = core.state.fpr_ps1;
+    const std::uint32_t cr_before = core.state.cr;
+    const std::uint32_t xer_before = core.state.xer;
+    const std::uint32_t ctr_before = core.state.ctr;
+    const std::uint32_t fpscr_before = core.state.fpscr;
+    const auto expect_alignment = [&](std::uint32_t flags,
+                                      std::uint32_t expected) {
+        core.state.cia = import;
+        core.state.lr = return_address;
+        core.state.gpr[3] = flags;
+        const auto result = core.run(1U);
+        assert(result.reason == StopReason::instruction_limit);
+        assert(core.state.cia == return_address);
+        assert(core.state.gpr[3] == expected);
+    };
+
+    expect_alignment(0U, 0x100U);
+    expect_alignment(1U << 11U, 0x100U); // CPU access is not alignment class
+    for (const std::uint32_t large_alignment_flag :
+         std::array<std::uint32_t, 4U>{1U << 8U, 1U << 6U, 1U << 7U, 1U << 10U})
+    {
+        expect_alignment(large_alignment_flag, 0x100U);
+    }
+    for (const std::uint32_t small_alignment_flag :
+         std::array<std::uint32_t, 3U>{1U << 4U, 1U << 5U, 1U << 9U})
+    {
+        expect_alignment(small_alignment_flag, 0x40U);
+    }
+    // The larger alignment category has priority when flags are combined.
+    expect_alignment((1U << 4U) | (1U << 8U), 0x100U);
+
+    assert(core.state.gpr[4] == gprs_before[4]);
+    assert(core.state.fpr == fprs_before && core.state.fpr_ps1 == ps1_before);
+    assert(core.state.cr == cr_before && core.state.xer == xer_before);
+    assert(core.state.ctr == ctr_before && core.state.fpscr == fpscr_before);
+    for (std::size_t index = 1U; index < core.state.gpr.size(); ++index)
+    {
+        if (index != 3U)
+            assert(core.state.gpr[index] == gprs_before[index]);
+    }
+}
+
 void gx2_clear_color_hle_tests()
 {
     constexpr std::uint32_t return_address = 0x02750600U;
@@ -32816,6 +32874,7 @@ int main(int argc, char* argv[])
     gx2r_create_buffer_user_memory_hle_tests();
     gx2r_buffer_exists_hle_tests();
     gx2r_get_buffer_allocation_size_hle_tests();
+    gx2r_get_buffer_alignment_hle_tests();
     gx2_clear_color_hle_tests();
     gx2_set_color_buffer_hle_tests();
     gx2_set_depth_stencil_control_hle_tests();

@@ -930,6 +930,23 @@ std::uint32_t gx2r_get_buffer_allocation_size(
     return (size + 0x3FU) & ~0x3FU;
 }
 
+std::uint32_t gx2r_get_buffer_alignment(std::uint32_t resource_flags)
+{
+    constexpr std::uint32_t alignment_0x100_flags =
+        (1U << 8U) | (1U << 6U) | (1U << 7U) | (1U << 10U);
+    constexpr std::uint32_t alignment_0x40_flags =
+        (1U << 4U) | (1U << 5U) | (1U << 9U);
+    if ((resource_flags & alignment_0x100_flags) != 0U)
+    {
+        return 0x100U;
+    }
+    if ((resource_flags & alignment_0x40_flags) != 0U)
+    {
+        return 0x40U;
+    }
+    return 0x100U;
+}
+
 std::uint32_t gx2_texture_endian_swap(std::uint32_t format)
 {
     switch (format & 0x3FU)
@@ -2206,6 +2223,13 @@ void register_gx2_hle(HleDispatcher& dispatcher)
         [](EspressoCore& core) {
             core.state.gpr[3] = gx2r_get_buffer_allocation_size(
                 core, core.state.gpr[3]);
+        });
+
+    dispatcher.register_function(
+        "gx2",
+        "GX2RGetBufferAlignment",
+        [](EspressoCore& core) {
+            core.state.gpr[3] = gx2r_get_buffer_alignment(core.state.gpr[3]);
         });
 
     dispatcher.register_function(
