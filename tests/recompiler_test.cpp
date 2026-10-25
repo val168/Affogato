@@ -9112,6 +9112,139 @@ void recompiler_lswx_differential_tests()
     assert(fault_recompiler.statistics().interpreter_fallbacks == 0U);
 }
 
+void recompiler_stswx_differential_tests()
+{
+    struct Case
+    {
+        std::uint8_t first_register;
+        std::uint8_t base_register;
+        std::uint8_t index_register;
+        std::uint8_t byte_count;
+        std::uint32_t base_value;
+        std::uint32_t index_value;
+    };
+    constexpr std::array cases{
+        Case{6U, 4U, 5U, 0U, 0x2000U, 0x100U},
+        Case{6U, 4U, 5U, 1U, 0x200U, 0x30U},
+        Case{6U, 4U, 5U, 6U, 0x200U, 0x30U},
+        Case{31U, 0U, 0U, 6U, 0xDEADBEEFU, 0x400U},
+        Case{29U, 4U, 5U, 127U, 0x200U, 0x30U},
+        Case{4U, 4U, 5U, 5U, 0x200U, 0x30U},
+        Case{5U, 4U, 5U, 5U, 0x200U, 0x30U},
+    };
+
+    for (const Case& test : cases)
+    {
+        EspressoCore interpreted(0x4000U);
+        EspressoCore compiled(0x4000U);
+        const std::uint32_t instruction = x_form(
+            test.first_register, test.base_register, test.index_register, 661U);
+        for (EspressoCore* core : {&interpreted, &compiled})
+        {
+            core->memory.write32_be(0x100U, instruction);
+            core->state.cia = 0x100U;
+            core->state.gpr.fill(0xC0DE0000U);
+            core->state.gpr[test.base_register] = test.base_value;
+            core->state.gpr[test.index_register] = test.index_value;
+            core->state.xer = 0x81234500U | test.byte_count;
+            core->state.cr = 0x89ABCDEFU;
+            core->state.lr = 0x12345678U;
+            core->state.ctr = 0x87654321U;
+            core->state.fpscr = 0xA5A55A5AU;
+            const std::uint32_t base = test.base_register == 0U
+                ? 0U : core->state.gpr[test.base_register];
+            const std::uint32_t address = base + core->state.gpr[test.index_register];
+            for (std::uint32_t byte = 0U; byte < test.byte_count; ++byte)
+                core->memory.write8(address + byte, 0xEEU);
+        }
+        const auto original_memory = interpreted.memory.read8(0x200U);
+        const RunResult oracle = interpreted.run(1U);
+        Recompiler recompiler;
+        const RunResult actual = recompiler.run(compiled, 1U);
+        assert(actual.reason == oracle.reason);
+        assert(actual.steps == oracle.steps && actual.steps == 1U);
+        assert(actual.cia == oracle.cia);
+        assert(compiled.state.gpr == interpreted.state.gpr);
+        assert(compiled.state.xer == interpreted.state.xer);
+        assert(compiled.state.cr == interpreted.state.cr);
+        assert(compiled.state.lr == interpreted.state.lr);
+        assert(compiled.state.ctr == interpreted.state.ctr);
+        assert(compiled.state.fpscr == interpreted.state.fpscr);
+        assert(recompiler.statistics().native_instructions == 1U);
+        assert(recompiler.statistics().interpreter_fallbacks == 0U);
+        assert(actual.instruction_history.size() == 1U);
+        const InstructionHistoryEntry& history = actual.instruction_history.back();
+        const InstructionHistoryEntry& expected = oracle.instruction_history.back();
+        assert(history.completed && history.opcode_name == "stswx");
+        assert(history.has_string_transfer && history.string_transfer_store);
+        assert(history.string_transfer_indexed);
+        assert(history.string_transfer_first_register == test.first_register);
+        assert(history.string_transfer_base_register == test.base_register);
+        assert(history.string_transfer_index_register == test.index_register);
+        assert(history.string_transfer_byte_count == test.byte_count);
+        assert(history.string_transfer_register_count == expected.string_transfer_register_count);
+        assert(history.effective_address == expected.effective_address);
+        assert(history.string_transfer_base_value == expected.string_transfer_base_value);
+        assert(history.string_transfer_index_value == expected.string_transfer_index_value);
+        assert(history.string_transfer_bytes == expected.string_transfer_bytes);
+        assert(history.string_transfer_registers == expected.string_transfer_registers);
+        assert(history.string_transfer_register_values == expected.string_transfer_register_values);
+        for (std::uint32_t byte = 0U; byte < test.byte_count; ++byte)
+        {
+            const std::uint32_t address = history.effective_address + byte;
+            assert(compiled.memory.read8(address) == interpreted.memory.read8(address));
+        }
+        if (test.byte_count == 0U)
+        {
+            assert(recompiler.statistics().memory_slow_path_calls == 0U);
+            assert(compiled.memory.read8(0x200U) == original_memory);
+        }
+    }
+
+    // A fault in the final byte must not leave a prefix store committed.
+    EspressoCore interpreted_fault(0x1000U);
+    EspressoCore compiled_fault(0x1000U);
+    constexpr std::uint32_t start = 0x100U;
+    constexpr std::uint32_t fault_address = 0xFFDU;
+    const std::uint32_t fault_instruction = x_form(31U, 4U, 5U, 661U);
+    for (EspressoCore* core : {&interpreted_fault, &compiled_fault})
+    {
+        core->memory.write32_be(start, fault_instruction);
+        core->memory.write8(fault_address, 0xAAU);
+        core->memory.write8(fault_address + 1U, 0xBBU);
+        core->memory.write8(fault_address + 2U, 0xCCU);
+        core->state.cia = start;
+        core->state.gpr.fill(0xDEADBEEFU);
+        core->state.gpr[4] = fault_address;
+        core->state.gpr[5] = 0U;
+        core->state.gpr[31] = 0x11223344U;
+        core->state.gpr[0] = 0x55667788U;
+        core->state.xer = 5U;
+    }
+    const auto original_gprs = compiled_fault.state.gpr;
+    const RunResult fault_oracle = interpreted_fault.run(1U);
+    Recompiler fault_recompiler;
+    const RunResult fault_actual = fault_recompiler.run(compiled_fault, 1U);
+    assert(fault_actual.reason == StopReason::memory_fault);
+    assert(fault_actual.reason == fault_oracle.reason);
+    assert(fault_actual.detail.find("write 5 byte(s) at guest address 0x00000FFD") !=
+        std::string::npos);
+    assert(compiled_fault.state.gpr == original_gprs);
+    assert(compiled_fault.state.gpr == interpreted_fault.state.gpr);
+    assert(compiled_fault.memory.read8(fault_address) == 0xAAU);
+    assert(compiled_fault.memory.read8(fault_address + 1U) == 0xBBU);
+    assert(compiled_fault.memory.read8(fault_address + 2U) == 0xCCU);
+    assert(fault_actual.instruction_history.size() == 1U);
+    const InstructionHistoryEntry& fault_history = fault_actual.instruction_history.back();
+    assert(!fault_history.completed && fault_history.opcode_name == "stswx");
+    assert(fault_history.has_string_transfer && fault_history.string_transfer_store);
+    assert(fault_history.string_transfer_indexed);
+    assert(fault_history.effective_address == fault_address);
+    assert(fault_history.string_transfer_byte_count == 5U);
+    assert(fault_recompiler.statistics().native_instructions == 0U);
+    assert(fault_recompiler.statistics().interpreter_fallbacks == 0U);
+}
+
 void recompiler_memory_fault_test()
 {
     EspressoCore interpreted(0x1000U);
@@ -9393,6 +9526,7 @@ int main()
     recompiler_interpreter_fallback_test();
     recompiler_memory_tests();
     recompiler_lswx_differential_tests();
+    recompiler_stswx_differential_tests();
     recompiler_memory_fault_test();
     recompiler_self_modifying_code_test();
     recompiler_stop_reason_test();
