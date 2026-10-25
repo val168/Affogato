@@ -25328,6 +25328,91 @@ void gx2_set_blend_control_hle_tests()
     assert(core.gx2.pending_commands.empty());
 }
 
+void gx2_init_blend_control_reg_hle_tests()
+{
+    constexpr std::uint32_t return_address = 0x027508A2U;
+    constexpr std::uint32_t output_address = 0x503U;
+    constexpr std::uint32_t stack_pointer = 0x3000U;
+    constexpr std::uint32_t packed = 0x3FE31DA4U;
+
+    EspressoCore core(0x10000U);
+    register_gx2_hle(core.hle);
+    const std::uint32_t import =
+        core.hle.bind_import("gx2", "GX2InitBlendControlReg");
+    const std::uint32_t wrong_library =
+        core.hle.bind_import("coreinit", "GX2InitBlendControlReg");
+    assert(import != 0U && wrong_library != 0U);
+    assert(!core.gx2.initialized);
+    core.memory.write8(output_address - 1U, 0xA5U);
+    core.memory.write32_be(output_address, 0xDEADBEEFU);
+    core.memory.write32_be(output_address + 4U, 0xCAFEBABEU);
+    core.memory.write8(output_address + 8U, 0x5AU);
+    core.memory.write32_be(stack_pointer + 8U, 0xFFFFFFFFU);
+    core.state.gpr.fill(0xB1000000U);
+    core.state.gpr[1] = stack_pointer;
+    core.state.gpr[3] = output_address;
+    core.state.gpr[4] = 3U;
+    core.state.gpr[5] = 0x24U;
+    core.state.gpr[6] = 0x1DU;
+    core.state.gpr[7] = 0x0DU;
+    core.state.gpr[8] = 0x100U;
+    core.state.gpr[9] = 0x03U;
+    core.state.gpr[10] = 0x1FU;
+    core.state.cr = 0x12345678U;
+    core.state.xer = 0xA5A55A5AU;
+    core.state.ctr = 0x87654321U;
+    core.state.fpscr = 0x5A5AA55AU;
+    const auto gprs_before = core.state.gpr;
+    const auto fprs_before = core.state.fpr;
+    const auto ps1_before = core.state.fpr_ps1;
+
+    const auto invoke = [&](std::uint32_t function) {
+        core.state.cia = function;
+        core.state.lr = return_address;
+        return core.run(1U);
+    };
+    const RunResult result = invoke(import);
+    assert(result.reason == StopReason::instruction_limit);
+    assert(result.steps == 1U && core.state.cia == return_address);
+    assert(core.memory.read32_be(output_address) == 3U);
+    assert(core.memory.read32_be(output_address + 4U) == packed);
+    assert(core.memory.read8(output_address - 1U) == 0xA5U);
+    assert(core.memory.read8(output_address + 8U) == 0x5AU);
+    assert(core.gx2.pending_commands.empty());
+    assert(core.state.gpr == gprs_before);
+    assert(core.state.fpr == fprs_before && core.state.fpr_ps1 == ps1_before);
+    assert(core.state.cr == 0x12345678U);
+    assert(core.state.xer == 0xA5A55A5AU);
+    assert(core.state.ctr == 0x87654321U);
+    assert(core.state.fpscr == 0x5A5AA55AU);
+
+    const std::uint32_t target_before_fault =
+        core.memory.read32_be(output_address);
+    core.state.gpr[1] = 0xFFF7U;
+    const RunResult stack_read_fault = invoke(import);
+    assert(stack_read_fault.reason == StopReason::memory_fault);
+    assert(stack_read_fault.detail.find("read 4 byte(s)") != std::string::npos);
+    assert(core.memory.read32_be(output_address) == target_before_fault);
+    assert(core.memory.read32_be(output_address + 4U) == packed);
+
+    core.state.gpr[1] = 0xFFFFFFFCU;
+    const RunResult stack_wrap = invoke(import);
+    assert(stack_wrap.reason == StopReason::hle_error);
+    assert(stack_wrap.detail.find("stack argument wraps") != std::string::npos);
+    assert(core.memory.read32_be(output_address) == target_before_fault);
+
+    core.state.gpr[1] = stack_pointer;
+    core.state.gpr[3] = 0xFFFCU;
+    const RunResult output_fault = invoke(import);
+    assert(output_fault.reason == StopReason::memory_fault);
+    assert(output_fault.detail.find("write 8 byte(s)") != std::string::npos);
+
+    const RunResult wrong_library_result = invoke(wrong_library);
+    assert(wrong_library_result.reason == StopReason::unimplemented_hle_call);
+    assert(wrong_library_result.hle_call ==
+           "coreinit::GX2InitBlendControlReg");
+}
+
 void gx2_set_blend_constant_color_hle_tests()
 {
     constexpr std::uint32_t return_address = 0x027508B4U;
@@ -40011,6 +40096,7 @@ int main(int argc, char* argv[])
     gx2_init_color_control_reg_hle_tests();
     gx2_get_color_control_reg_hle_tests();
     gx2_set_blend_control_hle_tests();
+    gx2_init_blend_control_reg_hle_tests();
     gx2_set_blend_constant_color_hle_tests();
     gx2_init_blend_constant_color_reg_hle_tests();
     gx2_get_blend_constant_color_reg_hle_tests();

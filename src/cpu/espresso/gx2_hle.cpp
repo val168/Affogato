@@ -3409,6 +3409,34 @@ void register_gx2_hle(HleDispatcher& dispatcher)
 
     dispatcher.register_function(
         "gx2",
+        "GX2InitBlendControlReg",
+        [](EspressoCore& core) {
+            constexpr std::uint32_t stack_argument_offset = 0x08U;
+            const std::uint32_t output = core.state.gpr[3];
+            core.memory.validate_write_range(output, 2U * sizeof(std::uint32_t));
+            const std::uint64_t stack_pointer = core.state.gpr[1];
+            if (stack_pointer + stack_argument_offset + sizeof(std::uint32_t) >
+                guest_address_space_end)
+            {
+                throw HleExecutionError(
+                    "gx2::GX2InitBlendControlReg: stack argument wraps guest address space");
+            }
+            const std::uint32_t alpha_combine = core.memory.read32_be(
+                static_cast<std::uint32_t>(stack_pointer + stack_argument_offset));
+            const std::uint32_t packed = pack_blend_control(
+                core.state.gpr[5],
+                core.state.gpr[6],
+                core.state.gpr[7],
+                core.state.gpr[8],
+                core.state.gpr[9],
+                core.state.gpr[10],
+                alpha_combine);
+            core.memory.write32_be(output, core.state.gpr[4]);
+            core.memory.write32_be(output + 4U, packed);
+        });
+
+    dispatcher.register_function(
+        "gx2",
         "GX2SetBlendConstantColor",
         [](EspressoCore& core) {
             if (!core.gx2.initialized)
