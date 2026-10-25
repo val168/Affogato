@@ -4872,6 +4872,7 @@ struct BlockCode
     case Opcode::data_cache_block_store:
     case Opcode::data_cache_block_flush:
     case Opcode::data_cache_block_touch:
+    case Opcode::data_cache_block_touch_for_store:
     case Opcode::data_cache_block_zero:
     case Opcode::condition_bit_and:
     case Opcode::condition_bit_and_complement:
@@ -5089,6 +5090,7 @@ struct BlockCode
     case Opcode::data_cache_block_store: return "dcbst";
     case Opcode::data_cache_block_flush: return "dcbf";
     case Opcode::data_cache_block_touch: return "dcbt";
+    case Opcode::data_cache_block_touch_for_store: return "dcbtst";
     case Opcode::data_cache_block_zero: return "dcbz";
     case Opcode::condition_bit_and: return "crand";
     case Opcode::condition_bit_and_complement: return "crandc";
@@ -5164,6 +5166,7 @@ struct BlockCode
     case Opcode::data_cache_block_store:
     case Opcode::data_cache_block_flush:
     case Opcode::data_cache_block_touch:
+    case Opcode::data_cache_block_touch_for_store:
     case Opcode::data_cache_block_zero:
         return true;
     default:
@@ -5267,6 +5270,7 @@ struct BlockCode
         opcode == Opcode::store_double_indexed_update ||
         opcode == Opcode::store_floating_as_integer_word_indexed ||
         opcode == Opcode::data_cache_block_touch ||
+        opcode == Opcode::data_cache_block_touch_for_store ||
         opcode == Opcode::data_cache_block_store ||
         opcode == Opcode::data_cache_block_flush ||
         opcode == Opcode::data_cache_block_zero;
@@ -9146,6 +9150,7 @@ struct Recompiler::Impl
                 break;
             }
             case Opcode::data_cache_block_touch:
+            case Opcode::data_cache_block_touch_for_store:
             {
                 const std::size_t record_base = offsetof(NativeExecutionContext,
                     memory_records) + index * sizeof(NativeMemoryRecord);
@@ -11154,13 +11159,14 @@ RunResult Recompiler::run(EspressoCore& core, std::size_t max_steps)
                 }
             }
             if (insn.opcode == Opcode::data_cache_block_touch ||
+                insn.opcode == Opcode::data_cache_block_touch_for_store ||
                 insn.opcode == Opcode::data_cache_block_store ||
                 insn.opcode == Opcode::data_cache_block_flush ||
                 insn.opcode == Opcode::data_cache_block_zero)
             {
                 // Cache hints/maintenance instructions have no architectural
-                // destination. dcbt is non-faulting; in the coherent-memory
-                // model dcbz writes its line while dcbst/dcbf validate access.
+                // destination. dcbt/dcbtst are non-faulting; in the coherent-
+                // memory model dcbz writes its line while dcbst/dcbf validate.
                 core.append_instruction_history(std::move(entry));
                 continue;
             }
