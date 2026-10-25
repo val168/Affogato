@@ -2207,6 +2207,15 @@ void register_coreinit_hle(HleDispatcher& dispatcher)
         });
     dispatcher.register_function(
         "coreinit",
+        "OSGetShutdownReason",
+        [](EspressoCore& core) {
+            // Affogato does not currently model Cafe power/shutdown events.
+            // A newly launched guest has no pending shutdown request, so
+            // expose the neutral OS reason value without changing other state.
+            core.state.gpr[3] = 0U;
+        });
+    dispatcher.register_function(
+        "coreinit",
         "OSSleepTicks",
         [](EspressoCore& core) {
             // OSTime is a signed 64-bit PPC ABI argument in r3:r4. A deadline

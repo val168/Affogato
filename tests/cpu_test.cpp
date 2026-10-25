@@ -16126,6 +16126,59 @@ void os_get_system_time_hle_tests()
     assert(core.memory.read64_be(*system_info_address + 0x08U) == 0U);
 }
 
+void os_get_shutdown_reason_hle_tests()
+{
+    constexpr std::uint32_t return_address = 0x027616D4U;
+
+    EspressoCore core(0x400U);
+    register_coreinit_hle(core.hle);
+    const std::uint32_t import =
+        core.hle.bind_import("coreinit", "OSGetShutdownReason");
+    core.memory.fill_bytes(0x100U, 0x80U, 0xB6U);
+    std::array<std::uint8_t, 0x80U> memory_before{};
+    core.memory.read_bytes(0x100U, memory_before);
+    for (std::uint32_t reg = 0; reg < core.state.gpr.size(); ++reg)
+    {
+        core.state.gpr[reg] = 0xA1000000U + reg * 0x101U;
+    }
+    for (std::uint32_t reg = 0; reg < core.state.fpr.size(); ++reg)
+    {
+        core.state.fpr[reg] = 0x1111000000000000ULL + reg;
+        core.state.fpr_ps1[reg] = 0x2222000000000000ULL + reg;
+    }
+    core.state.cia = import;
+    core.state.lr = return_address;
+    core.state.cr = 0x12345678U;
+    core.state.xer = 0xA00000A5U;
+    core.state.ctr = 0xCAFEBABEU;
+    core.state.fpscr = 0x5A5AA55AU;
+    const auto gprs_before = core.state.gpr;
+    const auto fprs_before = core.state.fpr;
+    const auto ps1_before = core.state.fpr_ps1;
+
+    const RunResult result = core.run(1U);
+    assert(result.reason == StopReason::instruction_limit);
+    assert(core.state.cia == return_address);
+    assert(core.state.lr == return_address);
+    assert(core.state.gpr[3] == 0U);
+    for (std::size_t reg = 1U; reg < core.state.gpr.size(); ++reg)
+    {
+        if (reg != 3U)
+        {
+            assert(core.state.gpr[reg] == gprs_before[reg]);
+        }
+    }
+    assert(core.state.fpr == fprs_before);
+    assert(core.state.fpr_ps1 == ps1_before);
+    assert(core.state.cr == 0x12345678U);
+    assert(core.state.xer == 0xA00000A5U);
+    assert(core.state.ctr == 0xCAFEBABEU);
+    assert(core.state.fpscr == 0x5A5AA55AU);
+    std::array<std::uint8_t, 0x80U> memory_after{};
+    core.memory.read_bytes(0x100U, memory_after);
+    assert(memory_after == memory_before);
+}
+
 void os_sleep_ticks_hle_tests()
 {
     constexpr std::uint32_t return_address = 0x180U;
@@ -34572,6 +34625,7 @@ int main(int argc, char* argv[])
     fs_add_client_hle_tests();
     fs_set_state_change_notification_hle_tests();
     os_get_system_time_hle_tests();
+    os_get_shutdown_reason_hle_tests();
     os_sleep_ticks_hle_tests();
     os_set_exception_callback_hle_tests();
     os_get_thread_priority_hle_tests();
