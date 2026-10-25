@@ -1915,6 +1915,22 @@ std::uint32_t pack_polygon_control(
            (boolean_bit(polygon_offset_parallel_enable) << 13U);
 }
 
+std::array<std::uint32_t, 2U> pack_scissor(
+    std::uint32_t x,
+    std::uint32_t y,
+    std::uint32_t width,
+    std::uint32_t height)
+{
+    constexpr std::uint32_t coordinate_mask = 0x7FFFU;
+    return {
+        0x80000000U |
+            (x & coordinate_mask) |
+            ((y & coordinate_mask) << 16U),
+        ((x + width) & coordinate_mask) |
+            (((y + height) & coordinate_mask) << 16U),
+    };
+}
+
 std::uint32_t pack_color_control(
     std::uint32_t rop3,
     std::uint32_t target_blend_enable,
@@ -3355,28 +3371,35 @@ void register_gx2_hle(HleDispatcher& dispatcher)
             const std::uint32_t y = core.state.gpr[4];
             const std::uint32_t width = core.state.gpr[5];
             const std::uint32_t height = core.state.gpr[6];
-
-            // The Latte generic scissor uses an inclusive top-left and an
-            // exclusive bottom-right. Setting WINDOW_OFFSET_DISABLE keeps
-            // the API's x/y coordinates literal, independent of other state.
-            constexpr std::uint32_t coordinate_mask = 0x7FFFU;
-            const std::uint32_t top_left =
-                0x80000000U |
-                (x & coordinate_mask) |
-                ((y & coordinate_mask) << 16U);
-            const std::uint32_t bottom_right =
-                ((x + width) & coordinate_mask) |
-                (((y + height) & coordinate_mask) << 16U);
+            // The helper models inclusive top-left and exclusive
+            // bottom-right coordinates, with window-offset adjustment off.
+            const auto packed = pack_scissor(x, y, width, height);
 
             core.gx2.pending_commands.push_back({
                 Gx2CommandType::set_context_register,
                 pa_sc_generic_scissor_tl_register,
-                top_left});
+                packed[0]});
             core.gx2.pending_commands.push_back({
                 Gx2CommandType::set_context_register,
                 pa_sc_generic_scissor_br_register,
-                bottom_right});
+                packed[1]});
             // Void GX2 setter: only the ordered Latte register stream changes.
+        });
+
+    dispatcher.register_function(
+        "gx2",
+        "GX2InitScissorReg",
+        [](EspressoCore& core) {
+            const auto packed = pack_scissor(
+                core.state.gpr[4],
+                core.state.gpr[5],
+                core.state.gpr[6],
+                core.state.gpr[7]);
+            const std::uint32_t output = core.state.gpr[3];
+            core.memory.validate_write_range(
+                output, packed.size() * sizeof(std::uint32_t));
+            core.memory.write32_be(output, packed[0]);
+            core.memory.write32_be(output + 4U, packed[1]);
         });
 
     dispatcher.register_function(
