@@ -3946,6 +3946,7 @@ struct BlockCode
         insn.opcode == Opcode::bitwise_or ||
         insn.opcode == Opcode::bitwise_and || insn.opcode == Opcode::bitwise_xor ||
         insn.opcode == Opcode::bitwise_nor ||
+        insn.opcode == Opcode::bitwise_nand ||
         insn.opcode == Opcode::bitwise_and_complement))
     {
         return true;
@@ -4035,6 +4036,7 @@ struct BlockCode
     case Opcode::bitwise_and_complement:
     case Opcode::bitwise_xor:
     case Opcode::bitwise_nor:
+    case Opcode::bitwise_nand:
     case Opcode::move_condition_register_field:
     case Opcode::move_from_condition_register:
     case Opcode::move_to_condition_register_fields:
@@ -4237,6 +4239,7 @@ struct BlockCode
     case Opcode::bitwise_and_complement: return "andc";
     case Opcode::bitwise_xor: return "xor";
     case Opcode::bitwise_nor: return "nor";
+    case Opcode::bitwise_nand: return "nand";
     case Opcode::compare_signed_immediate: return "cmpwi";
     case Opcode::compare_unsigned_immediate: return "cmplwi";
     case Opcode::compare_signed_register: return "cmpw";
@@ -5316,6 +5319,7 @@ struct Recompiler::Impl
             case Opcode::bitwise_and_complement:
             case Opcode::bitwise_xor:
             case Opcode::bitwise_nor:
+            case Opcode::bitwise_nand:
             {
                 x86::Gp lhs = compiler.new_gp32("lhs");
                 x86::Gp source_a = read_guest_gpr(insn.base);
@@ -5330,7 +5334,7 @@ struct Recompiler::Impl
                 }
                 else if (insn.opcode == Opcode::add || insn.opcode == Opcode::bitwise_or ||
                     insn.opcode == Opcode::bitwise_and || insn.opcode == Opcode::bitwise_xor ||
-                    insn.opcode == Opcode::bitwise_nor)
+                    insn.opcode == Opcode::bitwise_nor || insn.opcode == Opcode::bitwise_nand)
                 {
                     x86::Gp rhs = source_b;
                     if (insn.destination == insn.base)
@@ -5350,9 +5354,14 @@ struct Recompiler::Impl
                     else if (insn.opcode == Opcode::bitwise_or) compiler.or_(lhs, rhs);
                     else if (insn.opcode == Opcode::bitwise_and) compiler.and_(lhs, rhs);
                     else if (insn.opcode == Opcode::bitwise_xor) compiler.xor_(lhs, rhs);
-                    else
+                    else if (insn.opcode == Opcode::bitwise_nor)
                     {
                         compiler.or_(lhs, rhs);
+                        compiler.not_(lhs);
+                    }
+                    else
+                    {
+                        compiler.and_(lhs, rhs);
                         compiler.not_(lhs);
                     }
                 }
@@ -5361,7 +5370,8 @@ struct Recompiler::Impl
                     insn.opcode == Opcode::bitwise_or ||
                     insn.opcode == Opcode::bitwise_and ||
                     insn.opcode == Opcode::bitwise_xor ||
-                    insn.opcode == Opcode::bitwise_nor)
+                    insn.opcode == Opcode::bitwise_nor ||
+                    insn.opcode == Opcode::bitwise_nand)
                 {
                     write_guest_gpr(insn.destination, lhs);
                     if (insn.record)
