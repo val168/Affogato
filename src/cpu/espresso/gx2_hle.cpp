@@ -2984,6 +2984,41 @@ void register_gx2_hle(HleDispatcher& dispatcher)
 
     dispatcher.register_function(
         "gx2",
+        "GX2SetStencilMaskReg",
+        [](EspressoCore& core) {
+            if (!core.gx2.initialized)
+            {
+                throw HleExecutionError(
+                    "gx2::GX2SetStencilMaskReg: GX2 has not been initialized");
+            }
+
+            const std::uint32_t input = core.state.gpr[3];
+            if (static_cast<std::uint64_t>(input) + 2U * sizeof(std::uint32_t) >
+                guest_address_space_end)
+            {
+                throw HleExecutionError(
+                    "gx2::GX2SetStencilMaskReg: input range wraps guest address space");
+            }
+            const std::uint32_t front = core.memory.read32_be(input);
+            const std::uint32_t back = core.memory.read32_be(input + 4U);
+            auto& commands = core.gx2.pending_commands;
+            commands.reserve(commands.size() + 2U);
+            core.gx2.db_stencilrefmask = front;
+            core.gx2.db_stencilrefmask_valid = true;
+            core.gx2.db_stencilrefmask_bf = back;
+            core.gx2.db_stencilrefmask_bf_valid = true;
+            commands.push_back({
+                Gx2CommandType::set_context_register,
+                db_stencilrefmask_register,
+                front});
+            commands.push_back({
+                Gx2CommandType::set_context_register,
+                db_stencilrefmask_bf_register,
+                back});
+        });
+
+    dispatcher.register_function(
+        "gx2",
         "GX2SetPolygonControl",
         [](EspressoCore& core) {
             if (!core.gx2.initialized)
