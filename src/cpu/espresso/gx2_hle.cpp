@@ -3348,6 +3348,46 @@ void register_gx2_hle(HleDispatcher& dispatcher)
 
     dispatcher.register_function(
         "gx2",
+        "GX2SetAlphaTestReg",
+        [](EspressoCore& core) {
+            if (!core.gx2.initialized)
+            {
+                throw HleExecutionError(
+                    "gx2::GX2SetAlphaTestReg: GX2 has not been initialized");
+            }
+
+            // GX2AlphaTestReg contains the raw SX control and reference
+            // register words in that order. Snapshot both before mutating
+            // state so a failed second read cannot partially apply the reg.
+            const std::uint32_t input = core.state.gpr[3];
+            if (static_cast<std::uint64_t>(input) +
+                    2U * sizeof(std::uint32_t) >
+                guest_address_space_end)
+            {
+                throw HleExecutionError(
+                    "gx2::GX2SetAlphaTestReg: input range wraps guest address space");
+            }
+            const std::uint32_t control = core.memory.read32_be(input);
+            const std::uint32_t reference = core.memory.read32_be(input + 4U);
+            auto& commands = core.gx2.pending_commands;
+            commands.reserve(commands.size() + 2U);
+
+            core.gx2.sx_alpha_test_control = control;
+            core.gx2.sx_alpha_test_control_valid = true;
+            core.gx2.sx_alpha_ref = reference;
+            core.gx2.sx_alpha_ref_valid = true;
+            commands.push_back({
+                Gx2CommandType::set_context_register,
+                sx_alpha_test_control_register,
+                control});
+            commands.push_back({
+                Gx2CommandType::set_context_register,
+                sx_alpha_ref_register,
+                reference});
+        });
+
+    dispatcher.register_function(
+        "gx2",
         "GX2SetTargetChannelMasks",
         [](EspressoCore& core) {
             if (!core.gx2.initialized)
