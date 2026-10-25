@@ -4225,6 +4225,7 @@ struct BlockCode
     case Opcode::load_word_indexed_update:
     case Opcode::load_word_reserve_indexed:
     case Opcode::load_word_byte_reverse_indexed:
+    case Opcode::load_halfword_byte_reverse_indexed:
     case Opcode::load_byte_zero_indexed:
     case Opcode::load_byte_zero_indexed_update:
     case Opcode::load_halfword_zero_indexed:
@@ -4392,6 +4393,7 @@ struct BlockCode
     case Opcode::load_word_zero: return "lwz";
     case Opcode::load_word_reserve_indexed: return "lwarx";
     case Opcode::load_word_byte_reverse_indexed: return "lwbrx";
+    case Opcode::load_halfword_byte_reverse_indexed: return "lhbrx";
     case Opcode::load_multiple_word: return "lmw";
     case Opcode::load_string_word_immediate: return "lswi";
     case Opcode::store_string_word_immediate: return "stswi";
@@ -4499,6 +4501,7 @@ struct BlockCode
     case Opcode::load_byte_zero_indexed_update:
     case Opcode::load_halfword_zero_indexed:
     case Opcode::load_halfword_zero_indexed_update:
+    case Opcode::load_halfword_byte_reverse_indexed:
     case Opcode::load_halfword_algebraic_indexed:
     case Opcode::load_halfword_algebraic_indexed_update:
     case Opcode::store_word_indexed:
@@ -4540,6 +4543,7 @@ struct BlockCode
     case Opcode::store_halfword_update:
     case Opcode::load_halfword_zero_indexed:
     case Opcode::load_halfword_zero_indexed_update:
+    case Opcode::load_halfword_byte_reverse_indexed:
     case Opcode::load_halfword_algebraic_indexed:
     case Opcode::load_halfword_algebraic_indexed_update:
     case Opcode::store_halfword_indexed:
@@ -4589,6 +4593,7 @@ struct BlockCode
         opcode == Opcode::load_double_indexed_update ||
         opcode == Opcode::load_halfword_zero_indexed ||
         opcode == Opcode::load_halfword_zero_indexed_update ||
+        opcode == Opcode::load_halfword_byte_reverse_indexed ||
         opcode == Opcode::load_halfword_algebraic_indexed ||
         opcode == Opcode::load_halfword_algebraic_indexed_update ||
         opcode == Opcode::store_word_indexed ||
@@ -8245,6 +8250,7 @@ struct Recompiler::Impl
             case Opcode::load_byte_zero_indexed_update:
             case Opcode::load_halfword_zero_indexed:
             case Opcode::load_halfword_zero_indexed_update:
+            case Opcode::load_halfword_byte_reverse_indexed:
             case Opcode::load_halfword_algebraic_indexed:
             case Opcode::load_halfword_algebraic_indexed_update:
             case Opcode::store_word_indexed:
@@ -8532,6 +8538,12 @@ struct Recompiler::Impl
                 if (insn.opcode == Opcode::load_word_byte_reverse_indexed)
                 {
                     compiler.bswap(value);
+                    compiler.mov(x86::dword_ptr(context, static_cast<std::int32_t>(
+                        record_base + offsetof(NativeMemoryRecord, value))), value);
+                }
+                else if (insn.opcode == Opcode::load_halfword_byte_reverse_indexed)
+                {
+                    compiler.rol(value.r16(), imm(8U));
                     compiler.mov(x86::dword_ptr(context, static_cast<std::int32_t>(
                         record_base + offsetof(NativeMemoryRecord, value))), value);
                 }
