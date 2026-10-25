@@ -53,6 +53,13 @@ constexpr std::uint32_t cb_target_mask_register = 0x00028238U;
 constexpr std::uint32_t db_alpha_to_mask_register = 0x00028D44U;
 constexpr std::uint32_t pa_sc_generic_scissor_tl_register = 0x00028240U;
 constexpr std::uint32_t pa_sc_generic_scissor_br_register = 0x00028244U;
+constexpr std::uint32_t pa_cl_vport_xscale_register = 0x0002843CU;
+constexpr std::uint32_t pa_cl_gb_vert_clip_adj_register = 0x00028BE8U;
+constexpr std::uint32_t pa_cl_gb_vert_disc_adj_register = 0x00028BECU;
+constexpr std::uint32_t pa_cl_gb_horz_clip_adj_register = 0x00028BF0U;
+constexpr std::uint32_t pa_cl_gb_horz_disc_adj_register = 0x00028BF4U;
+constexpr std::uint32_t pa_sc_vport_zmin_register = 0x000282D0U;
+constexpr std::uint32_t pa_sc_vport_zmax_register = 0x000282D4U;
 constexpr std::uint32_t gx2_context_state_size = 0xA100U;
 constexpr std::uint32_t gx2_context_shadow_state_size = 0x9800U;
 constexpr std::uint32_t gx2_context_profiling_offset = 0x9800U;
@@ -3103,6 +3110,68 @@ void register_gx2_hle(HleDispatcher& dispatcher)
                 Gx2CommandType::set_context_register,
                 pa_sc_generic_scissor_br_register,
                 bottom_right});
+            // Void GX2 setter: only the ordered Latte register stream changes.
+        });
+
+    dispatcher.register_function(
+        "gx2",
+        "GX2SetViewport",
+        [](EspressoCore& core) {
+            if (!core.gx2.initialized)
+            {
+                throw HleExecutionError(
+                    "gx2::GX2SetViewport: GX2 has not been initialized");
+            }
+
+            // The Cafe ABI passes these six float arguments in f1-f6. Convert
+            // to binary32 before doing the viewport arithmetic, as the GX2
+            // register structure stores IEEE-754 single-precision values.
+            const float x = std::bit_cast<float>(fpr_float_argument_bits(core, 1U));
+            const float y = std::bit_cast<float>(fpr_float_argument_bits(core, 2U));
+            const float width = std::bit_cast<float>(fpr_float_argument_bits(core, 3U));
+            const float height = std::bit_cast<float>(fpr_float_argument_bits(core, 4U));
+            const float near_z = std::bit_cast<float>(fpr_float_argument_bits(core, 5U));
+            const float far_z = std::bit_cast<float>(fpr_float_argument_bits(core, 6U));
+
+            const float half_width = width * 0.5F;
+            const float half_height = height * 0.5F;
+            const float half_depth = (far_z - near_z) * 0.5F;
+            const std::array<std::uint32_t, 12U> values{
+                std::bit_cast<std::uint32_t>(half_width),
+                std::bit_cast<std::uint32_t>(x + half_width),
+                std::bit_cast<std::uint32_t>(-half_height),
+                std::bit_cast<std::uint32_t>(y + half_height),
+                std::bit_cast<std::uint32_t>(half_depth),
+                std::bit_cast<std::uint32_t>((near_z + far_z) * 0.5F),
+                0x3F800000U, // no vertical clip guard-band adjustment
+                0x3F800000U, // no vertical discard guard-band adjustment
+                0x3F800000U, // no horizontal clip guard-band adjustment
+                0x3F800000U, // no horizontal discard guard-band adjustment
+                0x00000000U, // depth clamp minimum
+                0x3F800000U, // depth clamp maximum
+            };
+            constexpr std::array<std::uint32_t, 12U> registers{
+                pa_cl_vport_xscale_register,
+                pa_cl_vport_xscale_register + 0x04U,
+                pa_cl_vport_xscale_register + 0x08U,
+                pa_cl_vport_xscale_register + 0x0CU,
+                pa_cl_vport_xscale_register + 0x10U,
+                pa_cl_vport_xscale_register + 0x14U,
+                pa_cl_gb_vert_clip_adj_register,
+                pa_cl_gb_vert_disc_adj_register,
+                pa_cl_gb_horz_clip_adj_register,
+                pa_cl_gb_horz_disc_adj_register,
+                pa_sc_vport_zmin_register,
+                pa_sc_vport_zmax_register,
+            };
+
+            for (std::size_t index = 0U; index < registers.size(); ++index)
+            {
+                core.gx2.pending_commands.push_back({
+                    Gx2CommandType::set_context_register,
+                    registers[index],
+                    values[index]});
+            }
             // Void GX2 setter: only the ordered Latte register stream changes.
         });
 
