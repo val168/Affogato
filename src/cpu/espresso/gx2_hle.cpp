@@ -3546,8 +3546,40 @@ void register_gx2_hle(HleDispatcher& dispatcher)
 
             std::this_thread::sleep_until(core.gx2.next_vsync_deadline);
             ++core.gx2.vsync_count;
+            core.gx2.last_vsync_time = core.time_base_ticks();
             core.gx2.next_vsync_deadline += gx2_virtual_vsync_period;
             // GX2WaitForVsync has a void ABI: preserve all PPC argument GPRs.
+        });
+
+    dispatcher.register_function(
+        "gx2",
+        "GX2GetSwapStatus",
+        [](EspressoCore& core) {
+            const std::uint32_t swap_count_output = core.state.gpr[3];
+            const std::uint32_t flip_count_output = core.state.gpr[4];
+            const std::uint32_t last_flip_output = core.state.gpr[5];
+            const std::uint32_t last_vsync_output = core.state.gpr[6];
+
+            // Validate every destination first so a bad later output cannot
+            // leave the earlier guest words partially updated.
+            validate_gx2_u32_output(
+                core, swap_count_output, "GX2GetSwapStatus", "swapCount");
+            validate_gx2_u32_output(
+                core, flip_count_output, "GX2GetSwapStatus", "flipCount");
+            validate_gx2_u64_output(
+                core, last_flip_output, "GX2GetSwapStatus");
+            validate_gx2_u64_output(
+                core, last_vsync_output, "GX2GetSwapStatus");
+
+            const std::uint32_t swap_count = core.gx2.flip_request_count;
+            const std::uint32_t flip_count = core.gx2.flip_execute_count;
+            const std::uint64_t last_flip = core.gx2.last_flip_time;
+            const std::uint64_t last_vsync = core.gx2.last_vsync_time;
+            core.memory.write32_be(swap_count_output, swap_count);
+            core.memory.write32_be(flip_count_output, flip_count);
+            core.memory.write64_be(last_flip_output, last_flip);
+            core.memory.write64_be(last_vsync_output, last_vsync);
+            core.state.gpr[3] = 0U;
         });
 
     dispatcher.register_function(

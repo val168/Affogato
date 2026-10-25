@@ -123,6 +123,8 @@ struct Gx2RuntimeState
     std::chrono::steady_clock::time_point next_vsync_deadline{};
     bool vsync_deadline_initialized{};
     std::uint64_t vsync_count{};
+    std::uint64_t last_vsync_time{};
+    std::uint64_t last_flip_time{};
     std::uint32_t flip_request_count{};
     std::uint32_t flip_execute_count{};
     // GX2EventType values 2 (vsync), 3 (flip), and 4 (display-list overrun).

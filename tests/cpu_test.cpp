@@ -24105,8 +24105,97 @@ void gx2_wait_for_vsync_hle_tests()
     assert(core.state.fpscr == 0x5A5AA5A5U);
     assert(core.gx2.vsync_deadline_initialized);
     assert(core.gx2.vsync_count == 1U);
+    assert(core.gx2.last_vsync_time != 0U);
     assert(core.gx2.pending_commands == gx2_before.pending_commands);
     assert(core.gx2.event_callbacks == gx2_before.event_callbacks);
+
+    // The swap-status API must expose the virtual-vsync time recorded by the
+    // wait boundary, while reporting no flips until a guest swap is submitted.
+    core.state.gpr[3] = 0x100U;
+    core.state.gpr[4] = 0x104U;
+    core.state.gpr[5] = 0x108U;
+    core.state.gpr[6] = 0x110U;
+    core.state.lr = return_address + 4U;
+    core.state.cia = core.hle.bind_import("gx2", "GX2GetSwapStatus");
+    const RunResult status_result = core.run(1U);
+    assert(status_result.reason == StopReason::instruction_limit);
+    assert(core.state.cia == return_address + 4U);
+    assert(core.state.gpr[3] == 0U);
+    assert(core.memory.read32_be(0x100U) == 0U);
+    assert(core.memory.read32_be(0x104U) == 0U);
+    assert(core.memory.read64_be(0x108U) == 0U);
+    assert(core.memory.read64_be(0x110U) == core.gx2.last_vsync_time);
+}
+
+void gx2_get_swap_status_hle_tests()
+{
+    constexpr std::uint32_t return_address = 0x02740340U;
+    constexpr std::uint32_t swap_count_output = 0x100U;
+    constexpr std::uint32_t flip_count_output = 0x104U;
+    constexpr std::uint32_t last_flip_output = 0x108U;
+    constexpr std::uint32_t last_vsync_output = 0x110U;
+    EspressoCore core(0x1000U);
+    register_gx2_hle(core.hle);
+    core.gx2.flip_request_count = 0x12345678U;
+    core.gx2.flip_execute_count = 0x87654321U;
+    core.gx2.last_flip_time = 0x1122334455667788ULL;
+    core.gx2.last_vsync_time = 0xAABBCCDDEEFF0011ULL;
+    core.memory.fill_bytes(0U, core.memory.size(), 0xA5U);
+    core.state.gpr.fill(0xD7000000U);
+    core.state.gpr[3] = swap_count_output;
+    core.state.gpr[4] = flip_count_output;
+    core.state.gpr[5] = last_flip_output;
+    core.state.gpr[6] = last_vsync_output;
+    core.state.lr = return_address;
+    core.state.cr = 0xA5A55A5AU;
+    core.state.xer = 0x87654321U;
+    core.state.ctr = 0xABCDEF01U;
+    core.state.fpscr = 0x5A5AA5A5U;
+    const auto gprs_before = core.state.gpr;
+    const auto fprs_before = core.state.fpr;
+    const auto ps1_before = core.state.fpr_ps1;
+    const Gx2RuntimeState gx2_before = core.gx2;
+    core.state.cia = core.hle.bind_import("gx2", "GX2GetSwapStatus");
+
+    const RunResult result = core.run(1U);
+    assert(result.reason == StopReason::instruction_limit);
+    assert(result.steps == 1U);
+    assert(core.state.cia == return_address && core.state.lr == return_address);
+    assert(core.state.gpr[3] == 0U);
+    for (std::size_t reg = 4U; reg < core.state.gpr.size(); ++reg)
+    {
+        assert(core.state.gpr[reg] == gprs_before[reg]);
+    }
+    assert(core.state.fpr == fprs_before && core.state.fpr_ps1 == ps1_before);
+    assert(core.state.cr == 0xA5A55A5AU);
+    assert(core.state.xer == 0x87654321U);
+    assert(core.state.ctr == 0xABCDEF01U);
+    assert(core.state.fpscr == 0x5A5AA5A5U);
+    assert(core.gx2 == gx2_before);
+    assert(core.memory.read32_be(swap_count_output) == 0x12345678U);
+    assert(core.memory.read32_be(flip_count_output) == 0x87654321U);
+    assert(core.memory.read64_be(last_flip_output) == 0x1122334455667788ULL);
+    assert(core.memory.read64_be(last_vsync_output) == 0xAABBCCDDEEFF0011ULL);
+
+    // Validation is transactional: an invalid final timestamp output leaves
+    // the preceding three destinations untouched.
+    constexpr std::uint32_t first_sentinel = 0xC001C0DEU;
+    constexpr std::uint32_t second_sentinel = 0x51A7E123U;
+    constexpr std::uint64_t third_sentinel = 0xD15EA5EDBADC0FFEULL;
+    core.memory.write32_be(swap_count_output, first_sentinel);
+    core.memory.write32_be(flip_count_output, second_sentinel);
+    core.memory.write64_be(last_flip_output, third_sentinel);
+    core.state.gpr[3] = swap_count_output;
+    core.state.gpr[4] = flip_count_output;
+    core.state.gpr[5] = last_flip_output;
+    core.state.gpr[6] = 0xFFFFFFFCU;
+    core.state.cia = core.hle.bind_import("gx2", "GX2GetSwapStatus");
+    const RunResult invalid = core.run(1U);
+    assert(invalid.reason == StopReason::hle_error);
+    assert(invalid.detail.find("range wraps") != std::string::npos);
+    assert(core.memory.read32_be(swap_count_output) == first_sentinel);
+    assert(core.memory.read32_be(flip_count_output) == second_sentinel);
+    assert(core.memory.read64_be(last_flip_output) == third_sentinel);
 }
 
 void gx2_calc_tv_size_hle_tests()
@@ -35056,6 +35145,7 @@ int main(int argc, char* argv[])
     gx2_gpu_time_to_cpu_time_hle_tests();
     gx2_set_gpu_fence_hle_tests();
     gx2_wait_for_vsync_hle_tests();
+    gx2_get_swap_status_hle_tests();
     gx2_calc_surface_size_and_alignment_hle_tests();
     gx2r_create_surface_user_memory_hle_tests();
     gx2r_lock_surface_ex_hle_tests();
