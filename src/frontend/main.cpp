@@ -506,6 +506,11 @@ int run_rpx_diagnostic(int argc, char* argv[])
     std::cout << "Loaded entry point: 0x" << std::hex << std::uppercase
               << image.entry_point << std::dec
               << "\nSections loaded: " << image.loaded_sections
+              << "\nHLE data range: [0x" << std::hex << std::uppercase
+              << emulator.core().hle.data_range_begin() << ",0x"
+              << emulator.core().hle.data_range_end() << ") import range: [0x"
+              << emulator.core().hle.import_range_begin() << ",0x"
+              << emulator.core().hle.import_range_end() << ")" << std::dec
               << "\nExecution mode: " << (mode == affogato::ExecutionMode::recompiler
                     ? "recompiler" : "interpreter")
               << "\nInstruction limit: " << instruction_limit << '\n';
@@ -704,7 +709,8 @@ int run_rpx_diagnostic(int argc, char* argv[])
     {
         const auto& call = recent_hle_calls[index];
         std::cout << "  0x" << std::hex << std::uppercase << call.import_address
-                  << " " << call.name << " args=";
+                  << " " << call.name << " return=0x" << call.return_address
+                  << " args=";
         for (std::size_t argument = 0U; argument < call.arguments.size(); ++argument)
         {
             std::cout << (argument == 0U ? "(" : ",") << "r"
