@@ -3507,6 +3507,47 @@ void register_gx2_hle(HleDispatcher& dispatcher)
 
     dispatcher.register_function(
         "gx2",
+        "GX2SetBlendConstantColorReg",
+        [](EspressoCore& core) {
+            if (!core.gx2.initialized)
+            {
+                throw HleExecutionError(
+                    "gx2::GX2SetBlendConstantColorReg: GX2 has not been initialized");
+            }
+            const std::uint32_t input = core.state.gpr[3];
+            if (static_cast<std::uint64_t>(input) + 4U * sizeof(std::uint32_t) >
+                guest_address_space_end)
+            {
+                throw HleExecutionError(
+                    "gx2::GX2SetBlendConstantColorReg: input range wraps guest address space");
+            }
+            std::array<std::uint32_t, 4U> values{};
+            for (std::size_t index = 0U; index < values.size(); ++index)
+            {
+                values[index] = core.memory.read32_be(
+                    input + static_cast<std::uint32_t>(index * 4U));
+            }
+            constexpr std::array<std::uint32_t, 4U> registers{
+                cb_blend_red_register,
+                cb_blend_green_register,
+                cb_blend_blue_register,
+                cb_blend_alpha_register,
+            };
+            auto& commands = core.gx2.pending_commands;
+            commands.reserve(commands.size() + values.size());
+            core.gx2.cb_blend_constant = values;
+            core.gx2.cb_blend_constant_valid.fill(true);
+            for (std::size_t index = 0U; index < values.size(); ++index)
+            {
+                commands.push_back({
+                    Gx2CommandType::set_context_register,
+                    registers[index],
+                    values[index]});
+            }
+        });
+
+    dispatcher.register_function(
+        "gx2",
         "GX2SetAlphaTest",
         [](EspressoCore& core) {
             if (!core.gx2.initialized)

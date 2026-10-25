@@ -25736,6 +25736,110 @@ void gx2_get_blend_constant_color_reg_hle_tests()
     assert(wrapped_input.detail.find("range wraps") != std::string::npos);
 }
 
+void gx2_set_blend_constant_color_reg_hle_tests()
+{
+    constexpr std::uint32_t return_address = 0x027508BAU;
+    constexpr std::uint32_t input_address = 0x503U;
+    constexpr std::array<std::uint32_t, 4U> registers{
+        0x00028414U, 0x00028418U, 0x0002841CU, 0x00028420U};
+    constexpr std::array<std::uint32_t, 4U> values{
+        0x3E800000U, 0xBF000000U, 0x40000000U, 0x80000000U};
+
+    EspressoCore core(0x10000U);
+    register_gx2_hle(core.hle);
+    const std::uint32_t import =
+        core.hle.bind_import("gx2", "GX2SetBlendConstantColorReg");
+    const std::uint32_t wrong_library =
+        core.hle.bind_import("coreinit", "GX2SetBlendConstantColorReg");
+    assert(import != 0U && wrong_library != 0U);
+    core.gx2.initialized = true;
+    core.gx2.cb_blend_constant = {0x11111111U, 0x22222222U,
+                                   0x33333333U, 0x44444444U};
+    core.gx2.cb_blend_constant_valid = {true, false, true, false};
+    core.gx2.pending_commands = {
+        {Gx2CommandType::set_context_register, 0x00028808U, 0x12345678U}};
+    for (std::size_t index = 0U; index < values.size(); ++index)
+    {
+        core.memory.write32_be(
+            input_address + static_cast<std::uint32_t>(index * 4U), values[index]);
+    }
+    core.state.gpr.fill(0xB1000000U);
+    core.state.gpr[3] = input_address;
+    core.state.cr = 0x12345678U;
+    core.state.xer = 0xA5A55A5AU;
+    core.state.ctr = 0x87654321U;
+    core.state.fpscr = 0x5A5AA55AU;
+    const auto gprs_before = core.state.gpr;
+    const auto fprs_before = core.state.fpr;
+    const auto ps1_before = core.state.fpr_ps1;
+    const auto initial_commands = core.gx2.pending_commands;
+
+    const auto invoke = [&](std::uint32_t function) {
+        core.state.cia = function;
+        core.state.lr = return_address;
+        return core.run(1U);
+    };
+    const RunResult result = invoke(import);
+    assert(result.reason == StopReason::instruction_limit);
+    assert(result.steps == 1U && core.state.cia == return_address);
+    assert(core.gx2.cb_blend_constant == values);
+    assert(std::ranges::all_of(core.gx2.cb_blend_constant_valid,
+                               [](bool valid) { return valid; }));
+    assert(core.gx2.pending_commands.size() == initial_commands.size() + 4U);
+    for (std::size_t index = 0U; index < values.size(); ++index)
+    {
+        assert(core.gx2.pending_commands[initial_commands.size() + index] ==
+               (Gx2Command{Gx2CommandType::set_context_register,
+                           registers[index], values[index]}));
+        assert(core.memory.read32_be(
+                   input_address + static_cast<std::uint32_t>(index * 4U)) ==
+               values[index]);
+    }
+    assert(core.state.gpr == gprs_before);
+    assert(core.state.fpr == fprs_before && core.state.fpr_ps1 == ps1_before);
+    assert(core.state.cr == 0x12345678U);
+    assert(core.state.xer == 0xA5A55A5AU);
+    assert(core.state.ctr == 0x87654321U);
+    assert(core.state.fpscr == 0x5A5AA55AU);
+
+    const auto state_before_fault = core.gx2;
+    core.state.gpr[3] = 0xFFFCU;
+    const RunResult late_read_fault = invoke(import);
+    assert(late_read_fault.reason == StopReason::memory_fault);
+    assert(late_read_fault.detail.find("read 4 byte(s)") != std::string::npos);
+    assert(core.gx2.cb_blend_constant == state_before_fault.cb_blend_constant);
+    assert(core.gx2.cb_blend_constant_valid ==
+           state_before_fault.cb_blend_constant_valid);
+    assert(core.gx2.pending_commands == state_before_fault.pending_commands);
+
+    core.state.gpr[3] = 0xFFFFFFFCU;
+    const RunResult wrapped_input = invoke(import);
+    assert(wrapped_input.reason == StopReason::hle_error);
+    assert(wrapped_input.detail.find("range wraps") != std::string::npos);
+    assert(core.gx2.pending_commands == state_before_fault.pending_commands);
+
+    core.state.gpr[3] = input_address;
+    const RunResult wrong_library_result = invoke(wrong_library);
+    assert(wrong_library_result.reason == StopReason::unimplemented_hle_call);
+    assert(wrong_library_result.hle_call ==
+           "coreinit::GX2SetBlendConstantColorReg");
+
+    EspressoCore uninitialized(0x1000U);
+    register_gx2_hle(uninitialized.hle);
+    const std::uint32_t uninitialized_import = uninitialized.hle.bind_import(
+        "gx2", "GX2SetBlendConstantColorReg");
+    uninitialized.state.gpr[3] = 0xFFFFFFFCU;
+    const RunResult uninitialized_result = [&] {
+        uninitialized.state.cia = uninitialized_import;
+        uninitialized.state.lr = return_address;
+        return uninitialized.run(1U);
+    }();
+    assert(uninitialized_result.reason == StopReason::hle_error);
+    assert(uninitialized_result.detail.find(
+               "gx2::GX2SetBlendConstantColorReg") != std::string::npos);
+    assert(uninitialized.gx2.pending_commands.empty());
+}
+
 void gx2_set_alpha_test_hle_tests()
 {
     constexpr std::uint32_t return_address = 0x027508C4U;
@@ -39910,6 +40014,7 @@ int main(int argc, char* argv[])
     gx2_set_blend_constant_color_hle_tests();
     gx2_init_blend_constant_color_reg_hle_tests();
     gx2_get_blend_constant_color_reg_hle_tests();
+    gx2_set_blend_constant_color_reg_hle_tests();
     gx2_set_alpha_test_hle_tests();
     gx2_init_target_channel_masks_reg_hle_tests();
     gx2_get_target_channel_masks_reg_hle_tests();
