@@ -2565,6 +2565,110 @@ void recompiler_subfco_differential_test()
     }
 }
 
+void recompiler_addzeo_differential_test()
+{
+    struct Case
+    {
+        std::uint32_t operand;
+        std::uint8_t source;
+        std::uint8_t destination;
+        bool carry_in;
+        bool record;
+        std::uint32_t initial_xer;
+        std::uint32_t initial_cr;
+    };
+    constexpr std::array cases{
+        Case{0x7FFFFFFFU, 4U, 5U, true, false, 0x400000A5U, 0x13579BDFU},
+        Case{0xFFFFFFFFU, 6U, 6U, true, true, 0x8000005AU, 0x87654321U},
+        Case{0x80000000U, 7U, 8U, true, true, 0x60000033U, 0xA5C36E91U},
+        Case{0U, 9U, 10U, false, false, 0xA00000C3U, 0x2468ACE0U},
+        Case{0x7FFFFFFFU, 12U, 12U, false, true, 0xE000005AU, 0x12345678U},
+    };
+    static_assert(x_form(3U, 4U, 0U, 714U) == 0x7C640594U);
+
+    for (const Case& test : cases)
+    {
+        EspressoCore interpreted(0x1000U);
+        EspressoCore compiled(0x1000U);
+        const std::uint32_t instruction = x_form(
+            test.destination, test.source, 0U, 714U, test.record);
+        for (EspressoCore* core : {&interpreted, &compiled})
+        {
+            core->memory.write32_be(0x100U, instruction);
+            core->state.cia = 0x100U;
+            core->state.gpr.fill(0x10203040U);
+            core->state.gpr[test.source] = test.operand;
+            core->state.xer = (test.initial_xer & ~0x20000000U) |
+                (test.carry_in ? 0x20000000U : 0U);
+            core->state.cr = test.initial_cr;
+            core->state.lr = 0x12345678U;
+            core->state.ctr = 0x87654321U;
+            core->state.fpscr = 0x89ABCDEFU;
+        }
+
+        const std::uint32_t result = test.operand +
+            static_cast<std::uint32_t>(test.carry_in);
+        const bool carry_out = test.carry_in && test.operand == 0xFFFFFFFFU;
+        const bool overflow = test.carry_in && test.operand == 0x7FFFFFFFU;
+        const bool summary_overflow =
+            ((test.initial_xer & 0x80000000U) != 0U) || overflow;
+        std::uint32_t expected_xer = test.initial_xer &
+            ~(0xE0000000U);
+        if (carry_out)
+        {
+            expected_xer |= 0x20000000U;
+        }
+        if (overflow)
+        {
+            expected_xer |= 0x40000000U;
+        }
+        if (summary_overflow)
+        {
+            expected_xer |= 0x80000000U;
+        }
+
+        const RunResult oracle = interpreted.run(1U);
+        Recompiler recompiler;
+        const RunResult actual = recompiler.run(compiled, 1U);
+        assert(actual.reason == oracle.reason);
+        assert(actual.steps == oracle.steps && actual.steps == 1U);
+        assert(actual.cia == oracle.cia);
+        assert(compiled.state.gpr == interpreted.state.gpr);
+        assert(compiled.state.cr == interpreted.state.cr);
+        assert(compiled.state.xer == interpreted.state.xer);
+        assert(compiled.state.lr == interpreted.state.lr);
+        assert(compiled.state.ctr == interpreted.state.ctr);
+        assert(compiled.state.fpscr == interpreted.state.fpscr);
+        assert(compiled.state.gpr[test.destination] == result);
+        assert(compiled.state.xer == expected_xer);
+        if (!test.record)
+        {
+            assert(compiled.state.cr == test.initial_cr);
+        }
+        else
+        {
+            const std::uint32_t relation = result == 0U ? 2U
+                : (result & 0x80000000U) != 0U ? 8U : 4U;
+            assert((compiled.state.cr >> 28U) ==
+                (relation | (summary_overflow ? 1U : 0U)));
+        }
+        assert(recompiler.statistics().native_instructions == 1U);
+        assert(recompiler.statistics().interpreter_fallbacks == 0U);
+        assert(actual.instruction_history.size() == 1U);
+        const InstructionHistoryEntry& history = actual.instruction_history.front();
+        assert(history.completed && history.opcode_name ==
+            (test.record ? "addzeo." : "addzeo"));
+        assert(history.source_count == 1U && history.source_registers[0] == test.source);
+        assert(history.source_values[0] == test.operand);
+        assert(history.has_destination && history.destination_register == test.destination);
+        assert(history.destination_value == result);
+        assert(history.has_carry_input && history.carry_input == test.carry_in);
+        assert(history.has_carry_result && history.carry_result == carry_out);
+        assert(history.has_overflow_result && history.overflow_result == overflow);
+        assert(history.summary_overflow_result == summary_overflow);
+    }
+}
+
 void recompiler_addme_differential_test()
 {
     struct Case
@@ -10983,6 +11087,7 @@ int main()
     recompiler_nego_differential_test();
     recompiler_addco_differential_test();
     recompiler_subfco_differential_test();
+    recompiler_addzeo_differential_test();
     recompiler_addme_differential_test();
     recompiler_mullwo_differential_test();
     recompiler_subfme_differential_test();
