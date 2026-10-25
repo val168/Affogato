@@ -3398,6 +3398,7 @@ extern "C" void native_store_string_word_immediate(
 extern "C" std::uint64_t native_load_double(
     NativeExecutionContext* context,
     std::uint32_t address,
+    std::uint32_t indexed,
     std::uint32_t instruction_index) noexcept
 {
     try
@@ -3413,7 +3414,7 @@ extern "C" std::uint64_t native_load_double(
         }
         NativeMemoryRecord& record = context->memory_records[instruction_index];
         record.address = address;
-        record.indexed = false;
+        record.indexed = indexed != 0U;
         record.fp_value = context->memory->read64_be(address);
         return record.fp_value;
     }
@@ -3793,6 +3794,7 @@ struct BlockCode
     case Opcode::load_single_indexed_update:
     case Opcode::load_double:
     case Opcode::load_double_update:
+    case Opcode::load_double_indexed:
     case Opcode::store_word:
     case Opcode::store_word_update:
     case Opcode::store_byte:
@@ -3962,6 +3964,7 @@ struct BlockCode
     case Opcode::load_single_indexed_update: return "lfsux";
     case Opcode::load_double: return "lfd";
     case Opcode::load_double_update: return "lfdu";
+    case Opcode::load_double_indexed: return "lfdx";
     case Opcode::store_word: return "stw";
     case Opcode::store_word_conditional_indexed: return "stwcx.";
     case Opcode::store_word_update: return "stwu";
@@ -4026,6 +4029,7 @@ struct BlockCode
     case Opcode::load_single_indexed_update:
     case Opcode::load_double:
     case Opcode::load_double_update:
+    case Opcode::load_double_indexed:
     case Opcode::store_single:
     case Opcode::store_single_update:
     case Opcode::store_single_indexed:
@@ -4133,6 +4137,7 @@ struct BlockCode
         opcode == Opcode::load_byte_zero_indexed_update ||
         opcode == Opcode::load_single_indexed ||
         opcode == Opcode::load_single_indexed_update ||
+        opcode == Opcode::load_double_indexed ||
         opcode == Opcode::load_halfword_zero_indexed ||
         opcode == Opcode::load_halfword_zero_indexed_update ||
         opcode == Opcode::load_halfword_algebraic_indexed ||
@@ -6927,12 +6932,14 @@ struct Recompiler::Impl
             }
             case Opcode::load_double:
             case Opcode::load_double_update:
+            case Opcode::load_double_indexed:
             {
                 const std::size_t record_base = offsetof(NativeExecutionContext, memory_records) +
                     index * sizeof(NativeMemoryRecord);
                 const std::uint32_t cia = block.address +
                     static_cast<std::uint32_t>(index * 4U);
                 x86::Gp address = compiler.new_gp32("lfd_address");
+                const bool indexed = insn.opcode == Opcode::load_double_indexed;
                 if (insn.opcode == Opcode::load_double_update)
                 {
                     compiler.mov(address, read_guest_gpr(insn.base));
@@ -6949,7 +6956,18 @@ struct Recompiler::Impl
                     compiler.mov(x86::dword_ptr(context, static_cast<std::int32_t>(
                         record_base + offsetof(NativeMemoryRecord, base_value))), address);
                 }
-                compiler.add(address, imm(static_cast<std::uint32_t>(insn.immediate)));
+                if (indexed)
+                {
+                    x86::Gp index_value = compiler.new_gp32("lfd_index");
+                    compiler.mov(index_value, read_guest_gpr(insn.source));
+                    compiler.mov(x86::dword_ptr(context, static_cast<std::int32_t>(
+                        record_base + offsetof(NativeMemoryRecord, index_value))), index_value);
+                    compiler.add(address, index_value);
+                }
+                else
+                {
+                    compiler.add(address, imm(static_cast<std::uint32_t>(insn.immediate)));
+                }
                 compiler.mov(x86::dword_ptr(context, static_cast<std::int32_t>(
                     offsetof(NativeExecutionContext, fault_cia))), imm(cia));
 
@@ -6958,10 +6976,11 @@ struct Recompiler::Impl
                     reinterpret_cast<std::uintptr_t>(&native_load_double));
                 compiler.invoke(Out(invoke), helper_address,
                     FuncSignature::build<std::uint64_t, NativeExecutionContext*,
-                        std::uint32_t, std::uint32_t>(CallConvId::kCDecl));
+                        std::uint32_t, std::uint32_t, std::uint32_t>(CallConvId::kCDecl));
                 invoke->set_arg(0, context);
                 invoke->set_arg(1, address);
-                invoke->set_arg(2, imm(static_cast<std::uint32_t>(index)));
+                invoke->set_arg(2, imm(indexed ? 1U : 0U));
+                invoke->set_arg(3, imm(static_cast<std::uint32_t>(index)));
                 x86::Gp value = compiler.new_gp64("lfd_value");
                 invoke->set_ret(0, value);
 
@@ -8526,7 +8545,8 @@ RunResult Recompiler::run(EspressoCore& core, std::size_t max_steps)
                 insn.opcode == Opcode::load_single_indexed ||
                 insn.opcode == Opcode::load_single_indexed_update ||
                 insn.opcode == Opcode::load_double ||
-                insn.opcode == Opcode::load_double_update)
+                insn.opcode == Opcode::load_double_update ||
+                insn.opcode == Opcode::load_double_indexed)
             {
                 entry.has_fp_destination = true;
                 entry.fp_destination_register = insn.fp_register;

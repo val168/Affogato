@@ -284,6 +284,14 @@ namespace
         (static_cast<std::uint32_t>(index) << 11U) | (567U << 1U);
 }
 
+[[nodiscard]] constexpr std::uint32_t lfdx_form(
+    std::uint8_t fp_destination, std::uint8_t base, std::uint8_t index)
+{
+    return (31U << 26U) | (static_cast<std::uint32_t>(fp_destination) << 21U) |
+        (static_cast<std::uint32_t>(base) << 16U) |
+        (static_cast<std::uint32_t>(index) << 11U) | (599U << 1U);
+}
+
 [[nodiscard]] constexpr std::uint32_t lmw_form(
     std::uint8_t first_destination, std::uint8_t base, std::int16_t displacement)
 {
@@ -3586,6 +3594,104 @@ void recompiler_lfd_differential_tests()
     assert(fault.instruction_history.back().opcode_name == "lfd");
 }
 
+void recompiler_lfdx_differential_tests()
+{
+    struct Case
+    {
+        std::uint8_t destination;
+        std::uint8_t base_register;
+        std::uint8_t index_register;
+        std::uint32_t base;
+        std::uint32_t index;
+        std::uint64_t memory_bits;
+    };
+    constexpr std::uint32_t start = 0x100U;
+    constexpr std::uint64_t ps1_sentinel = 0xDEADBEEF01234567ULL;
+    constexpr std::array cases{
+        Case{6U, 4U, 5U, 0x300U, 8U, 0x3FF0000000000000ULL},
+        Case{7U, 6U, 6U, 0x200U, 0x200U, 0x8000000000000000ULL}, // RA aliases RB
+        Case{8U, 0U, 0U, 0xDEADBEEFU, 0x320U, 0x7FF8123456789ABCULL}, // RA=0, RB=GPR0
+        Case{9U, 12U, 13U, 0xFFFFFF00U, 0x500U, 0x0000000000000001ULL}, // wraps
+    };
+
+    for (const Case& test : cases)
+    {
+        EspressoCore interpreted(0x1000U);
+        EspressoCore compiled(0x1000U);
+        const std::uint32_t address =
+            (test.base_register == 0U ? 0U : test.base) + test.index;
+        for (EspressoCore* core : {&interpreted, &compiled})
+        {
+            core->memory.write32_be(start, lfdx_form(
+                test.destination, test.base_register, test.index_register));
+            core->memory.write64_be(address, test.memory_bits);
+            core->state.cia = start;
+            core->state.gpr.fill(0xA5A5A5A5U);
+            core->state.gpr[test.base_register] = test.base;
+            core->state.gpr[test.index_register] = test.index;
+            core->state.fpr.fill(0xFEDCBA9876543210ULL);
+            core->state.fpr[test.destination] = 0xA5A5A5A5A5A5A5A5ULL;
+            core->state.fpr_ps1[test.destination] = ps1_sentinel;
+            core->state.cr = 0x76543210U;
+            core->state.xer = 0xE0000000U;
+            core->state.lr = 0xABCDEF00U;
+            core->state.ctr = 0xFEDCBA98U;
+            core->state.fpscr = 0x12345678U;
+        }
+
+        const RunResult oracle = interpreted.run(1U);
+        Recompiler recompiler;
+        const RunResult actual = recompiler.run(compiled, 1U);
+        assert(actual.reason == oracle.reason);
+        assert(actual.steps == oracle.steps && actual.steps == 1U);
+        assert(actual.cia == oracle.cia);
+        assert(compiled.state.gpr == interpreted.state.gpr);
+        assert(compiled.state.fpr == interpreted.state.fpr);
+        assert(compiled.state.fpr_ps1 == interpreted.state.fpr_ps1);
+        assert(compiled.state.fpr[test.destination] == test.memory_bits);
+        assert(compiled.state.fpr_ps1[test.destination] == ps1_sentinel);
+        assert(compiled.state.cr == interpreted.state.cr);
+        assert(compiled.state.xer == interpreted.state.xer);
+        assert(compiled.state.lr == interpreted.state.lr);
+        assert(compiled.state.ctr == interpreted.state.ctr);
+        assert(compiled.state.fpscr == interpreted.state.fpscr);
+        assert(recompiler.statistics().native_instructions == 1U);
+        assert(recompiler.statistics().interpreter_fallbacks == 0U);
+        assert(recompiler.statistics().memory_slow_path_calls == 1U);
+        const InstructionHistoryEntry& history = actual.instruction_history.back();
+        assert(history.opcode_name == "lfdx");
+        assert(history.has_effective_address && history.effective_address == address);
+        assert(history.source_count == (test.base_register == 0U ? 1U : 2U));
+        if (test.base_register != 0U)
+        {
+            assert(history.source_registers[0] == test.base_register);
+            assert(history.source_values[0] == test.base);
+        }
+        const std::uint8_t index_source = test.base_register == 0U ? 0U : 1U;
+        assert(history.source_registers[index_source] == test.index_register);
+        assert(history.source_values[index_source] == test.index);
+        assert(history.has_fp_destination);
+        assert(history.fp_destination_register == test.destination);
+        assert(history.fp_destination_value == test.memory_bits);
+    }
+
+    EspressoCore faulting(0x1000U);
+    faulting.memory.write32_be(start, lfdx_form(6U, 4U, 5U));
+    faulting.state.cia = start;
+    faulting.state.gpr[4] = 0x1000U;
+    faulting.state.gpr[5] = 8U;
+    faulting.state.fpr[6] = 0xA5A5A5A5A5A5A5A5ULL;
+    faulting.state.fpr_ps1[6] = ps1_sentinel;
+    Recompiler fault_recompiler;
+    const RunResult fault = fault_recompiler.run(faulting, 1U);
+    assert(fault.reason == StopReason::memory_fault);
+    assert(fault.detail.find("read 8 byte(s) at guest address 0x00001008") !=
+        std::string::npos);
+    assert(faulting.state.fpr[6] == 0xA5A5A5A5A5A5A5A5ULL);
+    assert(faulting.state.fpr_ps1[6] == ps1_sentinel);
+    assert(!fault.instruction_history.back().completed);
+}
+
 void recompiler_lfdu_differential_tests()
 {
     constexpr std::uint32_t start = 0x100U;
@@ -6381,6 +6487,7 @@ int main()
     recompiler_rlwnm_differential_tests();
     recompiler_andis_differential_tests();
     recompiler_lfd_differential_tests();
+    recompiler_lfdx_differential_tests();
     recompiler_lfdu_differential_tests();
     recompiler_lfs_differential_tests();
     recompiler_lfsx_differential_tests();
