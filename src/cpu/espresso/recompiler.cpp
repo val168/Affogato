@@ -88,6 +88,13 @@ struct NativeMtfsfRecord
     std::uint32_t after{};
 };
 
+struct NativeMcrfsRecord
+{
+    std::uint32_t before{};
+    std::uint32_t after{};
+    std::uint8_t value{};
+};
+
 struct NativeFrspRecord
 {
     std::uint64_t source_raw{};
@@ -345,6 +352,7 @@ struct NativeExecutionContext
     std::array<NativeMtfsbRecord, 64> mtfsb_records{};
     std::array<NativeMtfsfiRecord, 64> mtfsfi_records{};
     std::array<NativeMtfsfRecord, 64> mtfsf_records{};
+    std::array<NativeMcrfsRecord, 64> mcrfs_records{};
     std::array<NativeFrspRecord, 64> frsp_records{};
     std::array<NativeFrsqrteRecord, 64> frsqrte_records{};
     std::array<NativeFmulRecord, 64> fmul_records{};
@@ -4104,6 +4112,7 @@ struct BlockCode
     case Opcode::bitwise_nor:
     case Opcode::bitwise_nand:
     case Opcode::move_condition_register_field:
+    case Opcode::move_condition_register_from_fpscr:
     case Opcode::move_from_condition_register:
     case Opcode::move_to_condition_register_fields:
     case Opcode::move_condition_register_from_xer:
@@ -4333,6 +4342,7 @@ struct BlockCode
     case Opcode::paired_single_compare_ordered0: return "ps_cmpo0";
     case Opcode::paired_single_compare_ordered1: return "ps_cmpo1";
     case Opcode::move_condition_register_field: return "mcrf";
+    case Opcode::move_condition_register_from_fpscr: return "mcrfs";
     case Opcode::move_from_condition_register: return "mfcr";
     case Opcode::move_to_condition_register_fields: return "mtcrf";
     case Opcode::move_condition_register_from_xer: return "mcrxr";
@@ -6496,6 +6506,67 @@ struct Recompiler::Impl
                 compiler.or_(cr, field_value);
                 compiler.mov(x86::dword_ptr(
                     state, static_cast<std::int32_t>(cr_offset)), cr);
+                break;
+            }
+            case Opcode::move_condition_register_from_fpscr:
+            {
+                const std::size_t record_offset = offsetof(NativeExecutionContext,
+                    mcrfs_records) + index * sizeof(NativeMcrfsRecord);
+                const std::uint32_t fpscr_shift =
+                    (7U - insn.fpscr_field) * 4U;
+                const std::uint32_t valid_field_mask =
+                    insn.fpscr_field == 5U ? 0x7U : 0xFU;
+                const std::uint32_t cr_shift =
+                    (7U - insn.cr_field) * 4U;
+                const std::uint32_t cr_mask = 0xFU << cr_shift;
+                x86::Gp fpscr_value = compiler.new_gp32("mcrfs_fpscr");
+                compiler.mov(fpscr_value, x86::dword_ptr(state,
+                    static_cast<std::int32_t>(offsetof(CpuState, fpscr))));
+                compiler.mov(x86::dword_ptr(context, static_cast<std::int32_t>(
+                    record_offset + offsetof(NativeMcrfsRecord, before))), fpscr_value);
+
+                x86::Gp field_value = compiler.new_gp32("mcrfs_value");
+                compiler.mov(field_value, fpscr_value);
+                compiler.shr(field_value, imm(fpscr_shift));
+                compiler.and_(field_value, imm(valid_field_mask));
+                compiler.mov(x86::byte_ptr(context, static_cast<std::int32_t>(
+                    record_offset + offsetof(NativeMcrfsRecord, value))), field_value.r8());
+                x86::Gp cr = compiler.new_gp32("mcrfs_cr");
+                compiler.mov(cr, x86::dword_ptr(state,
+                    static_cast<std::int32_t>(offsetof(CpuState, cr))));
+                compiler.and_(cr, imm(~cr_mask));
+                x86::Gp cr_field_value = compiler.new_gp32("mcrfs_cr_field");
+                compiler.mov(cr_field_value, field_value);
+                compiler.shl(cr_field_value, imm(cr_shift));
+                compiler.or_(cr, cr_field_value);
+                compiler.mov(x86::dword_ptr(state,
+                    static_cast<std::int32_t>(offsetof(CpuState, cr))), cr);
+
+                std::uint32_t clear_mask = 0U;
+                switch (insn.fpscr_field)
+                {
+                case 0U: clear_mask = fpscr::fx_mask | fpscr::ox_mask; break;
+                case 1U: clear_mask = fpscr::ux_mask | fpscr::zx_mask |
+                    fpscr::xx_mask | fpscr::vxsnan_mask; break;
+                case 2U: clear_mask = fpscr::vxisi_mask | fpscr::vxidi_mask |
+                    fpscr::vxzdz_mask | fpscr::vximz_mask; break;
+                case 3U: clear_mask = fpscr::vxvc_mask; break;
+                case 5U: clear_mask = fpscr::vxsoft_mask | fpscr::vxsqrt_mask |
+                    fpscr::vxcvi_mask; break;
+                default: break;
+                }
+                compiler.and_(fpscr_value, imm(~clear_mask));
+                compiler.mov(x86::dword_ptr(state,
+                    static_cast<std::int32_t>(offsetof(CpuState, fpscr))), fpscr_value);
+                auto* invoke = static_cast<InvokeNode*>(nullptr);
+                compiler.invoke(Out(invoke),
+                    reinterpret_cast<std::uintptr_t>(&native_update_fpscr_summaries),
+                    FuncSignature::build<void, CpuState*>(CallConvId::kCDecl));
+                invoke->set_arg(0, state);
+                compiler.mov(fpscr_value, x86::dword_ptr(state,
+                    static_cast<std::int32_t>(offsetof(CpuState, fpscr))));
+                compiler.mov(x86::dword_ptr(context, static_cast<std::int32_t>(
+                    record_offset + offsetof(NativeMcrfsRecord, after))), fpscr_value);
                 break;
             }
             case Opcode::move_from_condition_register:
@@ -9615,6 +9686,19 @@ RunResult Recompiler::run(EspressoCore& core, std::size_t max_steps)
                 entry.fp_status_move_result = record.result;
                 entry.fp_status_move_destination_ps1 =
                     core.state.fpr_ps1[insn.fp_register];
+                core.append_instruction_history(std::move(entry));
+                continue;
+            }
+            if (insn.opcode == Opcode::move_condition_register_from_fpscr)
+            {
+                InstructionHistoryEntry entry = native_history(insn, cia);
+                const NativeMcrfsRecord& record = context.mcrfs_records[i];
+                entry.has_fpscr_cr_move = true;
+                entry.fpscr_cr_destination = insn.cr_field;
+                entry.fpscr_cr_source = insn.fpscr_field;
+                entry.fpscr_cr_value = record.value;
+                entry.fpscr_before_cr_move = record.before;
+                entry.fpscr_after_cr_move = record.after;
                 core.append_instruction_history(std::move(entry));
                 continue;
             }

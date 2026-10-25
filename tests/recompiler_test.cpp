@@ -2593,6 +2593,74 @@ void recompiler_mcrf_differential_tests()
     }
 }
 
+void recompiler_mcrfs_differential_tests()
+{
+    constexpr std::uint32_t start = 0x100U;
+    constexpr std::array<std::uint32_t, 4U> fpscr_values{
+        0U, 0xFFFFFFFFU, 0xA5C39E71U,
+        fpscr::fx_mask | fpscr::ox_mask | fpscr::ux_mask | fpscr::zx_mask |
+            fpscr::xx_mask | fpscr::vxsnan_mask | fpscr::vxisi_mask |
+            fpscr::vxidi_mask | fpscr::vxzdz_mask | fpscr::vximz_mask |
+            fpscr::vxvc_mask | fpscr::vxsoft_mask | fpscr::vxsqrt_mask |
+            fpscr::vxcvi_mask | fpscr::ve_mask | fpscr::ze_mask};
+
+    for (std::uint8_t destination = 0U; destination < 8U; ++destination)
+    {
+        for (std::uint8_t source = 0U; source < 8U; ++source)
+        {
+            for (const std::uint32_t initial_fpscr : fpscr_values)
+            {
+                EspressoCore interpreted(0x1000U);
+                EspressoCore compiled(0x1000U);
+                const std::uint32_t instruction = 0xFC000080U |
+                    (static_cast<std::uint32_t>(destination) << 23U) |
+                    (static_cast<std::uint32_t>(source) << 18U);
+                for (EspressoCore* core : {&interpreted, &compiled})
+                {
+                    core->memory.write32_be(start, instruction);
+                    core->state.cia = start;
+                    core->state.cr = 0xA5C39E71U ^
+                        (static_cast<std::uint32_t>(destination) << 12U);
+                    core->state.fpscr = initial_fpscr;
+                    core->state.gpr.fill(0xDEADBEEFU);
+                    core->state.xer = 0xE00000A5U;
+                    core->state.lr = 0xABCDEF00U;
+                    core->state.ctr = 0x76543210U;
+                    core->state.fpr[7] = 0x0123456789ABCDEFULL;
+                    core->state.fpr_ps1[7] = 0xFEDCBA9876543210ULL;
+                }
+
+                const RunResult oracle = interpreted.run(1U);
+                Recompiler recompiler;
+                const RunResult actual = recompiler.run(compiled, 1U);
+                assert(actual.reason == oracle.reason);
+                assert(actual.steps == oracle.steps && actual.steps == 1U);
+                assert(actual.cia == oracle.cia);
+                assert(compiled.state.cr == interpreted.state.cr);
+                assert(compiled.state.fpscr == interpreted.state.fpscr);
+                assert(compiled.state.gpr == interpreted.state.gpr);
+                assert(compiled.state.fpr == interpreted.state.fpr);
+                assert(compiled.state.fpr_ps1 == interpreted.state.fpr_ps1);
+                assert(compiled.state.xer == interpreted.state.xer);
+                assert(compiled.state.lr == interpreted.state.lr);
+                assert(compiled.state.ctr == interpreted.state.ctr);
+                assert(recompiler.statistics().native_instructions == 1U);
+                assert(recompiler.statistics().interpreter_fallbacks == 0U);
+
+                const InstructionHistoryEntry& expected = oracle.instruction_history.back();
+                const InstructionHistoryEntry& received = actual.instruction_history.back();
+                assert(received.opcode_name == "mcrfs");
+                assert(received.has_fpscr_cr_move == expected.has_fpscr_cr_move);
+                assert(received.fpscr_cr_source == expected.fpscr_cr_source);
+                assert(received.fpscr_cr_destination == expected.fpscr_cr_destination);
+                assert(received.fpscr_cr_value == expected.fpscr_cr_value);
+                assert(received.fpscr_before_cr_move == expected.fpscr_before_cr_move);
+                assert(received.fpscr_after_cr_move == expected.fpscr_after_cr_move);
+            }
+        }
+    }
+}
+
 void recompiler_mfcr_differential_tests()
 {
     constexpr std::uint32_t start = 0x100U;
@@ -9040,6 +9108,7 @@ int main()
     recompiler_logical_record_differential_test();
     recompiler_condition_bit_differential_tests();
     recompiler_mcrf_differential_tests();
+    recompiler_mcrfs_differential_tests();
     recompiler_mfcr_differential_tests();
     recompiler_mtcrf_differential_tests();
     recompiler_mcrxr_differential_tests();
