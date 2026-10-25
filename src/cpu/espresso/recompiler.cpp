@@ -3618,6 +3618,7 @@ struct BlockCode
     case Opcode::load_single:
     case Opcode::load_single_update:
     case Opcode::load_double:
+    case Opcode::load_double_update:
     case Opcode::store_word:
     case Opcode::store_word_update:
     case Opcode::store_byte:
@@ -3764,6 +3765,7 @@ struct BlockCode
     case Opcode::load_single: return "lfs";
     case Opcode::load_single_update: return "lfsu";
     case Opcode::load_double: return "lfd";
+    case Opcode::load_double_update: return "lfdu";
     case Opcode::store_word: return "stw";
     case Opcode::store_word_update: return "stwu";
     case Opcode::store_byte: return "stb";
@@ -3814,6 +3816,7 @@ struct BlockCode
     case Opcode::load_single:
     case Opcode::load_single_update:
     case Opcode::load_double:
+    case Opcode::load_double_update:
     case Opcode::store_single:
     case Opcode::store_single_update:
     case Opcode::store_single_indexed:
@@ -6620,13 +6623,20 @@ struct Recompiler::Impl
                 break;
             }
             case Opcode::load_double:
+            case Opcode::load_double_update:
             {
                 const std::size_t record_base = offsetof(NativeExecutionContext, memory_records) +
                     index * sizeof(NativeMemoryRecord);
                 const std::uint32_t cia = block.address +
                     static_cast<std::uint32_t>(index * 4U);
                 x86::Gp address = compiler.new_gp32("lfd_address");
-                if (insn.base == 0U)
+                if (insn.opcode == Opcode::load_double_update)
+                {
+                    compiler.mov(address, read_guest_gpr(insn.base));
+                    compiler.mov(x86::dword_ptr(context, static_cast<std::int32_t>(
+                        record_base + offsetof(NativeMemoryRecord, base_value))), address);
+                }
+                else if (insn.base == 0U)
                 {
                     compiler.mov(address, imm(0U));
                 }
@@ -6661,6 +6671,10 @@ struct Recompiler::Impl
                 compiler.jnz(fault);
                 compiler.mov(x86::qword_ptr(state, static_cast<std::int32_t>(
                     fpr_offset(insn.fp_register))), value);
+                if (insn.opcode == Opcode::load_double_update)
+                {
+                    write_guest_gpr(insn.base, address);
+                }
                 compiler.jmp(completed);
                 compiler.bind(fault);
                 compiler.mov(x86::dword_ptr(state, static_cast<std::int32_t>(
@@ -8078,7 +8092,8 @@ RunResult Recompiler::run(EspressoCore& core, std::size_t max_steps)
                 }
                 if (insn.opcode != Opcode::store_halfword_update &&
                     insn.opcode != Opcode::load_single_update &&
-                    insn.opcode != Opcode::load_halfword_zero_update)
+                    insn.opcode != Opcode::load_halfword_zero_update &&
+                    insn.opcode != Opcode::load_double_update)
                 {
                     entry.has_immediate = true;
                     entry.immediate = insn.immediate;
@@ -8096,12 +8111,19 @@ RunResult Recompiler::run(EspressoCore& core, std::size_t max_steps)
             }
             if (insn.opcode == Opcode::load_single ||
                 insn.opcode == Opcode::load_single_update ||
-                insn.opcode == Opcode::load_double)
+                insn.opcode == Opcode::load_double ||
+                insn.opcode == Opcode::load_double_update)
             {
                 entry.has_fp_destination = true;
                 entry.fp_destination_register = insn.fp_register;
                 entry.fp_destination_value = record.fp_value;
                 if (insn.opcode == Opcode::load_single_update)
+                {
+                    entry.has_destination = true;
+                    entry.destination_register = insn.base;
+                    entry.destination_value = record.address;
+                }
+                else if (insn.opcode == Opcode::load_double_update)
                 {
                     entry.has_destination = true;
                     entry.destination_register = insn.base;
