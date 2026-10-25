@@ -3701,6 +3701,93 @@ void recompiler_fnmadds_differential_tests()
     }
 }
 
+void recompiler_fres_differential_tests()
+{
+    constexpr auto encode = [](std::uint8_t destination, std::uint8_t source) {
+        return (63U << 26U) | (static_cast<std::uint32_t>(destination) << 21U) |
+            (static_cast<std::uint32_t>(source) << 11U) | (24U << 1U);
+    };
+    constexpr auto raw = [](double value) { return std::bit_cast<std::uint64_t>(value); };
+    constexpr std::uint32_t start = 0x100U;
+    constexpr std::uint64_t sentinel = 0x123456789ABCDEF0ULL;
+    constexpr std::uint64_t ps1_sentinel = 0xDEADBEEF01234567ULL;
+    struct Case
+    {
+        std::uint64_t source;
+        std::uint32_t fpscr;
+        std::uint8_t destination;
+        std::uint64_t expected;
+    };
+    constexpr std::array cases{
+        Case{raw(2.0), 0U, 4U, raw(0.5)},
+        Case{raw(3.0), 0U, 4U, 0U}, // estimate rounds to binary32
+        Case{raw(-4.0), 0U, 4U, raw(-0.25)},
+        Case{0U, 0U, 4U, 0x7FF0000000000000ULL},
+        Case{0x8000000000000000ULL, 0U, 4U, 0xFFF0000000000000ULL},
+        Case{0U, fpscr::ze_mask, 4U, sentinel},
+        Case{0x7FF0000000000000ULL, 0U, 4U, 0U},
+        Case{0xFFF0000000000000ULL, 0U, 4U, 0x8000000000000000ULL},
+        Case{0xFFF8123456789ABCULL, 0U, 4U, 0U},
+        Case{0xFFF0123456789ABCULL, 0U, 4U, 0U},
+        Case{0x7FF0123456789ABCULL, fpscr::ve_mask, 4U, sentinel},
+        Case{raw(2.0), 0U, 2U, raw(0.5)}, // destination aliases source
+    };
+    static_assert(encode(1U, 2U) == 0xFC201030U);
+
+    for (const Case& test : cases)
+    {
+        EspressoCore interpreted(0x1000U);
+        EspressoCore compiled(0x1000U);
+        for (EspressoCore* core : {&interpreted, &compiled})
+        {
+            core->memory.write32_be(start, encode(test.destination, 2U));
+            core->memory.write32_be(start + 8U, 0xA55AA55AU);
+            core->state.cia = start;
+            core->state.fpr.fill(sentinel);
+            core->state.fpr_ps1.fill(ps1_sentinel);
+            core->state.fpr[2] = test.source;
+            core->state.fpr[4] = sentinel;
+            core->state.gpr.fill(0xA5A5A5A5U);
+            core->state.cr = 0xA5C39E71U;
+            core->state.xer = 0x87654321U;
+            core->state.lr = 0xABCDEF00U;
+            core->state.ctr = 0xFEDCBA98U;
+            core->state.fpscr = test.fpscr;
+        }
+
+        const RunResult oracle = interpreted.run(1U);
+        Recompiler recompiler;
+        const RunResult actual = recompiler.run(compiled, 1U);
+        assert(actual.reason == oracle.reason && actual.steps == 1U);
+        assert(actual.cia == oracle.cia);
+        assert(compiled.state.gpr == interpreted.state.gpr);
+        assert(compiled.state.fpr == interpreted.state.fpr);
+        assert(compiled.state.fpr_ps1 == interpreted.state.fpr_ps1);
+        assert(compiled.state.cr == interpreted.state.cr);
+        assert(compiled.state.xer == interpreted.state.xer);
+        assert(compiled.state.lr == interpreted.state.lr);
+        assert(compiled.state.ctr == interpreted.state.ctr);
+        assert(compiled.state.fpscr == interpreted.state.fpscr);
+        assert(compiled.memory.read32_be(start + 8U) == 0xA55AA55AU);
+        if (test.expected != 0U)
+        {
+            assert(compiled.state.fpr[test.destination] == test.expected);
+        }
+        else if (test.source == 0xFFF8123456789ABCULL ||
+            test.source == 0xFFF0123456789ABCULL)
+        {
+            const std::uint64_t result = compiled.state.fpr[test.destination];
+            assert((result & 0x7FF8000000000000ULL) == 0x7FF8000000000000ULL);
+        }
+        assert(recompiler.statistics().native_instructions == 1U);
+        assert(recompiler.statistics().interpreter_fallbacks == 0U);
+        const InstructionHistoryEntry& history = actual.instruction_history.back();
+        assert(history.opcode_name == "fres");
+        assert(history.has_fp_source && history.fp_source_register == 2U);
+        assert(history.has_fp_destination && history.fp_destination_register == test.destination);
+    }
+}
+
 void recompiler_fabs_differential_tests()
 {
     constexpr std::uint32_t start = 0x100U;
@@ -9846,6 +9933,7 @@ int main()
     recompiler_fmsub_differential_tests();
     recompiler_fnmadd_differential_tests();
     recompiler_fnmadds_differential_tests();
+    recompiler_fres_differential_tests();
     recompiler_fabs_differential_tests();
     recompiler_ps_add_differential_tests();
     recompiler_ps_div_differential_tests();

@@ -368,6 +368,7 @@ struct NativeExecutionContext
     std::array<NativeMtfsfRecord, 64> mtfsf_records{};
     std::array<NativeMcrfsRecord, 64> mcrfs_records{};
     std::array<NativeFrspRecord, 64> frsp_records{};
+    std::array<NativeFrspRecord, 64> fres_records{};
     std::array<NativeFrsqrteRecord, 64> frsqrte_records{};
     std::array<NativeFmulRecord, 64> fmul_records{};
     std::array<NativeFsubRecord, 64> fdiv_records{};
@@ -451,6 +452,9 @@ struct NativeExecutionContext
             {
             case Opcode::floating_round_to_single:
                 frsp_records[index].wrote_result = false;
+                break;
+            case Opcode::floating_reciprocal_estimate_single:
+                fres_records[index].wrote_result = false;
                 break;
             case Opcode::floating_reciprocal_square_root_estimate:
                 frsqrte_records[index].wrote_result = false;
@@ -1185,6 +1189,106 @@ extern "C" void native_frsqrte(
         native_set_double_fprf(state, result_raw);
         record.wrote_result = true;
     }
+}
+
+extern "C" void native_fres(
+    NativeExecutionContext* context,
+    CpuState* state,
+    std::uint32_t destination,
+    std::uint32_t source_register,
+    std::uint32_t instruction_index) noexcept
+{
+    constexpr std::uint64_t exponent_mask = 0x7FF0000000000000ULL;
+    constexpr std::uint64_t fraction_mask = 0x000FFFFFFFFFFFFFULL;
+    constexpr std::uint64_t sign_mask = 0x8000000000000000ULL;
+    constexpr std::uint64_t quiet_bit = 0x0008000000000000ULL;
+    if (destination >= state->fpr.size() || source_register >= state->fpr.size() ||
+        instruction_index >= context->fres_records.size())
+    {
+        context->failed = true;
+        context->failed_instruction_index = instruction_index;
+        return;
+    }
+
+    NativeFrspRecord& record = context->fres_records[instruction_index];
+    record.source_raw = state->fpr[source_register];
+    record.wrote_result = false;
+    const std::uint64_t source_raw = record.source_raw;
+    const double source = std::bit_cast<double>(source_raw);
+    const bool is_nan = (source_raw & exponent_mask) == exponent_mask &&
+        (source_raw & fraction_mask) != 0U;
+    const bool is_signaling_nan = is_nan && (source_raw & quiet_bit) == 0U;
+    bool suppress_write = false;
+    bool inexact = false;
+    bool rounded_up = false;
+
+    if (is_signaling_nan)
+    {
+        native_raise_fpscr_exception(state, fpscr::vxsnan_mask);
+        suppress_write = (state->fpscr & fpscr::ve_mask) != 0U;
+    }
+
+    if (!suppress_write)
+    {
+        if (is_nan)
+        {
+            const std::uint32_t sign = (source_raw & sign_mask) != 0U
+                ? 0x80000000U : 0U;
+            const std::uint32_t payload = static_cast<std::uint32_t>(
+                (source_raw & fraction_mask) >> 29U);
+            record.single_bits = sign | 0x7F800000U | payload | 0x00400000U;
+        }
+        else if (source == 0.0)
+        {
+            native_raise_fpscr_exception(state, fpscr::zx_mask);
+            suppress_write = (state->fpscr & fpscr::ze_mask) != 0U;
+            record.single_bits = ((source_raw & sign_mask) != 0U
+                    ? 0x80000000U : 0U) | 0x7F800000U;
+        }
+        else if (std::isinf(source))
+        {
+            record.single_bits = (source_raw & sign_mask) != 0U
+                ? 0x80000000U : 0U;
+        }
+        else
+        {
+            // fres permits implementation-dependent estimates; match the
+            // interpreter's correctly-rounded single reciprocal policy.
+            const double reciprocal = 1.0 / source;
+            const float estimate = static_cast<float>(reciprocal);
+            const double extended_estimate = static_cast<double>(estimate);
+            record.single_bits = std::bit_cast<std::uint32_t>(estimate);
+            inexact = extended_estimate != reciprocal;
+            rounded_up = inexact &&
+                std::fabs(extended_estimate) > std::fabs(reciprocal);
+            // TODO: model fres OX/UX behavior for extreme reciprocal overflow
+            // and underflow, matching the interpreter's current scope.
+        }
+    }
+
+    if (suppress_write)
+    {
+        return;
+    }
+
+    state->fpscr &= ~(fpscr::fprf_mask | fpscr::fi_mask | fpscr::fr_mask);
+    state->fpscr |= static_cast<std::uint32_t>(
+        native_single_result_fprf(record.single_bits)) << 12U;
+    if (inexact)
+    {
+        state->fpscr |= fpscr::fi_mask | fpscr::xx_mask | fpscr::fx_mask;
+        if (rounded_up)
+        {
+            state->fpscr |= fpscr::fr_mask;
+        }
+    }
+    native_update_fpscr_summaries(state);
+
+    const float result = std::bit_cast<float>(record.single_bits);
+    record.result_raw = std::bit_cast<std::uint64_t>(static_cast<double>(result));
+    state->fpr[destination] = record.result_raw;
+    state->fpr_ps1[destination] = record.result_raw;
+    record.wrote_result = true;
 }
 
 extern "C" void native_fmul(
@@ -4574,6 +4678,7 @@ struct BlockCode
     case Opcode::paired_single_compare_ordered1:
     case Opcode::floating_convert_to_integer_word:
     case Opcode::floating_convert_to_integer_word_zero:
+    case Opcode::floating_reciprocal_estimate_single:
     case Opcode::floating_reciprocal_square_root_estimate:
     case Opcode::floating_round_to_single:
     case Opcode::floating_add_single:
@@ -4837,6 +4942,7 @@ struct BlockCode
     case Opcode::floating_multiply_subtract_double: return "fmsub";
     case Opcode::floating_negative_multiply_add_double: return "fnmadd";
     case Opcode::floating_negative_multiply_subtract_double: return "fnmsub";
+    case Opcode::floating_reciprocal_estimate_single: return "fres";
     case Opcode::floating_select: return "fsel";
     case Opcode::floating_subtract_double: return "fsub";
     case Opcode::floating_divide_double: return "fdiv";
@@ -7631,6 +7737,21 @@ struct Recompiler::Impl
                 invoke->set_arg(4, imm(static_cast<std::uint32_t>(index)));
                 break;
             }
+            case Opcode::floating_reciprocal_estimate_single:
+            {
+                auto* invoke = static_cast<InvokeNode*>(nullptr);
+                const auto helper_address = static_cast<std::uint64_t>(
+                    reinterpret_cast<std::uintptr_t>(&native_fres));
+                compiler.invoke(Out(invoke), helper_address,
+                    FuncSignature::build<void, NativeExecutionContext*, CpuState*,
+                        std::uint32_t, std::uint32_t, std::uint32_t>(CallConvId::kCDecl));
+                invoke->set_arg(0, context);
+                invoke->set_arg(1, state);
+                invoke->set_arg(2, imm(insn.fp_register));
+                invoke->set_arg(3, imm(insn.fp_source_b));
+                invoke->set_arg(4, imm(static_cast<std::uint32_t>(index)));
+                break;
+            }
             case Opcode::floating_multiply_single:
             {
                 auto* invoke = static_cast<InvokeNode*>(nullptr);
@@ -9960,6 +10081,20 @@ RunResult Recompiler::run(EspressoCore& core, std::size_t max_steps)
             {
                 InstructionHistoryEntry entry = native_history(insn, cia);
                 const NativeFrsqrteRecord& record = context.frsqrte_records[i];
+                entry.has_fp_source = true;
+                entry.fp_source_register = insn.fp_source_b;
+                entry.fp_source_value = record.source_raw;
+                entry.has_fp_destination = true;
+                entry.fp_destination_register = insn.fp_register;
+                entry.fp_destination_value = record.wrote_result
+                    ? record.result_raw : core.state.fpr[insn.fp_register];
+                core.append_instruction_history(std::move(entry));
+                continue;
+            }
+            if (insn.opcode == Opcode::floating_reciprocal_estimate_single)
+            {
+                InstructionHistoryEntry entry = native_history(insn, cia);
+                const NativeFrspRecord& record = context.fres_records[i];
                 entry.has_fp_source = true;
                 entry.fp_source_register = insn.fp_source_b;
                 entry.fp_source_value = record.source_raw;
