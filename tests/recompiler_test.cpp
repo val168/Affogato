@@ -7259,6 +7259,90 @@ void recompiler_eieio_differential_test()
     assert(actual.instruction_history[1].opcode_name == "addi");
 }
 
+void recompiler_dcbt_differential_test()
+{
+    struct Case
+    {
+        std::uint8_t base_register;
+        std::uint8_t index_register;
+        std::uint32_t base;
+        std::uint32_t index;
+        std::uint32_t expected_address;
+    };
+    constexpr std::uint32_t start = 0x100U;
+    constexpr std::uint32_t dcbt_r4_r0 = x_form(0U, 4U, 0U, 278U);
+    constexpr std::uint32_t dcbt_r0_r0 = x_form(0U, 0U, 0U, 278U);
+    static_assert(dcbt_r4_r0 == 0x7C04022CU);
+    constexpr std::array cases{
+        // The target is unmapped: dcbt is a non-faulting hint, not a load.
+        Case{4U, 0U, 0x2000U, 0x20U, 0x2020U},
+        // rA=0 is literal zero while rB=0 reads the actual GPR0.
+        Case{0U, 0U, 0xDEADBEEFU, 0x2020U, 0x2020U},
+    };
+
+    for (const Case& test : cases)
+    {
+        EspressoCore interpreted(0x1000U);
+        EspressoCore compiled(0x1000U);
+        for (EspressoCore* core : {&interpreted, &compiled})
+        {
+            core->memory.write32_be(start, test.base_register == 0U
+                ? dcbt_r0_r0 : dcbt_r4_r0);
+            core->memory.write32_be(start + 4U, 0x38C0002AU); // addi r6,r0,42
+            core->state.cia = start;
+            core->state.gpr.fill(0xA5A5A5A5U);
+            core->state.gpr[0] = test.index_register == 0U
+                ? test.index : 0xFACEB00CU;
+            if (test.base_register != 0U)
+                core->state.gpr[test.base_register] = test.base;
+            if (test.index_register != 0U)
+                core->state.gpr[test.index_register] = test.index;
+            core->state.cr = 0x91827364U;
+            core->state.xer = 0xA0000042U;
+            core->state.lr = 0x10203040U;
+            core->state.ctr = 0x50607080U;
+            core->state.fpscr = 0xCAFEBABEU;
+        }
+
+        const RunResult oracle = interpreted.run(2U);
+        Recompiler recompiler;
+        const RunResult actual = recompiler.run(compiled, 2U);
+        assert(actual.reason == oracle.reason && actual.steps == oracle.steps);
+        assert(actual.steps == 2U && actual.cia == oracle.cia);
+        assert(compiled.state.gpr == interpreted.state.gpr);
+        assert(compiled.state.fpr == interpreted.state.fpr);
+        assert(compiled.state.fpr_ps1 == interpreted.state.fpr_ps1);
+        assert(compiled.state.cr == interpreted.state.cr);
+        assert(compiled.state.xer == interpreted.state.xer);
+        assert(compiled.state.lr == interpreted.state.lr);
+        assert(compiled.state.ctr == interpreted.state.ctr);
+        assert(compiled.state.fpscr == interpreted.state.fpscr);
+        assert(compiled.state.gpr[6] == 42U);
+        assert(recompiler.statistics().native_instructions == 2U);
+        assert(recompiler.statistics().interpreter_fallbacks == 0U);
+        assert(recompiler.statistics().memory_slow_path_calls == 0U);
+        assert(actual.instruction_history.size() == 2U);
+        const InstructionHistoryEntry& history = actual.instruction_history.front();
+        assert(history.opcode_name == "dcbt" && history.completed);
+        assert(history.has_effective_address &&
+            history.effective_address == test.expected_address);
+        assert(history.source_count == (test.base_register == 0U ? 1U : 2U));
+        if (test.base_register == 0U)
+        {
+            assert(history.source_registers[0] == 0U);
+            assert(history.source_values[0] == test.index);
+        }
+        else
+        {
+            assert(history.source_registers[0] == test.base_register);
+            assert(history.source_values[0] == test.base);
+            assert(history.source_registers[1] == test.index_register);
+            assert(history.source_values[1] == test.index);
+        }
+        assert(!history.has_destination);
+    }
+}
+
 void recompiler_branch_test()
 {
     EspressoCore core(0x1000U);
@@ -10142,6 +10226,7 @@ int main()
     recompiler_recent_history_window_test();
     recompiler_isync_boundary_differential_test();
     recompiler_eieio_differential_test();
+    recompiler_dcbt_differential_test();
     recompiler_lbzu_differential_tests();
     recompiler_direct_flat_halfword_load_tests();
     recompiler_lwzu_differential_tests();
