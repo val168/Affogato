@@ -1189,6 +1189,67 @@ void recompiler_mtfsfi_differential_tests()
     }
 }
 
+void recompiler_mtfsf_differential_tests()
+{
+    constexpr std::uint8_t source_register = 3U;
+    static_assert(((63U << 26U) | (0xFFU << 17U) | (3U << 11U) |
+                   (711U << 1U)) == 0xFDFE1D8EU);
+
+    for (std::uint16_t mask_value = 0U; mask_value < 256U; ++mask_value)
+    {
+        const std::uint8_t field_mask = static_cast<std::uint8_t>(mask_value);
+        const std::uint32_t fpscr_value =
+            (static_cast<std::uint32_t>(mask_value) * 0x01010101U) ^ 0xA5C3BEEFU;
+        const std::uint64_t source_raw = 0xDEADBEEF00000000ULL |
+            ((static_cast<std::uint32_t>(mask_value) * 0x01020304U) ^ 0xA5C3BEEFU);
+        EspressoCore interpreted(0x1000U);
+        EspressoCore compiled(0x1000U);
+        const std::uint32_t instruction = (63U << 26U) |
+            (static_cast<std::uint32_t>(field_mask) << 17U) |
+            (static_cast<std::uint32_t>(source_register) << 11U) | (711U << 1U);
+        for (EspressoCore* core : {&interpreted, &compiled})
+        {
+            core->memory.write32_be(0x100U, instruction);
+            core->state.cia = 0x100U;
+            core->state.gpr.fill(0xA5A5A5A5U);
+            core->state.fpr.fill(0x0123456789ABCDEFULL);
+            core->state.fpr[source_register] = source_raw;
+            core->state.fpr_ps1.fill(0xFEDCBA9876543210ULL);
+            core->state.cr = 0x12345678U;
+            core->state.xer = 0xA00000A5U;
+            core->state.fpscr = fpscr_value;
+            core->state.lr = 0x11223344U;
+            core->state.ctr = 0x55667788U;
+        }
+
+        const RunResult oracle = interpreted.run(1U);
+        Recompiler recompiler;
+        const RunResult actual = recompiler.run(compiled, 1U);
+        assert(actual.reason == oracle.reason);
+        assert(actual.steps == oracle.steps && actual.steps == 1U);
+        assert(actual.cia == oracle.cia);
+        assert(compiled.state.gpr == interpreted.state.gpr);
+        assert(compiled.state.fpr == interpreted.state.fpr);
+        assert(compiled.state.fpr_ps1 == interpreted.state.fpr_ps1);
+        assert(compiled.state.cr == interpreted.state.cr);
+        assert(compiled.state.xer == interpreted.state.xer);
+        assert(compiled.state.fpscr == interpreted.state.fpscr);
+        assert(compiled.state.lr == interpreted.state.lr);
+        assert(compiled.state.ctr == interpreted.state.ctr);
+        assert(recompiler.statistics().native_instructions == 1U);
+        assert(recompiler.statistics().interpreter_fallbacks == 0U);
+        assert(actual.instruction_history.size() == 1U);
+        const InstructionHistoryEntry& history = actual.instruction_history.back();
+        assert(history.completed && history.opcode_name == "mtfsf");
+        assert(history.has_fpscr_masked_write);
+        assert(history.fpscr_masked_write_source == source_register);
+        assert(history.fpscr_masked_write_mask == field_mask);
+        assert(history.fpscr_masked_write_source_raw == source_raw);
+        assert(history.fpscr_before_masked_write == fpscr_value);
+        assert(history.fpscr_after_masked_write == compiled.state.fpscr);
+    }
+}
+
 void recompiler_ps_cmpu0_differential_test()
 {
     constexpr std::uint32_t start = 0x100U;
@@ -8829,6 +8890,7 @@ int main()
     recompiler_mffs_differential_test();
     recompiler_mtfsb_differential_tests();
     recompiler_mtfsfi_differential_tests();
+    recompiler_mtfsf_differential_tests();
     recompiler_ps_cmpu0_differential_test();
     recompiler_ps_cmpu1_differential_test();
     recompiler_ps_cmpo0_differential_test();

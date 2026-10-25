@@ -80,6 +80,13 @@ struct NativeMtfsbRecord
 
 using NativeMtfsfiRecord = NativeMtfsbRecord;
 
+struct NativeMtfsfRecord
+{
+    std::uint64_t source_raw{};
+    std::uint32_t before{};
+    std::uint32_t after{};
+};
+
 struct NativeFrspRecord
 {
     std::uint64_t source_raw{};
@@ -336,6 +343,7 @@ struct NativeExecutionContext
     std::array<NativeMffsRecord, 64> mffs_records{};
     std::array<NativeMtfsbRecord, 64> mtfsb_records{};
     std::array<NativeMtfsfiRecord, 64> mtfsfi_records{};
+    std::array<NativeMtfsfRecord, 64> mtfsf_records{};
     std::array<NativeFrspRecord, 64> frsp_records{};
     std::array<NativeFrsqrteRecord, 64> frsqrte_records{};
     std::array<NativeFmulRecord, 64> fmul_records{};
@@ -4160,6 +4168,7 @@ struct BlockCode
     case Opcode::floating_move_to_fpscr_bit_zero:
     case Opcode::floating_move_to_fpscr_bit_one:
     case Opcode::floating_move_to_fpscr_field_immediate:
+    case Opcode::floating_move_to_fpscr_fields:
     case Opcode::paired_single_merge00:
     case Opcode::paired_single_merge01:
     case Opcode::paired_single_merge10:
@@ -4342,6 +4351,7 @@ struct BlockCode
     case Opcode::floating_move_to_fpscr_bit_zero: return "mtfsb0";
     case Opcode::floating_move_to_fpscr_bit_one: return "mtfsb1";
     case Opcode::floating_move_to_fpscr_field_immediate: return "mtfsfi";
+    case Opcode::floating_move_to_fpscr_fields: return "mtfsf";
     case Opcode::floating_convert_to_integer_word_zero: return "fctiwz";
     case Opcode::floating_reciprocal_square_root_estimate: return "frsqrte";
     case Opcode::floating_round_to_single: return "frsp";
@@ -6951,6 +6961,47 @@ struct Recompiler::Impl
                     record_offset + offsetof(NativeMtfsfiRecord, after))), fpscr_value);
                 break;
             }
+            case Opcode::floating_move_to_fpscr_fields:
+            {
+                const std::size_t record_offset = offsetof(NativeExecutionContext,
+                    mtfsf_records) + index * sizeof(NativeMtfsfRecord);
+                std::uint32_t writable_mask = 0U;
+                for (std::uint32_t field = 0U; field < 8U; ++field)
+                {
+                    if ((insn.fpscr_field_mask & (1U << (7U - field))) != 0U)
+                    {
+                        writable_mask |= 0xFU << (28U - field * 4U);
+                    }
+                }
+                writable_mask &= ~(fpscr::fex_mask | fpscr::vx_mask);
+                x86::Gp source_raw = compiler.new_gp64("mtfsf_source_raw");
+                x86::Gp source = compiler.new_gp32("mtfsf_source");
+                x86::Gp fpscr_value = compiler.new_gp32("mtfsf_fpscr");
+                compiler.mov(source_raw, x86::qword_ptr(state,
+                    static_cast<std::int32_t>(fpr_offset(insn.fp_source_b))));
+                compiler.mov(source, source_raw.r32());
+                compiler.mov(fpscr_value, x86::dword_ptr(state,
+                    static_cast<std::int32_t>(offsetof(CpuState, fpscr))));
+                compiler.mov(x86::qword_ptr(context, static_cast<std::int32_t>(
+                    record_offset + offsetof(NativeMtfsfRecord, source_raw))), source_raw);
+                compiler.mov(x86::dword_ptr(context, static_cast<std::int32_t>(
+                    record_offset + offsetof(NativeMtfsfRecord, before))), fpscr_value);
+                compiler.and_(fpscr_value, imm(~writable_mask));
+                compiler.and_(source, imm(writable_mask));
+                compiler.or_(fpscr_value, source);
+                compiler.mov(x86::dword_ptr(state,
+                    static_cast<std::int32_t>(offsetof(CpuState, fpscr))), fpscr_value);
+                auto* invoke = static_cast<InvokeNode*>(nullptr);
+                compiler.invoke(Out(invoke),
+                    reinterpret_cast<std::uintptr_t>(&native_update_fpscr_summaries),
+                    FuncSignature::build<void, CpuState*>(CallConvId::kCDecl));
+                invoke->set_arg(0, state);
+                compiler.mov(fpscr_value, x86::dword_ptr(state,
+                    static_cast<std::int32_t>(offsetof(CpuState, fpscr))));
+                compiler.mov(x86::dword_ptr(context, static_cast<std::int32_t>(
+                    record_offset + offsetof(NativeMtfsfRecord, after))), fpscr_value);
+                break;
+            }
             case Opcode::floating_convert_to_integer_word_zero:
             {
                 auto* invoke = static_cast<InvokeNode*>(nullptr);
@@ -9539,6 +9590,19 @@ RunResult Recompiler::run(EspressoCore& core, std::size_t max_steps)
                 entry.fpscr_field_immediate = insn.fpscr_immediate;
                 entry.fpscr_before_field_write = record.before;
                 entry.fpscr_after_field_write = record.after;
+                core.append_instruction_history(std::move(entry));
+                continue;
+            }
+            if (insn.opcode == Opcode::floating_move_to_fpscr_fields)
+            {
+                InstructionHistoryEntry entry = native_history(insn, cia);
+                const NativeMtfsfRecord& record = context.mtfsf_records[i];
+                entry.has_fpscr_masked_write = true;
+                entry.fpscr_masked_write_source = insn.fp_source_b;
+                entry.fpscr_masked_write_mask = insn.fpscr_field_mask;
+                entry.fpscr_masked_write_source_raw = record.source_raw;
+                entry.fpscr_before_masked_write = record.before;
+                entry.fpscr_after_masked_write = record.after;
                 core.append_instruction_history(std::move(entry));
                 continue;
             }
