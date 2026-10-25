@@ -3716,6 +3716,48 @@ void register_gx2_hle(HleDispatcher& dispatcher)
 
     dispatcher.register_function(
         "gx2",
+        "GX2SetPolygonOffsetReg",
+        [](EspressoCore& core) {
+            if (!core.gx2.initialized)
+            {
+                throw HleExecutionError(
+                    "gx2::GX2SetPolygonOffsetReg: GX2 has not been initialized");
+            }
+
+            const std::uint32_t input = core.state.gpr[3];
+            if (static_cast<std::uint64_t>(input) + 5U * sizeof(std::uint32_t) >
+                guest_address_space_end)
+            {
+                throw HleExecutionError(
+                    "gx2::GX2SetPolygonOffsetReg: input range wraps guest address space");
+            }
+            const std::array<std::uint32_t, 5U> values{
+                core.memory.read32_be(input),
+                core.memory.read32_be(input + 4U),
+                core.memory.read32_be(input + 8U),
+                core.memory.read32_be(input + 12U),
+                core.memory.read32_be(input + 16U),
+            };
+            constexpr std::array<std::uint32_t, 5U> registers{
+                pa_su_poly_offset_front_scale_register,
+                pa_su_poly_offset_front_offset_register,
+                pa_su_poly_offset_back_scale_register,
+                pa_su_poly_offset_back_offset_register,
+                pa_su_poly_offset_clamp_register,
+            };
+            auto& commands = core.gx2.pending_commands;
+            commands.reserve(commands.size() + values.size());
+            for (std::size_t index = 0U; index < values.size(); ++index)
+            {
+                commands.push_back({
+                    Gx2CommandType::set_context_register,
+                    registers[index],
+                    values[index]});
+            }
+        });
+
+    dispatcher.register_function(
+        "gx2",
         "GX2SetPointSize",
         [](EspressoCore& core) {
             if (!core.gx2.initialized)
