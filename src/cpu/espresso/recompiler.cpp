@@ -4013,6 +4013,7 @@ struct BlockCode
     case Opcode::compare_signed_register:
     case Opcode::compare_unsigned_register:
     case Opcode::floating_compare_unordered:
+    case Opcode::paired_single_compare_unordered0:
     case Opcode::floating_convert_to_integer_word_zero:
     case Opcode::floating_reciprocal_square_root_estimate:
     case Opcode::floating_round_to_single:
@@ -4207,6 +4208,7 @@ struct BlockCode
     case Opcode::compare_signed_register: return "cmpw";
     case Opcode::compare_unsigned_register: return "cmplw";
     case Opcode::floating_compare_unordered: return "fcmpu";
+    case Opcode::paired_single_compare_unordered0: return "ps_cmpu0";
     case Opcode::move_condition_register_field: return "mcrf";
     case Opcode::move_from_condition_register: return "mfcr";
     case Opcode::move_to_condition_register_fields: return "mtcrf";
@@ -5836,6 +5838,7 @@ struct Recompiler::Impl
                 break;
             }
             case Opcode::floating_compare_unordered:
+            case Opcode::paired_single_compare_unordered0:
             {
                 const std::uint32_t compare_record_offset = static_cast<std::uint32_t>(
                     offsetof(NativeExecutionContext, fp_compare_records) +
@@ -8903,7 +8906,8 @@ RunResult Recompiler::run(EspressoCore& core, std::size_t max_steps)
                 core.append_instruction_history(std::move(entry));
                 continue;
             }
-            if (insn.opcode == Opcode::floating_compare_unordered)
+            if (insn.opcode == Opcode::floating_compare_unordered ||
+                insn.opcode == Opcode::paired_single_compare_unordered0)
             {
                 InstructionHistoryEntry entry = native_history(insn, cia);
                 const NativeFpCompareRecord& record = context.fp_compare_records[i];
