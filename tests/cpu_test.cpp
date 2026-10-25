@@ -12369,6 +12369,38 @@ void hle_dispatch_tests()
         assert(thread_core.state.gpr[3] == thread_address);
         assert(thread_core.state.cia == thread_core.state.lr);
     }
+
+    const std::uint32_t get_core_id =
+        thread_core.hle.bind_import("coreinit", "OSGetCoreId");
+    for (std::uint32_t reg = 0U; reg < thread_core.state.gpr.size(); ++reg)
+    {
+        thread_core.state.gpr[reg] = 0xA5000000U + reg;
+    }
+    thread_core.state.lr = 0x68U;
+    thread_core.state.cr = 0x12345678U;
+    thread_core.state.xer = 0xA00000A5U;
+    thread_core.state.ctr = 0x87654321U;
+    thread_core.state.fpscr = 0x5A5AA55AU;
+    const auto gprs_before_core_id = thread_core.state.gpr;
+    const auto fprs_before_core_id = thread_core.state.fpr;
+    const auto ps1_before_core_id = thread_core.state.fpr_ps1;
+    thread_core.state.cia = get_core_id;
+    assert(thread_core.step() == StepResult::executed);
+    assert(thread_core.state.gpr[3] == 1U);
+    assert(thread_core.state.cia == 0x68U);
+    for (std::uint32_t reg = 0U; reg < thread_core.state.gpr.size(); ++reg)
+    {
+        if (reg != 3U)
+        {
+            assert(thread_core.state.gpr[reg] == gprs_before_core_id[reg]);
+        }
+    }
+    assert(thread_core.state.cr == 0x12345678U);
+    assert(thread_core.state.xer == 0xA00000A5U);
+    assert(thread_core.state.ctr == 0x87654321U);
+    assert(thread_core.state.fpscr == 0x5A5AA55AU);
+    assert(thread_core.state.fpr == fprs_before_core_id);
+    assert(thread_core.state.fpr_ps1 == ps1_before_core_id);
     assert(thread_core.memory.read32_be(thread_address + 0x320U) == 0x74487244U);
     assert(thread_core.memory.read8(thread_address + 0x324U) == 2U);
     assert(thread_core.memory.read16_be(thread_address + 0x326U) == 1U);
@@ -12428,6 +12460,7 @@ void hle_dispatch_tests()
         return found == hle_calls.end() ? 0U : found->calls;
     };
     assert(call_count("coreinit::OSGetCurrentThread") == 2U);
+    assert(call_count("coreinit::OSGetCoreId") == 1U);
     assert(call_count("coreinit::OSSetThreadSpecific") == 2U);
     assert(call_count("coreinit::OSGetThreadSpecific") == 3U);
 

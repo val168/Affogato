@@ -2066,6 +2066,15 @@ void register_coreinit_hle(HleDispatcher& dispatcher)
         });
     dispatcher.register_function(
         "coreinit",
+        "OSGetCoreId",
+        [](EspressoCore& core) {
+            // Affogato currently runs one guest execution lane on Cafe's main
+            // core. Replace this policy with scheduler-owned core state when
+            // guest execution is distributed across cores.
+            core.state.gpr[3] = current_core_index;
+        });
+    dispatcher.register_function(
+        "coreinit",
         "OSGetThreadPriority",
         [](EspressoCore& core) {
             constexpr std::uint64_t guest_address_space_end = std::uint64_t{1} << 32U;
