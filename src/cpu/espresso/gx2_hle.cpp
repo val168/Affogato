@@ -53,6 +53,7 @@ constexpr std::uint32_t cb_target_mask_register = 0x00028238U;
 constexpr std::uint32_t db_alpha_to_mask_register = 0x00028D44U;
 constexpr std::uint32_t pa_sc_generic_scissor_tl_register = 0x00028240U;
 constexpr std::uint32_t pa_sc_generic_scissor_br_register = 0x00028244U;
+constexpr std::uint32_t pa_sc_window_offset_register = 0x00028200U;
 constexpr std::uint32_t pa_cl_vport_xscale_register = 0x0002843CU;
 constexpr std::uint32_t pa_cl_gb_vert_clip_adj_register = 0x00028BE8U;
 constexpr std::uint32_t pa_cl_gb_vert_disc_adj_register = 0x00028BECU;
@@ -3139,6 +3140,30 @@ void register_gx2_hle(HleDispatcher& dispatcher)
                 pa_sc_generic_scissor_br_register,
                 bottom_right});
             // Void GX2 setter: only the ordered Latte register stream changes.
+        });
+
+    dispatcher.register_function(
+        "gx2",
+        "GX2SetWindowOffset",
+        [](EspressoCore& core) {
+            if (!core.gx2.initialized)
+            {
+                throw HleExecutionError(
+                    "gx2::GX2SetWindowOffset: GX2 has not been initialized");
+            }
+
+            // PA_SC_WINDOW_OFFSET stores signed 16-bit X and Y offsets in the
+            // low and high halfwords, respectively. Preserve their two's-
+            // complement representation and let the register define wrapping.
+            const std::uint32_t packed =
+                (core.state.gpr[3] & 0xFFFFU) |
+                ((core.state.gpr[4] & 0xFFFFU) << 16U);
+            core.gx2.pending_commands.push_back({
+                Gx2CommandType::set_context_register,
+                pa_sc_window_offset_register,
+                packed});
+            // This setter records the offset only; activation remains governed
+            // by the independent PA_SU_SC_MODE_CNTL window-offset enable bit.
         });
 
     dispatcher.register_function(
