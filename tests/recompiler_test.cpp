@@ -693,6 +693,97 @@ void recompiler_mullw_differential_test()
     assert(history.destination_value == 1U);
 }
 
+void recompiler_mullwo_differential_test()
+{
+    struct Case
+    {
+        std::uint32_t a;
+        std::uint32_t b;
+        std::uint8_t ra;
+        std::uint8_t rb;
+        std::uint8_t destination;
+        bool record;
+        std::uint32_t initial_xer;
+        std::uint32_t initial_cr;
+    };
+    constexpr std::array cases{
+        Case{7U, 9U, 4U, 5U, 3U, false, 0x600000A5U, 0x12345678U},
+        Case{0x7FFFFFFFU, 2U, 4U, 5U, 4U, true, 0x200000A5U, 0x87654321U},
+        Case{0x80000000U, 2U, 4U, 5U, 5U, false, 0xA00000A5U, 0xA5C36E91U},
+        Case{0x40000000U, 4U, 4U, 5U, 4U, true, 0x600000A5U, 0xA5C36E91U},
+        Case{0x7FFFFFFFU, 2U, 8U, 9U, 8U, true, 0x25A5A5A5U, 0x12345678U},
+    };
+    static_assert(x_form(3U, 4U, 5U, 747U) == 0x7C642DD6U);
+
+    for (const Case& test : cases)
+    {
+        EspressoCore interpreted(0x1000U);
+        EspressoCore compiled(0x1000U);
+        const std::uint32_t instruction = x_form(
+            test.destination, test.ra, test.rb, 747U, test.record);
+        for (EspressoCore* core : {&interpreted, &compiled})
+        {
+            core->memory.write32_be(0x100U, instruction);
+            core->state.cia = 0x100U;
+            core->state.gpr.fill(0x10203040U);
+            core->state.gpr[test.ra] = test.a;
+            core->state.gpr[test.rb] = test.b;
+            core->state.xer = test.initial_xer;
+            core->state.cr = test.initial_cr;
+            core->state.lr = 0x12345678U;
+            core->state.ctr = 0x87654321U;
+            core->state.fpscr = 0x89ABCDEFU;
+        }
+
+        const std::int64_t product =
+            static_cast<std::int64_t>(std::bit_cast<std::int32_t>(test.a)) *
+            static_cast<std::int64_t>(std::bit_cast<std::int32_t>(test.b));
+        const std::uint32_t result = static_cast<std::uint32_t>(product);
+        const bool overflow = product < std::numeric_limits<std::int32_t>::min() ||
+            product > std::numeric_limits<std::int32_t>::max();
+        const bool summary_overflow =
+            ((test.initial_xer & 0x80000000U) != 0U) || overflow;
+        const RunResult oracle = interpreted.run(1U);
+        Recompiler recompiler;
+        const RunResult actual = recompiler.run(compiled, 1U);
+        assert(actual.reason == oracle.reason);
+        assert(actual.steps == oracle.steps && actual.steps == 1U);
+        assert(actual.cia == oracle.cia);
+        assert(compiled.state.gpr == interpreted.state.gpr);
+        assert(compiled.state.cr == interpreted.state.cr);
+        assert(compiled.state.xer == interpreted.state.xer);
+        assert(compiled.state.lr == interpreted.state.lr);
+        assert(compiled.state.ctr == interpreted.state.ctr);
+        assert(compiled.state.fpscr == interpreted.state.fpscr);
+        assert(compiled.state.gpr[test.destination] == result);
+        assert(((compiled.state.xer & 0x40000000U) != 0U) == overflow);
+        assert(((compiled.state.xer & 0x80000000U) != 0U) == summary_overflow);
+        assert((compiled.state.xer & 0x3FFFFFFFU) ==
+            (test.initial_xer & 0x3FFFFFFFU));
+        if (!test.record)
+        {
+            assert(compiled.state.cr == test.initial_cr);
+        }
+        assert(recompiler.statistics().native_instructions == 1U);
+        assert(recompiler.statistics().interpreter_fallbacks == 0U);
+        assert(actual.instruction_history.size() == 1U);
+        const InstructionHistoryEntry& history = actual.instruction_history.front();
+        assert(history.completed && history.opcode_name ==
+            (test.record ? "mullwo." : "mullwo"));
+        assert(history.source_count == (test.ra == test.rb ? 1U : 2U));
+        assert(history.source_registers[0] == test.ra && history.source_values[0] == test.a);
+        if (test.ra != test.rb)
+        {
+            assert(history.source_registers[1] == test.rb);
+            assert(history.source_values[1] == test.b);
+        }
+        assert(history.has_destination && history.destination_register == test.destination);
+        assert(history.destination_value == result);
+        assert(history.has_overflow_result && history.overflow_result == overflow);
+        assert(history.summary_overflow_result == summary_overflow);
+    }
+}
+
 void recompiler_mulhw_differential_tests()
 {
     struct Registers
@@ -10595,6 +10686,7 @@ int main()
     recompiler_addo_subfo_differential_test();
     recompiler_nego_differential_test();
     recompiler_addme_differential_test();
+    recompiler_mullwo_differential_test();
     recompiler_subfme_differential_test();
     recompiler_sraw_differential_test();
     recompiler_subfze_differential_test();

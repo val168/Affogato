@@ -272,6 +272,8 @@ struct NativeMullwRecord
     std::uint32_t source_a{};
     std::uint32_t source_b{};
     std::uint32_t result{};
+    std::uint32_t overflow{};
+    std::uint32_t summary_overflow{};
 };
 
 struct NativeDivwuRecord
@@ -4676,6 +4678,10 @@ struct BlockCode
     {
         return true;
     }
+    if (insn.opcode == Opcode::multiply_low_word_overflow)
+    {
+        return true;
+    }
     if (insn.opcode == Opcode::negate && insn.record)
     {
         return true;
@@ -4965,6 +4971,7 @@ struct BlockCode
     case Opcode::addis: return "addis";
     case Opcode::multiply_low_immediate: return "mulli";
     case Opcode::multiply_low_word: return "mullw";
+    case Opcode::multiply_low_word_overflow: return "mullwo";
     case Opcode::multiply_high_word_unsigned: return "mulhwu";
     case Opcode::multiply_high_word_signed: return "mulhw";
     case Opcode::divide_word_unsigned: return "divwu";
@@ -5949,6 +5956,7 @@ struct Recompiler::Impl
                 break;
             }
             case Opcode::multiply_low_word:
+            case Opcode::multiply_low_word_overflow:
             {
                 const std::size_t record_base = offsetof(NativeExecutionContext, mullw_records) +
                     index * sizeof(NativeMullwRecord);
@@ -5961,6 +5969,36 @@ struct Recompiler::Impl
                 x86::Gp result = compiler.new_gp32("mullw_result");
                 compiler.mov(result, source_a);
                 compiler.imul(result, source_b);
+                if (insn.opcode == Opcode::multiply_low_word_overflow)
+                {
+                    x86::Gp overflow = compiler.new_gp32("mullwo_overflow");
+                    compiler.mov(overflow, imm(0U));
+                    compiler.seto(overflow.r8());
+                    compiler.mov(x86::dword_ptr(context, static_cast<std::int32_t>(
+                        record_base + offsetof(NativeMullwRecord, overflow))), overflow);
+                    constexpr std::size_t xer_offset = offsetof(CpuState, xer);
+                    x86::Gp xer = compiler.new_gp32("mullwo_xer");
+                    compiler.mov(xer, x86::dword_ptr(
+                        state, static_cast<std::int32_t>(xer_offset)));
+                    x86::Gp summary_overflow =
+                        compiler.new_gp32("mullwo_summary_overflow");
+                    compiler.mov(summary_overflow, xer);
+                    compiler.shr(summary_overflow, imm(31U));
+                    compiler.or_(summary_overflow, overflow);
+                    compiler.shl(summary_overflow, imm(31U));
+                    x86::Gp overflow_bit = compiler.new_gp32("mullwo_overflow_bit");
+                    compiler.mov(overflow_bit, overflow);
+                    compiler.shl(overflow_bit, imm(30U));
+                    compiler.and_(xer, imm(~(xer_summary_overflow_mask |
+                        xer_overflow_mask)));
+                    compiler.or_(xer, summary_overflow);
+                    compiler.or_(xer, overflow_bit);
+                    compiler.mov(x86::dword_ptr(
+                        state, static_cast<std::int32_t>(xer_offset)), xer);
+                    compiler.mov(x86::dword_ptr(context, static_cast<std::int32_t>(
+                        record_base + offsetof(NativeMullwRecord, summary_overflow))),
+                        summary_overflow);
+                }
                 compiler.mov(x86::dword_ptr(context, static_cast<std::int32_t>(
                     record_base + offsetof(NativeMullwRecord, result))), result);
                 write_guest_gpr(insn.destination, result);
@@ -11090,7 +11128,8 @@ RunResult Recompiler::run(EspressoCore& core, std::size_t max_steps)
                 core.append_instruction_history(std::move(entry));
                 continue;
             }
-            if (insn.opcode == Opcode::multiply_low_word)
+            if (insn.opcode == Opcode::multiply_low_word ||
+                insn.opcode == Opcode::multiply_low_word_overflow)
             {
                 InstructionHistoryEntry entry = native_history(insn, cia);
                 const NativeMullwRecord& record = context.mullw_records[i];
@@ -11102,6 +11141,12 @@ RunResult Recompiler::run(EspressoCore& core, std::size_t max_steps)
                 entry.has_destination = true;
                 entry.destination_register = insn.destination;
                 entry.destination_value = record.result;
+                if (insn.opcode == Opcode::multiply_low_word_overflow)
+                {
+                    entry.has_overflow_result = true;
+                    entry.overflow_result = record.overflow != 0U;
+                    entry.summary_overflow_result = record.summary_overflow != 0U;
+                }
                 core.append_instruction_history(std::move(entry));
                 continue;
             }
