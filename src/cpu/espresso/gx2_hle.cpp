@@ -3354,6 +3354,31 @@ void register_gx2_hle(HleDispatcher& dispatcher)
 
     dispatcher.register_function(
         "gx2",
+        "GX2InitPolygonOffsetReg",
+        [](EspressoCore& core) {
+            // The API arguments are front offset/scale then back
+            // offset/scale, while GX2PolygonOffsetReg stores scale first.
+            const std::array<std::uint32_t, 5U> values{
+                fpr_float_argument_bits(core, 2U),
+                fpr_float_argument_bits(core, 1U),
+                fpr_float_argument_bits(core, 4U),
+                fpr_float_argument_bits(core, 3U),
+                fpr_float_argument_bits(core, 5U),
+            };
+            const std::uint32_t output = core.state.gpr[3];
+            core.memory.validate_write_range(
+                output, values.size() * sizeof(std::uint32_t));
+            for (std::size_t index = 0U; index < values.size(); ++index)
+            {
+                core.memory.write32_be(
+                    output + static_cast<std::uint32_t>(
+                        index * sizeof(std::uint32_t)),
+                    values[index]);
+            }
+        });
+
+    dispatcher.register_function(
+        "gx2",
         "GX2SetPointSize",
         [](EspressoCore& core) {
             if (!core.gx2.initialized)
