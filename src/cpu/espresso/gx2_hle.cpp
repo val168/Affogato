@@ -50,6 +50,7 @@ constexpr std::uint32_t cb_blend_alpha_register = 0x00028420U;
 constexpr std::uint32_t sx_alpha_test_control_register = 0x00028410U;
 constexpr std::uint32_t sx_alpha_ref_register = 0x00028438U;
 constexpr std::uint32_t cb_target_mask_register = 0x00028238U;
+constexpr std::uint32_t pa_sc_aa_mask_register = 0x00028C48U;
 constexpr std::uint32_t db_alpha_to_mask_register = 0x00028D44U;
 constexpr std::uint32_t pa_sc_generic_scissor_tl_register = 0x00028240U;
 constexpr std::uint32_t pa_sc_generic_scissor_br_register = 0x00028244U;
@@ -3134,6 +3135,32 @@ void register_gx2_hle(HleDispatcher& dispatcher)
                 packed});
             // Void setter: r3-r10 are the eight mask arguments. No stack,
             // FPR, or guest-memory state participates in this register write.
+        });
+
+    dispatcher.register_function(
+        "gx2",
+        "GX2SetAAMask",
+        [](EspressoCore& core) {
+            if (!core.gx2.initialized)
+            {
+                throw HleExecutionError(
+                    "gx2::GX2SetAAMask: GX2 has not been initialized");
+            }
+
+            // GX2 accepts one 8-bit mask per pixel in a 2x2 quad. Latte's
+            // PA_SC_AA_MASK register retains those four bytes in UL, UR, LL,
+            // LR order; do not expand them into the later 16-sample register
+            // pair used by newer AMD GPU generations.
+            const std::uint32_t packed =
+                (core.state.gpr[3] & 0xFFU) |
+                ((core.state.gpr[4] & 0xFFU) << 8U) |
+                ((core.state.gpr[5] & 0xFFU) << 16U) |
+                ((core.state.gpr[6] & 0xFFU) << 24U);
+
+            core.gx2.pending_commands.push_back({
+                Gx2CommandType::set_context_register,
+                pa_sc_aa_mask_register,
+                packed});
         });
 
     dispatcher.register_function(
