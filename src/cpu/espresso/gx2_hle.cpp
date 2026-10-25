@@ -3468,6 +3468,45 @@ void register_gx2_hle(HleDispatcher& dispatcher)
 
     dispatcher.register_function(
         "gx2",
+        "GX2GetBlendConstantColorReg",
+        [](EspressoCore& core) {
+            constexpr const char* api_name = "GX2GetBlendConstantColorReg";
+            const std::uint32_t input = core.state.gpr[3];
+            constexpr std::uint32_t structure_size = 4U * sizeof(std::uint32_t);
+            if (static_cast<std::uint64_t>(input) + structure_size >
+                guest_address_space_end)
+            {
+                throw HleExecutionError(
+                    "gx2::GX2GetBlendConstantColorReg: input range wraps guest address space");
+            }
+            std::array<std::uint32_t, 4U> values{};
+            for (std::size_t index = 0U; index < values.size(); ++index)
+            {
+                values[index] = core.memory.read32_be(
+                    input + static_cast<std::uint32_t>(index * 4U));
+            }
+
+            const std::array<std::uint32_t, 4U> output_addresses{
+                core.state.gpr[4],
+                core.state.gpr[5],
+                core.state.gpr[6],
+                core.state.gpr[7],
+            };
+            constexpr std::array<const char*, 4U> output_names{
+                "red output", "green output", "blue output", "alpha output"};
+            for (std::size_t index = 0U; index < output_addresses.size(); ++index)
+            {
+                validate_gx2_u32_output(
+                    core, output_addresses[index], api_name, output_names[index]);
+            }
+            for (std::size_t index = 0U; index < output_addresses.size(); ++index)
+            {
+                core.memory.write32_be(output_addresses[index], values[index]);
+            }
+        });
+
+    dispatcher.register_function(
+        "gx2",
         "GX2SetAlphaTest",
         [](EspressoCore& core) {
             if (!core.gx2.initialized)

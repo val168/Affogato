@@ -25644,6 +25644,98 @@ void gx2_init_blend_constant_color_reg_hle_tests()
     }
 }
 
+void gx2_get_blend_constant_color_reg_hle_tests()
+{
+    constexpr std::uint32_t return_address = 0x027508B8U;
+    constexpr std::uint32_t input_address = 0x503U;
+    constexpr std::array<std::uint32_t, 4U> outputs{
+        0x601U, 0x612U, 0x623U, 0x634U};
+    constexpr std::array<std::uint32_t, 4U> values{
+        0x3E800000U, 0xBF000000U, 0x40000000U, 0x80000000U};
+
+    EspressoCore core(0x10000U);
+    register_gx2_hle(core.hle);
+    const std::uint32_t import =
+        core.hle.bind_import("gx2", "GX2GetBlendConstantColorReg");
+    const std::uint32_t wrong_library =
+        core.hle.bind_import("coreinit", "GX2GetBlendConstantColorReg");
+    assert(import != 0U && wrong_library != 0U);
+    assert(!core.gx2.initialized);
+    for (std::size_t index = 0U; index < values.size(); ++index)
+    {
+        core.memory.write32_be(
+            input_address + static_cast<std::uint32_t>(index * 4U), values[index]);
+        core.memory.write32_be(outputs[index], 0xDEADBEEFU);
+    }
+    core.state.gpr.fill(0xB1000000U);
+    core.state.gpr[3] = input_address;
+    for (std::size_t index = 0U; index < outputs.size(); ++index)
+    {
+        core.state.gpr[index + 4U] = outputs[index];
+    }
+    core.state.cr = 0x12345678U;
+    core.state.xer = 0xA5A55A5AU;
+    core.state.ctr = 0x87654321U;
+    core.state.fpscr = 0x5A5AA55AU;
+    const auto gprs_before = core.state.gpr;
+    const auto fprs_before = core.state.fpr;
+    const auto ps1_before = core.state.fpr_ps1;
+
+    const auto invoke = [&](std::uint32_t function) {
+        core.state.cia = function;
+        core.state.lr = return_address;
+        return core.run(1U);
+    };
+    const RunResult result = invoke(import);
+    assert(result.reason == StopReason::instruction_limit);
+    assert(result.steps == 1U && core.state.cia == return_address);
+    for (std::size_t index = 0U; index < outputs.size(); ++index)
+    {
+        assert(core.memory.read32_be(outputs[index]) == values[index]);
+        assert(core.memory.read32_be(
+                   input_address + static_cast<std::uint32_t>(index * 4U)) ==
+               values[index]);
+    }
+    assert(core.state.gpr == gprs_before);
+    assert(core.state.fpr == fprs_before && core.state.fpr_ps1 == ps1_before);
+    assert(core.state.cr == 0x12345678U);
+    assert(core.state.xer == 0xA5A55A5AU);
+    assert(core.state.ctr == 0x87654321U);
+    assert(core.state.fpscr == 0x5A5AA55AU);
+    assert(core.gx2.pending_commands.empty());
+
+    // Input words are snapshotted before an output overwrites the structure.
+    core.state.gpr[4] = input_address;
+    assert(invoke(import).reason == StopReason::instruction_limit);
+    assert(core.memory.read32_be(input_address) == values[0]);
+    assert(core.memory.read32_be(outputs[1]) == values[1]);
+    assert(core.memory.read32_be(outputs[3]) == values[3]);
+
+    core.memory.write32_be(outputs[0], 0x11111111U);
+    core.memory.write32_be(outputs[1], 0x22222222U);
+    core.memory.write32_be(outputs[2], 0x33333333U);
+    core.state.gpr[4] = outputs[0];
+    core.state.gpr[5] = outputs[1];
+    core.state.gpr[6] = outputs[2];
+    core.state.gpr[7] = 0x10000U;
+    const RunResult late_output_fault = invoke(import);
+    assert(late_output_fault.reason == StopReason::memory_fault);
+    assert(core.memory.read32_be(outputs[0]) == 0x11111111U);
+    assert(core.memory.read32_be(outputs[1]) == 0x22222222U);
+    assert(core.memory.read32_be(outputs[2]) == 0x33333333U);
+
+    core.state.gpr[7] = outputs[3];
+    const RunResult wrong_library_result = invoke(wrong_library);
+    assert(wrong_library_result.reason == StopReason::unimplemented_hle_call);
+    assert(wrong_library_result.hle_call ==
+           "coreinit::GX2GetBlendConstantColorReg");
+
+    core.state.gpr[3] = 0xFFFFFFFCU;
+    const RunResult wrapped_input = invoke(import);
+    assert(wrapped_input.reason == StopReason::hle_error);
+    assert(wrapped_input.detail.find("range wraps") != std::string::npos);
+}
+
 void gx2_set_alpha_test_hle_tests()
 {
     constexpr std::uint32_t return_address = 0x027508C4U;
@@ -39817,6 +39909,7 @@ int main(int argc, char* argv[])
     gx2_set_blend_control_hle_tests();
     gx2_set_blend_constant_color_hle_tests();
     gx2_init_blend_constant_color_reg_hle_tests();
+    gx2_get_blend_constant_color_reg_hle_tests();
     gx2_set_alpha_test_hle_tests();
     gx2_init_target_channel_masks_reg_hle_tests();
     gx2_get_target_channel_masks_reg_hle_tests();
