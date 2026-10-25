@@ -380,7 +380,8 @@ int run_rpx_diagnostic(int argc, char* argv[])
                      "[--recompiler] [--limit <instructions>] "
                      "[--watch-write <guest-address>] "
                      "[--trace-hle <library::symbol>] "
-                     "[--dump-memory <address> <bytes>]...\n";
+                     "[--dump-memory <address> <bytes>]... "
+                     "[--dump-code <address> <words>]...\n";
         return 2;
     }
 
@@ -389,6 +390,7 @@ int run_rpx_diagnostic(int argc, char* argv[])
     std::optional<std::uint32_t> watched_guest_write_address;
     std::optional<std::string> hle_trace_filter;
     std::vector<std::pair<std::uint32_t, std::uint32_t>> guest_memory_dumps;
+    std::vector<std::pair<std::uint32_t, std::uint32_t>> guest_code_dumps;
     for (int index = 3; index < argc; ++index)
     {
         const std::string_view argument(argv[index]);
@@ -450,6 +452,31 @@ int run_rpx_diagnostic(int argc, char* argv[])
             guest_memory_dumps.emplace_back(
                 static_cast<std::uint32_t>(address),
                 static_cast<std::uint32_t>(size));
+        }
+        else if (argument == "--dump-code" && index + 2 < argc)
+        {
+            const std::string_view address_text(argv[++index]);
+            const std::string_view word_count_text(argv[++index]);
+            std::size_t parsed_address_length = 0U;
+            std::size_t parsed_count_length = 0U;
+            const unsigned long long address =
+                std::stoull(std::string(address_text), &parsed_address_length, 0);
+            const unsigned long long word_count =
+                std::stoull(std::string(word_count_text), &parsed_count_length, 0);
+            if (parsed_address_length != address_text.size() ||
+                address > std::numeric_limits<std::uint32_t>::max() ||
+                (address & 3U) != 0U ||
+                parsed_count_length != word_count_text.size() ||
+                word_count == 0U || word_count > 64U ||
+                address + word_count * sizeof(std::uint32_t) >
+                    (std::uint64_t{1U} << 32U))
+            {
+                throw std::invalid_argument(
+                    "--dump-code requires an aligned guest address and 1..64 words");
+            }
+            guest_code_dumps.emplace_back(
+                static_cast<std::uint32_t>(address),
+                static_cast<std::uint32_t>(word_count));
         }
         else
         {
@@ -654,6 +681,51 @@ int run_rpx_diagnostic(int argc, char* argv[])
         {
             std::cout << "  <dump failed: " << error.what() << ">\n";
         }
+    }
+    for (const auto& [dump_address, word_count] : guest_code_dumps)
+    {
+        std::cout << "Guest-code dump at 0x" << std::hex << std::uppercase
+                  << dump_address << " (" << std::dec << word_count
+                  << " words):\n";
+        for (std::uint32_t index = 0U; index < word_count; ++index)
+        {
+            const std::uint32_t cia =
+                dump_address + index * sizeof(std::uint32_t);
+            try
+            {
+                const std::uint32_t raw = emulator.core().memory.read32_be(cia);
+                const auto instruction =
+                    affogato::cpu::espresso::decode(raw);
+                std::cout << "  0x" << std::hex << std::uppercase
+                          << std::setw(8) << std::setfill('0') << cia
+                          << ": 0x" << std::setw(8) << raw << std::setfill(' ')
+                          << "  " << affogato::cpu::espresso::opcode_mnemonic(
+                                 instruction.opcode);
+                if (instruction.opcode !=
+                    affogato::cpu::espresso::Opcode::unsupported)
+                {
+                    std::cout << " fields(rd=" << std::dec
+                              << ((raw >> 21U) & 0x1FU)
+                              << ",ra=" << ((raw >> 16U) & 0x1FU)
+                              << ",rb=" << ((raw >> 11U) & 0x1FU)
+                              << ",rc=" << ((raw >> 6U) & 0x1FU) << ')'
+                              << " decoded-imm=" << instruction.immediate;
+                    if (instruction.record)
+                    {
+                        std::cout << " Rc=1";
+                    }
+                }
+                std::cout << '\n';
+            }
+            catch (const std::exception& error)
+            {
+                std::cout << "  0x" << std::hex << std::uppercase
+                          << cia << " <dump failed: " << error.what() << ">\n"
+                          << std::dec;
+                break;
+            }
+        }
+        std::cout << std::dec;
     }
     if (result.execution.hle_call == "coreinit::OSReceiveMessage")
     {
