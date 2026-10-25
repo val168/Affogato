@@ -54,6 +54,7 @@ public:
                 draw_calls_.push_back(command);
                 draw_vertex_buffers_.push_back(vertex_buffers_);
                 draw_fetch_shaders_.push_back(fetch_shader_);
+                draw_program_shaders_.push_back(program_shaders_);
                 continue;
             }
             if (command.type == cpu::espresso::Gx2CommandType::set_vertex_buffer)
@@ -69,6 +70,19 @@ public:
             if (command.type == cpu::espresso::Gx2CommandType::set_fetch_shader)
             {
                 fetch_shader_ = command.fetch_shader;
+                continue;
+            }
+            if (command.type == cpu::espresso::Gx2CommandType::set_program_shader)
+            {
+                if (command.program_shader)
+                {
+                    const std::size_t stage =
+                        static_cast<std::size_t>(command.program_shader->stage);
+                    if (stage < program_shaders_.size())
+                    {
+                        program_shaders_[stage] = command.program_shader;
+                    }
+                }
                 continue;
             }
             if (command.type == cpu::espresso::Gx2CommandType::flush ||
@@ -233,6 +247,20 @@ public:
         return draw_fetch_shaders_;
     }
 
+    [[nodiscard]] const std::array<std::optional<
+        cpu::espresso::Gx2ProgramShaderBinding>, 3U>&
+    program_shaders() const noexcept
+    {
+        return program_shaders_;
+    }
+
+    [[nodiscard]] std::span<const std::array<std::optional<
+        cpu::espresso::Gx2ProgramShaderBinding>, 3U>>
+    draw_program_shaders() const noexcept
+    {
+        return draw_program_shaders_;
+    }
+
 private:
     struct RegisterValue
     {
@@ -252,6 +280,11 @@ private:
     std::optional<cpu::espresso::Gx2FetchShaderBinding> fetch_shader_;
     std::vector<std::optional<cpu::espresso::Gx2FetchShaderBinding>>
         draw_fetch_shaders_;
+    std::array<std::optional<cpu::espresso::Gx2ProgramShaderBinding>, 3U>
+        program_shaders_{};
+    std::vector<std::array<std::optional<
+        cpu::espresso::Gx2ProgramShaderBinding>, 3U>>
+        draw_program_shaders_;
 };
 
 }

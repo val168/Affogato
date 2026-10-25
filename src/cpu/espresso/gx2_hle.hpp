@@ -22,7 +22,15 @@ enum class Gx2CommandType
     scan_buffer_swap,
     set_vertex_buffer,
     set_fetch_shader,
+    set_program_shader,
     draw,
+};
+
+enum class Gx2ProgramStage : std::uint8_t
+{
+    vertex,
+    pixel,
+    geometry,
 };
 
 struct Gx2DrawCall
@@ -64,6 +72,18 @@ struct Gx2FetchShaderBinding
     bool operator==(const Gx2FetchShaderBinding&) const = default;
 };
 
+struct Gx2ProgramShaderBinding
+{
+    Gx2ProgramStage stage{};
+    std::uint32_t descriptor_address{};
+    std::uint32_t program_size{};
+    std::uint32_t program_address{};
+    std::vector<std::uint32_t> descriptor_words;
+    std::vector<std::uint32_t> program_words;
+
+    bool operator==(const Gx2ProgramShaderBinding&) const = default;
+};
+
 struct Gx2Command
 {
     Gx2CommandType type{};
@@ -75,6 +95,7 @@ struct Gx2Command
     std::optional<Gx2DrawCall> draw_call;
     std::optional<Gx2VertexBufferBinding> vertex_buffer;
     std::optional<Gx2FetchShaderBinding> fetch_shader;
+    std::optional<Gx2ProgramShaderBinding> program_shader;
 
     constexpr Gx2Command() = default;
     constexpr Gx2Command(
@@ -86,7 +107,8 @@ struct Gx2Command
         std::uint32_t command_compare_op = 0U,
         std::optional<Gx2DrawCall> command_draw_call = std::nullopt,
         std::optional<Gx2VertexBufferBinding> command_vertex_buffer = std::nullopt,
-        std::optional<Gx2FetchShaderBinding> command_fetch_shader = std::nullopt)
+        std::optional<Gx2FetchShaderBinding> command_fetch_shader = std::nullopt,
+        std::optional<Gx2ProgramShaderBinding> command_program_shader = std::nullopt)
         : type(command_type),
           register_address(command_register_address),
           value(command_value),
@@ -95,7 +117,8 @@ struct Gx2Command
           compare_op(command_compare_op),
           draw_call(command_draw_call),
           vertex_buffer(command_vertex_buffer),
-          fetch_shader(command_fetch_shader)
+          fetch_shader(command_fetch_shader),
+          program_shader(command_program_shader)
     {
     }
 
@@ -250,6 +273,7 @@ struct Gx2RuntimeState
     std::array<std::optional<Gx2SamplerBinding>, 16U> geometry_samplers{};
     std::array<std::optional<Gx2VertexBufferBinding>, 16U> vertex_buffers{};
     std::optional<Gx2FetchShaderBinding> fetch_shader;
+    std::array<std::optional<Gx2ProgramShaderBinding>, 3U> program_shaders{};
     std::array<std::optional<std::array<std::uint32_t, 4U>>, 12U>
         pixel_sampler_border_colors{};
     std::array<std::optional<std::array<std::uint32_t, 4U>>, 12U>
