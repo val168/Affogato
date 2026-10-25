@@ -3379,6 +3379,43 @@ void register_gx2_hle(HleDispatcher& dispatcher)
 
     dispatcher.register_function(
         "gx2",
+        "GX2GetPolygonOffsetReg",
+        [](EspressoCore& core) {
+            const std::uint32_t input = core.state.gpr[3];
+            const std::array<std::uint32_t, 5U> register_values{
+                core.memory.read32_be(input),
+                core.memory.read32_be(input + 4U),
+                core.memory.read32_be(input + 8U),
+                core.memory.read32_be(input + 12U),
+                core.memory.read32_be(input + 16U),
+            };
+            const std::array<std::uint32_t, 5U> output_addresses{
+                core.state.gpr[4],
+                core.state.gpr[5],
+                core.state.gpr[6],
+                core.state.gpr[7],
+                core.state.gpr[8],
+            };
+            for (const std::uint32_t address : output_addresses)
+            {
+                core.memory.validate_write_range(
+                    address, sizeof(std::uint32_t));
+            }
+
+            // The structure is scale/offset per face; the API returns
+            // offset/scale per face.
+            constexpr std::array<std::size_t, 5U> value_indices{
+                1U, 0U, 3U, 2U, 4U};
+            for (std::size_t index = 0U; index < output_addresses.size(); ++index)
+            {
+                core.memory.write32_be(
+                    output_addresses[index],
+                    register_values[value_indices[index]]);
+            }
+        });
+
+    dispatcher.register_function(
+        "gx2",
         "GX2SetPointSize",
         [](EspressoCore& core) {
             if (!core.gx2.initialized)
