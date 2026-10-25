@@ -24150,6 +24150,102 @@ void gx2_init_stencil_mask_reg_hle_tests()
     assert(core.memory.read32_be(output_address + 4U) == 0x008844CCU);
 }
 
+void gx2_get_stencil_mask_reg_hle_tests()
+{
+    constexpr std::uint32_t return_address = 0x02750A74U;
+    constexpr std::uint32_t input_address = 0x503U;
+    constexpr std::array<std::uint32_t, 6U> outputs{
+        0x601U, 0x612U, 0x623U, 0x634U, 0x645U, 0x656U};
+
+    EspressoCore core(0x10000U);
+    register_gx2_hle(core.hle);
+    const std::uint32_t import =
+        core.hle.bind_import("gx2", "GX2GetStencilMaskReg");
+    const std::uint32_t wrong_library =
+        core.hle.bind_import("coreinit", "GX2GetStencilMaskReg");
+    assert(import != 0U && wrong_library != 0U);
+    assert(!core.gx2.initialized);
+    core.memory.write32_be(input_address, 0xA5C39E71U);
+    core.memory.write32_be(input_address + 4U, 0x12345678U);
+    for (const std::uint32_t output : outputs)
+    {
+        core.memory.write32_be(output, 0xDEADBEEFU);
+    }
+    core.state.gpr.fill(0xB1000000U);
+    core.state.gpr[3] = input_address;
+    for (std::size_t index = 0U; index < outputs.size(); ++index)
+    {
+        core.state.gpr[index + 4U] = outputs[index];
+    }
+    core.state.cr = 0x12345678U;
+    core.state.xer = 0xA5A55A5AU;
+    core.state.ctr = 0x87654321U;
+    core.state.fpscr = 0x5A5AA55AU;
+    const auto gprs_before = core.state.gpr;
+    const auto fprs_before = core.state.fpr;
+    const auto ps1_before = core.state.fpr_ps1;
+
+    const auto invoke = [&](std::uint32_t function) {
+        core.state.cia = function;
+        core.state.lr = return_address;
+        return core.run(1U);
+    };
+    const RunResult result = invoke(import);
+    assert(result.reason == StopReason::instruction_limit);
+    assert(result.steps == 1U && core.state.cia == return_address);
+    const std::array<std::uint32_t, 6U> expected{0x9EU, 0xC3U, 0x71U,
+                                                 0x56U, 0x34U, 0x78U};
+    for (std::size_t index = 0U; index < outputs.size(); ++index)
+    {
+        assert(core.memory.read32_be(outputs[index]) == expected[index]);
+    }
+    assert(core.memory.read32_be(input_address) == 0xA5C39E71U);
+    assert(core.memory.read32_be(input_address + 4U) == 0x12345678U);
+    assert(core.state.gpr == gprs_before);
+    assert(core.state.fpr == fprs_before && core.state.fpr_ps1 == ps1_before);
+    assert(core.state.cr == 0x12345678U);
+    assert(core.state.xer == 0xA5A55A5AU);
+    assert(core.state.ctr == 0x87654321U);
+    assert(core.state.fpscr == 0x5A5AA55AU);
+
+    // All source words are captured before an output aliases the input.
+    core.state.gpr[4] = input_address;
+    assert(invoke(import).reason == StopReason::instruction_limit);
+    assert(core.memory.read32_be(input_address) == 0x9EU);
+    assert(core.memory.read32_be(outputs[1]) == 0xC3U);
+    assert(core.memory.read32_be(outputs[5]) == 0x78U);
+
+    for (std::size_t index = 0U; index + 1U < outputs.size(); ++index)
+    {
+        core.memory.write32_be(outputs[index], 0x11111111U +
+            static_cast<std::uint32_t>(index));
+    }
+    core.state.gpr[4] = outputs[0];
+    core.state.gpr[5] = outputs[1];
+    core.state.gpr[6] = outputs[2];
+    core.state.gpr[7] = outputs[3];
+    core.state.gpr[8] = outputs[4];
+    core.state.gpr[9] = 0x10000U;
+    const RunResult late_output_fault = invoke(import);
+    assert(late_output_fault.reason == StopReason::memory_fault);
+    for (std::size_t index = 0U; index + 1U < outputs.size(); ++index)
+    {
+        assert(core.memory.read32_be(outputs[index]) ==
+               0x11111111U + static_cast<std::uint32_t>(index));
+    }
+
+    core.state.gpr[9] = outputs[5];
+    const RunResult wrong_library_result = invoke(wrong_library);
+    assert(wrong_library_result.reason == StopReason::unimplemented_hle_call);
+    assert(wrong_library_result.hle_call ==
+           "coreinit::GX2GetStencilMaskReg");
+
+    core.state.gpr[3] = 0xFFFFFFFCU;
+    const RunResult wrapped_input = invoke(import);
+    assert(wrapped_input.reason == StopReason::hle_error);
+    assert(wrapped_input.detail.find("range wraps") != std::string::npos);
+}
+
 void gx2_set_polygon_control_hle_tests()
 {
     constexpr std::uint32_t return_address = 0x02750828U;
@@ -39632,6 +39728,7 @@ int main(int argc, char* argv[])
     gx2_set_stencil_mask_hle_tests();
     gx2_set_stencil_mask_reg_hle_tests();
     gx2_init_stencil_mask_reg_hle_tests();
+    gx2_get_stencil_mask_reg_hle_tests();
     gx2_set_polygon_control_hle_tests();
     gx2_set_color_control_hle_tests();
     gx2_set_color_control_reg_hle_tests();

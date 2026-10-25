@@ -3034,6 +3034,61 @@ void register_gx2_hle(HleDispatcher& dispatcher)
 
     dispatcher.register_function(
         "gx2",
+        "GX2GetStencilMaskReg",
+        [](EspressoCore& core) {
+            constexpr const char* api_name = "GX2GetStencilMaskReg";
+            const std::uint32_t input = core.state.gpr[3];
+            if (static_cast<std::uint64_t>(input) + 2U * sizeof(std::uint32_t) >
+                guest_address_space_end)
+            {
+                throw HleExecutionError(
+                    "gx2::GX2GetStencilMaskReg: input range wraps guest address space");
+            }
+            const std::array<std::uint32_t, 2U> registers{
+                core.memory.read32_be(input),
+                core.memory.read32_be(input + 4U),
+            };
+            const std::array<std::uint32_t, 6U> output_addresses{
+                core.state.gpr[4],
+                core.state.gpr[5],
+                core.state.gpr[6],
+                core.state.gpr[7],
+                core.state.gpr[8],
+                core.state.gpr[9],
+            };
+            constexpr std::array<const char*, 6U> output_names{
+                "front-mask output",
+                "front-write-mask output",
+                "front-reference output",
+                "back-mask output",
+                "back-write-mask output",
+                "back-reference output",
+            };
+            for (std::size_t index = 0U; index < output_addresses.size(); ++index)
+            {
+                validate_gx2_u32_output(
+                    core, output_addresses[index], api_name, output_names[index]);
+            }
+
+            const auto decode_register = [](std::uint32_t value) {
+                return std::array<std::uint32_t, 3U>{
+                    (value >> 8U) & 0xFFU,
+                    (value >> 16U) & 0xFFU,
+                    value & 0xFFU,
+                };
+            };
+            const auto front = decode_register(registers[0]);
+            const auto back = decode_register(registers[1]);
+            const std::array<std::uint32_t, 6U> values{
+                front[0], front[1], front[2], back[0], back[1], back[2]};
+            for (std::size_t index = 0U; index < output_addresses.size(); ++index)
+            {
+                core.memory.write32_be(output_addresses[index], values[index]);
+            }
+        });
+
+    dispatcher.register_function(
+        "gx2",
         "GX2SetPolygonControl",
         [](EspressoCore& core) {
             if (!core.gx2.initialized)
