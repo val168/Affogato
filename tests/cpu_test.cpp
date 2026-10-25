@@ -12342,6 +12342,27 @@ void hle_dispatch_tests()
     assert(core.memory.read32_be(0x94) == 0x1234U);
     assert(core.memory.read32_be(0xB8) == 0);
 
+    const std::uint32_t fast_mutex_try_lock =
+        core.hle.bind_import("coreinit", "OSFastMutex_TryLock");
+    std::array<std::uint8_t, 0x2CU> fast_mutex_before{};
+    core.memory.read_bytes(0x90U, fast_mutex_before);
+    core.state.cia = fast_mutex_try_lock;
+    core.state.lr = 0x54U;
+    core.state.gpr[3] = 0x90U;
+    assert(core.step() == StepResult::executed);
+    assert(core.state.gpr[3] == 1U);
+    assert(core.state.cia == 0x54U);
+    std::array<std::uint8_t, 0x2CU> fast_mutex_after{};
+    core.memory.read_bytes(0x90U, fast_mutex_after);
+    assert(fast_mutex_after == fast_mutex_before);
+
+    core.state.cia = fast_mutex_try_lock;
+    core.state.lr = 0x58U;
+    core.state.gpr[3] = 0xFFFFFFFFU;
+    assert(core.run(1U).reason == StopReason::hle_error);
+    assert(core.state.gpr[3] == 0xFFFFFFFFU);
+    assert(core.state.cia == fast_mutex_try_lock);
+
     const std::uint32_t missing_import = core.hle.bind_import("coreinit", "OSFatal");
     core.state.cia = missing_import;
     core.state.lr = 0x44;

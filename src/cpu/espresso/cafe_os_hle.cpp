@@ -3479,6 +3479,39 @@ void register_coreinit_hle(HleDispatcher& dispatcher)
         });
     dispatcher.register_function(
         "coreinit",
+        "OSFastMutex_TryLock",
+        [](EspressoCore& core) {
+            const std::uint32_t mutex = core.state.gpr[3];
+            if (mutex == 0U)
+            {
+                throw HleExecutionError(
+                    "OSFastMutex_TryLock received a null mutex pointer");
+            }
+
+            std::uint32_t tag = 0U;
+            try
+            {
+                tag = core.memory.read32_be(mutex);
+            }
+            catch (const GuestMemoryFault&)
+            {
+                throw HleExecutionError(
+                    "OSFastMutex_TryLock mutex pointer is outside mapped guest memory");
+            }
+            if (tag != fs_fast_mutex_tag)
+            {
+                throw HleExecutionError(
+                    "OSFastMutex_TryLock received an uninitialized fast mutex");
+            }
+
+            // There is only one scheduled guest execution lane, so no other
+            // guest thread can own this mutex. The existing Lock/Unlock HLEs
+            // share this non-contending model; scheduler-backed ownership is
+            // needed before contention can be represented.
+            core.state.gpr[3] = 1U;
+        });
+    dispatcher.register_function(
+        "coreinit",
         "__ghsLock",
         [](EspressoCore&) {
             // Cafe conceptually acquires a global Green Hills runtime lock.
