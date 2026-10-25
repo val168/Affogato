@@ -12316,6 +12316,36 @@ void hle_dispatch_tests()
     assert(core.state.gpr[3] == 0);
     assert(core.state.cia == 0x40);
 
+    const std::uint32_t debugger_present =
+        core.hle.bind_import("coreinit", "OSIsDebuggerPresent");
+    core.state.cia = debugger_present;
+    core.state.lr = 0x44U;
+    core.state.gpr[3] = 0xFFFFFFFFU;
+    core.state.gpr[4] = 0x12345678U;
+    const auto gprs_before_debugger_present = core.state.gpr;
+    const auto fprs_before_debugger_present = core.state.fpr;
+    const auto ps1_before_debugger_present = core.state.fpr_ps1;
+    const std::uint32_t cr_before_debugger_present = core.state.cr;
+    const std::uint32_t xer_before_debugger_present = core.state.xer;
+    const std::uint32_t ctr_before_debugger_present = core.state.ctr;
+    const std::uint32_t fpscr_before_debugger_present = core.state.fpscr;
+    assert(core.step() == StepResult::executed);
+    assert(core.state.gpr[3] == 0U && core.state.gpr[4] == 0x12345678U);
+    assert(core.state.cia == 0x44U && core.state.lr == 0x44U);
+    for (std::size_t index = 0U; index < core.state.gpr.size(); ++index)
+    {
+        if (index != 3U)
+        {
+            assert(core.state.gpr[index] == gprs_before_debugger_present[index]);
+        }
+    }
+    assert(core.state.fpr == fprs_before_debugger_present);
+    assert(core.state.fpr_ps1 == ps1_before_debugger_present);
+    assert(core.state.cr == cr_before_debugger_present);
+    assert(core.state.xer == xer_before_debugger_present);
+    assert(core.state.ctr == ctr_before_debugger_present);
+    assert(core.state.fpscr == fpscr_before_debugger_present);
+
     const std::uint32_t device_info = core.hle.bind_import("coreinit", "FSAGetDeviceInfo");
     core.state.cia = device_info;
     core.state.lr = 0x48;

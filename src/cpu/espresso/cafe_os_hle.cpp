@@ -3783,6 +3783,13 @@ void register_coreinit_hle(HleDispatcher& dispatcher)
             // Affogato has no Cafe debugger/GDB transport yet.
             core.state.gpr[3] = 0;
         });
+    dispatcher.register_function(
+        "coreinit",
+        "OSIsDebuggerPresent",
+        [](EspressoCore& core) {
+            // No guest debugger is attached in the current execution model.
+            core.state.gpr[3] = 0;
+        });
 
     dispatcher.register_data(
         "coreinit",
