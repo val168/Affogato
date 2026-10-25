@@ -54,6 +54,7 @@ constexpr std::uint32_t db_alpha_to_mask_register = 0x00028D44U;
 constexpr std::uint32_t pa_sc_generic_scissor_tl_register = 0x00028240U;
 constexpr std::uint32_t pa_sc_generic_scissor_br_register = 0x00028244U;
 constexpr std::uint32_t pa_sc_window_offset_register = 0x00028200U;
+constexpr std::uint32_t pa_su_point_size_register = 0x00028A00U;
 constexpr std::uint32_t pa_su_poly_offset_front_scale_register = 0x00028B80U;
 constexpr std::uint32_t pa_su_poly_offset_front_offset_register = 0x00028B84U;
 constexpr std::uint32_t pa_su_poly_offset_back_scale_register = 0x00028B88U;
@@ -694,6 +695,31 @@ std::uint32_t fpr_float_argument_bits(
     const double value = std::bit_cast<double>(core.state.fpr[register_index]);
     const float single_value = static_cast<float>(value);
     return std::bit_cast<std::uint32_t>(single_value);
+}
+
+std::uint16_t pack_gx2_point_size_dimension(float dimension)
+{
+    // PA_SU_POINT_SIZE stores a half-dimension radius in unsigned 12.4
+    // pixels. The API accepts the full dimension, so radius * 16 is dimension
+    // * 8. GX2's fixed-point conversion truncates toward zero; retain the
+    // register's low 16 bits after the signed conversion.
+    const float fixed_value = dimension * 8.0F;
+    std::int32_t fixed_integer{};
+    if (std::isnan(fixed_value) || fixed_value < -2147483648.0F)
+    {
+        // Match fctiwz's invalid/negative-saturation integer word.
+        fixed_integer = std::numeric_limits<std::int32_t>::min();
+    }
+    else if (fixed_value >= 2147483648.0F)
+    {
+        fixed_integer = std::numeric_limits<std::int32_t>::max();
+    }
+    else
+    {
+        fixed_integer = static_cast<std::int32_t>(fixed_value);
+    }
+    return static_cast<std::uint16_t>(
+        static_cast<std::uint32_t>(fixed_integer));
 }
 
 std::uint32_t pack_alpha_test_control(
@@ -3212,6 +3238,35 @@ void register_gx2_hle(HleDispatcher& dispatcher)
                     values[index]});
             }
             // As a void setter, this records only the ordered Latte state.
+        });
+
+    dispatcher.register_function(
+        "gx2",
+        "GX2SetPointSize",
+        [](EspressoCore& core) {
+            if (!core.gx2.initialized)
+            {
+                throw HleExecutionError(
+                    "gx2::GX2SetPointSize: GX2 has not been initialized");
+            }
+
+            const float width = std::bit_cast<float>(
+                fpr_float_argument_bits(core, 1U));
+            const float height = std::bit_cast<float>(
+                fpr_float_argument_bits(core, 2U));
+            const std::uint32_t packed =
+                (static_cast<std::uint32_t>(
+                     pack_gx2_point_size_dimension(width))
+                 << 16U) |
+                static_cast<std::uint32_t>(
+                    pack_gx2_point_size_dimension(height));
+
+            core.gx2.pending_commands.push_back({
+                Gx2CommandType::set_context_register,
+                pa_su_point_size_register,
+                packed});
+            // Width and height are full point dimensions; Latte's register
+            // carries the corresponding half-width/half-height radii.
         });
 
     dispatcher.register_function(
