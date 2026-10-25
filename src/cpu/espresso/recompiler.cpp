@@ -4241,6 +4241,7 @@ struct BlockCode
     case Opcode::store_byte_indexed_update:
     case Opcode::store_halfword_indexed:
     case Opcode::store_halfword_indexed_update:
+    case Opcode::store_halfword_byte_reverse_indexed:
     case Opcode::data_cache_block_store:
     case Opcode::data_cache_block_flush:
     case Opcode::condition_bit_and:
@@ -4445,6 +4446,7 @@ struct BlockCode
     case Opcode::store_byte_indexed_update: return "stbux";
     case Opcode::store_halfword_indexed: return "sthx";
     case Opcode::store_halfword_indexed_update: return "sthux";
+    case Opcode::store_halfword_byte_reverse_indexed: return "sthbrx";
     case Opcode::data_cache_block_store: return "dcbst";
     case Opcode::data_cache_block_flush: return "dcbf";
     case Opcode::condition_bit_and: return "crand";
@@ -4515,6 +4517,7 @@ struct BlockCode
     case Opcode::store_byte_indexed_update:
     case Opcode::store_halfword_indexed:
     case Opcode::store_halfword_indexed_update:
+    case Opcode::store_halfword_byte_reverse_indexed:
     case Opcode::paired_single_quantized_store:
     case Opcode::paired_single_quantized_load:
     case Opcode::data_cache_block_store:
@@ -4552,6 +4555,7 @@ struct BlockCode
     case Opcode::load_halfword_algebraic_indexed_update:
     case Opcode::store_halfword_indexed:
     case Opcode::store_halfword_indexed_update:
+    case Opcode::store_halfword_byte_reverse_indexed:
         return 2U;
     case Opcode::store_double:
     case Opcode::store_double_update:
@@ -4575,6 +4579,7 @@ struct BlockCode
         opcode == Opcode::store_byte_indexed_update ||
         opcode == Opcode::store_halfword_indexed ||
         opcode == Opcode::store_halfword_indexed_update ||
+        opcode == Opcode::store_halfword_byte_reverse_indexed ||
         opcode == Opcode::store_single || opcode == Opcode::store_single_indexed ||
         opcode == Opcode::store_single_indexed_update ||
         opcode == Opcode::store_double || opcode == Opcode::store_double_update ||
@@ -4609,6 +4614,7 @@ struct BlockCode
         opcode == Opcode::store_byte_indexed_update ||
         opcode == Opcode::store_halfword_indexed ||
         opcode == Opcode::store_halfword_indexed_update ||
+        opcode == Opcode::store_halfword_byte_reverse_indexed ||
         opcode == Opcode::store_single_indexed ||
         opcode == Opcode::store_single_indexed_update ||
         opcode == Opcode::store_double_indexed ||
@@ -8267,6 +8273,7 @@ struct Recompiler::Impl
             case Opcode::store_byte_indexed_update:
             case Opcode::store_halfword_indexed:
             case Opcode::store_halfword_indexed_update:
+            case Opcode::store_halfword_byte_reverse_indexed:
             case Opcode::data_cache_block_store:
             case Opcode::data_cache_block_flush:
             {
@@ -8371,6 +8378,13 @@ struct Recompiler::Impl
                         record_base + offsetof(NativeMemoryRecord, source_value))),
                         stored_value);
                     compiler.bswap(stored_value);
+                }
+                else if (insn.opcode == Opcode::store_halfword_byte_reverse_indexed)
+                {
+                    compiler.mov(x86::dword_ptr(context, static_cast<std::int32_t>(
+                        record_base + offsetof(NativeMemoryRecord, source_value))),
+                        stored_value);
+                    compiler.rol(stored_value.r16(), imm(8U));
                 }
                 compiler.mov(x86::dword_ptr(context, static_cast<std::int32_t>(
                     offsetof(NativeExecutionContext, fault_cia))), imm(cia));
@@ -10134,12 +10148,14 @@ RunResult Recompiler::run(EspressoCore& core, std::size_t max_steps)
                 {
                     entry.source_registers[entry.source_count] = insn.destination;
                     entry.source_values[entry.source_count++] =
-                        insn.opcode == Opcode::store_word_byte_reverse_indexed
+                        (insn.opcode == Opcode::store_word_byte_reverse_indexed ||
+                         insn.opcode == Opcode::store_halfword_byte_reverse_indexed)
                         ? record.source_value : record.value;
                 }
                 if (insn.opcode == Opcode::store_halfword ||
                     insn.opcode == Opcode::store_halfword_update ||
-                    insn.opcode == Opcode::store_halfword_indexed)
+                    insn.opcode == Opcode::store_halfword_indexed ||
+                    insn.opcode == Opcode::store_halfword_byte_reverse_indexed)
                 {
                     entry.has_stored_halfword_value = true;
                     entry.stored_halfword_value = static_cast<std::uint16_t>(record.value);

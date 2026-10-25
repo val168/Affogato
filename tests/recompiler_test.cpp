@@ -8712,6 +8712,62 @@ void recompiler_memory_tests()
     assert(reverse_store_fault_recompiler.statistics().native_instructions == 0U);
     assert(reverse_store_fault_recompiler.statistics().interpreter_fallbacks == 0U);
 
+    // sthbrx reverses only the low halfword and preserves the complete source
+    // GPR value in history, matching the interpreter's checked store behavior.
+    EspressoCore reverse_half_store_interpreted(0x1000U);
+    EspressoCore reverse_half_store_compiled(0x1000U);
+    constexpr std::uint32_t sthbrx = x_form(6, 4, 5, 918);
+    static_assert(sthbrx == 0x7CC42F2CU);
+    for (EspressoCore* core : {&reverse_half_store_interpreted,
+                               &reverse_half_store_compiled})
+    {
+        core->memory.write32_be(0x100U, sthbrx); // sthbrx r6,r4,r5
+        core->state.cia = 0x100U;
+        core->state.gpr[4] = 0x200U;
+        core->state.gpr[5] = 0x20U;
+        core->state.gpr[6] = 0x12345678U;
+    }
+    const RunResult reverse_half_store_oracle =
+        reverse_half_store_interpreted.run(1U);
+    Recompiler reverse_half_store_recompiler;
+    const RunResult reverse_half_store_actual =
+        reverse_half_store_recompiler.run(reverse_half_store_compiled, 1U);
+    assert(reverse_half_store_actual.steps == reverse_half_store_oracle.steps);
+    assert(reverse_half_store_compiled.memory.read16_be(0x220U) == 0x7856U);
+    assert(reverse_half_store_compiled.state.gpr ==
+           reverse_half_store_interpreted.state.gpr);
+    assert(reverse_half_store_compiled.memory.read16_be(0x220U) ==
+           reverse_half_store_interpreted.memory.read16_be(0x220U));
+    assert(reverse_half_store_actual.instruction_history.front().opcode_name == "sthbrx");
+    assert(reverse_half_store_actual.instruction_history.front().source_count == 3U);
+    assert(reverse_half_store_actual.instruction_history.front().source_values[2] ==
+           0x12345678U);
+    assert(reverse_half_store_actual.instruction_history.front().has_stored_halfword_value);
+    assert(reverse_half_store_actual.instruction_history.front().stored_halfword_value ==
+           0x7856U);
+    assert(reverse_half_store_recompiler.statistics().native_instructions == 1U);
+    assert(reverse_half_store_recompiler.statistics().interpreter_fallbacks == 0U);
+
+    EspressoCore reverse_half_store_fault(0x1000U);
+    reverse_half_store_fault.memory.map_region(0x2000U, 1U);
+    reverse_half_store_fault.memory.write8(0x2000U, 0xA5U);
+    reverse_half_store_fault.memory.write32_be(0x100U, sthbrx);
+    reverse_half_store_fault.state.cia = 0x100U;
+    reverse_half_store_fault.state.gpr[4] = 0x2000U;
+    reverse_half_store_fault.state.gpr[5] = 0U;
+    reverse_half_store_fault.state.gpr[6] = 0x12345678U;
+    Recompiler reverse_half_store_fault_recompiler;
+    const RunResult reverse_half_store_fault_result =
+        reverse_half_store_fault_recompiler.run(reverse_half_store_fault, 1U);
+    assert(reverse_half_store_fault_result.reason == StopReason::memory_fault);
+    assert(reverse_half_store_fault_result.detail.find("write 2 byte(s)") !=
+           std::string::npos);
+    assert(reverse_half_store_fault.memory.read8(0x2000U) == 0xA5U);
+    assert(reverse_half_store_fault.state.gpr[6] == 0x12345678U);
+    assert(!reverse_half_store_fault_result.instruction_history.front().completed);
+    assert(reverse_half_store_fault_recompiler.statistics().native_instructions == 0U);
+    assert(reverse_half_store_fault_recompiler.statistics().interpreter_fallbacks == 0U);
+
     // A checked store crossing a page boundary advances both page generations
     // and the global write generation exactly once.
     EspressoCore boundary_store(0x2000U);
