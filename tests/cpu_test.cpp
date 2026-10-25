@@ -15641,6 +15641,51 @@ void fs_add_client_hle_tests()
            fatal_status);
 }
 
+void fs_get_volume_state_hle_tests()
+{
+    constexpr std::uint32_t client = 0x2003U;
+    constexpr std::uint32_t aligned_body = 0x2040U;
+    constexpr std::uint32_t volume_state_address = aligned_body + 0x144CU;
+    constexpr std::uint32_t return_address = 0x02742248U;
+
+    EspressoCore core(0x10000U);
+    register_coreinit_hle(core.hle);
+    core.fs_initialized = true;
+    core.memory.fill_bytes(client, 0x1700U, 0xA5U);
+    const std::uint32_t add_client_import =
+        core.hle.bind_import("coreinit", "FSAddClient");
+    core.state.cia = add_client_import;
+    core.state.lr = return_address;
+    core.state.gpr[3] = client;
+    core.state.gpr[4] = 0U;
+    assert(core.run(1U).reason == StopReason::instruction_limit);
+    assert(core.state.gpr[3] == 0U);
+    assert(core.memory.read32_be(volume_state_address) == 1U);
+
+    const std::uint32_t get_state_import =
+        core.hle.bind_import("coreinit", "FSGetVolumeState");
+    const auto invoke = [&](std::uint32_t target_client) {
+        core.state.cia = get_state_import;
+        core.state.lr = return_address;
+        core.state.gpr[3] = target_client;
+        return core.run(1U);
+    };
+    assert(invoke(client).reason == StopReason::instruction_limit);
+    assert(core.state.gpr[3] == 1U); // FS_VOLUME_STATE_READY
+    assert(core.state.cia == return_address && core.state.lr == return_address);
+
+    // The result is read from guest-visible FSClient state, not a host cache.
+    core.memory.write32_be(volume_state_address, 2U);
+    assert(invoke(client).reason == StopReason::instruction_limit);
+    assert(core.state.gpr[3] == 2U); // FS_VOLUME_STATE_NO_MEDIA
+
+    assert(invoke(0U).reason == StopReason::instruction_limit);
+    assert(core.state.gpr[3] == 11U); // FS_VOLUME_STATE_INVALID
+    assert(invoke(0x8000U).reason == StopReason::instruction_limit);
+    assert(core.state.gpr[3] == 11U);
+    assert(core.memory.read32_be(volume_state_address) == 2U);
+}
+
 void fs_set_state_change_notification_hle_tests()
 {
     constexpr std::uint32_t client_size = 0x1700U;
@@ -34623,6 +34668,7 @@ int main(int argc, char* argv[])
     fs_get_stat_hle_tests();
     fs_open_file_hle_tests();
     fs_add_client_hle_tests();
+    fs_get_volume_state_hle_tests();
     fs_set_state_change_notification_hle_tests();
     os_get_system_time_hle_tests();
     os_get_shutdown_reason_hle_tests();

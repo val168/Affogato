@@ -209,6 +209,7 @@ constexpr std::uint32_t fs_message_type_offset = 0x0CU;
 constexpr std::uint32_t fs_state_change_client_offset = 0x1CU;
 constexpr std::uint32_t fs_state_change_state_offset = 0x20U;
 constexpr std::uint32_t fs_state_change_message_type = 11U;
+constexpr std::uint32_t fs_volume_state_invalid = 11U;
 constexpr std::uint32_t fs_client_cmd_queue_offset = 0x1480U;
 constexpr std::uint32_t fs_client_last_dequeued_command_offset = 0x14C4U;
 constexpr std::uint32_t fs_client_emulated_error_offset = 0x14C8U;
@@ -3437,6 +3438,40 @@ void register_coreinit_hle(HleDispatcher& dispatcher)
             core.fs_clients.push_back({client, body, handle});
             core.next_fs_client_handle = handle + 1U;
             core.state.gpr[3] = 0U;
+        });
+    dispatcher.register_function(
+        "coreinit",
+        "FSGetVolumeState",
+        [](EspressoCore& core) {
+            const std::uint32_t client = core.state.gpr[3];
+            const auto registration = std::find_if(
+                core.fs_clients.begin(), core.fs_clients.end(),
+                [client](const FsClientRegistration& candidate) {
+                    return candidate.client_address == client;
+                });
+            if (client == 0U || registration == core.fs_clients.end())
+            {
+                core.state.gpr[3] = fs_volume_state_invalid;
+                return;
+            }
+
+            const std::uint64_t expected_body =
+                (static_cast<std::uint64_t>(client) +
+                 fs_client_body_alignment_mask) &
+                ~static_cast<std::uint64_t>(fs_client_body_alignment_mask);
+            constexpr std::uint64_t guest_address_space_end =
+                std::uint64_t{1} << 32U;
+            if (expected_body != registration->body_address ||
+                expected_body + fs_client_body_size > guest_address_space_end)
+            {
+                throw HleExecutionError(
+                    "FSGetVolumeState has inconsistent FSClient bookkeeping");
+            }
+
+            const std::uint32_t volume_state_address =
+                registration->body_address + fs_client_fsm_offset +
+                fs_client_fsm_volume_state_offset;
+            core.state.gpr[3] = core.memory.read32_be(volume_state_address);
         });
     dispatcher.register_function(
         "coreinit",
