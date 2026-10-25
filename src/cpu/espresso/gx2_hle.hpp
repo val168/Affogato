@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <chrono>
 #include <cstdint>
 #include <optional>
 #include <vector>
@@ -117,6 +118,11 @@ struct Gx2RuntimeState
     std::uint32_t hang_reset_swap_timeout{};
     std::uint32_t hang_reset_swaps_outstanding{};
     std::uint32_t swap_interval{};
+    // Headless single-lane virtual display cadence. This models the wait
+    // boundary only; it does not imply that a guest frame was rendered.
+    std::chrono::steady_clock::time_point next_vsync_deadline{};
+    bool vsync_deadline_initialized{};
+    std::uint64_t vsync_count{};
     std::uint32_t flip_request_count{};
     std::uint32_t flip_execute_count{};
     // GX2EventType values 2 (vsync), 3 (flip), and 4 (display-list overrun).

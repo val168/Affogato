@@ -13,6 +13,7 @@
 #include <limits>
 #include <span>
 #include <string>
+#include <thread>
 #include <utility>
 
 namespace affogato::cpu::espresso
@@ -136,6 +137,7 @@ constexpr std::uint32_t gx2_event_type_flip = 3U;
 constexpr std::uint32_t gx2_event_type_display_list_overrun = 4U;
 // The Wii U GFD/GX2 resource format identifies this platform as GPU version 2.
 constexpr std::uint32_t gx2_gpu_version = 2U;
+constexpr auto gx2_virtual_vsync_period = std::chrono::nanoseconds(16'666'667);
 constexpr std::uint32_t gx2_fetch_shader_instruction_size = 0x10U;
 constexpr std::uint32_t gx2_fetch_shader_struct_size = 0x20U;
 constexpr std::uint32_t gx2_attrib_stream_size = 0x20U;
@@ -3516,6 +3518,36 @@ void register_gx2_hle(HleDispatcher& dispatcher)
             // sentinel, matching Cemu's fallback instead of inventing a time.
             core.memory.write64_be(
                 timestamp_output, std::numeric_limits<std::uint64_t>::max());
+        });
+
+    dispatcher.register_function(
+        "gx2",
+        "GX2WaitForVsync",
+        [](EspressoCore& core) {
+            // The real GX2 call waits for its display-vsync scheduler queue.
+            // Affogato has no guest scanout/event thread yet, so pace a
+            // deterministic 60 Hz virtual display boundary on the host clock.
+            // This deliberately does not claim that a frame was rendered or
+            // invoke GX2 event callbacks; those require the renderer/event
+            // scheduler integration.
+            auto now = std::chrono::steady_clock::now();
+            if (!core.gx2.vsync_deadline_initialized)
+            {
+                core.gx2.next_vsync_deadline = now + gx2_virtual_vsync_period;
+                core.gx2.vsync_deadline_initialized = true;
+            }
+            else
+            {
+                while (core.gx2.next_vsync_deadline <= now)
+                {
+                    core.gx2.next_vsync_deadline += gx2_virtual_vsync_period;
+                }
+            }
+
+            std::this_thread::sleep_until(core.gx2.next_vsync_deadline);
+            ++core.gx2.vsync_count;
+            core.gx2.next_vsync_deadline += gx2_virtual_vsync_period;
+            // GX2WaitForVsync has a void ABI: preserve all PPC argument GPRs.
         });
 
     dispatcher.register_function(

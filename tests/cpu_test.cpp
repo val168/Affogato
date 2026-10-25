@@ -24071,6 +24071,44 @@ void gx2_set_gpu_fence_hle_tests()
     assert(core.gx2.pending_commands.size() == 1U);
 }
 
+void gx2_wait_for_vsync_hle_tests()
+{
+    constexpr std::uint32_t return_address = 0x02740300U;
+    EspressoCore core(0x1000U);
+    register_gx2_hle(core.hle);
+    core.state.gpr.fill(0xD6000000U);
+    core.state.gpr[3] = 0x12345678U;
+    core.state.lr = return_address;
+    core.state.cr = 0xA5A55A5AU;
+    core.state.xer = 0x87654321U;
+    core.state.ctr = 0xABCDEF01U;
+    core.state.fpscr = 0x5A5AA5A5U;
+    const auto gprs_before = core.state.gpr;
+    const auto fprs_before = core.state.fpr;
+    const auto ps1_before = core.state.fpr_ps1;
+    const auto gx2_before = core.gx2;
+    core.state.cia = core.hle.bind_import("gx2", "GX2WaitForVsync");
+
+    const auto wait_start = std::chrono::steady_clock::now();
+    const RunResult result = core.run(1U);
+    const auto elapsed = std::chrono::steady_clock::now() - wait_start;
+
+    assert(result.reason == StopReason::instruction_limit);
+    assert(result.steps == 1U);
+    assert(elapsed >= std::chrono::milliseconds(12));
+    assert(core.state.cia == return_address && core.state.lr == return_address);
+    assert(core.state.gpr == gprs_before); // void ABI preserves arguments
+    assert(core.state.fpr == fprs_before && core.state.fpr_ps1 == ps1_before);
+    assert(core.state.cr == 0xA5A55A5AU);
+    assert(core.state.xer == 0x87654321U);
+    assert(core.state.ctr == 0xABCDEF01U);
+    assert(core.state.fpscr == 0x5A5AA5A5U);
+    assert(core.gx2.vsync_deadline_initialized);
+    assert(core.gx2.vsync_count == 1U);
+    assert(core.gx2.pending_commands == gx2_before.pending_commands);
+    assert(core.gx2.event_callbacks == gx2_before.event_callbacks);
+}
+
 void gx2_calc_tv_size_hle_tests()
 {
     constexpr std::uint32_t tv_render_mode_wide_1080p = 5U;
@@ -35017,6 +35055,7 @@ int main(int argc, char* argv[])
     gx2_draw_done_hle_tests();
     gx2_gpu_time_to_cpu_time_hle_tests();
     gx2_set_gpu_fence_hle_tests();
+    gx2_wait_for_vsync_hle_tests();
     gx2_calc_surface_size_and_alignment_hle_tests();
     gx2r_create_surface_user_memory_hle_tests();
     gx2r_lock_surface_ex_hle_tests();
