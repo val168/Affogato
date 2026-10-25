@@ -3176,6 +3176,13 @@ void register_gx2_hle(HleDispatcher& dispatcher)
 
     dispatcher.register_function(
         "gx2",
+        "GX2GetSwapInterval",
+        [](EspressoCore& core) {
+            core.state.gpr[3] = core.gx2.swap_interval;
+        });
+
+    dispatcher.register_function(
+        "gx2",
         "GX2SetEventCallback",
         [](EspressoCore& core) {
             const std::uint32_t event_type = core.state.gpr[3];

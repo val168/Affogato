@@ -26209,6 +26209,74 @@ void gx2_set_swap_interval_hle_tests()
     assert(wrong_library_result.hle_call == "coreinit::GX2SetSwapInterval");
 }
 
+void gx2_get_swap_interval_hle_tests()
+{
+    constexpr std::uint32_t return_address = 0x0274C3BCU;
+    EspressoCore core(0x1000U);
+    register_gx2_hle(core.hle);
+    const std::uint32_t import =
+        core.hle.bind_import("gx2", "GX2GetSwapInterval");
+    assert(import != 0U);
+    const std::uint32_t wrong_library =
+        core.hle.bind_import("coreinit", "GX2GetSwapInterval");
+    assert(wrong_library != 0U && wrong_library != import);
+    assert(core.gx2.swap_interval == 0U);
+
+    const std::array<std::uint32_t, 6U> values{
+        0U, 1U, 2U, 0xFFFFFFFFU, 0x80000000U, 0U};
+    for (const std::uint32_t value : values)
+    {
+        core.gx2.swap_interval = value;
+        for (std::size_t index = 0U; index < core.state.gpr.size(); ++index)
+        {
+            core.state.gpr[index] = 0xA5000000U +
+                static_cast<std::uint32_t>(index) * 0x101U;
+        }
+        core.state.cr = 0x12345678U;
+        core.state.xer = 0x87654321U;
+        core.state.ctr = 0xABCDEF01U;
+        core.state.fpscr = 0x0FEDCBA9U;
+        core.state.cia = import;
+        core.state.lr = return_address;
+
+        const auto gprs_before = core.state.gpr;
+        const auto fprs_before = core.state.fpr;
+        const auto fprs_ps1_before = core.state.fpr_ps1;
+        const std::uint32_t cr_before = core.state.cr;
+        const std::uint32_t xer_before = core.state.xer;
+        const std::uint32_t ctr_before = core.state.ctr;
+        const std::uint32_t fpscr_before = core.state.fpscr;
+        std::vector<std::uint8_t> memory_before(core.memory.size());
+        core.memory.read_bytes(0U, memory_before);
+
+        const RunResult result = core.run(1U);
+        assert(result.reason == StopReason::instruction_limit);
+        assert(result.steps == 1U);
+        assert(core.state.gpr[3] == value);
+        for (std::size_t index = 0U; index < core.state.gpr.size(); ++index)
+        {
+            if (index != 3U)
+            {
+                assert(core.state.gpr[index] == gprs_before[index]);
+            }
+        }
+        assert(core.state.cr == cr_before && core.state.xer == xer_before &&
+               core.state.ctr == ctr_before && core.state.fpscr == fpscr_before);
+        assert(core.state.fpr == fprs_before &&
+               core.state.fpr_ps1 == fprs_ps1_before);
+        std::vector<std::uint8_t> memory_after(core.memory.size());
+        core.memory.read_bytes(0U, memory_after);
+        assert(memory_after == memory_before);
+        assert(core.state.cia == return_address && core.state.lr == return_address);
+    }
+
+    core.state.cia = wrong_library;
+    core.state.lr = return_address;
+    const RunResult wrong_library_result = core.run(1U);
+    assert(wrong_library_result.reason == StopReason::unimplemented_hle_call);
+    assert(wrong_library_result.hle_call == "coreinit::GX2GetSwapInterval");
+}
+
 void gx2_set_event_callback_hle_tests()
 {
     constexpr std::uint32_t return_address = 0x0274C3BCU;
@@ -34008,6 +34076,7 @@ int main(int argc, char* argv[])
     gx2_set_drc_buffer_hle_tests();
     gx2_set_drc_scale_hle_tests();
     gx2_set_swap_interval_hle_tests();
+    gx2_get_swap_interval_hle_tests();
     gx2_set_event_callback_hle_tests();
     gx2_get_event_callback_hle_tests();
     mem_get_total_free_size_for_exp_heap_hle_tests();
