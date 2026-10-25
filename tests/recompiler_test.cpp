@@ -1986,7 +1986,7 @@ void recompiler_adde_differential_test()
     }
 }
 
-void recompiler_addo_differential_test()
+void recompiler_addo_subfo_differential_test()
 {
     struct Case
     {
@@ -1995,28 +1995,38 @@ void recompiler_addo_differential_test()
         std::uint8_t ra;
         std::uint8_t rb;
         std::uint8_t destination;
+        bool subtract;
         bool record;
         std::uint32_t initial_xer;
         std::uint32_t initial_cr;
     };
     constexpr std::array cases{
-        Case{0x7FFFFFFFU, 1U, 4U, 5U, 3U, false, 0xA5A5A5A5U, 0x12345678U},
-        Case{0x80000000U, 0xFFFFFFFFU, 4U, 5U, 4U, true,
+        Case{0x7FFFFFFFU, 1U, 4U, 5U, 3U, false, false,
+            0xA5A5A5A5U, 0x12345678U},
+        Case{0x80000000U, 0xFFFFFFFFU, 4U, 5U, 4U, false, true,
             0x25A5A5A5U, 0x87654321U},
-        Case{5U, 7U, 4U, 5U, 5U, false, 0xE5A5A5A5U, 0xA5C36E91U},
-        Case{0x7FFFFFFFU, 1U, 6U, 7U, 7U, true,
+        Case{5U, 7U, 4U, 5U, 5U, false, false, 0xE5A5A5A5U, 0xA5C36E91U},
+        Case{0x7FFFFFFFU, 1U, 6U, 7U, 7U, false, true,
             0x65A5A5A5U, 0xA5C36E91U},
-        Case{0x80000000U, 0x80000000U, 8U, 8U, 8U, true,
+        Case{0x80000000U, 0x80000000U, 8U, 8U, 8U, false, true,
             0xA5A5A5A5U, 0xFFFFFFFFU},
+        Case{0x80000000U, 1U, 4U, 5U, 3U, true, true,
+            0xE5A5A5A5U, 0x12345678U},
+        Case{0x7FFFFFFFU, 0xFFFFFFFFU, 4U, 5U, 5U, true, false,
+            0x65A5A5A5U, 0x87654321U},
+        Case{0x80000000U, 0x7FFFFFFFU, 8U, 9U, 8U, true, true,
+            0x25A5A5A5U, 0xA5C36E91U},
     };
     static_assert(x_form(3U, 4U, 5U, 778U) == 0x7C642E14U);
+    static_assert(x_form(3U, 4U, 5U, 552U) == 0x7C642C50U);
 
     for (const Case& test : cases)
     {
         EspressoCore interpreted(0x1000U);
         EspressoCore compiled(0x1000U);
         const std::uint32_t instruction = x_form(
-            test.destination, test.ra, test.rb, 778U, test.record);
+            test.destination, test.ra, test.rb,
+            test.subtract ? 552U : 778U, test.record);
         for (EspressoCore* core : {&interpreted, &compiled})
         {
             core->memory.write32_be(0x100U, instruction);
@@ -2034,9 +2044,11 @@ void recompiler_addo_differential_test()
         const RunResult oracle = interpreted.run(1U);
         Recompiler recompiler;
         const RunResult actual = recompiler.run(compiled, 1U);
-        const std::uint32_t result = test.a + test.b;
-        const bool overflow = ((~(test.a ^ test.b) & (test.a ^ result)) &
-            0x80000000U) != 0U;
+        const std::uint32_t result = test.subtract
+            ? test.b - test.a : test.a + test.b;
+        const bool overflow = test.subtract
+            ? (((test.b ^ test.a) & (test.b ^ result)) & 0x80000000U) != 0U
+            : ((~(test.a ^ test.b) & (test.a ^ result)) & 0x80000000U) != 0U;
         const bool summary_overflow =
             ((test.initial_xer & 0x80000000U) != 0U) || overflow;
 
@@ -2063,7 +2075,9 @@ void recompiler_addo_differential_test()
         assert(actual.instruction_history.size() == 1U);
         const InstructionHistoryEntry& history = actual.instruction_history.back();
         assert(history.completed && history.opcode_name ==
-            (test.record ? "addo." : "addo"));
+            (test.subtract
+                ? (test.record ? "subfo." : "subfo")
+                : (test.record ? "addo." : "addo")));
         assert(history.source_count == (test.ra == test.rb ? 1U : 2U));
         assert(history.source_registers[0] == test.ra);
         assert(history.source_values[0] == test.a);
@@ -10492,7 +10506,7 @@ int main()
     recompiler_subfc_differential_test();
     recompiler_subfe_differential_test();
     recompiler_adde_differential_test();
-    recompiler_addo_differential_test();
+    recompiler_addo_subfo_differential_test();
     recompiler_addme_differential_test();
     recompiler_subfme_differential_test();
     recompiler_sraw_differential_test();

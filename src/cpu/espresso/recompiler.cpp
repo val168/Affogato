@@ -304,6 +304,8 @@ struct NativeAddOverflowRecord
     std::uint32_t summary_overflow{};
 };
 
+using NativeSubfOverflowRecord = NativeAddOverflowRecord;
+
 struct NativeFselRecord
 {
     std::uint64_t source_a_raw{};
@@ -422,6 +424,7 @@ struct NativeExecutionContext
     std::array<NativeDivwRecord, 64> divw_records{};
     std::array<NativeSubfRecord, 64> subf_records{};
     std::array<NativeAddOverflowRecord, 64> add_overflow_records{};
+    std::array<NativeSubfOverflowRecord, 64> subf_overflow_records{};
     std::array<NativeFselRecord, 64> fsel_records{};
     std::array<NativeMulhwuRecord, 64> mulhwu_records{};
     std::array<NativeAddcRecord, 64> addc_records{};
@@ -4656,6 +4659,10 @@ struct BlockCode
     {
         return true;
     }
+    if (insn.opcode == Opcode::subtract_from_overflow)
+    {
+        return true;
+    }
     if (insn.opcode == Opcode::negate && insn.record)
     {
         return true;
@@ -4963,6 +4970,7 @@ struct BlockCode
     case Opcode::add: return "add";
     case Opcode::add_overflow: return "addo";
     case Opcode::subtract_from: return "subf";
+    case Opcode::subtract_from_overflow: return "subfo";
     case Opcode::subtract_from_carrying: return "subfc";
     case Opcode::add_carrying: return "addc";
     case Opcode::add_extended: return "adde";
@@ -6234,9 +6242,12 @@ struct Recompiler::Impl
                 break;
             }
             case Opcode::add_overflow:
+            case Opcode::subtract_from_overflow:
             {
-                const std::size_t record_offset =
-                    offsetof(NativeExecutionContext, add_overflow_records) +
+                const bool subtract = insn.opcode == Opcode::subtract_from_overflow;
+                const std::size_t record_offset = (subtract
+                    ? offsetof(NativeExecutionContext, subf_overflow_records)
+                    : offsetof(NativeExecutionContext, add_overflow_records)) +
                     index * sizeof(NativeAddOverflowRecord);
                 x86::Gp operand_a = read_guest_gpr(insn.base);
                 x86::Gp operand_b = read_guest_gpr(insn.source);
@@ -6246,8 +6257,15 @@ struct Recompiler::Impl
                     record_offset + offsetof(NativeAddOverflowRecord, operand_b))), operand_b);
 
                 x86::Gp result = compiler.new_gp32("addo_result");
-                compiler.mov(result, operand_a);
-                compiler.add(result, operand_b);
+                compiler.mov(result, subtract ? operand_b : operand_a);
+                if (subtract)
+                {
+                    compiler.sub(result, operand_a);
+                }
+                else
+                {
+                    compiler.add(result, operand_b);
+                }
                 x86::Gp overflow = compiler.new_gp32("addo_overflow");
                 compiler.mov(overflow, imm(0U));
                 compiler.seto(overflow.r8());
@@ -10999,10 +11017,14 @@ RunResult Recompiler::run(EspressoCore& core, std::size_t max_steps)
                 core.append_instruction_history(std::move(entry));
                 continue;
             }
-            if (insn.opcode == Opcode::add_overflow)
+            if (insn.opcode == Opcode::add_overflow ||
+                insn.opcode == Opcode::subtract_from_overflow)
             {
                 InstructionHistoryEntry entry = native_history(insn, cia);
-                const NativeAddOverflowRecord& record = context.add_overflow_records[i];
+                const NativeAddOverflowRecord& record =
+                    insn.opcode == Opcode::add_overflow
+                        ? context.add_overflow_records[i]
+                        : context.subf_overflow_records[i];
                 entry.source_registers[0] = insn.base;
                 entry.source_values[0] = record.operand_a;
                 entry.source_count = 1U;
