@@ -3354,6 +3354,31 @@ void register_gx2_hle(HleDispatcher& dispatcher)
 
     dispatcher.register_function(
         "gx2",
+        "GX2SetTargetChannelMasksReg",
+        [](EspressoCore& core) {
+            if (!core.gx2.initialized)
+            {
+                throw HleExecutionError(
+                    "gx2::GX2SetTargetChannelMasksReg: GX2 has not been initialized");
+            }
+
+            // The guest structure contains the packed CB_TARGET_MASK word.
+            // Read it before changing host-side GX2 state so a bad pointer
+            // cannot leave a partial register update.
+            const std::uint32_t mask =
+                core.memory.read32_be(core.state.gpr[3]);
+            auto& commands = core.gx2.pending_commands;
+            commands.reserve(commands.size() + 1U);
+            core.gx2.cb_target_mask = mask;
+            core.gx2.cb_target_mask_valid = true;
+            commands.push_back({
+                Gx2CommandType::set_context_register,
+                cb_target_mask_register,
+                mask});
+        });
+
+    dispatcher.register_function(
+        "gx2",
         "GX2SetAAMask",
         [](EspressoCore& core) {
             if (!core.gx2.initialized)
