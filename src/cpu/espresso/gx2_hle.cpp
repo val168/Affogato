@@ -2744,6 +2744,34 @@ void register_gx2_hle(HleDispatcher& dispatcher)
 
     dispatcher.register_function(
         "gx2",
+        "GX2SetDepthOnlyControl",
+        [](EspressoCore& core) {
+            if (!core.gx2.initialized)
+            {
+                throw HleExecutionError(
+                    "gx2::GX2SetDepthOnlyControl: GX2 has not been initialized");
+            }
+
+            const auto boolean_bit = [](std::uint32_t value) {
+                return value != 0U ? 1U : 0U;
+            };
+            const std::uint32_t packed =
+                (boolean_bit(core.state.gpr[3]) << 1U) |
+                (boolean_bit(core.state.gpr[4]) << 2U) |
+                ((core.state.gpr[5] & 0x7U) << 4U);
+
+            core.gx2.db_depth_control = packed;
+            core.gx2.db_depth_control_valid = true;
+            core.gx2.pending_commands.push_back({
+                Gx2CommandType::set_context_register,
+                db_depth_control_register,
+                packed});
+            // This convenience API disables stencil fields and, like the
+            // full depth/stencil setter, changes only Latte state.
+        });
+
+    dispatcher.register_function(
+        "gx2",
         "GX2SetDepthStencilControl",
         [](EspressoCore& core) {
             if (!core.gx2.initialized)
