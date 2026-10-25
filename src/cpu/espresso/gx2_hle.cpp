@@ -51,6 +51,8 @@ constexpr std::uint32_t sx_alpha_test_control_register = 0x00028410U;
 constexpr std::uint32_t sx_alpha_ref_register = 0x00028438U;
 constexpr std::uint32_t cb_target_mask_register = 0x00028238U;
 constexpr std::uint32_t db_alpha_to_mask_register = 0x00028D44U;
+constexpr std::uint32_t pa_sc_generic_scissor_tl_register = 0x00028240U;
+constexpr std::uint32_t pa_sc_generic_scissor_br_register = 0x00028244U;
 constexpr std::uint32_t gx2_context_state_size = 0xA100U;
 constexpr std::uint32_t gx2_context_shadow_state_size = 0x9800U;
 constexpr std::uint32_t gx2_context_profiling_offset = 0x9800U;
@@ -3064,6 +3066,44 @@ void register_gx2_hle(HleDispatcher& dispatcher)
                 packed});
             // Void setter: r3-r10 are the eight mask arguments. No stack,
             // FPR, or guest-memory state participates in this register write.
+        });
+
+    dispatcher.register_function(
+        "gx2",
+        "GX2SetScissor",
+        [](EspressoCore& core) {
+            if (!core.gx2.initialized)
+            {
+                throw HleExecutionError(
+                    "gx2::GX2SetScissor: GX2 has not been initialized");
+            }
+
+            const std::uint32_t x = core.state.gpr[3];
+            const std::uint32_t y = core.state.gpr[4];
+            const std::uint32_t width = core.state.gpr[5];
+            const std::uint32_t height = core.state.gpr[6];
+
+            // The Latte generic scissor uses an inclusive top-left and an
+            // exclusive bottom-right. Setting WINDOW_OFFSET_DISABLE keeps
+            // the API's x/y coordinates literal, independent of other state.
+            constexpr std::uint32_t coordinate_mask = 0x7FFFU;
+            const std::uint32_t top_left =
+                0x80000000U |
+                (x & coordinate_mask) |
+                ((y & coordinate_mask) << 16U);
+            const std::uint32_t bottom_right =
+                ((x + width) & coordinate_mask) |
+                (((y + height) & coordinate_mask) << 16U);
+
+            core.gx2.pending_commands.push_back({
+                Gx2CommandType::set_context_register,
+                pa_sc_generic_scissor_tl_register,
+                top_left});
+            core.gx2.pending_commands.push_back({
+                Gx2CommandType::set_context_register,
+                pa_sc_generic_scissor_br_register,
+                bottom_right});
+            // Void GX2 setter: only the ordered Latte register stream changes.
         });
 
     dispatcher.register_function(
