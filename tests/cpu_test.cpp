@@ -23742,6 +23742,87 @@ void gx2_set_depth_stencil_control_reg_hle_tests()
     assert(uninitialized.gx2.pending_commands.empty());
 }
 
+void gx2_init_depth_stencil_control_reg_hle_tests()
+{
+    constexpr std::uint32_t return_address = 0x02750A74U;
+    constexpr std::uint32_t output_address = 0x503U;
+    constexpr std::uint32_t stack_pointer = 0x3000U;
+    constexpr std::uint32_t expected_control = 0x6A1D7AB3U;
+
+    EspressoCore core(0x10000U);
+    register_gx2_hle(core.hle);
+    const std::uint32_t import = core.hle.bind_import(
+        "gx2", "GX2InitDepthStencilControlReg");
+    const std::uint32_t wrong_library = core.hle.bind_import(
+        "coreinit", "GX2InitDepthStencilControlReg");
+    assert(import != 0U && wrong_library != 0U);
+    core.memory.write32_be(output_address, 0xDEADBEEFU);
+    const std::array<std::uint32_t, 6U> stack_arguments{
+        0x6U, 0x7U, 0x9U, 0xAU, 0xBU, 0xCU};
+    for (std::size_t index = 0U; index < stack_arguments.size(); ++index)
+    {
+        core.memory.write32_be(
+            stack_pointer + 8U + static_cast<std::uint32_t>(index * 4U),
+            stack_arguments[index]);
+    }
+    core.state.gpr.fill(0xB1000000U);
+    core.state.gpr[1] = stack_pointer;
+    core.state.gpr[3] = output_address;
+    const std::array<std::uint32_t, 7U> register_arguments{
+        2U, 0U, 0xBU, 5U, 2U, 0xAU, 0xDU};
+    for (std::size_t index = 0U; index < register_arguments.size(); ++index)
+    {
+        core.state.gpr[index + 4U] = register_arguments[index];
+    }
+    core.state.cr = 0x12345678U;
+    core.state.xer = 0xA5A55A5AU;
+    core.state.ctr = 0x87654321U;
+    core.state.fpscr = 0x5A5AA55AU;
+    const auto gprs_before = core.state.gpr;
+    const auto fprs_before = core.state.fpr;
+    const auto ps1_before = core.state.fpr_ps1;
+
+    const auto invoke = [&](std::uint32_t function) {
+        core.state.cia = function;
+        core.state.lr = return_address;
+        return core.run(1U);
+    };
+    const RunResult result = invoke(import);
+    assert(result.reason == StopReason::instruction_limit);
+    assert(result.steps == 1U && core.state.cia == return_address);
+    assert(core.memory.read32_be(output_address) == expected_control);
+    assert(core.state.gpr == gprs_before);
+    assert(core.state.fpr == fprs_before && core.state.fpr_ps1 == ps1_before);
+    assert(core.state.cr == 0x12345678U);
+    assert(core.state.xer == 0xA5A55A5AU);
+    assert(core.state.ctr == 0x87654321U);
+    assert(core.state.fpscr == 0x5A5AA55AU);
+    assert(!core.gx2.initialized);
+    assert(core.gx2.pending_commands.empty());
+
+    core.memory.write32_be(output_address, 0xCAFEBABEU);
+    core.state.gpr[1] = 0xFFFFFFF0U;
+    const RunResult stack_wrap = invoke(import);
+    assert(stack_wrap.reason == StopReason::hle_error);
+    assert(stack_wrap.detail.find("stack arguments wrap") != std::string::npos);
+    assert(core.memory.read32_be(output_address) == 0xCAFEBABEU);
+
+    core.state.gpr[1] = 0xFFE4U;
+    const RunResult stack_fault = invoke(import);
+    assert(stack_fault.reason == StopReason::memory_fault);
+    assert(core.memory.read32_be(output_address) == 0xCAFEBABEU);
+
+    core.state.gpr[1] = stack_pointer;
+    core.state.gpr[3] = 0xFFFFFFFCU;
+    const RunResult output_fault = invoke(import);
+    assert(output_fault.reason == StopReason::memory_fault);
+
+    const RunResult wrong_library_result = invoke(wrong_library);
+    assert(wrong_library_result.reason == StopReason::unimplemented_hle_call);
+    assert(wrong_library_result.hle_call ==
+           "coreinit::GX2InitDepthStencilControlReg");
+}
+
 void gx2_set_stencil_mask_hle_tests()
 {
     constexpr std::uint32_t return_address = 0x027507D8U;
@@ -40188,6 +40269,7 @@ int main(int argc, char* argv[])
     gx2_set_depth_buffer_hle_tests();
     gx2_set_depth_stencil_control_hle_tests();
     gx2_set_depth_stencil_control_reg_hle_tests();
+    gx2_init_depth_stencil_control_reg_hle_tests();
     gx2_set_stencil_mask_hle_tests();
     gx2_set_stencil_mask_reg_hle_tests();
     gx2_init_stencil_mask_reg_hle_tests();

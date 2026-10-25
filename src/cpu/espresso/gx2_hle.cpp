@@ -2923,6 +2923,61 @@ void register_gx2_hle(HleDispatcher& dispatcher)
 
     dispatcher.register_function(
         "gx2",
+        "GX2InitDepthStencilControlReg",
+        [](EspressoCore& core) {
+            constexpr const char* api_name = "gx2::GX2InitDepthStencilControlReg";
+            constexpr std::uint32_t stack_argument_last_offset = 0x1CU;
+            const std::uint32_t output = core.state.gpr[3];
+            core.memory.validate_write_range(output, sizeof(std::uint32_t));
+
+            const std::uint64_t stack_pointer = core.state.gpr[1];
+            if (stack_pointer + stack_argument_last_offset + sizeof(std::uint32_t) >
+                guest_address_space_end)
+            {
+                throw HleExecutionError(
+                    std::string(api_name) + ": stack arguments wrap guest address space");
+            }
+
+            const std::array<std::uint32_t, 7U> register_arguments{
+                core.state.gpr[4],
+                core.state.gpr[5],
+                core.state.gpr[6],
+                core.state.gpr[7],
+                core.state.gpr[8],
+                core.state.gpr[9],
+                core.state.gpr[10],
+            };
+            std::array<std::uint32_t, 6U> stack_arguments{};
+            for (std::size_t index = 0U; index < stack_arguments.size(); ++index)
+            {
+                const std::uint32_t offset = 0x08U +
+                    static_cast<std::uint32_t>(index * sizeof(std::uint32_t));
+                stack_arguments[index] = core.memory.read32_be(
+                    static_cast<std::uint32_t>(stack_pointer + offset));
+            }
+
+            const auto boolean_bit = [](std::uint32_t value) {
+                return value != 0U ? 1U : 0U;
+            };
+            const std::uint32_t packed =
+                boolean_bit(register_arguments[3]) |
+                (boolean_bit(register_arguments[0]) << 1U) |
+                (boolean_bit(register_arguments[1]) << 2U) |
+                ((register_arguments[2] & 0x7U) << 4U) |
+                (boolean_bit(register_arguments[4]) << 7U) |
+                ((register_arguments[5] & 0x7U) << 8U) |
+                ((stack_arguments[1] & 0x7U) << 11U) |
+                ((register_arguments[6] & 0x7U) << 14U) |
+                ((stack_arguments[0] & 0x7U) << 17U) |
+                ((stack_arguments[2] & 0x7U) << 20U) |
+                ((stack_arguments[5] & 0x7U) << 23U) |
+                ((stack_arguments[3] & 0x7U) << 26U) |
+                ((stack_arguments[4] & 0x7U) << 29U);
+            core.memory.write32_be(output, packed);
+        });
+
+    dispatcher.register_function(
+        "gx2",
         "GX2SetDepthStencilControlReg",
         [](EspressoCore& core) {
             if (!core.gx2.initialized)
