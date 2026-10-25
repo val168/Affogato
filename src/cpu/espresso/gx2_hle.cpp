@@ -55,6 +55,7 @@ constexpr std::uint32_t pa_sc_generic_scissor_tl_register = 0x00028240U;
 constexpr std::uint32_t pa_sc_generic_scissor_br_register = 0x00028244U;
 constexpr std::uint32_t pa_sc_window_offset_register = 0x00028200U;
 constexpr std::uint32_t pa_su_point_size_register = 0x00028A00U;
+constexpr std::uint32_t pa_su_point_minmax_register = 0x00028A04U;
 constexpr std::uint32_t pa_su_poly_offset_front_scale_register = 0x00028B80U;
 constexpr std::uint32_t pa_su_poly_offset_front_offset_register = 0x00028B84U;
 constexpr std::uint32_t pa_su_poly_offset_back_scale_register = 0x00028B88U;
@@ -697,13 +698,13 @@ std::uint32_t fpr_float_argument_bits(
     return std::bit_cast<std::uint32_t>(single_value);
 }
 
-std::uint16_t pack_gx2_point_size_dimension(float dimension)
+std::uint16_t pack_gx2_fixed_12_4(float value, float scale)
 {
-    // PA_SU_POINT_SIZE stores a half-dimension radius in unsigned 12.4
-    // pixels. The API accepts the full dimension, so radius * 16 is dimension
-    // * 8. GX2's fixed-point conversion truncates toward zero; retain the
-    // register's low 16 bits after the signed conversion.
-    const float fixed_value = dimension * 8.0F;
+    // Point-size arguments are full dimensions, so the half-dimension radius
+    // is dimension * 8 in 12.4. Point limits are already radii and use *16.
+    // GX2's fixed-point conversion truncates toward zero and writes the low
+    // 16 bits after the signed conversion.
+    const float fixed_value = value * scale;
     std::int32_t fixed_integer{};
     if (std::isnan(fixed_value) || fixed_value < -2147483648.0F)
     {
@@ -3256,10 +3257,10 @@ void register_gx2_hle(HleDispatcher& dispatcher)
                 fpr_float_argument_bits(core, 2U));
             const std::uint32_t packed =
                 (static_cast<std::uint32_t>(
-                     pack_gx2_point_size_dimension(width))
+                     pack_gx2_fixed_12_4(width, 8.0F))
                  << 16U) |
                 static_cast<std::uint32_t>(
-                    pack_gx2_point_size_dimension(height));
+                    pack_gx2_fixed_12_4(height, 8.0F));
 
             core.gx2.pending_commands.push_back({
                 Gx2CommandType::set_context_register,
@@ -3267,6 +3268,33 @@ void register_gx2_hle(HleDispatcher& dispatcher)
                 packed});
             // Width and height are full point dimensions; Latte's register
             // carries the corresponding half-width/half-height radii.
+        });
+
+    dispatcher.register_function(
+        "gx2",
+        "GX2SetPointLimits",
+        [](EspressoCore& core) {
+            if (!core.gx2.initialized)
+            {
+                throw HleExecutionError(
+                    "gx2::GX2SetPointLimits: GX2 has not been initialized");
+            }
+
+            const float minimum = std::bit_cast<float>(
+                fpr_float_argument_bits(core, 1U));
+            const float maximum = std::bit_cast<float>(
+                fpr_float_argument_bits(core, 2U));
+            const std::uint32_t packed =
+                static_cast<std::uint32_t>(pack_gx2_fixed_12_4(
+                    maximum, 16.0F)) << 16U |
+                static_cast<std::uint32_t>(pack_gx2_fixed_12_4(
+                    minimum, 16.0F));
+
+            core.gx2.pending_commands.push_back({
+                Gx2CommandType::set_context_register,
+                pa_su_point_minmax_register,
+                packed});
+            // The min/max parameters are the radius limits stored by Latte.
         });
 
     dispatcher.register_function(

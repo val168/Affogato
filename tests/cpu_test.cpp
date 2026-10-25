@@ -21216,6 +21216,61 @@ void gx2_set_point_size_hle_tests()
     assert(uninitialized.gx2.pending_commands.empty());
 }
 
+void gx2_set_point_limits_hle_tests()
+{
+    constexpr std::uint32_t return_address = 0x027505E4U;
+    EspressoCore core(0x10000U);
+    register_gx2_hle(core.hle);
+    core.gx2.initialized = true;
+    const std::uint32_t import =
+        core.hle.bind_import("gx2", "GX2SetPointLimits");
+    const std::uint32_t wrong_library =
+        core.hle.bind_import("coreinit", "GX2SetPointLimits");
+    assert(import != 0U && wrong_library != 0U);
+
+    core.state.gpr.fill(0xA5000000U);
+    core.state.fpr[1] = std::bit_cast<std::uint64_t>(1.5);
+    core.state.fpr[2] = std::bit_cast<std::uint64_t>(511.75);
+    core.state.cr = 0x12345678U;
+    core.state.xer = 0xA5A55A5AU;
+    core.state.ctr = 0x87654321U;
+    core.state.fpscr = 0x5A5AA55AU;
+    const auto gprs_before = core.state.gpr;
+    const auto fprs_before = core.state.fpr;
+    const auto ps1_before = core.state.fpr_ps1;
+    const std::uint32_t cr_before = core.state.cr;
+    const std::uint32_t xer_before = core.state.xer;
+    const std::uint32_t ctr_before = core.state.ctr;
+    const std::uint32_t fpscr_before = core.state.fpscr;
+
+    const auto invoke = [&](std::uint32_t address) {
+        core.state.cia = address;
+        core.state.lr = return_address;
+        return core.run(1U);
+    };
+    const RunResult result = invoke(import);
+    assert(result.reason == StopReason::instruction_limit);
+    assert(result.steps == 1U && core.state.cia == return_address);
+    assert(core.gx2.pending_commands.size() == 1U);
+    assert((core.gx2.pending_commands.front() == Gx2Command{
+        Gx2CommandType::set_context_register,
+        0x00028A04U,
+        0x1FFC0018U}));
+    assert(core.state.gpr == gprs_before);
+    assert(core.state.fpr == fprs_before && core.state.fpr_ps1 == ps1_before);
+    assert(core.state.cr == cr_before && core.state.xer == xer_before);
+    assert(core.state.ctr == ctr_before && core.state.fpscr == fpscr_before);
+    assert(invoke(wrong_library).hle_call == "coreinit::GX2SetPointLimits");
+
+    EspressoCore uninitialized(0x10000U);
+    register_gx2_hle(uninitialized.hle);
+    const std::uint32_t uninitialized_import =
+        uninitialized.hle.bind_import("gx2", "GX2SetPointLimits");
+    uninitialized.state.cia = uninitialized_import;
+    assert(uninitialized.run(1U).reason == StopReason::hle_error);
+    assert(uninitialized.gx2.pending_commands.empty());
+}
+
 void gx2_set_window_offset_hle_tests()
 {
     constexpr std::uint32_t return_address = 0x027505F0U;
@@ -36565,6 +36620,7 @@ int main(int argc, char* argv[])
     gx2_set_depth_only_control_hle_tests();
     gx2_set_polygon_offset_hle_tests();
     gx2_set_point_size_hle_tests();
+    gx2_set_point_limits_hle_tests();
     gx2_set_window_offset_hle_tests();
     gx2_set_scissor_hle_tests();
     gx2_set_viewport_hle_tests();
