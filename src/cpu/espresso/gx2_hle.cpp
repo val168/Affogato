@@ -1026,6 +1026,31 @@ std::uint32_t gx2r_lock_buffer(EspressoCore& core, std::uint32_t buffer_address)
     return core.memory.read32_be(buffer_address + 0x0CU);
 }
 
+void notify_gx2r_buffer_coherent(
+    EspressoCore& core,
+    std::uint32_t buffer_address,
+    const char* api_name)
+{
+    constexpr std::uint32_t gx2r_buffer_size = 0x10U;
+    if (buffer_address == 0U || (buffer_address & 3U) != 0U ||
+        buffer_address > std::numeric_limits<std::uint32_t>::max() -
+                             gx2r_buffer_size)
+    {
+        throw HleExecutionError(std::string(api_name) +
+                                ": buffer pointer is null, misaligned, or wraps");
+    }
+
+    const std::uint32_t element_size = core.memory.read32_be(buffer_address + 4U);
+    const std::uint32_t element_count = core.memory.read32_be(buffer_address + 8U);
+    const std::uint32_t data_address = core.memory.read32_be(buffer_address + 0x0CU);
+    const std::uint32_t byte_size = element_size * element_count;
+    // The reference reports this range to the GPU buffer cache. GuestMemory
+    // is already coherent with GPU consumers in the current model, so there
+    // is no separate cache state to flush or invalidate.
+    static_cast<void>(data_address);
+    static_cast<void>(byte_size);
+}
+
 std::uint32_t gx2_texture_endian_swap(std::uint32_t format)
 {
     switch (format & 0x3FU)
@@ -2316,6 +2341,22 @@ void register_gx2_hle(HleDispatcher& dispatcher)
         "GX2RLockBufferEx",
         [](EspressoCore& core) {
             core.state.gpr[3] = gx2r_lock_buffer(core, core.state.gpr[3]);
+        });
+
+    dispatcher.register_function(
+        "gx2",
+        "GX2RUnlockBufferEx",
+        [](EspressoCore& core) {
+            notify_gx2r_buffer_coherent(
+                core, core.state.gpr[3], "gx2::GX2RUnlockBufferEx");
+        });
+
+    dispatcher.register_function(
+        "gx2",
+        "GX2RInvalidateBuffer",
+        [](EspressoCore& core) {
+            notify_gx2r_buffer_coherent(
+                core, core.state.gpr[3], "gx2::GX2RInvalidateBuffer");
         });
 
     dispatcher.register_function(
