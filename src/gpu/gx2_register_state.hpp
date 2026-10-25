@@ -67,6 +67,7 @@ public:
                 draw_program_shaders_.push_back(program_shaders_);
                 draw_shader_resources_.push_back(snapshot_shader_resources());
                 draw_color_buffers_.push_back(color_buffers_);
+                draw_depth_buffer_.push_back(depth_buffer_);
                 continue;
             }
             if (command.type == cpu::espresso::Gx2CommandType::set_vertex_buffer)
@@ -110,6 +111,21 @@ public:
                     {
                         color_buffers_[command.color_buffer->target] =
                             command.color_buffer;
+                    }
+                }
+                continue;
+            }
+            if (command.type == cpu::espresso::Gx2CommandType::set_depth_buffer)
+            {
+                if (command.depth_buffer)
+                {
+                    if (command.depth_buffer->guest_address == 0U)
+                    {
+                        depth_buffer_.reset();
+                    }
+                    else
+                    {
+                        depth_buffer_ = command.depth_buffer;
                     }
                 }
                 continue;
@@ -310,6 +326,20 @@ public:
         return draw_color_buffers_;
     }
 
+    [[nodiscard]] const std::optional<
+        cpu::espresso::Gx2DepthBufferBinding>&
+    depth_buffer() const noexcept
+    {
+        return depth_buffer_;
+    }
+
+    [[nodiscard]] std::span<const std::optional<
+        cpu::espresso::Gx2DepthBufferBinding>>
+    draw_depth_buffers() const noexcept
+    {
+        return draw_depth_buffer_;
+    }
+
 private:
     [[nodiscard]] Gx2DrawShaderResources snapshot_shader_resources() const
     {
@@ -360,6 +390,9 @@ private:
     std::vector<std::array<std::optional<
         cpu::espresso::Gx2ColorBufferBinding>, 8U>>
         draw_color_buffers_;
+    std::optional<cpu::espresso::Gx2DepthBufferBinding> depth_buffer_;
+    std::vector<std::optional<cpu::espresso::Gx2DepthBufferBinding>>
+        draw_depth_buffer_;
 };
 
 }

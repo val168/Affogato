@@ -24,6 +24,7 @@ enum class Gx2CommandType
     set_fetch_shader,
     set_program_shader,
     set_color_buffer,
+    set_depth_buffer,
     draw,
 };
 
@@ -127,6 +128,46 @@ struct Gx2ColorBufferBinding
     bool operator==(const Gx2ColorBufferBinding&) const = default;
 };
 
+struct Gx2DepthBufferState
+{
+    std::uint32_t guest_address{};
+    std::uint32_t dimension{};
+    std::uint32_t width{};
+    std::uint32_t height{};
+    std::uint32_t depth{};
+    std::uint32_t mip_levels{};
+    std::uint32_t format{};
+    std::uint32_t aa_mode{};
+    std::uint32_t use{};
+    std::uint32_t image_size{};
+    std::uint32_t image_address{};
+    std::uint32_t mipmap_size{};
+    std::uint32_t mipmap_address{};
+    std::uint32_t tile_mode{};
+    std::uint32_t swizzle{};
+    std::uint32_t alignment{};
+    std::uint32_t pitch{};
+    std::array<std::uint32_t, 13U> mip_level_offsets{};
+    std::uint32_t view_mip{};
+    std::uint32_t view_first_slice{};
+    std::uint32_t view_num_slices{};
+    std::uint32_t hi_z_address{};
+    std::uint32_t hi_z_size{};
+    std::uint32_t depth_clear_bits{};
+    std::uint32_t stencil_clear{};
+    std::array<std::uint32_t, 7U> registers{};
+
+    bool operator==(const Gx2DepthBufferState&) const = default;
+};
+
+struct Gx2DepthBufferBinding
+{
+    std::uint32_t guest_address{};
+    std::optional<Gx2DepthBufferState> descriptor;
+
+    bool operator==(const Gx2DepthBufferBinding&) const = default;
+};
+
 struct Gx2Command
 {
     Gx2CommandType type{};
@@ -140,6 +181,7 @@ struct Gx2Command
     std::optional<Gx2FetchShaderBinding> fetch_shader;
     std::optional<Gx2ProgramShaderBinding> program_shader;
     std::optional<Gx2ColorBufferBinding> color_buffer;
+    std::optional<Gx2DepthBufferBinding> depth_buffer;
 
     constexpr Gx2Command() = default;
     constexpr Gx2Command(
@@ -153,7 +195,8 @@ struct Gx2Command
         std::optional<Gx2VertexBufferBinding> command_vertex_buffer = std::nullopt,
         std::optional<Gx2FetchShaderBinding> command_fetch_shader = std::nullopt,
         std::optional<Gx2ProgramShaderBinding> command_program_shader = std::nullopt,
-        std::optional<Gx2ColorBufferBinding> command_color_buffer = std::nullopt)
+        std::optional<Gx2ColorBufferBinding> command_color_buffer = std::nullopt,
+        std::optional<Gx2DepthBufferBinding> command_depth_buffer = std::nullopt)
         : type(command_type),
           register_address(command_register_address),
           value(command_value),
@@ -164,7 +207,8 @@ struct Gx2Command
           vertex_buffer(command_vertex_buffer),
           fetch_shader(command_fetch_shader),
           program_shader(command_program_shader),
-          color_buffer(command_color_buffer)
+          color_buffer(command_color_buffer),
+          depth_buffer(command_depth_buffer)
     {
     }
 
@@ -281,6 +325,8 @@ struct Gx2RuntimeState
     std::array<std::uint32_t, 4U> cb_blend_constant{};
     std::array<std::optional<Gx2ColorBufferState>, 8U> color_buffer_descriptors{};
     std::array<std::uint32_t, 8U> bound_color_buffers{};
+    std::optional<Gx2DepthBufferState> depth_buffer_descriptor;
+    std::uint32_t bound_depth_buffer{};
     std::array<std::optional<Gx2TextureBinding>, 16U> pixel_textures{};
     std::array<std::optional<Gx2TextureBinding>, 16U> vertex_textures{};
     std::array<std::optional<Gx2TextureBinding>, 16U> geometry_textures{};

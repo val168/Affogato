@@ -21164,6 +21164,86 @@ void gx2_set_color_buffer_hle_tests()
     assert(core.gx2.bound_color_buffers[7] == second_descriptor);
 }
 
+void gx2_set_depth_buffer_hle_tests()
+{
+    constexpr std::uint32_t return_address = 0x02750610U;
+    constexpr std::uint32_t descriptor_address = 0x500U;
+    EspressoCore core(0x10000U);
+    register_gx2_hle(core.hle);
+    core.gx2.initialized = true;
+    const std::uint32_t import = core.hle.bind_import("gx2", "GX2SetDepthBuffer");
+    std::array<std::uint32_t, 0xACU / sizeof(std::uint32_t)> descriptor_words{};
+    for (std::size_t index = 0U; index < descriptor_words.size(); ++index)
+    {
+        descriptor_words[index] =
+            0xB0000000U | static_cast<std::uint32_t>(index * 0x101U);
+        core.memory.write32_be(
+            descriptor_address + static_cast<std::uint32_t>(index * 4U),
+            descriptor_words[index]);
+    }
+    core.state.gpr.fill(0xD7000000U);
+    core.state.gpr[3] = descriptor_address;
+    core.state.lr = return_address;
+    const auto gprs_before = core.state.gpr;
+    core.state.cia = import;
+    assert(core.run(1U).reason == StopReason::instruction_limit);
+    assert(core.state.gpr == gprs_before);
+    assert(core.state.cia == return_address);
+    assert(core.gx2.bound_depth_buffer == descriptor_address);
+    assert(core.gx2.depth_buffer_descriptor.has_value());
+    const Gx2DepthBufferState& descriptor = *core.gx2.depth_buffer_descriptor;
+    assert(descriptor.guest_address == descriptor_address);
+    assert(descriptor.dimension == descriptor_words[0U]);
+    assert(descriptor.width == descriptor_words[1U]);
+    assert(descriptor.height == descriptor_words[2U]);
+    assert(descriptor.image_address == descriptor_words[9U]);
+    assert(descriptor.view_mip == descriptor_words[29U]);
+    assert(descriptor.hi_z_address == descriptor_words[32U]);
+    assert(descriptor.depth_clear_bits == descriptor_words[34U]);
+    assert(descriptor.stencil_clear == descriptor_words[35U]);
+    assert(descriptor.registers.front() == descriptor_words[36U]);
+    assert(descriptor.registers.back() == descriptor_words[42U]);
+    assert(core.gx2.pending_commands.size() == 1U);
+    const Gx2DepthBufferBinding expected_binding{descriptor_address, descriptor};
+    assert(core.gx2.pending_commands.front().type ==
+           Gx2CommandType::set_depth_buffer);
+    assert(core.gx2.pending_commands.front().depth_buffer == expected_binding);
+
+    affogato::gpu::Gx2RegisterState register_state;
+    register_state.apply(take_gx2_commands(core.gx2));
+    assert(register_state.depth_buffer() == expected_binding);
+    const Gx2Command draw_command{
+        Gx2CommandType::draw,
+        0U,
+        0U,
+        0U,
+        0U,
+        0U,
+        Gx2DrawCall{4U, 6U, false, 0U, 0U, 0U, 1U, 0U}};
+    register_state.apply(std::span<const Gx2Command>(&draw_command, 1U));
+    assert(register_state.draw_depth_buffers().size() == 1U);
+    assert(register_state.draw_depth_buffers().front() == expected_binding);
+
+    core.state.gpr[3] = 0xFF80U;
+    core.state.cia = import;
+    assert(core.run(1U).reason == StopReason::memory_fault);
+    assert(core.gx2.pending_commands.empty());
+    assert(core.gx2.depth_buffer_descriptor == descriptor);
+
+    core.state.gpr[3] = 0U;
+    core.state.cia = import;
+    assert(core.run(1U).reason == StopReason::instruction_limit);
+    const auto unbind_commands = take_gx2_commands(core.gx2);
+    assert(unbind_commands.size() == 1U);
+    assert(unbind_commands.front().depth_buffer ==
+           (Gx2DepthBufferBinding{0U, std::nullopt}));
+    register_state.apply(unbind_commands);
+    assert(!register_state.depth_buffer().has_value());
+    assert(register_state.draw_depth_buffers().front() == expected_binding);
+    assert(core.gx2.bound_depth_buffer == 0U);
+    assert(!core.gx2.depth_buffer_descriptor.has_value());
+}
+
 void gx2_set_depth_stencil_control_hle_tests()
 {
     constexpr std::uint32_t return_address = 0x027507BCU;
@@ -36039,6 +36119,7 @@ int main(int argc, char* argv[])
     gx2r_buffer_cache_notification_hle_tests();
     gx2_clear_color_hle_tests();
     gx2_set_color_buffer_hle_tests();
+    gx2_set_depth_buffer_hle_tests();
     gx2_set_depth_stencil_control_hle_tests();
     gx2_set_stencil_mask_hle_tests();
     gx2_set_polygon_control_hle_tests();

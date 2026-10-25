@@ -58,6 +58,7 @@ constexpr std::uint32_t gx2_context_display_list_size_offset = 0x9804U;
 constexpr std::uint32_t gx2_context_display_list_offset = 0x9E00U;
 constexpr std::uint32_t gx2_context_display_list_capacity = 0x300U;
 constexpr std::uint32_t gx2_color_buffer_size = 0x9CU;
+constexpr std::uint32_t gx2_depth_buffer_size = 0xACU;
 constexpr std::uint32_t gx2_render_target_count = 8U;
 static_assert(gx2_context_shadow_state_size == gx2_context_profiling_offset);
 static_assert(gx2_context_display_list_offset +
@@ -457,6 +458,61 @@ Gx2ColorBufferState read_color_buffer(
     result.aa_buffer_address = words[32];
     result.aa_size = words[33];
     std::copy_n(words.begin() + 34, result.registers.size(),
+        result.registers.begin());
+    return result;
+}
+
+Gx2DepthBufferState read_depth_buffer(
+    EspressoCore& core,
+    std::uint32_t address)
+{
+    if (address == 0U || (address & 3U) != 0U)
+    {
+        throw HleExecutionError(
+            "gx2::GX2SetDepthBuffer: depth buffer pointer is null or misaligned");
+    }
+    if (static_cast<std::uint64_t>(address) + gx2_depth_buffer_size >
+        guest_address_space_end)
+    {
+        throw HleExecutionError(
+            "gx2::GX2SetDepthBuffer: depth buffer range wraps guest address space");
+    }
+
+    std::array<std::uint32_t, gx2_depth_buffer_size / sizeof(std::uint32_t)> words{};
+    for (std::size_t index = 0U; index < words.size(); ++index)
+    {
+        words[index] = core.memory.read32_be(
+            address + static_cast<std::uint32_t>(index * sizeof(std::uint32_t)));
+    }
+
+    Gx2DepthBufferState result{};
+    result.guest_address = address;
+    result.dimension = words[0];
+    result.width = words[1];
+    result.height = words[2];
+    result.depth = words[3];
+    result.mip_levels = words[4];
+    result.format = words[5];
+    result.aa_mode = words[6];
+    result.use = words[7];
+    result.image_size = words[8];
+    result.image_address = words[9];
+    result.mipmap_size = words[10];
+    result.mipmap_address = words[11];
+    result.tile_mode = words[12];
+    result.swizzle = words[13];
+    result.alignment = words[14];
+    result.pitch = words[15];
+    std::copy_n(words.begin() + 16, result.mip_level_offsets.size(),
+        result.mip_level_offsets.begin());
+    result.view_mip = words[29];
+    result.view_first_slice = words[30];
+    result.view_num_slices = words[31];
+    result.hi_z_address = words[32];
+    result.hi_z_size = words[33];
+    result.depth_clear_bits = words[34];
+    result.stencil_clear = words[35];
+    std::copy_n(words.begin() + 36, result.registers.size(),
         result.registers.begin());
     return result;
 }
@@ -4132,6 +4188,32 @@ void register_gx2_hle(HleDispatcher& dispatcher)
             core.gx2.pending_commands.push_back(std::move(command));
             core.gx2.color_buffer_descriptors[target] = std::move(descriptor);
             core.gx2.bound_color_buffers[target] = color_buffer;
+        });
+
+    dispatcher.register_function(
+        "gx2",
+        "GX2SetDepthBuffer",
+        [](EspressoCore& core) {
+            if (!core.gx2.initialized)
+            {
+                throw HleExecutionError(
+                    "gx2::GX2SetDepthBuffer: GX2 has not been initialized");
+            }
+
+            const std::uint32_t depth_buffer = core.state.gpr[3];
+            std::optional<Gx2DepthBufferState> descriptor;
+            if (depth_buffer != 0U)
+            {
+                descriptor = read_depth_buffer(core, depth_buffer);
+            }
+
+            Gx2DepthBufferBinding binding{depth_buffer, descriptor};
+            Gx2Command command{};
+            command.type = Gx2CommandType::set_depth_buffer;
+            command.depth_buffer = std::move(binding);
+            core.gx2.pending_commands.push_back(std::move(command));
+            core.gx2.depth_buffer_descriptor = std::move(descriptor);
+            core.gx2.bound_depth_buffer = depth_buffer;
         });
 
     dispatcher.register_function(
