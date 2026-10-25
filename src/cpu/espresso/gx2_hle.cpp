@@ -3199,6 +3199,34 @@ void register_gx2_hle(HleDispatcher& dispatcher)
 
     dispatcher.register_function(
         "gx2",
+        "GX2GetEventCallback",
+        [](EspressoCore& core) {
+            const std::uint32_t event_type = core.state.gpr[3];
+            if (event_type < gx2_event_type_vsync ||
+                event_type > gx2_event_type_display_list_overrun)
+            {
+                throw HleExecutionError(
+                    "gx2::GX2GetEventCallback: unsupported event type " +
+                    std::to_string(event_type));
+            }
+
+            const std::uint32_t function_output = core.state.gpr[4];
+            const std::uint32_t user_data_output = core.state.gpr[5];
+            validate_gx2_u32_output(
+                core, function_output, "GX2GetEventCallback", "funcOut");
+            validate_gx2_u32_output(
+                core, user_data_output, "GX2GetEventCallback", "userDataOut");
+
+            const Gx2EventCallback callback =
+                core.gx2.event_callbacks[event_type - gx2_event_type_vsync];
+            // Both destinations are validated before either is written. If
+            // the guest aliases them, preserve ABI write order.
+            core.memory.write32_be(function_output, callback.function);
+            core.memory.write32_be(user_data_output, callback.user_data);
+        });
+
+    dispatcher.register_function(
+        "gx2",
         "GX2SetColorBuffer",
         [](EspressoCore& core) {
             if (!core.gx2.initialized)

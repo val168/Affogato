@@ -26264,6 +26264,75 @@ void gx2_set_event_callback_hle_tests()
             std::array<Gx2EventCallback, 3U>{}));
 }
 
+void gx2_get_event_callback_hle_tests()
+{
+    constexpr std::uint32_t return_address = 0x0274C3BCU;
+    constexpr std::uint32_t function_output = 0x100U;
+    constexpr std::uint32_t user_data_output = 0x104U;
+    EspressoCore core(0x1000U);
+    register_gx2_hle(core.hle);
+    const std::uint32_t import =
+        core.hle.bind_import("gx2", "GX2GetEventCallback");
+    assert(import != 0U);
+
+    for (std::uint32_t event = 2U; event <= 4U; ++event)
+    {
+        const std::uint32_t function = 0x02001000U + event * 0x100U;
+        const std::uint32_t user_data = 0x10000000U + event;
+        core.gx2.event_callbacks[event - 2U] = {function, user_data};
+        core.memory.write32_be(function_output, 0xAAAAAAAAU);
+        core.memory.write32_be(user_data_output, 0xBBBBBBBBU);
+        core.state.gpr[3] = event;
+        core.state.gpr[4] = function_output;
+        core.state.gpr[5] = user_data_output;
+        core.state.cia = import;
+        core.state.lr = return_address;
+
+        const RunResult result = core.run(1U);
+        assert(result.reason == StopReason::instruction_limit);
+        assert(result.steps == 1U);
+        assert(core.memory.read32_be(function_output) == function);
+        assert(core.memory.read32_be(user_data_output) == user_data);
+        assert(core.state.gpr[3] == event && core.state.gpr[4] == function_output &&
+               core.state.gpr[5] == user_data_output);
+        assert(core.state.cia == return_address &&
+               core.state.lr == return_address);
+    }
+
+    core.gx2.event_callbacks[1U] = {0U, 0xDEADBEEFU};
+    core.state.gpr[3] = 3U;
+    core.state.gpr[4] = function_output;
+    core.state.gpr[5] = user_data_output;
+    core.state.cia = import;
+    core.state.lr = return_address;
+    assert(core.run(1U).reason == StopReason::instruction_limit);
+    assert(core.memory.read32_be(function_output) == 0U);
+    assert(core.memory.read32_be(user_data_output) == 0xDEADBEEFU);
+
+    const std::uint32_t old_function = core.memory.read32_be(function_output);
+    const std::uint32_t old_user_data = core.memory.read32_be(user_data_output);
+    core.state.gpr[3] = 1U;
+    core.state.gpr[4] = function_output;
+    core.state.gpr[5] = user_data_output;
+    core.state.cia = import;
+    const RunResult invalid = core.run(1U);
+    assert(invalid.reason == StopReason::hle_error);
+    assert(invalid.steps == 0U);
+    assert(invalid.detail.find("unsupported event type 1") !=
+           std::string::npos);
+    assert(core.memory.read32_be(function_output) == old_function);
+    assert(core.memory.read32_be(user_data_output) == old_user_data);
+
+    core.state.gpr[3] = 2U;
+    core.state.gpr[4] = function_output;
+    core.state.gpr[5] = 0x2000U;
+    core.state.cia = import;
+    const RunResult invalid_output = core.run(1U);
+    assert(invalid_output.reason == StopReason::memory_fault);
+    assert(invalid_output.steps == 0U);
+    assert(core.memory.read32_be(function_output) == old_function);
+}
+
 void compare_and_conditional_branch_tests()
 {
     EspressoCore unsigned_compare_core(8);
@@ -33940,6 +34009,7 @@ int main(int argc, char* argv[])
     gx2_set_drc_scale_hle_tests();
     gx2_set_swap_interval_hle_tests();
     gx2_set_event_callback_hle_tests();
+    gx2_get_event_callback_hle_tests();
     mem_get_total_free_size_for_exp_heap_hle_tests();
     mem_get_allocatable_size_for_exp_heap_ex_hle_tests();
     compare_and_conditional_branch_tests();
