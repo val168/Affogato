@@ -3414,6 +3414,17 @@ void register_gx2_hle(HleDispatcher& dispatcher)
 
     dispatcher.register_function(
         "gx2",
+        "GX2Flush",
+        [](EspressoCore& core) {
+            // Publish an ordered submission boundary. The frontend drains the
+            // accumulated command stream after each bounded guest run; GX2Flush
+            // is asynchronous and does not wait for GPU retirement.
+            core.gx2.pending_commands.push_back(
+                {Gx2CommandType::flush, 0U, 0U});
+        });
+
+    dispatcher.register_function(
+        "gx2",
         "GX2SampleTopGPUCycle",
         [](EspressoCore& core) {
             const std::uint32_t timestamp_output = core.state.gpr[3];

@@ -15,6 +15,7 @@ enum class Gx2CommandType
     set_context_register,
     set_shader_resource,
     set_shader_sampler,
+    flush,
 };
 
 struct Gx2Command
