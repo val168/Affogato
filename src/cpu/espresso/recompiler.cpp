@@ -5683,6 +5683,7 @@ struct Recompiler::Impl
         std::uint64_t first_page_write_generation{};
         std::uint64_t second_page_write_generation{};
         bool spans_two_pages{};
+        bool write_watchpoint_enabled{};
     };
 
     struct FastLookupEntry
@@ -5713,6 +5714,7 @@ struct Recompiler::Impl
             ? memory.page_write_generation(entry.second_code_page << 12U)
             : 0U;
         entry.memory_owner = &memory;
+        entry.write_watchpoint_enabled = memory.has_write_watchpoint();
     }
 
     [[nodiscard]] static bool code_page_generations_match(
@@ -5747,7 +5749,7 @@ struct Recompiler::Impl
         stats = {};
     }
 
-    [[nodiscard]] bool compile(BlockCode& block)
+    [[nodiscard]] bool compile(BlockCode& block, bool write_watchpoint_enabled)
     {
         if (block.instructions.empty())
         {
@@ -10222,6 +10224,14 @@ struct Recompiler::Impl
                 compiler.mov(x86::dword_ptr(context, static_cast<std::int32_t>(
                     offsetof(NativeExecutionContext, fault_cia))), imm(cia));
 
+                if (write_watchpoint_enabled)
+                {
+                    // The watchpoint callback reads architectural GPRs from
+                    // CpuState. Publish the JIT's cached values before the
+                    // helper records the write, but only in diagnostic blocks.
+                    flush_guest_gprs();
+                }
+
                 auto* invoke = static_cast<InvokeNode*>(nullptr);
                 const auto helper_address = static_cast<std::uint64_t>(
                     reinterpret_cast<std::uintptr_t>(&native_psq_store));
@@ -10752,6 +10762,15 @@ struct Recompiler::Impl
                     record_base + offsetof(NativeMemoryRecord, indexed))),
                     imm(indexed ? 1U : 0U));
 
+                if (store && write_watchpoint_enabled)
+                {
+                    // Write-watch events must observe current guest registers,
+                    // not stale CpuState values hidden by block-local caching.
+                    // Watchpoint configuration participates in cache validity,
+                    // so ordinary JIT blocks pay no extra synchronization cost.
+                    flush_guest_gprs();
+                }
+
                 if (insn.opcode == Opcode::load_word_reserve_indexed)
                 {
                     // Flush before the helper updates the architectural RT. The
@@ -11152,6 +11171,8 @@ RunResult Recompiler::run(EspressoCore& core, std::size_t max_steps)
             if (impl_->last_cache_entry != nullptr &&
                 impl_->last_cache_address == start &&
                 impl_->last_cache_entry->memory_owner == &core.memory &&
+                impl_->last_cache_entry->write_watchpoint_enabled ==
+                    core.memory.has_write_watchpoint() &&
                 Impl::code_page_generations_match(
                     *impl_->last_cache_entry, core.memory))
             {
@@ -11161,6 +11182,8 @@ RunResult Recompiler::run(EspressoCore& core, std::size_t max_steps)
             }
             else if (fast_entry.address == start && fast_entry.entry != nullptr &&
                 fast_entry.entry->memory_owner == &core.memory &&
+                fast_entry.entry->write_watchpoint_enabled ==
+                    core.memory.has_write_watchpoint() &&
                 Impl::code_page_generations_match(*fast_entry.entry, core.memory))
             {
                 ++impl_->stats.cache_hits;
@@ -11173,6 +11196,27 @@ RunResult Recompiler::run(EspressoCore& core, std::size_t max_steps)
             {
                 auto found = impl_->cache.find(start);
                 bool valid = found != impl_->cache.end();
+                if (valid && found->second.write_watchpoint_enabled !=
+                        core.memory.has_write_watchpoint())
+                {
+                    if (fast_entry.address == start && fast_entry.entry == &found->second)
+                    {
+                        fast_entry = {};
+                    }
+                    if (impl_->last_cache_entry == &found->second)
+                    {
+                        impl_->last_cache_entry = nullptr;
+                        impl_->last_cache_address = 0U;
+                    }
+                    if (found->second.block.function != nullptr)
+                    {
+                        static_cast<void>(impl_->runtime.release(
+                            found->second.block.function));
+                    }
+                    impl_->cache.erase(found);
+                    found = impl_->cache.end();
+                    valid = false;
+                }
                 if (valid && (found->second.memory_owner != &core.memory ||
                         !Impl::code_page_generations_match(found->second, core.memory)))
                 {
@@ -11272,7 +11316,8 @@ RunResult Recompiler::run(EspressoCore& core, std::size_t max_steps)
 #ifndef NDEBUG
                         const auto compile_start = std::chrono::steady_clock::now();
 #endif
-                        compiled = impl_->compile(candidate);
+                        compiled = impl_->compile(
+                            candidate, core.memory.has_write_watchpoint());
 #ifndef NDEBUG
                         impl_->stats.compilation_time_ns += static_cast<std::uint64_t>(
                             std::chrono::duration_cast<std::chrono::nanoseconds>(

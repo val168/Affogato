@@ -10928,6 +10928,37 @@ void recompiler_psq_l_differential_tests()
 
 void recompiler_memory_tests()
 {
+    EspressoCore cached_watched_store(0x1000U);
+    cached_watched_store.memory.write32_be(0x100U, 0x3CA01234U); // lis r5, 0x1234
+    cached_watched_store.memory.write32_be(0x104U, 0x60A55678U); // ori r5,r5,0x5678
+    cached_watched_store.memory.write32_be(0x108U, 0x90A40000U); // stw r5,0(r4)
+    cached_watched_store.state.cia = 0x100U;
+    cached_watched_store.state.gpr[4] = 0x200U;
+    Recompiler cached_watched_store_recompiler;
+    const RunResult initial_compile = cached_watched_store_recompiler.run(
+        cached_watched_store, 1U);
+    assert(initial_compile.steps == 1U);
+    assert(cached_watched_store.state.gpr[5] == 0x12340000U);
+    assert(cached_watched_store.memory.write_watch_events_snapshot().empty());
+
+    // The block was compiled before diagnostic watching was enabled. Its cache
+    // entry must be recompiled so the store publishes host-cached GPRs first.
+    cached_watched_store.memory.set_write_watch_gpr_source(
+        &cached_watched_store.state.gpr);
+    cached_watched_store.memory.set_write_watchpoint(0x200U, 4U);
+    cached_watched_store.state.cia = 0x100U;
+    const RunResult watched_cached_result = cached_watched_store_recompiler.run(
+        cached_watched_store, 3U);
+    assert(watched_cached_result.steps == 3U);
+    const auto cached_watch_events =
+        cached_watched_store.memory.write_watch_events_snapshot();
+    assert(cached_watch_events.size() == 1U);
+    assert(cached_watch_events[0].writer_cia == 0x108U);
+    assert(cached_watch_events[0].watched_value == 0x12345678U);
+    assert(cached_watch_events[0].has_gpr_snapshot);
+    assert(cached_watch_events[0].gpr_snapshot[4] == 0x200U);
+    assert(cached_watch_events[0].gpr_snapshot[5] == 0x12345678U);
+
     EspressoCore watched_store(0x1000U);
     watched_store.memory.write32_be(0x100U, 0x90A40000U); // stw r5, 0(r4)
     watched_store.state.cia = 0x100U;
