@@ -17,6 +17,7 @@ enum class Gx2CommandType
     set_shader_sampler,
     flush,
     draw_done,
+    gpu_fence,
 };
 
 struct Gx2Command
@@ -24,6 +25,9 @@ struct Gx2Command
     Gx2CommandType type{};
     std::uint32_t register_address{};
     std::uint32_t value{};
+    std::uint32_t guest_memory_address{};
+    std::uint32_t mask{};
+    std::uint32_t compare_op{};
 
     bool operator==(const Gx2Command&) const = default;
 };

@@ -3440,6 +3440,47 @@ void register_gx2_hle(HleDispatcher& dispatcher)
 
     dispatcher.register_function(
         "gx2",
+        "GX2SetGPUFence",
+        [](EspressoCore& core) {
+            const std::uint32_t fence_address = core.state.gpr[3];
+            const std::uint32_t mask = core.state.gpr[4];
+            const std::uint32_t compare_op = core.state.gpr[5] & 7U;
+            const std::uint32_t compare_value = core.state.gpr[6];
+
+            if (fence_address == 0U ||
+                static_cast<std::uint64_t>(fence_address) +
+                        sizeof(std::uint32_t) >
+                    guest_address_space_end)
+            {
+                throw HleExecutionError(
+                    "gx2::GX2SetGPUFence received an invalid fence address");
+            }
+            try
+            {
+                // Validate that the GPU wait target is backed by guest RAM;
+                // do not read/modify it here because the wait is asynchronous.
+                static_cast<void>(core.memory.read32_be(fence_address));
+            }
+            catch (const GuestMemoryFault&)
+            {
+                throw HleExecutionError(
+                    "gx2::GX2SetGPUFence fence address is outside mapped guest memory");
+            }
+
+            // Preserve the GPU-side WAIT_REG_MEM operation in command order.
+            // The current renderer records this synchronization command but
+            // has not yet implemented guest GPU command execution.
+            core.gx2.pending_commands.push_back({
+                Gx2CommandType::gpu_fence,
+                0U,
+                compare_value,
+                fence_address,
+                mask,
+                compare_op});
+        });
+
+    dispatcher.register_function(
+        "gx2",
         "GX2GPUTimeToCPUTime",
         [](EspressoCore& core) {
             // Affogato has no GPU timestamp clock. Return zero as the

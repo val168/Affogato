@@ -10,6 +10,7 @@
 #include <optional>
 #include <span>
 #include <unordered_map>
+#include <vector>
 
 namespace affogato::gpu
 {
@@ -32,6 +33,13 @@ public:
     {
         for (const cpu::espresso::Gx2Command& command : commands)
         {
+            if (command.type == cpu::espresso::Gx2CommandType::gpu_fence)
+            {
+                // Retain the ordered GPU wait parameters separately from
+                // Latte register state until command execution is modeled.
+                gpu_fences_.push_back(command);
+                continue;
+            }
             if (command.type == cpu::espresso::Gx2CommandType::flush ||
                 command.type == cpu::espresso::Gx2CommandType::draw_done)
             {
@@ -150,6 +158,11 @@ public:
         return registers_.size();
     }
 
+    [[nodiscard]] std::span<const cpu::espresso::Gx2Command> gpu_fences() const noexcept
+    {
+        return gpu_fences_;
+    }
+
 private:
     struct RegisterValue
     {
@@ -158,6 +171,7 @@ private:
     };
 
     std::unordered_map<std::uint32_t, RegisterValue> registers_;
+    std::vector<cpu::espresso::Gx2Command> gpu_fences_;
 };
 
 }
