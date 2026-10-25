@@ -11090,6 +11090,87 @@ void recompiler_psq_l_differential_tests()
     assert(reserved_recompiler.statistics().native_instructions == 0U);
 }
 
+void recompiler_psq_lu_differential_tests()
+{
+    const auto encode_psq_lu = [](
+        std::uint8_t destination, std::uint8_t base, std::int16_t displacement,
+        bool single_element, std::uint8_t gqr) {
+        return (57U << 26U) |
+            (static_cast<std::uint32_t>(destination) << 21U) |
+            (static_cast<std::uint32_t>(base) << 16U) |
+            (static_cast<std::uint32_t>(single_element) << 15U) |
+            (static_cast<std::uint32_t>(gqr & 7U) << 12U) |
+            (static_cast<std::uint16_t>(displacement) & 0x0FFFU);
+    };
+    const auto double_bits = [](double value) { return std::bit_cast<std::uint64_t>(value); };
+    constexpr std::uint32_t start = 0x100U;
+
+    EspressoCore interpreted(0x3000U);
+    EspressoCore compiled(0x3000U);
+    for (EspressoCore* core : {&interpreted, &compiled})
+    {
+        core->state.gpr[9] = 0x1008U;
+        core->state.gqr[5] = 0U;
+        core->state.fpr[6] = 0x1111222233334444ULL;
+        core->state.fpr_ps1[6] = 0x5555666677778888ULL;
+        core->state.cia = start;
+        core->memory.write32_be(start, encode_psq_lu(6U, 9U, -8, false, 5U));
+        core->memory.write32_be(0x1000U, std::bit_cast<std::uint32_t>(2.5F));
+        core->memory.write32_be(0x1004U, std::bit_cast<std::uint32_t>(-1.25F));
+    }
+    const RunResult oracle = interpreted.run(1U);
+    Recompiler recompiler;
+    const RunResult actual = recompiler.run(compiled, 1U);
+    assert(actual.reason == oracle.reason && actual.steps == oracle.steps);
+    assert(actual.steps == 1U);
+    assert(compiled.state.gpr == interpreted.state.gpr);
+    assert(compiled.state.fpr == interpreted.state.fpr);
+    assert(compiled.state.fpr_ps1 == interpreted.state.fpr_ps1);
+    assert(compiled.state.gpr[9] == 0x1000U);
+    assert(compiled.state.fpr[6] == double_bits(2.5));
+    assert(compiled.state.fpr_ps1[6] == double_bits(-1.25));
+    assert(recompiler.statistics().native_instructions == 1U);
+    assert(recompiler.statistics().interpreter_fallbacks == 0U);
+    const InstructionHistoryEntry& history = actual.instruction_history.back();
+    assert(history.opcode_name == "psq_lu" && history.completed);
+    assert(history.has_effective_address && history.effective_address == 0x1000U);
+    assert(history.has_destination && history.destination_register == 9U &&
+        history.destination_value == 0x1000U);
+    assert(history.source_count == 1U && history.source_registers[0] == 9U &&
+        history.source_values[0] == 0x1008U);
+    assert(history.has_paired_fp_state && history.paired_fp_destination_register == 6U);
+    assert(history.paired_fp_destination_ps0 == double_bits(2.5));
+    assert(history.paired_fp_destination_ps1 == double_bits(-1.25));
+
+    EspressoCore fault_interpreted(0x3000U);
+    EspressoCore fault_compiled(0x3000U);
+    for (EspressoCore* core : {&fault_interpreted, &fault_compiled})
+    {
+        core->memory.map_region(0x4000U, 4U);
+        core->state.gpr[7] = 0x3FF8U;
+        core->state.fpr[3] = 0x1111222233334444ULL;
+        core->state.fpr_ps1[3] = 0x5555666677778888ULL;
+        core->state.cia = start;
+        core->memory.write32_be(start, encode_psq_lu(3U, 7U, 8, false, 0U));
+        core->memory.write32_be(0x4000U, std::bit_cast<std::uint32_t>(3.0F));
+    }
+    const RunResult fault_oracle = fault_interpreted.run(1U);
+    Recompiler fault_recompiler;
+    const RunResult fault_actual = fault_recompiler.run(fault_compiled, 1U);
+    assert(fault_actual.reason == fault_oracle.reason);
+    assert(fault_actual.detail.find("read 4 byte(s) at guest address 0x00004004") !=
+        std::string::npos);
+    assert(fault_compiled.state.gpr == fault_interpreted.state.gpr);
+    assert(fault_compiled.state.fpr == fault_interpreted.state.fpr);
+    assert(fault_compiled.state.fpr_ps1 == fault_interpreted.state.fpr_ps1);
+    assert(fault_compiled.state.gpr[7] == 0x3FF8U);
+    assert(!fault_actual.instruction_history.back().completed);
+    assert(fault_actual.instruction_history.back().opcode_name == "psq_lu");
+    assert(fault_actual.instruction_history.back().has_destination &&
+        fault_actual.instruction_history.back().destination_register == 7U);
+    assert(fault_recompiler.statistics().native_instructions == 0U);
+}
+
 void recompiler_psq_lx_differential_tests()
 {
     const auto encode_psq_lx = [](
@@ -12156,6 +12237,7 @@ int main()
     recompiler_psq_st_differential_tests();
     recompiler_psq_stx_differential_tests();
     recompiler_psq_l_differential_tests();
+    recompiler_psq_lu_differential_tests();
     recompiler_psq_lx_differential_tests();
     recompiler_psq_lux_differential_tests();
     recompiler_branch_test();

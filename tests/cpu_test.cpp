@@ -739,6 +739,14 @@ void decoder_tests()
     assert(psq_l.fp_register == 7U && psq_l.base == 7U);
     assert(psq_l.quantized_register == 0U && !psq_l.paired_single_w);
     assert(psq_l.immediate == 0);
+    const std::uint32_t psq_lu_word = (57U << 26U) | (6U << 21U) |
+        (9U << 16U) | (1U << 15U) | (5U << 12U) | 0xFF8U;
+    const DecodedInstruction psq_lu = decode(psq_lu_word);
+    assert(psq_lu.opcode == Opcode::paired_single_quantized_load_update);
+    assert(psq_lu.fp_register == 6U && psq_lu.base == 9U);
+    assert(psq_lu.quantized_register == 5U && psq_lu.paired_single_w);
+    assert(psq_lu.immediate == -8);
+    assert(decode(psq_lu_word & ~(0x1FU << 16U)).opcode == Opcode::unsupported);
     const DecodedInstruction psq_lw = decode(0xE0E78000U);
     assert(psq_lw.opcode == Opcode::paired_single_quantized_load);
     assert(psq_lw.paired_single_w);
@@ -30486,6 +30494,89 @@ void paired_single_quantized_load_tests()
     assert(fault.state.fpr_ps1[7] == 0x5555666677778888ULL);
 }
 
+void paired_single_quantized_load_update_tests()
+{
+    const auto encode_psq_lu = [](
+        std::uint8_t destination, std::uint8_t base, std::int16_t displacement,
+        bool single_element, std::uint8_t gqr) {
+        return (57U << 26U) |
+            (static_cast<std::uint32_t>(destination) << 21U) |
+            (static_cast<std::uint32_t>(base) << 16U) |
+            (static_cast<std::uint32_t>(single_element) << 15U) |
+            (static_cast<std::uint32_t>(gqr & 7U) << 12U) |
+            (static_cast<std::uint16_t>(displacement) & 0x0FFFU);
+    };
+    const auto double_bits = [](double value) { return std::bit_cast<std::uint64_t>(value); };
+    constexpr std::uint32_t start = 0x100U;
+    constexpr std::uint32_t word = encode_psq_lu(6U, 9U, -8, false, 0U);
+
+    EspressoCore loaded(0x3000U);
+    loaded.state.gpr[9] = 0x1008U;
+    loaded.state.gqr[0] = 0U;
+    loaded.state.fpr[6] = 0x1111222233334444ULL;
+    loaded.state.fpr_ps1[6] = 0x5555666677778888ULL;
+    loaded.state.cia = start;
+    loaded.memory.write32_be(start, word);
+    loaded.memory.write32_be(0x1000U, std::bit_cast<std::uint32_t>(2.5F));
+    loaded.memory.write32_be(0x1004U, std::bit_cast<std::uint32_t>(-1.25F));
+    const RunResult result = loaded.run(1U);
+    assert(result.reason == StopReason::instruction_limit && result.steps == 1U);
+    assert(loaded.state.fpr[6] == double_bits(2.5));
+    assert(loaded.state.fpr_ps1[6] == double_bits(-1.25));
+    assert(loaded.state.gpr[9] == 0x1000U);
+    const InstructionHistoryEntry& history = result.instruction_history.back();
+    assert(history.opcode_name == "psq_lu" && history.completed);
+    assert(history.has_effective_address && history.effective_address == 0x1000U);
+    assert(history.has_destination && history.destination_register == 9U &&
+        history.destination_value == 0x1000U);
+    assert(history.source_count == 1U && history.source_registers[0] == 9U &&
+        history.source_values[0] == 0x1008U);
+
+    // W=1 performs one load, synthesizes PS1=1.0, and still writes back.
+    EspressoCore scalar(0x3000U);
+    scalar.state.gpr[4] = 0x1208U;
+    scalar.state.cia = start;
+    scalar.memory.write32_be(start, encode_psq_lu(2U, 4U, -8, true, 0U));
+    scalar.memory.write32_be(0x1200U, std::bit_cast<std::uint32_t>(-0.75F));
+    assert(scalar.step() == StepResult::executed);
+    assert(scalar.state.gpr[4] == 0x1200U);
+    assert(scalar.state.fpr[2] == double_bits(-0.75));
+    assert(scalar.state.fpr_ps1[2] == double_bits(1.0));
+
+    // A fault while fetching PS1 must preserve the base and both destination lanes.
+    EspressoCore fault(0x3000U);
+    fault.memory.map_region(0x4000U, 4U);
+    fault.state.gpr[7] = 0x3FF8U;
+    fault.state.fpr[3] = 0x1111222233334444ULL;
+    fault.state.fpr_ps1[3] = 0x5555666677778888ULL;
+    fault.state.cia = start;
+    fault.memory.write32_be(start, encode_psq_lu(3U, 7U, 8, false, 0U));
+    fault.memory.write32_be(0x4000U, std::bit_cast<std::uint32_t>(3.0F));
+    const RunResult failed_result = fault.run(1U);
+    assert(failed_result.reason == StopReason::memory_fault);
+    assert(fault.state.gpr[7] == 0x3FF8U);
+    assert(fault.state.fpr[3] == 0x1111222233334444ULL);
+    assert(fault.state.fpr_ps1[3] == 0x5555666677778888ULL);
+    assert(!failed_result.instruction_history.back().completed);
+    assert(failed_result.instruction_history.back().opcode_name == "psq_lu");
+    assert(failed_result.instruction_history.back().has_destination &&
+        failed_result.instruction_history.back().destination_register == 7U);
+
+    // Reserved GQR load type fails before either the FPR pair or base is changed.
+    EspressoCore unsupported(0x3000U);
+    unsupported.state.gpr[9] = 0x1008U;
+    unsupported.state.gqr[5] = 1U << 16U;
+    unsupported.state.fpr[6] = 0x1111222233334444ULL;
+    unsupported.state.fpr_ps1[6] = 0x5555666677778888ULL;
+    unsupported.state.cia = start;
+    unsupported.memory.write32_be(start, encode_psq_lu(6U, 9U, -8, false, 5U));
+    const RunResult unsupported_result = unsupported.run(1U);
+    assert(unsupported_result.reason == StopReason::unsupported_instruction);
+    assert(unsupported.state.gpr[9] == 0x1008U);
+    assert(unsupported.state.fpr[6] == 0x1111222233334444ULL);
+    assert(unsupported.state.fpr_ps1[6] == 0x5555666677778888ULL);
+}
+
 void paired_single_quantized_load_indexed_tests()
 {
     const auto encode_psq_lx = [](
@@ -33515,6 +33606,7 @@ int main(int argc, char* argv[])
     floating_point_double_store_tests();
     floating_point_double_update_store_tests();
     paired_single_quantized_load_tests();
+    paired_single_quantized_load_update_tests();
     paired_single_quantized_load_indexed_tests();
     paired_single_quantized_load_indexed_update_tests();
     paired_single_quantized_store_tests();

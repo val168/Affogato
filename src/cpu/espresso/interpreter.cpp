@@ -513,6 +513,7 @@ void set_xer_carry(CpuState& state, bool carry) noexcept
             instruction.opcode == Opcode::load_halfword_zero ||
             instruction.opcode == Opcode::load_halfword_zero_update ||
             instruction.opcode == Opcode::paired_single_quantized_load ||
+            instruction.opcode == Opcode::paired_single_quantized_load_update ||
             instruction.opcode == Opcode::paired_single_quantized_load_indexed ||
             instruction.opcode == Opcode::paired_single_quantized_load_indexed_update ||
             instruction.opcode == Opcode::paired_single_quantized_store ||
@@ -779,6 +780,7 @@ void set_xer_carry(CpuState& state, bool carry) noexcept
     case Opcode::paired_single_negative_absolute_value: return "ps_nabs";
     case Opcode::paired_single_select: return "ps_sel";
     case Opcode::paired_single_quantized_load: return "psq_l";
+    case Opcode::paired_single_quantized_load_update: return "psq_lu";
     case Opcode::paired_single_quantized_load_indexed: return "psq_lx";
     case Opcode::paired_single_quantized_load_indexed_update: return "psq_lux";
     case Opcode::paired_single_quantized_store: return "psq_st";
@@ -1080,6 +1082,7 @@ void add_history_source(
         return entry;
     }
     if (opcode == Opcode::paired_single_quantized_load ||
+        opcode == Opcode::paired_single_quantized_load_update ||
         opcode == Opcode::paired_single_quantized_load_indexed ||
         opcode == Opcode::paired_single_quantized_load_indexed_update)
     {
@@ -1101,7 +1104,8 @@ void add_history_source(
         }
         entry.has_paired_fp_state = true;
         entry.paired_fp_destination_register = instruction.fp_register;
-        if (opcode == Opcode::paired_single_quantized_load_indexed_update)
+        if (opcode == Opcode::paired_single_quantized_load_update ||
+            opcode == Opcode::paired_single_quantized_load_indexed_update)
         {
             entry.has_destination = true;
             entry.destination_register = instruction.base;
@@ -5943,6 +5947,7 @@ StepResult EspressoCore::step()
     }
 
     case Opcode::paired_single_quantized_load:
+    case Opcode::paired_single_quantized_load_update:
     case Opcode::paired_single_quantized_load_indexed:
     case Opcode::paired_single_quantized_load_indexed_update:
     {
@@ -6011,7 +6016,8 @@ StepResult EspressoCore::step()
                 (load_type == 4U || load_type == 6U ? 1U : 2U)));
         state.fpr[instruction.fp_register] = ps0;
         state.fpr_ps1[instruction.fp_register] = ps1;
-        if (instruction.opcode == Opcode::paired_single_quantized_load_indexed_update)
+        if (instruction.opcode == Opcode::paired_single_quantized_load_update ||
+            instruction.opcode == Opcode::paired_single_quantized_load_indexed_update)
         {
             state.gpr[instruction.base] = address;
         }

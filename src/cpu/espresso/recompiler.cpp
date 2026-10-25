@@ -5107,6 +5107,7 @@ struct BlockCode
     case Opcode::paired_single_reciprocal_estimate:
     case Opcode::paired_single_reciprocal_square_root_estimate:
     case Opcode::paired_single_quantized_load:
+    case Opcode::paired_single_quantized_load_update:
     case Opcode::paired_single_quantized_load_indexed:
     case Opcode::paired_single_quantized_load_indexed_update:
     case Opcode::paired_single_quantized_store:
@@ -5271,6 +5272,7 @@ struct BlockCode
     case Opcode::paired_single_quantized_store_indexed: return "psq_stx";
     case Opcode::paired_single_quantized_store_indexed_update: return "psq_stux";
     case Opcode::paired_single_quantized_load: return "psq_l";
+    case Opcode::paired_single_quantized_load_update: return "psq_lu";
     case Opcode::paired_single_quantized_load_indexed: return "psq_lx";
     case Opcode::paired_single_quantized_load_indexed_update: return "psq_lux";
     case Opcode::instruction_sync: return "isync";
@@ -5500,6 +5502,7 @@ struct BlockCode
     case Opcode::paired_single_quantized_store_indexed:
     case Opcode::paired_single_quantized_store_indexed_update:
     case Opcode::paired_single_quantized_load:
+    case Opcode::paired_single_quantized_load_update:
     case Opcode::paired_single_quantized_load_indexed:
     case Opcode::paired_single_quantized_load_indexed_update:
     case Opcode::instruction_cache_block_invalidate:
@@ -10333,6 +10336,7 @@ struct Recompiler::Impl
                 break;
             }
             case Opcode::paired_single_quantized_load:
+            case Opcode::paired_single_quantized_load_update:
             case Opcode::paired_single_quantized_load_indexed:
             case Opcode::paired_single_quantized_load_indexed_update:
             {
@@ -10407,7 +10411,8 @@ struct Recompiler::Impl
                 compiler.mov(stopped_at_load, imm(static_cast<std::uint32_t>(index)));
                 compiler.ret(stopped_at_load);
                 compiler.bind(load_completed);
-                if (insn.opcode == Opcode::paired_single_quantized_load_indexed_update)
+                if (insn.opcode == Opcode::paired_single_quantized_load_update ||
+                    insn.opcode == Opcode::paired_single_quantized_load_indexed_update)
                 {
                     compiler.mov(address, x86::dword_ptr(context, static_cast<std::int32_t>(
                         record_base + offsetof(NativeMemoryRecord, address))));
@@ -12793,6 +12798,7 @@ RunResult Recompiler::run(EspressoCore& core, std::size_t max_steps)
                 continue;
             }
             if (insn.opcode == Opcode::paired_single_quantized_load ||
+                insn.opcode == Opcode::paired_single_quantized_load_update ||
                 insn.opcode == Opcode::paired_single_quantized_load_indexed ||
                 insn.opcode == Opcode::paired_single_quantized_load_indexed_update)
             {
@@ -12816,7 +12822,8 @@ RunResult Recompiler::run(EspressoCore& core, std::size_t max_steps)
                         entry.source_values[entry.source_count++] = memory_record.index_value;
                     }
                 }
-                if (insn.opcode == Opcode::paired_single_quantized_load_indexed_update)
+                if (insn.opcode == Opcode::paired_single_quantized_load_update ||
+                    insn.opcode == Opcode::paired_single_quantized_load_indexed_update)
                 {
                     entry.has_destination = true;
                     entry.destination_register = insn.base;
