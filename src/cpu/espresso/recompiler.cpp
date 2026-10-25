@@ -2551,6 +2551,66 @@ extern "C" void native_ps_msub(
     state->fpr_ps1[destination] = record.destination_ps1;
 }
 
+extern "C" void native_ps_nmadd(
+    NativeExecutionContext* context,
+    CpuState* state,
+    std::uint32_t destination,
+    std::uint32_t source_a,
+    std::uint32_t source_b,
+    std::uint32_t source_c,
+    std::uint32_t instruction_index) noexcept
+{
+    if (destination >= state->fpr.size() || source_a >= state->fpr.size() ||
+        source_b >= state->fpr.size() || source_c >= state->fpr.size() ||
+        instruction_index >= context->ps_madd_records.size())
+    {
+        context->failed = true;
+        context->failed_instruction_index = instruction_index;
+        return;
+    }
+
+    NativePsMaddRecord& record = context->ps_madd_records[instruction_index];
+    record.source_a_ps0 = state->fpr[source_a];
+    record.source_a_ps1 = state->fpr_ps1[source_a];
+    record.source_b_ps0 = state->fpr[source_b];
+    record.source_b_ps1 = state->fpr_ps1[source_b];
+    record.source_c_ps0 = state->fpr[source_c];
+    record.source_c_ps1 = state->fpr_ps1[source_c];
+    const auto round_operand = [](std::uint64_t raw) {
+        constexpr std::uint64_t exponent_mask = 0x7FF0000000000000ULL;
+        constexpr std::uint64_t fraction_mask = 0x000FFFFFFFFFFFFFULL;
+        const std::uint64_t exponent = raw & exponent_mask;
+        const std::uint64_t fraction = raw & fraction_mask;
+        if (exponent == 0U && fraction != 0U)
+        {
+            const unsigned shift = static_cast<unsigned>(std::countl_zero(fraction) - 11);
+            const std::int64_t signed_keep_mask =
+                std::bit_cast<std::int64_t>(0xFFFFFFFFF8000000ULL);
+            const std::uint64_t keep_mask =
+                static_cast<std::uint64_t>(signed_keep_mask >> shift);
+            return (raw & keep_mask) +
+                (raw & (0x0000000008000000ULL >> shift));
+        }
+        return (raw & 0xFFFFFFFFF8000000ULL) +
+            (raw & 0x0000000008000000ULL);
+    };
+    const auto negative_multiply_add_lane = [&](std::uint64_t a_raw,
+                                                std::uint64_t b_raw,
+                                                std::uint64_t c_raw) {
+        const double a = std::bit_cast<double>(a_raw);
+        const double b = std::bit_cast<double>(b_raw);
+        const double c = std::bit_cast<double>(round_operand(c_raw));
+        const float result = static_cast<float>(-(a * c + b));
+        return std::bit_cast<std::uint64_t>(static_cast<double>(result));
+    };
+    record.destination_ps0 = negative_multiply_add_lane(
+        record.source_a_ps0, record.source_b_ps0, record.source_c_ps0);
+    record.destination_ps1 = negative_multiply_add_lane(
+        record.source_a_ps1, record.source_b_ps1, record.source_c_ps1);
+    state->fpr[destination] = record.destination_ps0;
+    state->fpr_ps1[destination] = record.destination_ps1;
+}
+
 extern "C" void native_fmadd(
     NativeExecutionContext* context,
     CpuState* state,
@@ -3944,6 +4004,7 @@ struct BlockCode
     case Opcode::paired_single_multiply_subtract:
     case Opcode::paired_single_multiply_add_scalar0:
     case Opcode::paired_single_multiply_add_scalar1:
+    case Opcode::paired_single_negative_multiply_add:
     case Opcode::branch:
     case Opcode::conditional_branch:
     case Opcode::conditional_branch_to_link_register:
@@ -4153,6 +4214,7 @@ struct BlockCode
     case Opcode::paired_single_multiply_subtract: return "ps_msub";
     case Opcode::paired_single_multiply_add_scalar0: return "ps_madds0";
     case Opcode::paired_single_multiply_add_scalar1: return "ps_madds1";
+    case Opcode::paired_single_negative_multiply_add: return "ps_nmadd";
     case Opcode::shift_left_word: return "slw";
     case Opcode::shift_right_word: return "srw";
     case Opcode::arithmetic_shift_right_immediate: return "srawi";
@@ -6615,19 +6677,12 @@ struct Recompiler::Impl
                 invoke->set_arg(6, imm(static_cast<std::uint32_t>(index)));
                 break;
             }
-            case Opcode::paired_single_multiply_add:
-            case Opcode::paired_single_multiply_subtract:
             case Opcode::paired_single_multiply_add_scalar0:
             case Opcode::paired_single_multiply_add_scalar1:
             {
                 auto* invoke = static_cast<InvokeNode*>(nullptr);
-                const std::uintptr_t helper_address =
-                    insn.opcode == Opcode::paired_single_multiply_add_scalar0 ||
-                            insn.opcode == Opcode::paired_single_multiply_add_scalar1
-                        ? reinterpret_cast<std::uintptr_t>(&native_ps_madds)
-                        : (insn.opcode == Opcode::paired_single_multiply_add
-                            ? reinterpret_cast<std::uintptr_t>(&native_ps_madd)
-                            : reinterpret_cast<std::uintptr_t>(&native_ps_msub));
+                const auto helper_address = static_cast<std::uint64_t>(
+                    reinterpret_cast<std::uintptr_t>(&native_ps_madds));
                 compiler.invoke(Out(invoke), helper_address,
                     FuncSignature::build<void, NativeExecutionContext*, CpuState*,
                         std::uint32_t, std::uint32_t, std::uint32_t,
@@ -6641,6 +6696,30 @@ struct Recompiler::Impl
                 invoke->set_arg(6, imm(insn.opcode ==
                     Opcode::paired_single_multiply_add_scalar1 ? 1U : 0U));
                 invoke->set_arg(7, imm(static_cast<std::uint32_t>(index)));
+                break;
+            }
+            case Opcode::paired_single_multiply_add:
+            case Opcode::paired_single_multiply_subtract:
+            case Opcode::paired_single_negative_multiply_add:
+            {
+                auto* invoke = static_cast<InvokeNode*>(nullptr);
+                const std::uintptr_t helper_address =
+                    insn.opcode == Opcode::paired_single_negative_multiply_add
+                        ? reinterpret_cast<std::uintptr_t>(&native_ps_nmadd)
+                        : (insn.opcode == Opcode::paired_single_multiply_add
+                            ? reinterpret_cast<std::uintptr_t>(&native_ps_madd)
+                            : reinterpret_cast<std::uintptr_t>(&native_ps_msub));
+                compiler.invoke(Out(invoke), helper_address,
+                    FuncSignature::build<void, NativeExecutionContext*, CpuState*,
+                        std::uint32_t, std::uint32_t, std::uint32_t,
+                        std::uint32_t, std::uint32_t>(CallConvId::kCDecl));
+                invoke->set_arg(0, context);
+                invoke->set_arg(1, state);
+                invoke->set_arg(2, imm(insn.fp_register));
+                invoke->set_arg(3, imm(insn.fp_source_a));
+                invoke->set_arg(4, imm(insn.fp_source_b));
+                invoke->set_arg(5, imm(insn.fp_source_c));
+                invoke->set_arg(6, imm(static_cast<std::uint32_t>(index)));
                 break;
             }
             case Opcode::paired_single_merge00:
@@ -8691,7 +8770,8 @@ RunResult Recompiler::run(EspressoCore& core, std::size_t max_steps)
             if (insn.opcode == Opcode::paired_single_multiply_add ||
                 insn.opcode == Opcode::paired_single_multiply_subtract ||
                 insn.opcode == Opcode::paired_single_multiply_add_scalar0 ||
-                insn.opcode == Opcode::paired_single_multiply_add_scalar1)
+                insn.opcode == Opcode::paired_single_multiply_add_scalar1 ||
+                insn.opcode == Opcode::paired_single_negative_multiply_add)
             {
                 InstructionHistoryEntry entry = native_history(insn, cia);
                 const NativePsMaddRecord& record = context.ps_madd_records[i];
@@ -8704,6 +8784,8 @@ RunResult Recompiler::run(EspressoCore& core, std::size_t max_steps)
                     insn.opcode == Opcode::paired_single_multiply_add_scalar0;
                 entry.paired_fp_multiply_add_scalar1 =
                     insn.opcode == Opcode::paired_single_multiply_add_scalar1;
+                entry.paired_fp_negative_multiply_add =
+                    insn.opcode == Opcode::paired_single_negative_multiply_add;
                 entry.paired_fp_destination_register = insn.fp_register;
                 entry.paired_fp_source_a_register = insn.fp_source_a;
                 entry.paired_fp_source_b_register = insn.fp_source_b;
