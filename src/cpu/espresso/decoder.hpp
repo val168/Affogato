@@ -215,6 +215,7 @@ enum class Opcode
     paired_single_quantized_load_indexed,
     paired_single_quantized_load_indexed_update,
     paired_single_quantized_store,
+    paired_single_quantized_store_update,
     paired_single_quantized_store_indexed,
     paired_single_quantized_store_indexed_update,
     condition_bit_and,

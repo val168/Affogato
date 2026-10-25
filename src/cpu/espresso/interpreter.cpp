@@ -516,6 +516,7 @@ void set_xer_carry(CpuState& state, bool carry) noexcept
             instruction.opcode == Opcode::paired_single_quantized_load_indexed ||
             instruction.opcode == Opcode::paired_single_quantized_load_indexed_update ||
             instruction.opcode == Opcode::paired_single_quantized_store ||
+            instruction.opcode == Opcode::paired_single_quantized_store_update ||
             instruction.opcode == Opcode::paired_single_quantized_store_indexed ||
             instruction.opcode == Opcode::paired_single_quantized_store_indexed_update ||
             instruction.opcode == Opcode::load_halfword_algebraic ||
@@ -781,6 +782,7 @@ void set_xer_carry(CpuState& state, bool carry) noexcept
     case Opcode::paired_single_quantized_load_indexed: return "psq_lx";
     case Opcode::paired_single_quantized_load_indexed_update: return "psq_lux";
     case Opcode::paired_single_quantized_store: return "psq_st";
+    case Opcode::paired_single_quantized_store_update: return "psq_stu";
     case Opcode::paired_single_quantized_store_indexed: return "psq_stx";
     case Opcode::paired_single_quantized_store_indexed_update: return "psq_stux";
     case Opcode::condition_bit_and: return "crand";
@@ -1107,12 +1109,14 @@ void add_history_source(
         return entry;
     }
     if (opcode == Opcode::paired_single_quantized_store ||
+        opcode == Opcode::paired_single_quantized_store_update ||
         opcode == Opcode::paired_single_quantized_store_indexed ||
         opcode == Opcode::paired_single_quantized_store_indexed_update)
     {
-        const bool indexed = opcode != Opcode::paired_single_quantized_store;
-        const bool update = opcode ==
-            Opcode::paired_single_quantized_store_indexed_update;
+        const bool indexed = opcode == Opcode::paired_single_quantized_store_indexed ||
+            opcode == Opcode::paired_single_quantized_store_indexed_update;
+        const bool update = opcode == Opcode::paired_single_quantized_store_update ||
+            opcode == Opcode::paired_single_quantized_store_indexed_update;
         entry.has_effective_address = true;
         const std::uint32_t base = instruction.base == 0U
             ? 0U : state.gpr[instruction.base];
@@ -6015,13 +6019,15 @@ StepResult EspressoCore::step()
     }
 
     case Opcode::paired_single_quantized_store:
+    case Opcode::paired_single_quantized_store_update:
     case Opcode::paired_single_quantized_store_indexed:
     case Opcode::paired_single_quantized_store_indexed_update:
     {
         const std::uint32_t base = instruction.base == 0U
             ? 0U : state.gpr[instruction.base];
-        const bool indexed = instruction.opcode !=
-            Opcode::paired_single_quantized_store;
+        const bool indexed = instruction.opcode ==
+                Opcode::paired_single_quantized_store_indexed ||
+            instruction.opcode == Opcode::paired_single_quantized_store_indexed_update;
         const std::uint32_t address = indexed
                 ? base + state.gpr[instruction.source]
                 : base + static_cast<std::uint32_t>(instruction.immediate);
@@ -6110,7 +6116,8 @@ StepResult EspressoCore::step()
         {
             store_lane(address + static_cast<std::uint32_t>(lane_width), *value1);
         }
-        if (instruction.opcode == Opcode::paired_single_quantized_store_indexed_update)
+        if (instruction.opcode == Opcode::paired_single_quantized_store_update ||
+            instruction.opcode == Opcode::paired_single_quantized_store_indexed_update)
         {
             state.gpr[instruction.base] = address;
         }

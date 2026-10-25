@@ -10699,6 +10699,29 @@ void recompiler_psq_st_differential_tests()
     assert(float_history.paired_fp_store_value0 == std::bit_cast<std::uint32_t>(1.5F));
     assert(float_history.paired_fp_store_value1 == std::bit_cast<std::uint32_t>(-2.25F));
 
+    // D-form update store writes the effective address back only after its
+    // complete pair has been committed.
+    EspressoCore update_interpreted(0x1000U);
+    EspressoCore update_compiled(0x1000U);
+    for (EspressoCore* core : {&update_interpreted, &update_compiled})
+    {
+        core->state.gpr[5] = 0x380U;
+        core->state.fpr[6] = double_bits(3.5);
+        core->state.fpr_ps1[6] = double_bits(-2.0);
+    }
+    const auto [update_result, update_stats] = compare_cores(
+        update_interpreted, update_compiled,
+        encode_psq_st(6U, 5U, -4, false, 0U) | (1U << 26U));
+    assert(update_result.reason == StopReason::instruction_limit && update_result.steps == 1U);
+    assert(update_compiled.memory.read32_be(0x37CU) == std::bit_cast<std::uint32_t>(3.5F));
+    assert(update_compiled.memory.read32_be(0x380U) == std::bit_cast<std::uint32_t>(-2.0F));
+    assert(update_compiled.state.gpr[5] == 0x37CU);
+    assert(update_stats.native_instructions == 1U && update_stats.interpreter_fallbacks == 0U);
+    const auto& update_history = update_result.instruction_history.back();
+    assert(update_history.opcode_name == "psq_stu" && update_history.completed);
+    assert(update_history.has_destination && update_history.destination_register == 5U);
+    assert(update_history.destination_value == 0x37CU);
+
     // Integer quantization applies the signed GQR scale and clamps before
     // truncation. W=1 must not touch the next byte or read PS1 for quantization.
     EspressoCore integer_interpreted(0x1000U);
@@ -10787,6 +10810,26 @@ void recompiler_psq_st_differential_tests()
     assert(!fault_result.instruction_history.back().completed);
     assert(fault_result.instruction_history.back().opcode_name == "psq_st");
     assert(fault_stats.native_instructions == 0U);
+
+    EspressoCore update_fault_interpreted(0x1000U);
+    EspressoCore update_fault_compiled(0x1000U);
+    for (EspressoCore* core : {&update_fault_interpreted, &update_fault_compiled})
+    {
+        core->memory.map_region(0x2000U, 4U);
+        core->memory.write32_be(0x2000U, 0xAABBCCDDU);
+        core->state.gpr[7] = 0x2000U;
+        core->state.fpr[8] = double_bits(9.0);
+        core->state.fpr_ps1[8] = double_bits(10.0);
+    }
+    const auto [update_fault, update_fault_stats] = compare_cores(
+        update_fault_interpreted, update_fault_compiled,
+        encode_psq_st(8U, 7U, 0, false, 0U) | (1U << 26U));
+    assert(update_fault.reason == StopReason::memory_fault);
+    assert(update_fault_compiled.state.gpr[7] == 0x2000U);
+    assert(update_fault_compiled.memory.read32_be(0x2000U) == 0xAABBCCDDU);
+    assert(!update_fault.instruction_history.back().completed);
+    assert(update_fault.instruction_history.back().opcode_name == "psq_stu");
+    assert(update_fault_stats.native_instructions == 0U);
 }
 
 void recompiler_psq_stx_differential_tests()

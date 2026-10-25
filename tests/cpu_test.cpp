@@ -763,6 +763,14 @@ void decoder_tests()
     assert(psq_st.fp_register == 13U && psq_st.base == 1U);
     assert(psq_st.quantized_register == 0U && !psq_st.paired_single_w);
     assert(psq_st.immediate == 16);
+    const std::uint32_t psq_stu_word = (61U << 26U) | (13U << 21U) |
+        (9U << 16U) | (1U << 15U) | (5U << 12U) | 0xFFCU;
+    const DecodedInstruction psq_stu = decode(psq_stu_word);
+    assert(psq_stu.opcode == Opcode::paired_single_quantized_store_update);
+    assert(psq_stu.fp_register == 13U && psq_stu.base == 9U);
+    assert(psq_stu.quantized_register == 5U && psq_stu.paired_single_w);
+    assert(psq_stu.immediate == -4);
+    assert(decode(psq_stu_word & ~(0x1FU << 16U)).opcode == Opcode::unsupported);
     const std::uint32_t psq_stx_word = (4U << 26U) | (13U << 21U) |
         (9U << 16U) | (8U << 11U) | (1U << 10U) | (5U << 7U) | (7U << 1U);
     const DecodedInstruction psq_stx = decode(psq_stx_word);
@@ -30761,6 +30769,34 @@ void paired_single_quantized_store_tests()
     assert(reserved_result.reason == StopReason::unsupported_instruction);
     assert(reserved_result.instruction_history.front().opcode_name == "psq_st");
     assert(!reserved_result.instruction_history.front().completed);
+
+    EspressoCore update(0x100U);
+    update.state.gpr[5] = 0x80U;
+    update.state.fpr[6] = double_bits(3.5);
+    update.state.fpr_ps1[6] = double_bits(-2.0);
+    update.memory.write32_be(0U, encode_psq_st(6U, 5U, -4, false, 0U) |
+        (1U << 26U));
+    assert(update.step() == StepResult::executed);
+    assert(update.memory.read32_be(0x7CU) == std::bit_cast<std::uint32_t>(3.5F));
+    assert(update.memory.read32_be(0x80U) == std::bit_cast<std::uint32_t>(-2.0F));
+    assert(update.state.gpr[5] == 0x7CU);
+    const RunResult update_trace = update.run(0U);
+    assert(update_trace.instruction_history.back().opcode_name == "psq_stu");
+    assert(update_trace.instruction_history.back().has_destination);
+    assert(update_trace.instruction_history.back().destination_register == 5U);
+    assert(update_trace.instruction_history.back().destination_value == 0x7CU);
+
+    EspressoCore update_fault(0x100U);
+    update_fault.memory.map_region(0x2000U, 4U);
+    update_fault.memory.write32_be(0x2000U, 0xAABBCCDDU);
+    update_fault.state.gpr[5] = 0x2000U;
+    update_fault.state.fpr[6] = double_bits(1.0);
+    update_fault.state.fpr_ps1[6] = double_bits(2.0);
+    update_fault.memory.write32_be(0U, encode_psq_st(6U, 5U, 0, false, 0U) |
+        (1U << 26U));
+    assert(update_fault.run(1U).reason == StopReason::memory_fault);
+    assert(update_fault.state.gpr[5] == 0x2000U);
+    assert(update_fault.memory.read32_be(0x2000U) == 0xAABBCCDDU);
 }
 
 void paired_single_quantized_store_indexed_tests()
