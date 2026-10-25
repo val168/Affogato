@@ -4086,6 +4086,7 @@ struct BlockCode
     case Opcode::compare_signed_register:
     case Opcode::compare_unsigned_register:
     case Opcode::floating_compare_unordered:
+    case Opcode::floating_compare_ordered:
     case Opcode::paired_single_compare_unordered0:
     case Opcode::paired_single_compare_unordered1:
     case Opcode::paired_single_compare_ordered0:
@@ -4291,6 +4292,7 @@ struct BlockCode
     case Opcode::compare_signed_register: return "cmpw";
     case Opcode::compare_unsigned_register: return "cmplw";
     case Opcode::floating_compare_unordered: return "fcmpu";
+    case Opcode::floating_compare_ordered: return "fcmpo";
     case Opcode::paired_single_compare_unordered0: return "ps_cmpu0";
     case Opcode::paired_single_compare_unordered1: return "ps_cmpu1";
     case Opcode::paired_single_compare_ordered0: return "ps_cmpo0";
@@ -6305,6 +6307,7 @@ struct Recompiler::Impl
                 break;
             }
             case Opcode::floating_compare_unordered:
+            case Opcode::floating_compare_ordered:
             case Opcode::paired_single_compare_unordered0:
             case Opcode::paired_single_compare_unordered1:
             case Opcode::paired_single_compare_ordered0:
@@ -6361,7 +6364,8 @@ struct Recompiler::Impl
                 compiler.jz(ordered);
                 compiler.mov(comparison, imm(1U));
                 auto* invoke_invalid = static_cast<InvokeNode*>(nullptr);
-                if (insn.opcode == Opcode::paired_single_compare_ordered0 ||
+                if (insn.opcode == Opcode::floating_compare_ordered ||
+                    insn.opcode == Opcode::paired_single_compare_ordered0 ||
                     insn.opcode == Opcode::paired_single_compare_ordered1)
                 {
                     compiler.invoke(Out(invoke_invalid),
@@ -9403,6 +9407,7 @@ RunResult Recompiler::run(EspressoCore& core, std::size_t max_steps)
                 continue;
             }
             if (insn.opcode == Opcode::floating_compare_unordered ||
+                insn.opcode == Opcode::floating_compare_ordered ||
                 insn.opcode == Opcode::paired_single_compare_unordered0 ||
                 insn.opcode == Opcode::paired_single_compare_unordered1 ||
                 insn.opcode == Opcode::paired_single_compare_ordered0 ||
