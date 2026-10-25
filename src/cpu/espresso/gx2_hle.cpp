@@ -884,6 +884,26 @@ std::uint32_t gx2r_lock_surface(
     return image_address;
 }
 
+bool gx2r_surface_exists(EspressoCore& core, std::uint32_t surface_address)
+{
+    if (surface_address == 0U)
+    {
+        return false;
+    }
+    constexpr std::uint32_t cpu_gpu_usage_mask = 0x00007800U;
+    if ((surface_address & 3U) != 0U ||
+        surface_address > std::numeric_limits<std::uint32_t>::max() -
+                              gx2_surface_size)
+    {
+        throw HleExecutionError(
+            "gx2::GX2RSurfaceExists: surface pointer is misaligned or wraps");
+    }
+
+    const std::uint32_t resource_flags = core.memory.read32_be(surface_address + 0x1CU);
+    const std::uint32_t image_address = core.memory.read32_be(surface_address + 0x24U);
+    return image_address != 0U && (resource_flags & cpu_gpu_usage_mask) != 0U;
+}
+
 void create_gx2_buffer_user_memory(
     EspressoCore& core,
     std::uint32_t buffer_address,
@@ -2928,6 +2948,15 @@ void register_gx2_hle(HleDispatcher& dispatcher)
         "GX2RLockSurfaceEx",
         [](EspressoCore& core) {
             core.state.gpr[3] = gx2r_lock_surface(core, core.state.gpr[3]);
+        });
+
+    dispatcher.register_function(
+        "gx2",
+        "GX2RSurfaceExists",
+        [](EspressoCore& core) {
+            core.state.gpr[3] = gx2r_surface_exists(core, core.state.gpr[3])
+                ? 1U
+                : 0U;
         });
 
     dispatcher.register_function(
