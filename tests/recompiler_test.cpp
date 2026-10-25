@@ -1665,6 +1665,97 @@ void recompiler_addme_differential_test()
     }
 }
 
+void recompiler_subfme_differential_test()
+{
+    struct Case
+    {
+        std::uint32_t operand;
+        std::uint8_t source;
+        std::uint8_t destination;
+        bool carry_in;
+        bool record;
+        std::uint32_t initial_xer;
+        std::uint32_t initial_cr;
+        std::uint32_t expected_result;
+        bool expected_carry;
+    };
+    constexpr std::array cases{
+        Case{0xFFFFFFFFU, 4U, 4U, false, false, 0x80000000U, 0x13579BDFU,
+            0xFFFFFFFFU, false},
+        Case{0xFFFFFFFFU, 4U, 4U, true, true, 0xA0000000U, 0x87654321U,
+            0U, true},
+        Case{0U, 5U, 6U, false, true, 0U, 0xA5C36E91U,
+            0xFFFFFFFEU, true},
+        Case{0U, 5U, 6U, true, false, 0x20000000U, 0xA5C36E91U,
+            0xFFFFFFFFU, true},
+        Case{0x80000000U, 0U, 0U, false, true, 0x80000000U, 0x12345678U,
+            0x7FFFFFFEU, true},
+        Case{0x7FFFFFFFU, 7U, 7U, false, true, 0U, 0xA5C36E91U,
+            0x7FFFFFFFU, true},
+    };
+    static_assert(x_form(3U, 4U, 0U, 232U) == 0x7C6401D0U);
+
+    for (const Case& test : cases)
+    {
+        EspressoCore interpreted(0x1000U);
+        EspressoCore compiled(0x1000U);
+        const std::uint32_t instruction = x_form(
+            test.destination, test.source, 0U, 232U, test.record);
+        for (EspressoCore* core : {&interpreted, &compiled})
+        {
+            core->memory.write32_be(0x100U, instruction);
+            core->state.cia = 0x100U;
+            core->state.gpr.fill(0x10203040U);
+            core->state.gpr[test.source] = test.operand;
+            core->state.xer = (test.initial_xer & ~0x20000000U) |
+                (test.carry_in ? 0x20000000U : 0U);
+            core->state.cr = test.initial_cr;
+            core->state.lr = 0x12345678U;
+            core->state.ctr = 0x87654321U;
+            core->state.fpscr = 0x89ABCDEFU;
+        }
+
+        const RunResult oracle = interpreted.run(1U);
+        Recompiler recompiler;
+        const RunResult actual = recompiler.run(compiled, 1U);
+        assert(actual.reason == oracle.reason);
+        assert(actual.steps == oracle.steps && actual.steps == 1U);
+        assert(actual.cia == oracle.cia);
+        assert(compiled.state.gpr == interpreted.state.gpr);
+        assert(compiled.state.cr == interpreted.state.cr);
+        assert(compiled.state.xer == interpreted.state.xer);
+        assert(compiled.state.lr == interpreted.state.lr);
+        assert(compiled.state.ctr == interpreted.state.ctr);
+        assert(compiled.state.fpscr == interpreted.state.fpscr);
+        assert(compiled.state.gpr[test.destination] == test.expected_result);
+        assert(((compiled.state.xer & 0x20000000U) != 0U) == test.expected_carry);
+        assert((compiled.state.xer & ~0x20000000U) ==
+            (test.initial_xer & ~0x20000000U));
+        if (test.record)
+        {
+            const std::uint32_t expected_cr0 = test.expected_result == 0U ? 2U
+                : (test.expected_result & 0x80000000U) != 0U ? 8U : 4U;
+            assert((compiled.state.cr >> 28U) ==
+                (expected_cr0 | (test.initial_xer >> 31U)));
+        }
+        else
+        {
+            assert(compiled.state.cr == test.initial_cr);
+        }
+        assert(recompiler.statistics().native_instructions == 1U);
+        assert(recompiler.statistics().interpreter_fallbacks == 0U);
+        assert(actual.instruction_history.size() == 1U);
+        const InstructionHistoryEntry& history = actual.instruction_history.back();
+        assert(history.completed && history.opcode_name ==
+            (test.record ? "subfme." : "subfme"));
+        assert(history.source_count == 1U);
+        assert(history.source_registers[0] == test.source);
+        assert(history.source_values[0] == test.operand);
+        assert(history.has_carry_input && history.carry_input == test.carry_in);
+        assert(history.has_carry_result && history.carry_result == test.expected_carry);
+    }
+}
+
 void recompiler_subfze_differential_test()
 {
     struct Case
@@ -8365,6 +8456,7 @@ int main()
     recompiler_subfe_differential_test();
     recompiler_adde_differential_test();
     recompiler_addme_differential_test();
+    recompiler_subfme_differential_test();
     recompiler_subfze_differential_test();
     recompiler_addic_differential_test();
     recompiler_destination_aliases_second_source_test();
