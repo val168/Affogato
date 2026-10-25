@@ -3795,6 +3795,7 @@ struct BlockCode
     case Opcode::load_double:
     case Opcode::load_double_update:
     case Opcode::load_double_indexed:
+    case Opcode::load_double_indexed_update:
     case Opcode::store_word:
     case Opcode::store_word_update:
     case Opcode::store_byte:
@@ -3965,6 +3966,7 @@ struct BlockCode
     case Opcode::load_double: return "lfd";
     case Opcode::load_double_update: return "lfdu";
     case Opcode::load_double_indexed: return "lfdx";
+    case Opcode::load_double_indexed_update: return "lfdux";
     case Opcode::store_word: return "stw";
     case Opcode::store_word_conditional_indexed: return "stwcx.";
     case Opcode::store_word_update: return "stwu";
@@ -4030,6 +4032,7 @@ struct BlockCode
     case Opcode::load_double:
     case Opcode::load_double_update:
     case Opcode::load_double_indexed:
+    case Opcode::load_double_indexed_update:
     case Opcode::store_single:
     case Opcode::store_single_update:
     case Opcode::store_single_indexed:
@@ -4138,6 +4141,7 @@ struct BlockCode
         opcode == Opcode::load_single_indexed ||
         opcode == Opcode::load_single_indexed_update ||
         opcode == Opcode::load_double_indexed ||
+        opcode == Opcode::load_double_indexed_update ||
         opcode == Opcode::load_halfword_zero_indexed ||
         opcode == Opcode::load_halfword_zero_indexed_update ||
         opcode == Opcode::load_halfword_algebraic_indexed ||
@@ -6933,14 +6937,17 @@ struct Recompiler::Impl
             case Opcode::load_double:
             case Opcode::load_double_update:
             case Opcode::load_double_indexed:
+            case Opcode::load_double_indexed_update:
             {
                 const std::size_t record_base = offsetof(NativeExecutionContext, memory_records) +
                     index * sizeof(NativeMemoryRecord);
                 const std::uint32_t cia = block.address +
                     static_cast<std::uint32_t>(index * 4U);
                 x86::Gp address = compiler.new_gp32("lfd_address");
-                const bool indexed = insn.opcode == Opcode::load_double_indexed;
-                if (insn.opcode == Opcode::load_double_update)
+                const bool indexed = insn.opcode == Opcode::load_double_indexed ||
+                    insn.opcode == Opcode::load_double_indexed_update;
+                if (insn.opcode == Opcode::load_double_update ||
+                    insn.opcode == Opcode::load_double_indexed_update)
                 {
                     compiler.mov(address, read_guest_gpr(insn.base));
                     compiler.mov(x86::dword_ptr(context, static_cast<std::int32_t>(
@@ -6993,7 +7000,8 @@ struct Recompiler::Impl
                 compiler.jnz(fault);
                 compiler.mov(x86::qword_ptr(state, static_cast<std::int32_t>(
                     fpr_offset(insn.fp_register))), value);
-                if (insn.opcode == Opcode::load_double_update)
+                if (insn.opcode == Opcode::load_double_update ||
+                    insn.opcode == Opcode::load_double_indexed_update)
                 {
                     write_guest_gpr(insn.base, address);
                 }
@@ -8546,7 +8554,8 @@ RunResult Recompiler::run(EspressoCore& core, std::size_t max_steps)
                 insn.opcode == Opcode::load_single_indexed_update ||
                 insn.opcode == Opcode::load_double ||
                 insn.opcode == Opcode::load_double_update ||
-                insn.opcode == Opcode::load_double_indexed)
+                insn.opcode == Opcode::load_double_indexed ||
+                insn.opcode == Opcode::load_double_indexed_update)
             {
                 entry.has_fp_destination = true;
                 entry.fp_destination_register = insn.fp_register;
@@ -8558,7 +8567,8 @@ RunResult Recompiler::run(EspressoCore& core, std::size_t max_steps)
                     entry.destination_register = insn.base;
                     entry.destination_value = record.address;
                 }
-                else if (insn.opcode == Opcode::load_double_update)
+                else if (insn.opcode == Opcode::load_double_update ||
+                    insn.opcode == Opcode::load_double_indexed_update)
                 {
                     entry.has_destination = true;
                     entry.destination_register = insn.base;
