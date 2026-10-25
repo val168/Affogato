@@ -24502,6 +24502,77 @@ void gx2_draw_ex_hle_tests()
                Gx2ProgramStage::vertex)]->descriptor_address ==
            replacement_vertex_shader_descriptor_address);
 
+    constexpr std::uint32_t pixel_shader_descriptor_address = 0x800U;
+    constexpr std::uint32_t pixel_shader_program_address = 0x900U;
+    std::array<std::uint32_t, 0xE8U / sizeof(std::uint32_t)>
+        pixel_shader_descriptor{};
+    for (std::size_t index = 0U; index < pixel_shader_descriptor.size(); ++index)
+    {
+        pixel_shader_descriptor[index] =
+            0x5A000000U | static_cast<std::uint32_t>(index);
+    }
+    pixel_shader_descriptor[0xA4U / sizeof(std::uint32_t)] = 8U;
+    pixel_shader_descriptor[0xA8U / sizeof(std::uint32_t)] =
+        pixel_shader_program_address;
+    const std::array<std::uint32_t, 2U> pixel_shader_program{
+        0xBE800000U, 0xBF9C0000U};
+    for (std::size_t index = 0U; index < pixel_shader_descriptor.size(); ++index)
+    {
+        core.memory.write32_be(
+            pixel_shader_descriptor_address +
+                static_cast<std::uint32_t>(index * sizeof(std::uint32_t)),
+            pixel_shader_descriptor[index]);
+    }
+    for (std::size_t index = 0U; index < pixel_shader_program.size(); ++index)
+    {
+        core.memory.write32_be(
+            pixel_shader_program_address +
+                static_cast<std::uint32_t>(index * sizeof(std::uint32_t)),
+            pixel_shader_program[index]);
+    }
+    core.state.gpr[3] = pixel_shader_descriptor_address;
+    core.state.lr = return_address;
+    core.state.cia = core.hle.bind_import("gx2", "GX2SetPixelShader");
+    const auto pixel_shader_gprs_before = core.state.gpr;
+    assert(core.run(1U).reason == StopReason::instruction_limit);
+    assert(core.state.gpr == pixel_shader_gprs_before);
+    const auto pixel_shader_commands = take_gx2_commands(core.gx2);
+    assert(pixel_shader_commands.size() == 1U);
+    Gx2ProgramShaderBinding expected_pixel_shader{};
+    expected_pixel_shader.stage = Gx2ProgramStage::pixel;
+    expected_pixel_shader.descriptor_address = pixel_shader_descriptor_address;
+    expected_pixel_shader.program_size = 8U;
+    expected_pixel_shader.program_address = pixel_shader_program_address;
+    expected_pixel_shader.descriptor_words.assign(
+        pixel_shader_descriptor.begin(), pixel_shader_descriptor.end());
+    expected_pixel_shader.program_words.assign(
+        pixel_shader_program.begin(), pixel_shader_program.end());
+    assert(pixel_shader_commands.front().type ==
+           Gx2CommandType::set_program_shader);
+    assert(pixel_shader_commands.front().program_shader == expected_pixel_shader);
+    assert(core.gx2.program_shaders[static_cast<std::size_t>(
+               Gx2ProgramStage::vertex)]->descriptor_address ==
+           replacement_vertex_shader_descriptor_address);
+    assert(core.gx2.program_shaders[static_cast<std::size_t>(
+               Gx2ProgramStage::pixel)] == expected_pixel_shader);
+    register_state.apply(pixel_shader_commands);
+    assert(register_state.program_shaders()[static_cast<std::size_t>(
+               Gx2ProgramStage::vertex)]->descriptor_address ==
+           replacement_vertex_shader_descriptor_address);
+    assert(register_state.program_shaders()[static_cast<std::size_t>(
+               Gx2ProgramStage::pixel)] == expected_pixel_shader);
+
+    run_draw_variant(
+        "GX2DrawEx",
+        {5U, 1U, 0U, 1U, 0U, 0U, 0U},
+        Gx2DrawCall{5U, 1U, false, 0U, 0U, 0U, 1U, 0U});
+    assert(register_state.draw_program_shaders().size() == 12U);
+    assert(register_state.draw_program_shaders()[11U][static_cast<std::size_t>(
+               Gx2ProgramStage::vertex)]->descriptor_address ==
+           replacement_vertex_shader_descriptor_address);
+    assert(register_state.draw_program_shaders()[11U][static_cast<std::size_t>(
+               Gx2ProgramStage::pixel)] == expected_pixel_shader);
+
     vertex_shader_descriptor[0xD0U / sizeof(std::uint32_t)] = 10U;
     for (std::size_t index = 0U; index < vertex_shader_descriptor.size(); ++index)
     {

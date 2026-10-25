@@ -144,6 +144,10 @@ constexpr std::uint32_t gx2_fetch_shader_struct_size = 0x20U;
 constexpr std::uint32_t gx2_vertex_shader_struct_size = 0x134U;
 constexpr std::uint32_t gx2_vertex_shader_program_size_offset = 0xD0U;
 constexpr std::uint32_t gx2_vertex_shader_program_address_offset = 0xD4U;
+// GX2PixelShader ends with a 16-byte GX2RBuffer at offset 0xD8.
+constexpr std::uint32_t gx2_pixel_shader_struct_size = 0xE8U;
+constexpr std::uint32_t gx2_pixel_shader_program_size_offset = 0xA4U;
+constexpr std::uint32_t gx2_pixel_shader_program_address_offset = 0xA8U;
 constexpr std::uint32_t gx2_max_shader_program_size = 0x01000000U;
 constexpr std::uint32_t gx2_attrib_stream_size = 0x20U;
 constexpr std::uint32_t gx2_max_fetch_attributes = 64U;
@@ -183,6 +187,77 @@ constexpr std::uint32_t latte_pipe_interleave_bytes = 256U;
 constexpr std::uint32_t latte_pipe_count = 2U;
 constexpr std::uint32_t latte_bank_count = 4U;
 constexpr std::uint32_t latte_split_size = 2048U;
+
+Gx2ProgramShaderBinding capture_program_shader(
+    EspressoCore& core,
+    Gx2ProgramStage stage,
+    std::uint32_t descriptor_size,
+    std::uint32_t program_size_offset,
+    std::uint32_t program_address_offset,
+    const char* api_name)
+{
+    const std::uint32_t descriptor_address = core.state.gpr[3];
+    if (descriptor_address == 0U || (descriptor_address & 3U) != 0U)
+    {
+        throw HleExecutionError(
+            std::string(api_name) + ": descriptor is null or misaligned");
+    }
+    if (static_cast<std::uint64_t>(descriptor_address) + descriptor_size >
+        guest_address_space_end)
+    {
+        throw HleExecutionError(
+            std::string(api_name) + ": descriptor range wraps guest address space");
+    }
+
+    Gx2ProgramShaderBinding binding{};
+    binding.stage = stage;
+    binding.descriptor_address = descriptor_address;
+    const std::size_t descriptor_word_count =
+        descriptor_size / sizeof(std::uint32_t);
+    binding.descriptor_words.reserve(descriptor_word_count);
+    for (std::uint32_t offset = 0U; offset < descriptor_size;
+         offset += sizeof(std::uint32_t))
+    {
+        binding.descriptor_words.push_back(
+            core.memory.read32_be(descriptor_address + offset));
+    }
+    const std::size_t program_size_word =
+        program_size_offset / sizeof(std::uint32_t);
+    const std::size_t program_address_word =
+        program_address_offset / sizeof(std::uint32_t);
+    binding.program_size = binding.descriptor_words[program_size_word];
+    binding.program_address = binding.descriptor_words[program_address_word];
+    if (binding.program_size > gx2_max_shader_program_size ||
+        (binding.program_size % sizeof(std::uint32_t)) != 0U)
+    {
+        throw HleExecutionError(
+            std::string(api_name) + ": invalid shader program size");
+    }
+    if (binding.program_size != 0U &&
+        (binding.program_address == 0U ||
+         (binding.program_address & 3U) != 0U))
+    {
+        throw HleExecutionError(
+            std::string(api_name) + ": program is null or misaligned");
+    }
+    if (static_cast<std::uint64_t>(binding.program_address) +
+            binding.program_size >
+        guest_address_space_end)
+    {
+        throw HleExecutionError(
+            std::string(api_name) + ": program range wraps guest address space");
+    }
+
+    binding.program_words.reserve(
+        binding.program_size / sizeof(std::uint32_t));
+    for (std::uint32_t offset = 0U; offset < binding.program_size;
+         offset += sizeof(std::uint32_t))
+    {
+        binding.program_words.push_back(
+            core.memory.read32_be(binding.program_address + offset));
+    }
+    return binding;
+}
 
 struct Gx2AttribStream
 {
@@ -3529,69 +3604,13 @@ void register_gx2_hle(HleDispatcher& dispatcher)
         "gx2",
         "GX2SetVertexShader",
         [](EspressoCore& core) {
-            constexpr const char* api_name = "gx2::GX2SetVertexShader";
-            const std::uint32_t descriptor_address = core.state.gpr[3];
-            if (descriptor_address == 0U || (descriptor_address & 3U) != 0U)
-            {
-                throw HleExecutionError(
-                    std::string(api_name) + ": descriptor is null or misaligned");
-            }
-            if (static_cast<std::uint64_t>(descriptor_address) +
-                    gx2_vertex_shader_struct_size >
-                guest_address_space_end)
-            {
-                throw HleExecutionError(
-                    std::string(api_name) + ": descriptor range wraps guest address space");
-            }
-
-            Gx2ProgramShaderBinding binding{};
-            binding.stage = Gx2ProgramStage::vertex;
-            binding.descriptor_address = descriptor_address;
-            const std::size_t descriptor_word_count =
-                gx2_vertex_shader_struct_size / sizeof(std::uint32_t);
-            binding.descriptor_words.reserve(descriptor_word_count);
-            for (std::uint32_t offset = 0U;
-                 offset < gx2_vertex_shader_struct_size;
-                 offset += sizeof(std::uint32_t))
-            {
-                binding.descriptor_words.push_back(
-                    core.memory.read32_be(descriptor_address + offset));
-            }
-            constexpr std::size_t program_size_word =
-                gx2_vertex_shader_program_size_offset / sizeof(std::uint32_t);
-            constexpr std::size_t program_address_word =
-                gx2_vertex_shader_program_address_offset / sizeof(std::uint32_t);
-            binding.program_size = binding.descriptor_words[program_size_word];
-            binding.program_address = binding.descriptor_words[program_address_word];
-            if (binding.program_size > gx2_max_shader_program_size ||
-                (binding.program_size % sizeof(std::uint32_t)) != 0U)
-            {
-                throw HleExecutionError(
-                    std::string(api_name) + ": invalid shader program size");
-            }
-            if (binding.program_size != 0U &&
-                (binding.program_address == 0U ||
-                 (binding.program_address & 3U) != 0U))
-            {
-                throw HleExecutionError(
-                    std::string(api_name) + ": program is null or misaligned");
-            }
-            if (static_cast<std::uint64_t>(binding.program_address) +
-                    binding.program_size >
-                guest_address_space_end)
-            {
-                throw HleExecutionError(
-                    std::string(api_name) + ": program range wraps guest address space");
-            }
-
-            binding.program_words.reserve(
-                binding.program_size / sizeof(std::uint32_t));
-            for (std::uint32_t offset = 0U; offset < binding.program_size;
-                 offset += sizeof(std::uint32_t))
-            {
-                binding.program_words.push_back(
-                    core.memory.read32_be(binding.program_address + offset));
-            }
+            Gx2ProgramShaderBinding binding = capture_program_shader(
+                core,
+                Gx2ProgramStage::vertex,
+                gx2_vertex_shader_struct_size,
+                gx2_vertex_shader_program_size_offset,
+                gx2_vertex_shader_program_address_offset,
+                "gx2::GX2SetVertexShader");
 
             core.gx2.pending_commands.push_back({
                 Gx2CommandType::set_program_shader,
@@ -3606,6 +3625,34 @@ void register_gx2_hle(HleDispatcher& dispatcher)
                 binding});
             core.gx2.program_shaders[
                 static_cast<std::size_t>(Gx2ProgramStage::vertex)] =
+                std::move(binding);
+        });
+
+    dispatcher.register_function(
+        "gx2",
+        "GX2SetPixelShader",
+        [](EspressoCore& core) {
+            Gx2ProgramShaderBinding binding = capture_program_shader(
+                core,
+                Gx2ProgramStage::pixel,
+                gx2_pixel_shader_struct_size,
+                gx2_pixel_shader_program_size_offset,
+                gx2_pixel_shader_program_address_offset,
+                "gx2::GX2SetPixelShader");
+
+            core.gx2.pending_commands.push_back({
+                Gx2CommandType::set_program_shader,
+                0U,
+                0U,
+                0U,
+                0U,
+                0U,
+                std::nullopt,
+                std::nullopt,
+                std::nullopt,
+                binding});
+            core.gx2.program_shaders[
+                static_cast<std::size_t>(Gx2ProgramStage::pixel)] =
                 std::move(binding);
         });
 
