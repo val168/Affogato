@@ -24119,14 +24119,15 @@ void gx2_draw_ex_hle_tests()
 {
     constexpr std::uint32_t return_address = 0x2000U;
     constexpr Gx2Command expected_draw{
-        Gx2CommandType::draw, 4U, 36U, 12U, 2U, 0U};
+        Gx2CommandType::draw, 0U, 0U, 0U, 0U, 0U,
+        Gx2DrawCall{4U, 36U, false, 0U, 0U, 12U, 2U, 0U}};
     EspressoCore core(0x1000U);
     register_gx2_hle(core.hle);
     core.state.gpr.fill(0xD4000000U);
-    core.state.gpr[3] = expected_draw.register_address;
-    core.state.gpr[4] = expected_draw.value;
-    core.state.gpr[5] = expected_draw.guest_memory_address;
-    core.state.gpr[6] = expected_draw.mask;
+    core.state.gpr[3] = 4U;
+    core.state.gpr[4] = 36U;
+    core.state.gpr[5] = 12U;
+    core.state.gpr[6] = 2U;
     core.state.lr = return_address;
     core.state.cr = 0xA5A55A5AU;
     core.state.xer = 0x87654321U;
@@ -24156,6 +24157,29 @@ void gx2_draw_ex_hle_tests()
     assert(register_state.size() == 0U);
     assert(register_state.draw_calls().size() == 1U);
     assert(register_state.draw_calls().front() == expected_draw);
+
+    constexpr Gx2Command expected_indexed_draw{
+        Gx2CommandType::draw, 0U, 0U, 0U, 0U, 0U,
+        Gx2DrawCall{
+            4U, 96U, true, 9U, 0x10203040U, 8U, 3U, 0U}};
+    core.state.gpr[3] = 4U;
+    core.state.gpr[4] = 96U;
+    core.state.gpr[5] = 9U;
+    core.state.gpr[6] = 0x10203040U;
+    core.state.gpr[7] = 8U;
+    core.state.gpr[8] = 3U;
+    core.state.lr = return_address;
+    core.state.cia = core.hle.bind_import("gx2", "GX2DrawIndexedEx");
+    const auto indexed_gprs_before = core.state.gpr;
+    assert(core.run(1U).reason == StopReason::instruction_limit);
+    assert(core.state.gpr == indexed_gprs_before);
+    const auto indexed_commands = take_gx2_commands(core.gx2);
+    assert(indexed_commands.size() == 1U);
+    assert(indexed_commands.front() == expected_indexed_draw);
+    register_state.apply(indexed_commands);
+    assert(register_state.size() == 0U);
+    assert(register_state.draw_calls().size() == 2U);
+    assert(register_state.draw_calls().back() == expected_indexed_draw);
 }
 
 void gx2_gpu_time_to_cpu_time_hle_tests()

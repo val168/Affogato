@@ -3445,15 +3445,35 @@ void register_gx2_hle(HleDispatcher& dispatcher)
             // Preserve the guest draw request in the ordered GX2 stream for
             // the backend. Vertex fetch, shader execution, and rasterization
             // remain renderer work and are not claimed by this capture path.
-            // For draw records the generic payload fields mean mode, vertex
-            // count, vertex offset, and instance count respectively.
             core.gx2.pending_commands.push_back({
                 Gx2CommandType::draw,
-                core.state.gpr[3],
-                core.state.gpr[4],
-                core.state.gpr[5],
-                core.state.gpr[6],
-                0U});
+                0U,
+                0U,
+                0U,
+                0U,
+                0U,
+                Gx2DrawCall{
+                    core.state.gpr[3], core.state.gpr[4], false, 0U, 0U,
+                    core.state.gpr[5], core.state.gpr[6], 0U}});
+        });
+
+    dispatcher.register_function(
+        "gx2",
+        "GX2DrawIndexedEx",
+        [](EspressoCore& core) {
+            // Index-buffer contents are consumed by the renderer later; keep
+            // the guest address and all draw parameters in stream order.
+            core.gx2.pending_commands.push_back({
+                Gx2CommandType::draw,
+                0U,
+                0U,
+                0U,
+                0U,
+                0U,
+                Gx2DrawCall{
+                    core.state.gpr[3], core.state.gpr[4], true,
+                    core.state.gpr[5], core.state.gpr[6], core.state.gpr[7],
+                    core.state.gpr[8], 0U}});
         });
 
     dispatcher.register_function(

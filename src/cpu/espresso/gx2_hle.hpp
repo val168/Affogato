@@ -23,6 +23,20 @@ enum class Gx2CommandType
     draw,
 };
 
+struct Gx2DrawCall
+{
+    std::uint32_t primitive_mode{};
+    std::uint32_t element_count{};
+    bool indexed{};
+    std::uint32_t index_type{};
+    std::uint32_t element_address{};
+    std::uint32_t element_offset{};
+    std::uint32_t instance_count{};
+    std::uint32_t base_instance{};
+
+    constexpr bool operator==(const Gx2DrawCall&) const = default;
+};
+
 struct Gx2Command
 {
     Gx2CommandType type{};
@@ -31,8 +45,28 @@ struct Gx2Command
     std::uint32_t guest_memory_address{};
     std::uint32_t mask{};
     std::uint32_t compare_op{};
+    std::optional<Gx2DrawCall> draw_call;
 
-    bool operator==(const Gx2Command&) const = default;
+    constexpr Gx2Command() = default;
+    constexpr Gx2Command(
+        Gx2CommandType command_type,
+        std::uint32_t command_register_address,
+        std::uint32_t command_value,
+        std::uint32_t command_guest_memory_address = 0U,
+        std::uint32_t command_mask = 0U,
+        std::uint32_t command_compare_op = 0U,
+        std::optional<Gx2DrawCall> command_draw_call = std::nullopt)
+        : type(command_type),
+          register_address(command_register_address),
+          value(command_value),
+          guest_memory_address(command_guest_memory_address),
+          mask(command_mask),
+          compare_op(command_compare_op),
+          draw_call(command_draw_call)
+    {
+    }
+
+    constexpr bool operator==(const Gx2Command&) const = default;
 };
 
 struct Gx2ClearColorRequest
