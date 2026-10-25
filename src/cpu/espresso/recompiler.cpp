@@ -389,6 +389,8 @@ struct NativeAddzeoRecord
     std::uint32_t summary_overflow{};
 };
 
+using NativeAddmeoRecord = NativeAddzeoRecord;
+
 using NativeSubfzeRecord = NativeAddzeRecord;
 
 struct NativeSrawRecord
@@ -479,6 +481,7 @@ struct NativeExecutionContext
     std::array<NativeAddzeRecord, 64> addze_records{};
     std::array<NativeAddzeoRecord, 64> addzeo_records{};
     std::array<NativeAddzeRecord, 64> addme_records{};
+    std::array<NativeAddmeoRecord, 64> addmeo_records{};
     std::array<NativeAddzeRecord, 64> subfme_records{};
     std::array<NativeSubfzeRecord, 64> subfze_records{};
     std::array<NativeSrawRecord, 64> sraw_records{};
@@ -4764,6 +4767,10 @@ struct BlockCode
     {
         return true;
     }
+    if (insn.opcode == Opcode::add_to_minus_one_extended_overflow)
+    {
+        return true;
+    }
     if (insn.opcode == Opcode::subtract_from_minus_one_extended)
     {
         return true;
@@ -5052,6 +5059,7 @@ struct BlockCode
     case Opcode::add_extended: return "adde";
     case Opcode::add_extended_overflow: return "addeo";
     case Opcode::add_to_minus_one_extended: return "addme";
+    case Opcode::add_to_minus_one_extended_overflow: return "addmeo";
     case Opcode::subtract_from_minus_one_extended: return "subfme";
     case Opcode::add_to_zero_extended: return "addze";
     case Opcode::add_to_zero_extended_overflow: return "addzeo";
@@ -7398,6 +7406,100 @@ struct Recompiler::Impl
                     compiler.or_(less, xer_so);
                     compiler.shl(less, imm(28U));
                     x86::Gp cr = compiler.new_gp32("addme_cr0");
+                    compiler.mov(cr, x86::dword_ptr(
+                        state, static_cast<std::int32_t>(offsetof(CpuState, cr))));
+                    compiler.and_(cr, imm(0x0FFFFFFFU));
+                    compiler.or_(cr, less);
+                    compiler.mov(x86::dword_ptr(
+                        state, static_cast<std::int32_t>(offsetof(CpuState, cr))), cr);
+                }
+                break;
+            }
+            case Opcode::add_to_minus_one_extended_overflow:
+            {
+                const std::size_t record_offset = offsetof(NativeExecutionContext,
+                    addmeo_records) + index * sizeof(NativeAddmeoRecord);
+                constexpr std::size_t xer_offset = offsetof(CpuState, xer);
+                x86::Gp operand = read_guest_gpr(insn.base);
+                x86::Gp carry_in = compiler.new_gp32("addmeo_carry_in");
+                compiler.mov(carry_in, x86::dword_ptr(
+                    state, static_cast<std::int32_t>(xer_offset)));
+                compiler.shr(carry_in, imm(29U));
+                compiler.and_(carry_in, imm(1U));
+                compiler.mov(x86::dword_ptr(context, static_cast<std::int32_t>(
+                    record_offset + offsetof(NativeAddmeoRecord, operand))), operand);
+                compiler.mov(x86::dword_ptr(context, static_cast<std::int32_t>(
+                    record_offset + offsetof(NativeAddmeoRecord, carry_in))), carry_in);
+
+                // addmeo computes rA + 0xFFFFFFFF + old_CA. ADC supplies the
+                // exact carry-out and signed-overflow flags for that sum.
+                x86::Gp result = compiler.new_gp32("addmeo_result");
+                compiler.mov(result, operand);
+                compiler.bt(carry_in, imm(0U));
+                compiler.adc(result, imm(0xFFFFFFFFU));
+                x86::Gp carry_out = compiler.new_gp32("addmeo_carry_out");
+                compiler.mov(carry_out, imm(0U));
+                compiler.setb(carry_out.r8());
+                x86::Gp overflow = compiler.new_gp32("addmeo_overflow");
+                compiler.mov(overflow, imm(0U));
+                compiler.seto(overflow.r8());
+                compiler.mov(x86::dword_ptr(context, static_cast<std::int32_t>(
+                    record_offset + offsetof(NativeAddmeoRecord, result))), result);
+                compiler.mov(x86::dword_ptr(context, static_cast<std::int32_t>(
+                    record_offset + offsetof(NativeAddmeoRecord, carry_out))), carry_out);
+                compiler.mov(x86::dword_ptr(context, static_cast<std::int32_t>(
+                    record_offset + offsetof(NativeAddmeoRecord, overflow))), overflow);
+
+                x86::Gp xer = compiler.new_gp32("addmeo_xer");
+                compiler.mov(xer, x86::dword_ptr(
+                    state, static_cast<std::int32_t>(xer_offset)));
+                x86::Gp summary_overflow = compiler.new_gp32("addmeo_summary_overflow");
+                compiler.mov(summary_overflow, xer);
+                compiler.shr(summary_overflow, imm(31U));
+                compiler.or_(summary_overflow, overflow);
+                compiler.shl(summary_overflow, imm(31U));
+                x86::Gp overflow_bit = compiler.new_gp32("addmeo_overflow_bit");
+                compiler.mov(overflow_bit, overflow);
+                compiler.shl(overflow_bit, imm(30U));
+                x86::Gp carry_bit = compiler.new_gp32("addmeo_carry_bit");
+                compiler.mov(carry_bit, carry_out);
+                compiler.shl(carry_bit, imm(29U));
+                compiler.and_(xer, imm(~(xer_summary_overflow_mask |
+                    xer_overflow_mask | xer_carry_mask)));
+                compiler.or_(xer, summary_overflow);
+                compiler.or_(xer, overflow_bit);
+                compiler.or_(xer, carry_bit);
+                compiler.mov(x86::dword_ptr(
+                    state, static_cast<std::int32_t>(xer_offset)), xer);
+                compiler.mov(x86::dword_ptr(context, static_cast<std::int32_t>(
+                    record_offset + offsetof(NativeAddmeoRecord, summary_overflow))),
+                    summary_overflow);
+                write_guest_gpr(insn.destination, result);
+
+                if (insn.record)
+                {
+                    compiler.test(result, result);
+                    x86::Gp less = compiler.new_gp32("addmeo_cr0_lt");
+                    x86::Gp greater = compiler.new_gp32("addmeo_cr0_gt");
+                    x86::Gp equal = compiler.new_gp32("addmeo_cr0_eq");
+                    compiler.mov(less, imm(0U));
+                    compiler.setl(less.r8());
+                    compiler.mov(greater, imm(0U));
+                    compiler.setg(greater.r8());
+                    compiler.mov(equal, imm(0U));
+                    compiler.sete(equal.r8());
+                    compiler.shl(less, imm(3U));
+                    compiler.shl(greater, imm(2U));
+                    compiler.shl(equal, imm(1U));
+                    compiler.or_(less, greater);
+                    compiler.or_(less, equal);
+                    x86::Gp xer_so = compiler.new_gp32("addmeo_cr0_so");
+                    compiler.mov(xer_so, x86::dword_ptr(
+                        state, static_cast<std::int32_t>(xer_offset)));
+                    compiler.shr(xer_so, imm(31U));
+                    compiler.or_(less, xer_so);
+                    compiler.shl(less, imm(28U));
+                    x86::Gp cr = compiler.new_gp32("addmeo_cr0");
                     compiler.mov(cr, x86::dword_ptr(
                         state, static_cast<std::int32_t>(offsetof(CpuState, cr))));
                     compiler.and_(cr, imm(0x0FFFFFFFU));
@@ -11778,6 +11880,26 @@ RunResult Recompiler::run(EspressoCore& core, std::size_t max_steps)
                 entry.carry_input = record.carry_in != 0U;
                 entry.has_carry_result = true;
                 entry.carry_result = record.carry_out != 0U;
+                core.append_instruction_history(std::move(entry));
+                continue;
+            }
+            if (insn.opcode == Opcode::add_to_minus_one_extended_overflow)
+            {
+                InstructionHistoryEntry entry = native_history(insn, cia);
+                const NativeAddmeoRecord& record = context.addmeo_records[i];
+                entry.source_registers[0] = insn.base;
+                entry.source_values[0] = record.operand;
+                entry.source_count = 1U;
+                entry.has_destination = true;
+                entry.destination_register = insn.destination;
+                entry.destination_value = record.result;
+                entry.has_carry_input = true;
+                entry.carry_input = record.carry_in != 0U;
+                entry.has_carry_result = true;
+                entry.carry_result = record.carry_out != 0U;
+                entry.has_overflow_result = true;
+                entry.overflow_result = record.overflow != 0U;
+                entry.summary_overflow_result = record.summary_overflow != 0U;
                 core.append_instruction_history(std::move(entry));
                 continue;
             }
