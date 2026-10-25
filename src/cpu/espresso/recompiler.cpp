@@ -273,6 +273,15 @@ struct NativeAddcRecord
     std::uint32_t carry_out{};
 };
 
+struct NativeAddeRecord
+{
+    std::uint32_t operand_a{};
+    std::uint32_t operand_b{};
+    std::uint32_t carry_in{};
+    std::uint32_t result{};
+    std::uint32_t carry_out{};
+};
+
 struct NativeAddzeRecord
 {
     std::uint32_t operand{};
@@ -341,6 +350,7 @@ struct NativeExecutionContext
     std::array<NativeFselRecord, 64> fsel_records{};
     std::array<NativeMulhwuRecord, 64> mulhwu_records{};
     std::array<NativeAddcRecord, 64> addc_records{};
+    std::array<NativeAddeRecord, 64> adde_records{};
     std::array<NativeAddzeRecord, 64> addze_records{};
     std::array<NativeSubfzeRecord, 64> subfze_records{};
     std::array<NativeExtsbRecord, 64> extsb_records{};
@@ -3980,6 +3990,10 @@ struct BlockCode
     {
         return true;
     }
+    if (insn.opcode == Opcode::add_extended)
+    {
+        return true;
+    }
     if (insn.opcode == Opcode::add_to_zero_extended)
     {
         return true;
@@ -4218,6 +4232,7 @@ struct BlockCode
     case Opcode::subtract_from: return "subf";
     case Opcode::subtract_from_carrying: return "subfc";
     case Opcode::add_carrying: return "addc";
+    case Opcode::add_extended: return "adde";
     case Opcode::add_to_zero_extended: return "addze";
     case Opcode::subtract_from_zero_extended: return "subfze";
     case Opcode::subtract_from_extended: return "subfe";
@@ -5613,6 +5628,92 @@ struct Recompiler::Impl
                         state, static_cast<std::int32_t>(offsetof(CpuState, cr))));
                     compiler.and_(cr, imm(0x0FFFFFFFU));
                     compiler.or_(cr, field);
+                    compiler.mov(x86::dword_ptr(
+                        state, static_cast<std::int32_t>(offsetof(CpuState, cr))), cr);
+                }
+                break;
+            }
+            case Opcode::add_extended:
+            {
+                const std::size_t record_offset = offsetof(NativeExecutionContext,
+                    adde_records) + index * sizeof(NativeAddeRecord);
+                constexpr std::size_t xer_offset = offsetof(CpuState, xer);
+                x86::Gp operand_a = read_guest_gpr(insn.base);
+                x86::Gp operand_b = read_guest_gpr(insn.source);
+                x86::Gp carry_in = compiler.new_gp32("adde_carry_in");
+                compiler.mov(carry_in, x86::dword_ptr(
+                    state, static_cast<std::int32_t>(xer_offset)));
+                compiler.shr(carry_in, imm(29U));
+                compiler.and_(carry_in, imm(1U));
+
+                compiler.mov(x86::dword_ptr(context,
+                    static_cast<std::int32_t>(record_offset +
+                        offsetof(NativeAddeRecord, operand_a))), operand_a);
+                compiler.mov(x86::dword_ptr(context,
+                    static_cast<std::int32_t>(record_offset +
+                        offsetof(NativeAddeRecord, operand_b))), operand_b);
+                compiler.mov(x86::dword_ptr(context,
+                    static_cast<std::int32_t>(record_offset +
+                        offsetof(NativeAddeRecord, carry_in))), carry_in);
+
+                x86::Gp result = compiler.new_gp32("adde_result");
+                compiler.mov(result, operand_a);
+                compiler.add(result, operand_b);
+                x86::Gp carry_ab = compiler.new_gp32("adde_carry_ab");
+                compiler.mov(carry_ab, imm(0U));
+                compiler.setb(carry_ab.r8());
+                compiler.add(result, carry_in);
+                x86::Gp carry_cin = compiler.new_gp32("adde_carry_cin");
+                compiler.mov(carry_cin, imm(0U));
+                compiler.setb(carry_cin.r8());
+                compiler.or_(carry_ab, carry_cin);
+                compiler.mov(x86::dword_ptr(context,
+                    static_cast<std::int32_t>(record_offset +
+                        offsetof(NativeAddeRecord, result))), result);
+                compiler.mov(x86::dword_ptr(context,
+                    static_cast<std::int32_t>(record_offset +
+                        offsetof(NativeAddeRecord, carry_out))), carry_ab);
+
+                x86::Gp xer = compiler.new_gp32("adde_xer");
+                compiler.mov(xer, x86::dword_ptr(
+                    state, static_cast<std::int32_t>(xer_offset)));
+                compiler.and_(xer, imm(~xer_carry_mask));
+                x86::Gp carry_bit = compiler.new_gp32("adde_carry_bit");
+                compiler.mov(carry_bit, carry_ab);
+                compiler.shl(carry_bit, imm(29U));
+                compiler.or_(xer, carry_bit);
+                compiler.mov(x86::dword_ptr(
+                    state, static_cast<std::int32_t>(xer_offset)), xer);
+                write_guest_gpr(insn.destination, result);
+
+                if (insn.record)
+                {
+                    compiler.test(result, result);
+                    x86::Gp less = compiler.new_gp32("adde_cr0_lt");
+                    x86::Gp greater = compiler.new_gp32("adde_cr0_gt");
+                    x86::Gp equal = compiler.new_gp32("adde_cr0_eq");
+                    compiler.mov(less, imm(0U));
+                    compiler.setl(less.r8());
+                    compiler.mov(greater, imm(0U));
+                    compiler.setg(greater.r8());
+                    compiler.mov(equal, imm(0U));
+                    compiler.sete(equal.r8());
+                    compiler.shl(less, imm(3U));
+                    compiler.shl(greater, imm(2U));
+                    compiler.shl(equal, imm(1U));
+                    compiler.or_(less, greater);
+                    compiler.or_(less, equal);
+                    x86::Gp xer_so = compiler.new_gp32("adde_cr0_so");
+                    compiler.mov(xer_so, x86::dword_ptr(
+                        state, static_cast<std::int32_t>(xer_offset)));
+                    compiler.shr(xer_so, imm(31U));
+                    compiler.or_(less, xer_so);
+                    compiler.shl(less, imm(28U));
+                    x86::Gp cr = compiler.new_gp32("adde_cr0");
+                    compiler.mov(cr, x86::dword_ptr(
+                        state, static_cast<std::int32_t>(offsetof(CpuState, cr))));
+                    compiler.and_(cr, imm(0x0FFFFFFFU));
+                    compiler.or_(cr, less);
                     compiler.mov(x86::dword_ptr(
                         state, static_cast<std::int32_t>(offsetof(CpuState, cr))), cr);
                 }
@@ -9079,6 +9180,25 @@ RunResult Recompiler::run(EspressoCore& core, std::size_t max_steps)
                 entry.has_destination = true;
                 entry.destination_register = insn.destination;
                 entry.destination_value = record.result;
+                entry.has_carry_result = true;
+                entry.carry_result = record.carry_out != 0U;
+                core.append_instruction_history(std::move(entry));
+                continue;
+            }
+            if (insn.opcode == Opcode::add_extended)
+            {
+                InstructionHistoryEntry entry = native_history(insn, cia);
+                const NativeAddeRecord& record = context.adde_records[i];
+                entry.source_registers[0] = insn.base;
+                entry.source_values[0] = record.operand_a;
+                entry.source_registers[1] = insn.source;
+                entry.source_values[1] = record.operand_b;
+                entry.source_count = insn.source == insn.base ? 1U : 2U;
+                entry.has_destination = true;
+                entry.destination_register = insn.destination;
+                entry.destination_value = record.result;
+                entry.has_carry_input = true;
+                entry.carry_input = record.carry_in != 0U;
                 entry.has_carry_result = true;
                 entry.carry_result = record.carry_out != 0U;
                 core.append_instruction_history(std::move(entry));
