@@ -260,6 +260,14 @@ namespace
         (static_cast<std::uint32_t>(source_b) << 11U);
 }
 
+[[nodiscard]] constexpr std::uint32_t ps_cmpu1_form(
+    std::uint8_t cr_field, std::uint8_t source_a, std::uint8_t source_b)
+{
+    return (4U << 26U) | (static_cast<std::uint32_t>(cr_field) << 23U) |
+        (static_cast<std::uint32_t>(source_a) << 16U) |
+        (static_cast<std::uint32_t>(source_b) << 11U) | (64U << 1U);
+}
+
 [[nodiscard]] constexpr std::uint32_t fctiwz_form(
     std::uint8_t destination, std::uint8_t source)
 {
@@ -982,6 +990,95 @@ void recompiler_ps_cmpu0_differential_test()
         assert(history.fp_compare_b_raw == expected.fp_compare_b_raw);
         assert(history.fp_compare_result == expected.fp_compare_result);
         assert(!history.fp_compare_uses_ps1);
+    }
+    assert(actual.instruction_history[0].fp_compare_result == 0x8U);
+    assert(actual.instruction_history[1].fp_compare_result == 0x1U);
+    assert(actual.instruction_history[2].fp_compare_result == 0x1U);
+}
+
+void recompiler_ps_cmpu1_differential_test()
+{
+    constexpr std::uint32_t start = 0x100U;
+    constexpr std::array program{
+        ps_cmpu1_form(1U, 1U, 2U),
+        ps_cmpu1_form(2U, 3U, 4U),
+        ps_cmpu1_form(3U, 5U, 6U),
+    };
+    static_assert(ps_cmpu1_form(1U, 1U, 2U) == 0x10811080U);
+    constexpr std::uint64_t positive_one = 0x3FF0000000000000ULL;
+    constexpr std::uint64_t positive_two = 0x4000000000000000ULL;
+    constexpr std::uint64_t qnan = 0x7FF8123456789ABCULL;
+    constexpr std::uint64_t snan = 0xFFF0000000000001ULL;
+    EspressoCore interpreted(0x1000U);
+    EspressoCore compiled(0x1000U);
+    for (EspressoCore* core : {&interpreted, &compiled})
+    {
+        for (std::size_t index = 0U; index < program.size(); ++index)
+        {
+            core->memory.write32_be(start + static_cast<std::uint32_t>(index * 4U),
+                program[index]);
+        }
+        core->state.cia = start;
+        core->state.gpr.fill(0xC001D00DU);
+        core->state.fpr.fill(positive_one);
+        core->state.fpr_ps1.fill(positive_one);
+        core->state.fpr[1] = 0x4022000000000000ULL; // PS0=9, opposite to PS1 compare
+        core->state.fpr_ps1[1] = positive_one;
+        core->state.fpr[2] = positive_one;
+        core->state.fpr_ps1[2] = positive_two;
+        core->state.fpr[3] = positive_one;
+        core->state.fpr_ps1[3] = qnan;
+        core->state.fpr[4] = positive_two;
+        core->state.fpr_ps1[4] = positive_one;
+        core->state.fpr[5] = positive_one;
+        core->state.fpr_ps1[5] = positive_one;
+        core->state.fpr[6] = positive_two;
+        core->state.fpr_ps1[6] = snan;
+        core->state.cr = 0xA5C39E71U;
+        core->state.xer = 0x80000000U;
+        core->state.lr = 0x12345678U;
+        core->state.ctr = 0x87654321U;
+        core->state.fpscr = 0x0000A025U | fpscr::ve_mask;
+    }
+
+    const auto original_gprs = compiled.state.gpr;
+    const auto original_fpr = compiled.state.fpr;
+    const auto original_fpr_ps1 = compiled.state.fpr_ps1;
+    const auto original_memory = compiled.memory.read32_be(start);
+    const RunResult oracle = interpreted.run(program.size());
+    Recompiler recompiler;
+    const RunResult actual = recompiler.run(compiled, program.size());
+    assert(actual.reason == oracle.reason);
+    assert(actual.steps == oracle.steps && actual.steps == program.size());
+    assert(actual.cia == oracle.cia);
+    assert(compiled.state.gpr == interpreted.state.gpr &&
+        compiled.state.gpr == original_gprs);
+    assert(compiled.state.fpr == interpreted.state.fpr && compiled.state.fpr == original_fpr);
+    assert(compiled.state.fpr_ps1 == interpreted.state.fpr_ps1 &&
+        compiled.state.fpr_ps1 == original_fpr_ps1);
+    assert(compiled.state.cr == interpreted.state.cr);
+    assert(compiled.state.xer == interpreted.state.xer);
+    assert(compiled.state.lr == interpreted.state.lr);
+    assert(compiled.state.ctr == interpreted.state.ctr);
+    assert(compiled.state.fpscr == interpreted.state.fpscr);
+    assert(compiled.memory.read32_be(start) == original_memory);
+    assert((compiled.state.fpscr & fpscr::vxsnan_mask) != 0U);
+    assert((compiled.state.fpscr & fpscr::fex_mask) != 0U);
+    assert(recompiler.statistics().native_instructions == program.size());
+    assert(recompiler.statistics().interpreter_fallbacks == 0U);
+    assert(actual.instruction_history.size() == program.size());
+    for (std::size_t index = 0U; index < program.size(); ++index)
+    {
+        const InstructionHistoryEntry& expected = oracle.instruction_history[index];
+        const InstructionHistoryEntry& history = actual.instruction_history[index];
+        assert(history.completed && history.opcode_name == "ps_cmpu1");
+        assert(history.has_fp_compare && history.fp_compare_uses_ps1);
+        assert(history.fp_compare_cr_field == expected.fp_compare_cr_field);
+        assert(history.fp_compare_a_register == expected.fp_compare_a_register);
+        assert(history.fp_compare_b_register == expected.fp_compare_b_register);
+        assert(history.fp_compare_a_raw == expected.fp_compare_a_raw);
+        assert(history.fp_compare_b_raw == expected.fp_compare_b_raw);
+        assert(history.fp_compare_result == expected.fp_compare_result);
     }
     assert(actual.instruction_history[0].fp_compare_result == 0x8U);
     assert(actual.instruction_history[1].fp_compare_result == 0x1U);
@@ -7884,6 +7981,7 @@ int main()
     recompiler_cmpw_differential_test();
     recompiler_fcmpu_differential_test();
     recompiler_ps_cmpu0_differential_test();
+    recompiler_ps_cmpu1_differential_test();
     recompiler_subfic_differential_test();
     recompiler_subfc_differential_test();
     recompiler_subfe_differential_test();

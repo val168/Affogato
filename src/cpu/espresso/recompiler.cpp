@@ -4014,6 +4014,7 @@ struct BlockCode
     case Opcode::compare_unsigned_register:
     case Opcode::floating_compare_unordered:
     case Opcode::paired_single_compare_unordered0:
+    case Opcode::paired_single_compare_unordered1:
     case Opcode::floating_convert_to_integer_word_zero:
     case Opcode::floating_reciprocal_square_root_estimate:
     case Opcode::floating_round_to_single:
@@ -4209,6 +4210,7 @@ struct BlockCode
     case Opcode::compare_unsigned_register: return "cmplw";
     case Opcode::floating_compare_unordered: return "fcmpu";
     case Opcode::paired_single_compare_unordered0: return "ps_cmpu0";
+    case Opcode::paired_single_compare_unordered1: return "ps_cmpu1";
     case Opcode::move_condition_register_field: return "mcrf";
     case Opcode::move_from_condition_register: return "mfcr";
     case Opcode::move_to_condition_register_fields: return "mtcrf";
@@ -5839,16 +5841,25 @@ struct Recompiler::Impl
             }
             case Opcode::floating_compare_unordered:
             case Opcode::paired_single_compare_unordered0:
+            case Opcode::paired_single_compare_unordered1:
             {
                 const std::uint32_t compare_record_offset = static_cast<std::uint32_t>(
                     offsetof(NativeExecutionContext, fp_compare_records) +
                     index * sizeof(NativeFpCompareRecord));
                 x86::Gp a_raw = compiler.new_gp64("fcmpu_a_raw");
                 x86::Gp b_raw = compiler.new_gp64("fcmpu_b_raw");
+                const std::int32_t a_offset = insn.fp_compare_uses_ps1
+                    ? static_cast<std::int32_t>(offsetof(CpuState, fpr_ps1) +
+                        insn.fp_compare_a * sizeof(std::uint64_t))
+                    : fpr_offset(insn.fp_compare_a);
+                const std::int32_t b_offset = insn.fp_compare_uses_ps1
+                    ? static_cast<std::int32_t>(offsetof(CpuState, fpr_ps1) +
+                        insn.fp_compare_b * sizeof(std::uint64_t))
+                    : fpr_offset(insn.fp_compare_b);
                 compiler.mov(a_raw, x86::qword_ptr(
-                    state, static_cast<std::int32_t>(fpr_offset(insn.fp_compare_a))));
+                    state, a_offset));
                 compiler.mov(b_raw, x86::qword_ptr(
-                    state, static_cast<std::int32_t>(fpr_offset(insn.fp_compare_b))));
+                    state, b_offset));
 
                 x86::Vec a = compiler.new_xmm("fcmpu_a");
                 x86::Vec b = compiler.new_xmm("fcmpu_b");
@@ -8907,7 +8918,8 @@ RunResult Recompiler::run(EspressoCore& core, std::size_t max_steps)
                 continue;
             }
             if (insn.opcode == Opcode::floating_compare_unordered ||
-                insn.opcode == Opcode::paired_single_compare_unordered0)
+                insn.opcode == Opcode::paired_single_compare_unordered0 ||
+                insn.opcode == Opcode::paired_single_compare_unordered1)
             {
                 InstructionHistoryEntry entry = native_history(insn, cia);
                 const NativeFpCompareRecord& record = context.fp_compare_records[i];
@@ -8915,6 +8927,7 @@ RunResult Recompiler::run(EspressoCore& core, std::size_t max_steps)
                 entry.fp_compare_cr_field = insn.cr_field;
                 entry.fp_compare_a_register = insn.fp_compare_a;
                 entry.fp_compare_b_register = insn.fp_compare_b;
+                entry.fp_compare_uses_ps1 = insn.fp_compare_uses_ps1;
                 entry.fp_compare_a_raw = record.a_raw;
                 entry.fp_compare_b_raw = record.b_raw;
                 entry.fp_compare_result = record.result;
