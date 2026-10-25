@@ -13128,6 +13128,63 @@ void memcpy_hle_tests()
 
 void os_block_set_hle_tests();
 
+void dc_invalidate_range_hle_tests()
+{
+    constexpr std::uint32_t address = 0x180U;
+    constexpr std::uint32_t size = 0x80U;
+    constexpr std::uint32_t return_address = 0x0274BE78U;
+
+    EspressoCore core(0x1000U);
+    register_coreinit_hle(core.hle);
+    const std::uint32_t import = core.hle.bind_import(
+        "coreinit", "DCInvalidateRange");
+    assert(import != 0U);
+
+    for (std::uint32_t offset = 0U; offset < size; ++offset)
+    {
+        core.memory.write8(address + offset,
+                           static_cast<std::uint8_t>(offset ^ 0x5AU));
+    }
+    std::vector<std::uint8_t> bytes_before(size);
+    core.memory.read_bytes(address, bytes_before);
+    core.state.gpr.fill(0xC7000000U);
+    core.state.gpr[3] = address;
+    core.state.gpr[4] = size;
+    core.state.cr = 0x12345678U;
+    core.state.xer = 0xA5A55A5AU;
+    core.state.ctr = 0x87654321U;
+    core.state.fpscr = 0x5A5AA55AU;
+    const auto gprs_before = core.state.gpr;
+    const auto fprs_before = core.state.fpr;
+    const auto ps1_before = core.state.fpr_ps1;
+
+    core.state.cia = import;
+    core.state.lr = return_address;
+    const RunResult result = core.run(1U);
+    assert(result.reason == StopReason::instruction_limit && result.steps == 1U);
+    assert(core.state.cia == return_address && core.state.lr == return_address);
+    assert(core.state.gpr == gprs_before);
+    assert(core.state.cr == 0x12345678U);
+    assert(core.state.xer == 0xA5A55A5AU);
+    assert(core.state.ctr == 0x87654321U);
+    assert(core.state.fpscr == 0x5A5AA55AU);
+    assert(core.state.fpr == fprs_before && core.state.fpr_ps1 == ps1_before);
+    std::vector<std::uint8_t> bytes_after(size);
+    core.memory.read_bytes(address, bytes_after);
+    assert(bytes_after == bytes_before);
+
+    // In the coherent-memory model the cache hint does not dereference this
+    // range; zero length and a non-RAM pointer remain a harmless no-op.
+    core.state.cia = import;
+    core.state.lr = return_address;
+    core.state.gpr[3] = 0xDEADBEEFU;
+    core.state.gpr[4] = 0U;
+    const RunResult empty_range = core.run(1U);
+    assert(empty_range.reason == StopReason::instruction_limit);
+    assert(core.state.cia == return_address);
+    assert(core.state.gpr[3] == 0xDEADBEEFU && core.state.gpr[4] == 0U);
+}
+
 void dc_flush_range_no_sync_hle_tests()
 {
     constexpr std::uint32_t address = 0x180U;
@@ -34708,6 +34765,7 @@ int main(int argc, char* argv[])
     memset_hle_tests();
     memcpy_hle_tests();
     os_block_move_hle_tests();
+    dc_invalidate_range_hle_tests();
     dc_flush_range_no_sync_hle_tests();
     os_block_set_hle_tests();
     os_get_system_info_hle_tests();

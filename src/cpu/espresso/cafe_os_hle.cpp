@@ -3663,6 +3663,15 @@ void register_coreinit_hle(HleDispatcher& dispatcher)
         });
     dispatcher.register_function(
         "coreinit",
+        "DCInvalidateRange",
+        [](EspressoCore&) {
+            // Guest RAM is immediately coherent in Affogato and neither the
+            // Espresso D-cache nor a separate GPU-side data cache is modeled.
+            // There is therefore no cached copy to invalidate; preserve the
+            // guest arguments and memory unchanged.
+        });
+    dispatcher.register_function(
+        "coreinit",
         "DCFlushRangeNoSync",
         [](EspressoCore&) {
             // GuestMemory is immediately coherent and Affogato has neither an
