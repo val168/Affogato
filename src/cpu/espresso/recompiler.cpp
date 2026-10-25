@@ -4019,7 +4019,8 @@ struct BlockCode
     {
         return true;
     }
-    if (insn.opcode == Opcode::multiply_high_word_unsigned)
+    if (insn.opcode == Opcode::multiply_high_word_unsigned ||
+        insn.opcode == Opcode::multiply_high_word_signed)
     {
         return true;
     }
@@ -4284,6 +4285,7 @@ struct BlockCode
     case Opcode::multiply_low_immediate: return "mulli";
     case Opcode::multiply_low_word: return "mullw";
     case Opcode::multiply_high_word_unsigned: return "mulhwu";
+    case Opcode::multiply_high_word_signed: return "mulhw";
     case Opcode::divide_word_unsigned: return "divwu";
     case Opcode::divide_word_signed: return "divw";
     case Opcode::extend_sign_byte: return "extsb";
@@ -5286,6 +5288,7 @@ struct Recompiler::Impl
                 break;
             }
             case Opcode::multiply_high_word_unsigned:
+            case Opcode::multiply_high_word_signed:
             {
                 const std::size_t record_base =
                     offsetof(NativeExecutionContext, mulhwu_records) +
@@ -5298,8 +5301,16 @@ struct Recompiler::Impl
                     record_base + offsetof(NativeMulhwuRecord, source_b))), source_b);
                 x86::Gp product = compiler.new_gp64("mulhwu_product");
                 x86::Gp rhs = compiler.new_gp64("mulhwu_rhs");
-                compiler.mov(product.r32(), source_a);
-                compiler.mov(rhs.r32(), source_b);
+                if (insn.opcode == Opcode::multiply_high_word_signed)
+                {
+                    compiler.movsxd(product, source_a);
+                    compiler.movsxd(rhs, source_b);
+                }
+                else
+                {
+                    compiler.mov(product.r32(), source_a);
+                    compiler.mov(rhs.r32(), source_b);
+                }
                 compiler.imul(product, rhs);
                 compiler.shr(product, imm(32U));
                 x86::Gp result = compiler.new_gp32("mulhwu_result");
@@ -9950,7 +9961,8 @@ RunResult Recompiler::run(EspressoCore& core, std::size_t max_steps)
                 core.append_instruction_history(std::move(entry));
                 continue;
             }
-            if (insn.opcode == Opcode::multiply_high_word_unsigned)
+            if (insn.opcode == Opcode::multiply_high_word_unsigned ||
+                insn.opcode == Opcode::multiply_high_word_signed)
             {
                 InstructionHistoryEntry entry = native_history(insn, cia);
                 const NativeMulhwuRecord& record = context.mulhwu_records[i];

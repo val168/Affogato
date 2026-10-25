@@ -693,6 +693,89 @@ void recompiler_mullw_differential_test()
     assert(history.destination_value == 1U);
 }
 
+void recompiler_mulhw_differential_tests()
+{
+    struct Registers
+    {
+        std::uint8_t destination;
+        std::uint8_t base;
+        std::uint8_t source;
+    };
+    constexpr std::array register_cases{
+        Registers{3U, 4U, 5U},
+        Registers{4U, 4U, 5U},
+        Registers{5U, 4U, 5U},
+        Registers{4U, 4U, 4U},
+    };
+    constexpr std::array<std::array<std::uint32_t, 2U>, 8U> operand_cases{{
+        {0U, 0xFFFFFFFFU},
+        {1U, 1U},
+        {0xFFFFFFFFU, 2U},
+        {0xFFFFFFFFU, 0xFFFFFFFFU},
+        {0x80000000U, 1U},
+        {0x80000000U, 0xFFFFFFFFU},
+        {0x7FFFFFFFU, 0x7FFFFFFFU},
+        {0x80000001U, 0x7FFFFFFEU},
+    }};
+
+    for (const Registers registers : register_cases)
+    {
+        for (const auto& [lhs, rhs] : operand_cases)
+        {
+            for (const bool record : {false, true})
+            {
+                EspressoCore interpreted(0x1000U);
+                EspressoCore compiled(0x1000U);
+                const std::uint32_t instruction = x_form(
+                    registers.destination, registers.base, registers.source,
+                    75U, record);
+                for (EspressoCore* core : {&interpreted, &compiled})
+                {
+                    core->memory.write32_be(0x100U, instruction);
+                    core->state.cia = 0x100U;
+                    core->state.gpr.fill(0xDEADBEEFU);
+                    core->state.gpr[registers.base] = lhs;
+                    core->state.gpr[registers.source] =
+                        registers.source == registers.base ? lhs : rhs;
+                    core->state.cr = 0xA5C39E71U;
+                    core->state.xer = record ? 0x800000A5U : 0x200000A5U;
+                    core->state.lr = 0x12345678U;
+                    core->state.ctr = 0x87654321U;
+                    core->state.fpscr = 0x89ABCDEFU;
+                }
+
+                const RunResult oracle = interpreted.run(1U);
+                Recompiler recompiler;
+                const RunResult actual = recompiler.run(compiled, 1U);
+                assert(actual.reason == oracle.reason);
+                assert(actual.steps == oracle.steps && actual.steps == 1U);
+                assert(actual.cia == oracle.cia);
+                assert(compiled.state.gpr == interpreted.state.gpr);
+                assert(compiled.state.cr == interpreted.state.cr);
+                assert(compiled.state.xer == interpreted.state.xer);
+                assert(compiled.state.lr == interpreted.state.lr);
+                assert(compiled.state.ctr == interpreted.state.ctr);
+                assert(compiled.state.fpscr == interpreted.state.fpscr);
+                const std::int64_t a = std::bit_cast<std::int32_t>(lhs);
+                const std::int64_t b = std::bit_cast<std::int32_t>(
+                    registers.source == registers.base ? lhs : rhs);
+                const std::int64_t product = a * b;
+                const std::uint32_t expected = static_cast<std::uint32_t>(
+                    static_cast<std::uint64_t>(product) >> 32U);
+                assert(compiled.state.gpr[registers.destination] == expected);
+                assert(recompiler.statistics().native_instructions == 1U);
+                assert(recompiler.statistics().interpreter_fallbacks == 0U);
+                const InstructionHistoryEntry& history =
+                    actual.instruction_history.back();
+                assert(history.opcode_name == (record ? "mulhw." : "mulhw"));
+                assert(history.has_destination &&
+                       history.destination_register == registers.destination);
+                assert(history.destination_value == expected);
+            }
+        }
+    }
+}
+
 void recompiler_cmpwi_differential_test()
 {
     constexpr std::uint32_t start = 0x100U;
@@ -9081,6 +9164,7 @@ int main()
     recompiler_mulli_differential_test();
     recompiler_neg_differential_test();
     recompiler_mullw_differential_test();
+    recompiler_mulhw_differential_tests();
     recompiler_cmpwi_differential_test();
     recompiler_cmplwi_differential_test();
     recompiler_cmpw_differential_test();
