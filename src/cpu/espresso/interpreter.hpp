@@ -360,6 +360,7 @@ public:
 
     [[nodiscard]] StepResult step();
     [[nodiscard]] RunResult run(std::size_t max_steps);
+    [[nodiscard]] std::uint64_t time_base_ticks() const noexcept;
 
     CpuState state{};
     GuestMemory memory;

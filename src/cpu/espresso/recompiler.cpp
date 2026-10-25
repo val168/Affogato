@@ -351,8 +351,14 @@ struct NativeExtsbRecord
 
 using NativeExtshRecord = NativeExtsbRecord;
 
+struct NativeTimeBaseRecord
+{
+    std::uint32_t result{};
+};
+
 struct NativeExecutionContext
 {
+    EspressoCore* core{};
     GuestMemory* memory{};
     const std::uint8_t* flat_memory_data{};
     std::size_t flat_memory_size{};
@@ -415,6 +421,7 @@ struct NativeExecutionContext
     std::array<NativeSrawRecord, 64> sraw_records{};
     std::array<NativeExtsbRecord, 64> extsb_records{};
     std::array<NativeExtshRecord, 64> extsh_records{};
+    std::array<NativeTimeBaseRecord, 64> time_base_records{};
     std::uint64_t memory_access_calls{};
     bool failed{};
     bool guest_memory_fault{};
@@ -505,6 +512,19 @@ struct NativeExecutionContext
         }
     }
 };
+
+extern "C" std::uint32_t native_read_time_base(
+    NativeExecutionContext* context, std::uint32_t upper) noexcept
+{
+    if (context->core == nullptr)
+    {
+        return 0U;
+    }
+    const std::uint64_t ticks = context->core->time_base_ticks();
+    return upper != 0U
+        ? static_cast<std::uint32_t>(ticks >> 32U)
+        : static_cast<std::uint32_t>(ticks);
+}
 
 extern "C" std::uint32_t native_psq_load(
     NativeExecutionContext* context,
@@ -4782,6 +4802,8 @@ struct BlockCode
     case Opcode::move_from_count_register:
     case Opcode::move_to_count_register:
     case Opcode::move_from_xer:
+    case Opcode::move_from_time_base_lower:
+    case Opcode::move_from_time_base_upper:
     case Opcode::move_to_xer:
     case Opcode::move_from_gqr:
     case Opcode::move_to_gqr:
@@ -4983,6 +5005,8 @@ struct BlockCode
     case Opcode::move_from_count_register: return "mfctr";
     case Opcode::move_to_count_register: return "mtctr";
     case Opcode::move_from_xer: return "mfxer";
+    case Opcode::move_from_time_base_lower: return "mftb";
+    case Opcode::move_from_time_base_upper: return "mftbu";
     case Opcode::move_to_xer: return "mtxer";
     case Opcode::move_from_gqr: return "mfgqr";
     case Opcode::move_to_gqr: return "mtgqr";
@@ -7590,6 +7614,27 @@ struct Recompiler::Impl
                 }
                 break;
             }
+            case Opcode::move_from_time_base_lower:
+            case Opcode::move_from_time_base_upper:
+            {
+                auto* invoke = static_cast<InvokeNode*>(nullptr);
+                const auto helper_address = static_cast<std::uint64_t>(
+                    reinterpret_cast<std::uintptr_t>(&native_read_time_base));
+                compiler.invoke(Out(invoke), helper_address,
+                    FuncSignature::build<std::uint32_t, NativeExecutionContext*,
+                        std::uint32_t>(CallConvId::kCDecl));
+                invoke->set_arg(0, context);
+                invoke->set_arg(1, imm(insn.opcode == Opcode::move_from_time_base_upper
+                    ? 1U : 0U));
+                x86::Gp value = compiler.new_gp32("time_base");
+                invoke->set_ret(0, value);
+                compiler.mov(x86::dword_ptr(context, static_cast<std::int32_t>(
+                    offsetof(NativeExecutionContext, time_base_records) +
+                    index * sizeof(NativeTimeBaseRecord) +
+                    offsetof(NativeTimeBaseRecord, result))), value);
+                write_guest_gpr(insn.destination, value);
+                break;
+            }
             case Opcode::move_from_gqr:
             {
                 const std::size_t gqr_offset = offsetof(CpuState, gqr) +
@@ -10053,6 +10098,7 @@ RunResult Recompiler::run(EspressoCore& core, std::size_t max_steps)
 
         NativeExecutionContext& context = impl_->execution_context;
         context.begin_block(core.memory, block->address, block->instructions);
+        context.core = &core;
 #ifndef NDEBUG
         const auto native_start = std::chrono::steady_clock::now();
 #endif
@@ -11090,6 +11136,16 @@ RunResult Recompiler::run(EspressoCore& core, std::size_t max_steps)
                 entry.paired_fp_destination_register = insn.fp_register;
                 entry.paired_fp_destination_ps0 = record.destination_ps0;
                 entry.paired_fp_destination_ps1 = record.destination_ps1;
+                core.append_instruction_history(std::move(entry));
+                continue;
+            }
+            if (insn.opcode == Opcode::move_from_time_base_lower ||
+                insn.opcode == Opcode::move_from_time_base_upper)
+            {
+                InstructionHistoryEntry entry = native_history(insn, cia);
+                entry.has_destination = true;
+                entry.destination_register = insn.destination;
+                entry.destination_value = context.time_base_records[i].result;
                 core.append_instruction_history(std::move(entry));
                 continue;
             }

@@ -2353,6 +2353,11 @@ std::string format_instruction_history(const RunResult& result)
     return text.str();
 }
 
+std::uint64_t EspressoCore::time_base_ticks() const noexcept
+{
+    return elapsed_time_base_ticks(timebase_origin_);
+}
+
 StepResult EspressoCore::step()
 {
     const std::uint32_t cia = state.cia;
@@ -5302,7 +5307,7 @@ StepResult EspressoCore::step()
     case Opcode::move_from_time_base_lower:
     case Opcode::move_from_time_base_upper:
     {
-        const std::uint64_t time_base = elapsed_time_base_ticks(timebase_origin_);
+        const std::uint64_t time_base = time_base_ticks();
         state.gpr[instruction.destination] =
             instruction.opcode == Opcode::move_from_time_base_lower
                 ? static_cast<std::uint32_t>(time_base)

@@ -7316,6 +7316,72 @@ void recompiler_memory_synchronize_differential_test()
     }
 }
 
+void recompiler_move_from_time_base_differential_test()
+{
+    constexpr std::uint32_t start = 0x100U;
+    constexpr std::array<std::uint32_t, 3U> program{
+        0x7C6C42E6U, // mftb r3
+        0x7C8D42E6U, // mftbu r4
+        0x7CAC42E6U, // mftb r5
+    };
+    EspressoCore interpreted(0x1000U);
+    EspressoCore compiled(0x1000U);
+    for (EspressoCore* core : {&interpreted, &compiled})
+    {
+        for (std::size_t index = 0U; index < program.size(); ++index)
+        {
+            core->memory.write32_be(
+                start + static_cast<std::uint32_t>(index * 4U), program[index]);
+        }
+        core->state.cia = start;
+        core->state.gpr.fill(0xA5A5A5A5U);
+        core->state.gpr[3] = 0xDEADBEEFU;
+        core->state.gpr[4] = 0xCAFEBABEU;
+        core->state.gpr[5] = 0x13579BDFU;
+        core->state.cr = 0x12345678U;
+        core->state.xer = 0xE00000A5U;
+        core->state.lr = 0x10203040U;
+        core->state.ctr = 0x50607080U;
+        core->state.fpscr = 0xCAFEBABEU;
+    }
+
+    const RunResult oracle = interpreted.run(program.size());
+    Recompiler recompiler;
+    const RunResult actual = recompiler.run(compiled, program.size());
+    assert(actual.reason == oracle.reason && actual.steps == oracle.steps);
+    assert(actual.steps == program.size() && actual.cia == oracle.cia);
+    assert(compiled.state.gpr[3] != 0xDEADBEEFU);
+    assert(compiled.state.gpr[4] == 0U);
+    assert(compiled.state.gpr[5] >= compiled.state.gpr[3]);
+    assert(interpreted.state.gpr[3] != 0xDEADBEEFU);
+    assert(interpreted.state.gpr[4] == 0U);
+    assert(interpreted.state.gpr[5] >= interpreted.state.gpr[3]);
+    for (std::size_t reg = 0U; reg < compiled.state.gpr.size(); ++reg)
+    {
+        if (reg != 3U && reg != 4U && reg != 5U)
+        {
+            assert(compiled.state.gpr[reg] == interpreted.state.gpr[reg]);
+        }
+    }
+    assert(compiled.state.fpr == interpreted.state.fpr);
+    assert(compiled.state.fpr_ps1 == interpreted.state.fpr_ps1);
+    assert(compiled.state.cr == interpreted.state.cr);
+    assert(compiled.state.xer == interpreted.state.xer);
+    assert(compiled.state.lr == interpreted.state.lr);
+    assert(compiled.state.ctr == interpreted.state.ctr);
+    assert(compiled.state.fpscr == interpreted.state.fpscr);
+    assert(recompiler.statistics().native_instructions == program.size());
+    assert(recompiler.statistics().interpreter_fallbacks == 0U);
+    assert(recompiler.statistics().memory_slow_path_calls == 0U);
+    assert(actual.instruction_history.size() == program.size());
+    assert(actual.instruction_history[0].opcode_name == "mftb");
+    assert(actual.instruction_history[0].destination_value == compiled.state.gpr[3]);
+    assert(actual.instruction_history[1].opcode_name == "mftbu");
+    assert(actual.instruction_history[1].destination_value == compiled.state.gpr[4]);
+    assert(actual.instruction_history[2].opcode_name == "mftb");
+    assert(actual.instruction_history[2].destination_value == compiled.state.gpr[5]);
+}
+
 void recompiler_dcbt_differential_test()
 {
     struct Case
@@ -10404,6 +10470,7 @@ int main()
     recompiler_isync_boundary_differential_test();
     recompiler_eieio_differential_test();
     recompiler_memory_synchronize_differential_test();
+    recompiler_move_from_time_base_differential_test();
     recompiler_dcbt_differential_test();
     recompiler_dcbtst_differential_test();
     recompiler_icbi_differential_test();
