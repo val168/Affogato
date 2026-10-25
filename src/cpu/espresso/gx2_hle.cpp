@@ -885,6 +885,29 @@ void create_gx2_buffer_user_memory(
     core.memory.write32_be(buffer_address + 0x0CU, data_address);
 }
 
+bool gx2r_buffer_exists(EspressoCore& core, std::uint32_t buffer_address)
+{
+    if (buffer_address == 0U)
+    {
+        return false;
+    }
+    constexpr std::uint32_t gx2r_buffer_size = 0x10U;
+    constexpr std::uint32_t cpu_gpu_usage_mask = 0x00007800U;
+    constexpr const char* api_name = "gx2::GX2RBufferExists";
+    if ((buffer_address & 3U) != 0U ||
+        buffer_address > std::numeric_limits<std::uint32_t>::max() -
+                             gx2r_buffer_size)
+    {
+        throw HleExecutionError(std::string(api_name) +
+                                ": buffer pointer is misaligned or wraps");
+    }
+
+    const std::uint32_t resource_flags = core.memory.read32_be(buffer_address);
+    const std::uint32_t data_address =
+        core.memory.read32_be(buffer_address + 0x0CU);
+    return data_address != 0U && (resource_flags & cpu_gpu_usage_mask) != 0U;
+}
+
 std::uint32_t gx2_texture_endian_swap(std::uint32_t format)
 {
     switch (format & 0x3FU)
@@ -2144,6 +2167,15 @@ void register_gx2_hle(HleDispatcher& dispatcher)
             create_gx2_buffer_user_memory(
                 core, core.state.gpr[3], core.state.gpr[4]);
             core.state.gpr[3] = 1U;
+        });
+
+    dispatcher.register_function(
+        "gx2",
+        "GX2RBufferExists",
+        [](EspressoCore& core) {
+            core.state.gpr[3] = gx2r_buffer_exists(core, core.state.gpr[3])
+                ? 1U
+                : 0U;
         });
 
     dispatcher.register_function(

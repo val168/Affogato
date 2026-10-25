@@ -19834,6 +19834,79 @@ void gx2r_create_buffer_user_memory_hle_tests()
     assert(result.reason == StopReason::hle_error);
 }
 
+void gx2r_buffer_exists_hle_tests()
+{
+    constexpr std::uint32_t buffer_address = 0x4000U;
+    constexpr std::uint32_t return_address = 0x0274BD9CU;
+    constexpr std::uint32_t cpu_gpu_usage_mask = 0x00007800U;
+    EspressoCore core(0x10000U);
+    register_gx2_hle(core.hle);
+    const std::uint32_t import = core.hle.bind_import("gx2", "GX2RBufferExists");
+    assert(import != 0U);
+
+    core.state.gpr.fill(0xA5000000U);
+    core.state.gpr[4] = 0x44444444U;
+    core.state.cr = 0x12345678U;
+    core.state.xer = 0xA5A55A5AU;
+    core.state.ctr = 0x87654321U;
+    core.state.fpscr = 0x5A5AA55AU;
+    const auto gprs_before = core.state.gpr;
+    const auto fprs_before = core.state.fpr;
+    const auto ps1_before = core.state.fpr_ps1;
+    const std::uint32_t cr_before = core.state.cr;
+    const std::uint32_t xer_before = core.state.xer;
+    const std::uint32_t ctr_before = core.state.ctr;
+    const std::uint32_t fpscr_before = core.state.fpscr;
+    const auto invoke = [&](std::uint32_t descriptor) {
+        core.state.cia = import;
+        core.state.lr = return_address;
+        core.state.gpr[3] = descriptor;
+        return core.run(1U);
+    };
+
+    auto result = invoke(0U);
+    assert(result.reason == StopReason::instruction_limit);
+    assert(core.state.gpr[3] == 0U && core.state.gpr[4] == gprs_before[4]);
+
+    core.memory.write32_be(buffer_address, cpu_gpu_usage_mask);
+    core.memory.write32_be(buffer_address + 4U, 16U);
+    core.memory.write32_be(buffer_address + 8U, 8U);
+    core.memory.write32_be(buffer_address + 12U, 0U);
+    result = invoke(buffer_address);
+    assert(result.reason == StopReason::instruction_limit);
+    assert(core.state.gpr[3] == 0U); // usage flags cannot make a null ptr exist
+
+    core.memory.write32_be(buffer_address, 0x60000000U);
+    core.memory.write32_be(buffer_address + 12U, 0x8000U);
+    result = invoke(buffer_address);
+    assert(result.reason == StopReason::instruction_limit);
+    assert(core.state.gpr[3] == 0U); // ownership/lock bits are not usage bits
+
+    constexpr std::array<std::uint32_t, 4U> usage_flags{
+        1U << 11U, 1U << 12U, 1U << 13U, 1U << 14U};
+    for (const std::uint32_t usage_flag : usage_flags)
+    {
+        core.memory.write32_be(buffer_address, usage_flag | 0x60000000U);
+        result = invoke(buffer_address);
+        assert(result.reason == StopReason::instruction_limit);
+        assert(core.state.gpr[3] == 1U);
+    }
+
+    assert(core.state.fpr == fprs_before && core.state.fpr_ps1 == ps1_before);
+    assert(core.state.cr == cr_before && core.state.xer == xer_before);
+    assert(core.state.ctr == ctr_before && core.state.fpscr == fpscr_before);
+    for (std::size_t index = 1U; index < core.state.gpr.size(); ++index)
+    {
+        if (index != 3U)
+            assert(core.state.gpr[index] == gprs_before[index]);
+    }
+
+    result = invoke(buffer_address + 2U);
+    assert(result.reason == StopReason::hle_error);
+    result = invoke(0x20000U);
+    assert(result.reason == StopReason::memory_fault);
+}
+
 void gx2_clear_color_hle_tests()
 {
     constexpr std::uint32_t return_address = 0x02750600U;
@@ -32670,6 +32743,7 @@ int main(int argc, char* argv[])
     gx2_init_hle_tests();
     gx2_allocator_hle_tests();
     gx2r_create_buffer_user_memory_hle_tests();
+    gx2r_buffer_exists_hle_tests();
     gx2_clear_color_hle_tests();
     gx2_set_color_buffer_hle_tests();
     gx2_set_depth_stencil_control_hle_tests();
