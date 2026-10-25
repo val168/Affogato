@@ -1947,6 +1947,79 @@ void register_coreinit_hle(HleDispatcher& dispatcher)
                     error_output, static_cast<std::uint32_t>(read_error));
             }
         });
+    dispatcher.register_function(
+        "vpad",
+        "VPADGetTPCalibratedPoint",
+        [](EspressoCore& core) {
+            constexpr std::uint32_t touch_data_size = 8U;
+            constexpr std::uint32_t supported_channel_count = 2U;
+            constexpr std::uint32_t x_offset = 92U;
+            constexpr std::uint32_t y_offset = 254U;
+            constexpr std::uint32_t raw_y_extent = 4095U;
+            constexpr std::uint32_t x_range = 3883U;
+            constexpr std::uint32_t y_range = 3694U;
+            constexpr std::uint32_t display_width = 1280U;
+            constexpr std::uint32_t display_height = 720U;
+
+            const std::uint32_t channel = core.state.gpr[3];
+            const std::uint32_t output = core.state.gpr[4];
+            const std::uint32_t input = core.state.gpr[5];
+            if (channel >= supported_channel_count)
+            {
+                throw HleExecutionError(
+                    "vpad::VPADGetTPCalibratedPoint channel is invalid");
+            }
+
+            try
+            {
+                if (output == 0U || input == 0U)
+                {
+                    throw HleExecutionError(
+                        "vpad::VPADGetTPCalibratedPoint pointer is null");
+                }
+                core.memory.validate_write_range(output, touch_data_size);
+
+                // Snapshot before writing so identical/overlapping input and
+                // output structures behave just like the guest memcpy path.
+                const std::int32_t raw_x = static_cast<std::int16_t>(
+                    core.memory.read16_be(input));
+                const std::int32_t raw_y = static_cast<std::int16_t>(
+                    core.memory.read16_be(input + 2U));
+                const std::uint16_t touched =
+                    core.memory.read16_be(input + 4U);
+                const std::uint16_t validity =
+                    core.memory.read16_be(input + 6U);
+
+                // Cafe's default VPAD calibration maps the raw 12-bit touch
+                // range into the 1280x720 display coordinate space. Integer
+                // division matches truncation in the reference behavior.
+                const std::int32_t adjusted_x =
+                    raw_x - static_cast<std::int32_t>(x_offset);
+                const std::int32_t adjusted_y =
+                    static_cast<std::int32_t>(raw_y_extent) - raw_y -
+                    static_cast<std::int32_t>(y_offset);
+                const std::int32_t clamped_x =
+                    adjusted_x < 0 ? 0 : adjusted_x;
+                const std::int32_t clamped_y =
+                    adjusted_y < 0 ? 0 : adjusted_y;
+                const std::uint16_t display_x = static_cast<std::uint16_t>(
+                    (clamped_x * static_cast<std::int32_t>(display_width)) /
+                    static_cast<std::int32_t>(x_range));
+                const std::uint16_t display_y = static_cast<std::uint16_t>(
+                    (clamped_y * static_cast<std::int32_t>(display_height)) /
+                    static_cast<std::int32_t>(y_range));
+
+                core.memory.write16_be(output, display_x);
+                core.memory.write16_be(output + 2U, display_y);
+                core.memory.write16_be(output + 4U, touched);
+                core.memory.write16_be(output + 6U, validity);
+            }
+            catch (const GuestMemoryFault&)
+            {
+                throw HleExecutionError(
+                    "vpad::VPADGetTPCalibratedPoint guest range is unmapped");
+            }
+        });
 
     dispatcher.register_function(
         "coreinit",

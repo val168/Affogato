@@ -14725,6 +14725,99 @@ void vpad_read_hle_tests()
     assert(core.memory.read32_be(status_buffer + 8U) == 0x00004000U);
 }
 
+void vpad_get_tp_calibrated_point_hle_tests()
+{
+    constexpr std::uint32_t input = 0x305U;
+    constexpr std::uint32_t output = 0x501U;
+    constexpr std::uint32_t return_address = 0x02740130U;
+
+    EspressoCore core(0x1000U);
+    register_coreinit_hle(core.hle);
+    const std::uint32_t import = core.hle.bind_import(
+        "vpad", "VPADGetTPCalibratedPoint");
+
+    // Unaligned big-endian input; default calibration maps this to (1280,360)
+    // and preserves the touch-state/validity words exactly.
+    core.memory.write16_be(input, 3975U);
+    core.memory.write16_be(input + 2U, 1994U);
+    core.memory.write16_be(input + 4U, 1U);
+    core.memory.write16_be(input + 6U, 3U);
+    core.memory.fill_bytes(output, 8U, 0xA5U);
+    core.state.gpr.fill(0xD3000000U);
+    core.state.gpr[3] = 0U;
+    core.state.gpr[4] = output;
+    core.state.gpr[5] = input;
+    core.state.lr = return_address;
+    core.state.cr = 0x12345678U;
+    core.state.xer = 0x87654321U;
+    core.state.ctr = 0xABCDEF01U;
+    core.state.fpscr = 0x5A5AA5A5U;
+    const auto gprs_before = core.state.gpr;
+    const auto fprs_before = core.state.fpr;
+    const auto ps1_before = core.state.fpr_ps1;
+    core.state.cia = import;
+
+    assert(core.run(1U).reason == StopReason::instruction_limit);
+    assert(core.state.cia == return_address);
+    assert(core.state.gpr == gprs_before);
+    assert(core.state.lr == return_address);
+    assert(core.state.cr == 0x12345678U);
+    assert(core.state.xer == 0x87654321U);
+    assert(core.state.ctr == 0xABCDEF01U);
+    assert(core.state.fpscr == 0x5A5AA5A5U);
+    assert(core.state.fpr == fprs_before && core.state.fpr_ps1 == ps1_before);
+    assert(core.memory.read16_be(output) == 1280U);
+    assert(core.memory.read16_be(output + 2U) == 360U);
+    assert(core.memory.read16_be(output + 4U) == 1U);
+    assert(core.memory.read16_be(output + 6U) == 3U);
+    assert(core.memory.read8(output + 8U) == 0U);
+
+    // A no-touch sample still transforms coordinates and preserves the two
+    // validity words; identical input/output pointers are safe.
+    core.memory.write16_be(input, 92U);
+    core.memory.write16_be(input + 2U, 3841U);
+    core.memory.write16_be(input + 4U, 0U);
+    core.memory.write16_be(input + 6U, 2U);
+    core.state.cia = import;
+    core.state.gpr[3] = 1U;
+    core.state.gpr[4] = input;
+    core.state.gpr[5] = input;
+    core.state.lr = return_address;
+    assert(core.run(1U).reason == StopReason::instruction_limit);
+    assert(core.memory.read16_be(input) == 0U);
+    assert(core.memory.read16_be(input + 2U) == 0U);
+    assert(core.memory.read16_be(input + 4U) == 0U);
+    assert(core.memory.read16_be(input + 6U) == 2U);
+
+    // Invalid channel and unmapped input fail before modifying output/state.
+    core.memory.fill_bytes(output, 8U, 0xC3U);
+    core.state.cia = import;
+    core.state.gpr[3] = 2U;
+    core.state.gpr[4] = output;
+    core.state.gpr[5] = input;
+    core.state.lr = return_address;
+    const auto invalid_channel_gprs = core.state.gpr;
+    const RunResult invalid_channel = core.run(1U);
+    assert(invalid_channel.reason == StopReason::hle_error);
+    assert(invalid_channel.detail.find("VPADGetTPCalibratedPoint") !=
+           std::string::npos);
+    assert(core.state.gpr == invalid_channel_gprs);
+    assert(core.memory.read8(output) == 0xC3U);
+
+    core.state.cia = import;
+    core.state.gpr[3] = 0U;
+    core.state.gpr[4] = output;
+    core.state.gpr[5] = 0xFFFFFFFCU;
+    core.state.lr = return_address;
+    const auto invalid_pointer_gprs = core.state.gpr;
+    const RunResult invalid_pointer = core.run(1U);
+    assert(invalid_pointer.reason == StopReason::hle_error);
+    assert(invalid_pointer.detail.find("VPADGetTPCalibratedPoint") !=
+           std::string::npos);
+    assert(core.state.gpr == invalid_pointer_gprs);
+    assert(core.memory.read8(output) == 0xC3U);
+}
+
 void os_create_thread_hle_tests()
 {
     constexpr std::uint32_t thread = 0x1000U;
@@ -35252,6 +35345,7 @@ int main(int argc, char* argv[])
     kpad_init_ex_hle_tests();
     kpad_read_ex_hle_tests();
     vpad_read_hle_tests();
+    vpad_get_tp_calibrated_point_hle_tests();
     os_create_thread_hle_tests();
     os_set_thread_name_hle_tests();
     os_set_thread_affinity_hle_tests();
