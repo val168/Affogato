@@ -26255,6 +26255,14 @@ void gx2_register_state_tests()
             geometry_sampler_base + static_cast<std::uint32_t>(index * 4U),
             sampler_words[index]});
     }
+    constexpr Gx2CommandType context_register_type =
+        Gx2CommandType::set_context_register;
+    constexpr std::uint32_t depth_control_address = 0x00028800U;
+    constexpr std::uint32_t depth_control_value = 0x1234ABCDU;
+    binding_commands.push_back({
+        context_register_type,
+        depth_control_address,
+        depth_control_value});
     binding_commands.push_back({
         Gx2CommandType::draw,
         0U,
@@ -26284,6 +26292,27 @@ void gx2_register_state_tests()
     assert(first_draw_resources.samplers[2U][0U] == sampler_words);
     assert(!first_draw_resources.textures[0U][0U]);
     assert(!first_draw_resources.samplers[0U][0U]);
+    assert(bindings.draw_registers().size() == 1U);
+    const auto find_snapshot_entry = [](
+        std::span<const affogato::gpu::Gx2RegisterSnapshotEntry> snapshot,
+        std::uint32_t address) {
+        const auto found = std::find_if(
+            snapshot.begin(), snapshot.end(),
+            [address](const auto& entry) { return entry.address == address; });
+        return found == snapshot.end()
+            ? std::optional<affogato::gpu::Gx2RegisterSnapshotEntry>{}
+            : std::optional<affogato::gpu::Gx2RegisterSnapshotEntry>{*found};
+    };
+    const auto first_depth_control = find_snapshot_entry(
+        bindings.draw_registers()[0U], depth_control_address);
+    assert(first_depth_control.has_value());
+    assert(first_depth_control->type == context_register_type);
+    assert(first_depth_control->value == depth_control_value);
+    const auto first_texture_last_word = find_snapshot_entry(
+        bindings.draw_registers()[0U], vertex_resource_base + 6U * 4U);
+    assert(first_texture_last_word.has_value());
+    assert(first_texture_last_word->type == Gx2CommandType::set_shader_resource);
+    assert(first_texture_last_word->value == texture_words[6U]);
 
     // A different command class at one word must not make a resource appear
     // complete, even if every address has a value in the raw register shadow.
@@ -26307,6 +26336,20 @@ void gx2_register_state_tests()
     assert(bindings.draw_shader_resources()[0U] == first_draw_resources);
     assert(!bindings.draw_shader_resources()[1U].textures[1U][0U]);
     assert(bindings.draw_shader_resources()[1U].samplers[2U][0U] == sampler_words);
+    assert(bindings.draw_registers().size() == 2U);
+    assert(bindings.draw_registers()[0U].size() ==
+           bindings.draw_registers()[1U].size());
+    assert(find_snapshot_entry(
+               bindings.draw_registers()[0U],
+               vertex_resource_base + 6U * 4U)->type ==
+           Gx2CommandType::set_shader_resource);
+    assert(find_snapshot_entry(
+               bindings.draw_registers()[1U],
+               vertex_resource_base + 6U * 4U)->type ==
+           Gx2CommandType::set_context_register);
+    assert(find_snapshot_entry(
+               bindings.draw_registers()[0U], depth_control_address)->value ==
+           depth_control_value);
 
     constexpr LatteTextureResourceWords decoded_words{
         (1U << 0U) | (4U << 3U) | (7U << 8U) | (63U << 19U),

@@ -33,6 +33,15 @@ struct Gx2DrawShaderResources
     bool operator==(const Gx2DrawShaderResources&) const = default;
 };
 
+struct Gx2RegisterSnapshotEntry
+{
+    std::uint32_t address{};
+    cpu::espresso::Gx2CommandType type{};
+    std::uint32_t value{};
+
+    bool operator==(const Gx2RegisterSnapshotEntry&) const = default;
+};
+
 // CPU-side shadow of Latte register writes consumed by the GPU backend.
 // It intentionally stores raw register words; decoding into Vulkan objects
 // belongs to later rendering stages.
@@ -68,6 +77,7 @@ public:
                 draw_shader_resources_.push_back(snapshot_shader_resources());
                 draw_color_buffers_.push_back(color_buffers_);
                 draw_depth_buffer_.push_back(depth_buffer_);
+                draw_registers_.push_back(snapshot_registers());
                 continue;
             }
             if (command.type == cpu::espresso::Gx2CommandType::set_vertex_buffer)
@@ -340,7 +350,25 @@ public:
         return draw_depth_buffer_;
     }
 
+    [[nodiscard]] std::span<const std::vector<Gx2RegisterSnapshotEntry>>
+    draw_registers() const noexcept
+    {
+        return draw_registers_;
+    }
+
 private:
+    [[nodiscard]] std::vector<Gx2RegisterSnapshotEntry>
+    snapshot_registers() const
+    {
+        std::vector<Gx2RegisterSnapshotEntry> result;
+        result.reserve(registers_.size());
+        for (const auto& [address, value] : registers_)
+        {
+            result.push_back({address, value.type, value.value});
+        }
+        return result;
+    }
+
     [[nodiscard]] Gx2DrawShaderResources snapshot_shader_resources() const
     {
         constexpr std::array<Gx2ShaderStage, 3U> stages{
@@ -393,6 +421,7 @@ private:
     std::optional<cpu::espresso::Gx2DepthBufferBinding> depth_buffer_;
     std::vector<std::optional<cpu::espresso::Gx2DepthBufferBinding>>
         draw_depth_buffer_;
+    std::vector<std::vector<Gx2RegisterSnapshotEntry>> draw_registers_;
 };
 
 }
