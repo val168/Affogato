@@ -26401,6 +26401,94 @@ void gx2_get_swap_interval_hle_tests()
     assert(wrong_library_result.hle_call == "coreinit::GX2GetSwapInterval");
 }
 
+void gx2_sample_top_gpu_cycle_hle_tests()
+{
+    constexpr std::uint32_t timestamp_output = 0x100U;
+    constexpr std::uint32_t return_address = 0x0274C3BCU;
+    EspressoCore core(0x1000U);
+    register_coreinit_hle(core.hle);
+    register_gx2_hle(core.hle);
+    const std::uint32_t import =
+        core.hle.bind_import("gx2", "GX2SampleTopGPUCycle");
+    const std::uint32_t bottom_import =
+        core.hle.bind_import("gx2", "GX2SampleBottomGPUCycle");
+    const std::uint32_t wrong_library =
+        core.hle.bind_import("coreinit", "GX2SampleTopGPUCycle");
+    assert(import != 0U && bottom_import != 0U && wrong_library != 0U &&
+           wrong_library != import);
+
+    const std::uint64_t before = get_os_system_time(core);
+    core.memory.fill_bytes(timestamp_output, sizeof(std::uint64_t), 0xA5U);
+    for (std::size_t index = 0U; index < core.state.gpr.size(); ++index)
+    {
+        core.state.gpr[index] = 0xB6000000U +
+            static_cast<std::uint32_t>(index) * 0x101U;
+    }
+    core.state.gpr[3] = timestamp_output;
+    core.state.cr = 0x12345678U;
+    core.state.xer = 0x87654321U;
+    core.state.ctr = 0xABCDEF01U;
+    core.state.fpscr = 0x0FEDCBA9U;
+    core.state.cia = import;
+    core.state.lr = return_address;
+    const auto gprs_before = core.state.gpr;
+    const auto fprs_before = core.state.fpr;
+    const auto fprs_ps1_before = core.state.fpr_ps1;
+    const std::uint32_t cr_before = core.state.cr;
+    const std::uint32_t xer_before = core.state.xer;
+    const std::uint32_t ctr_before = core.state.ctr;
+    const std::uint32_t fpscr_before = core.state.fpscr;
+
+    const RunResult sampled = core.run(1U);
+    assert(sampled.reason == StopReason::instruction_limit);
+    assert(sampled.steps == 1U);
+    const std::uint64_t timestamp = core.memory.read64_be(timestamp_output);
+    assert(timestamp >= before);
+    assert(core.state.gpr == gprs_before);
+    assert(core.state.cr == cr_before && core.state.xer == xer_before &&
+           core.state.ctr == ctr_before && core.state.fpscr == fpscr_before);
+    assert(core.state.fpr == fprs_before &&
+           core.state.fpr_ps1 == fprs_ps1_before);
+    assert(core.state.cia == return_address && core.state.lr == return_address);
+
+    constexpr std::uint32_t bottom_output = 0x108U;
+    core.memory.fill_bytes(bottom_output, sizeof(std::uint64_t), 0xA5U);
+    core.state.gpr[3] = bottom_output;
+    core.state.cia = bottom_import;
+    core.state.lr = return_address;
+    const RunResult bottom_sampled = core.run(1U);
+    assert(bottom_sampled.reason == StopReason::instruction_limit);
+    assert(bottom_sampled.steps == 1U);
+    assert(core.memory.read64_be(bottom_output) ==
+           std::numeric_limits<std::uint64_t>::max());
+    assert(core.state.gpr[3] == bottom_output);
+    assert(core.state.cia == return_address && core.state.lr == return_address);
+
+    core.memory.fill_bytes(0xFFCU, 4U, 0x5AU);
+    core.state.gpr[3] = 0xFFCU;
+    core.state.cia = import;
+    core.state.lr = return_address;
+    const RunResult invalid_range = core.run(1U);
+    assert(invalid_range.reason == StopReason::hle_error);
+    assert(invalid_range.detail.find("outside mapped guest memory") !=
+           std::string::npos);
+    assert(core.memory.read32_be(0xFFCU) == 0x5A5A5A5AU);
+
+    core.state.gpr[3] = 0U;
+    core.state.cia = import;
+    core.state.lr = return_address;
+    const RunResult null_output = core.run(1U);
+    assert(null_output.reason == StopReason::hle_error);
+    assert(null_output.detail.find("timestamp output pointer is null") !=
+           std::string::npos);
+
+    core.state.cia = wrong_library;
+    core.state.lr = return_address;
+    const RunResult wrong_library_result = core.run(1U);
+    assert(wrong_library_result.reason == StopReason::unimplemented_hle_call);
+    assert(wrong_library_result.hle_call == "coreinit::GX2SampleTopGPUCycle");
+}
+
 void gx2_set_event_callback_hle_tests()
 {
     constexpr std::uint32_t return_address = 0x0274C3BCU;
@@ -34202,6 +34290,7 @@ int main(int argc, char* argv[])
     gx2_set_drc_scale_hle_tests();
     gx2_set_swap_interval_hle_tests();
     gx2_get_swap_interval_hle_tests();
+    gx2_sample_top_gpu_cycle_hle_tests();
     gx2_set_event_callback_hle_tests();
     gx2_get_event_callback_hle_tests();
     mem_get_total_free_size_for_exp_heap_hle_tests();

@@ -1,5 +1,6 @@
 #include "cpu/espresso/gx2_hle.hpp"
 
+#include "cpu/espresso/cafe_os_hle.hpp"
 #include "cpu/espresso/guest_memory.hpp"
 #include "cpu/espresso/hle_dispatcher.hpp"
 #include "cpu/espresso/interpreter.hpp"
@@ -318,6 +319,36 @@ void validate_gx2_u32_output(
             " pointer range wraps the guest address space");
     }
     core.memory.validate_write_range(address, sizeof(std::uint32_t));
+}
+
+void validate_gx2_u64_output(
+    EspressoCore& core,
+    std::uint32_t address,
+    const char* api_name)
+{
+    if (address == 0U)
+    {
+        throw HleExecutionError(
+            std::string("gx2::") + api_name +
+            ": timestamp output pointer is null");
+    }
+    if (static_cast<std::uint64_t>(address) + sizeof(std::uint64_t) >
+        guest_address_space_end)
+    {
+        throw HleExecutionError(
+            std::string("gx2::") + api_name +
+            ": timestamp output range wraps the guest address space");
+    }
+    try
+    {
+        core.memory.validate_write_range(address, sizeof(std::uint64_t));
+    }
+    catch (const GuestMemoryFault&)
+    {
+        throw HleExecutionError(
+            std::string("gx2::") + api_name +
+            ": timestamp output is outside mapped guest memory");
+    }
 }
 
 std::uint32_t fpr_float_argument_bits(
@@ -3179,6 +3210,34 @@ void register_gx2_hle(HleDispatcher& dispatcher)
         "GX2GetSwapInterval",
         [](EspressoCore& core) {
             core.state.gpr[3] = core.gx2.swap_interval;
+        });
+
+    dispatcher.register_function(
+        "gx2",
+        "GX2SampleTopGPUCycle",
+        [](EspressoCore& core) {
+            const std::uint32_t timestamp_output = core.state.gpr[3];
+            validate_gx2_u64_output(
+                core, timestamp_output, "GX2SampleTopGPUCycle");
+
+            // Until GPU command execution can place a timestamp marker in
+            // submission order, follow the established GX2 CPU-clock fallback.
+            core.memory.write64_be(timestamp_output, get_os_system_time(core));
+        });
+
+    dispatcher.register_function(
+        "gx2",
+        "GX2SampleBottomGPUCycle",
+        [](EspressoCore& core) {
+            const std::uint32_t timestamp_output = core.state.gpr[3];
+            validate_gx2_u64_output(
+                core, timestamp_output, "GX2SampleBottomGPUCycle");
+
+            // GPU command-order timestamps are not available without executing
+            // a marker on the backend. Return the platform invalid-counter
+            // sentinel, matching Cemu's fallback instead of inventing a time.
+            core.memory.write64_be(
+                timestamp_output, std::numeric_limits<std::uint64_t>::max());
         });
 
     dispatcher.register_function(

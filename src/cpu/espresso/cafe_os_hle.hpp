@@ -9,6 +9,7 @@ class HleDispatcher;
 class EspressoCore;
 
 void register_coreinit_hle(HleDispatcher& dispatcher);
+[[nodiscard]] std::uint64_t get_os_system_time(EspressoCore& core);
 [[nodiscard]] std::uint32_t initialize_default_guest_thread(
     EspressoCore& core,
     std::uint32_t stack_start,

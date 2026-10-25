@@ -1364,6 +1364,40 @@ bool switch_guest_thread(
 
 } // namespace
 
+std::uint64_t get_os_system_time(EspressoCore& core)
+{
+    const auto address = core.hle.bind_data_import(
+        "coreinit", "__affogato_internal_OSSystemInfo", core.memory);
+    if (!address)
+    {
+        throw HleExecutionError(
+            "OSGetSystemTime internal OSSystemInfo data is not registered");
+    }
+
+    std::uint64_t base_time{};
+    try
+    {
+        base_time = core.memory.read64_be(*address + 0x08U);
+    }
+    catch (const GuestMemoryFault&)
+    {
+        throw HleExecutionError(
+            "OSGetSystemTime OSSystemInfo baseTime is outside mapped guest memory");
+    }
+
+    // Affogato does not yet emulate Espresso's CPU time base. Until cycle
+    // accounting exists, derive elapsed timer ticks from the same host-clock
+    // epoch used for the persistent Cafe baseTime.
+    const std::uint64_t current_epoch_ticks = current_os_epoch_ticks();
+    const std::uint64_t elapsed_ticks = current_epoch_ticks >= base_time
+        ? current_epoch_ticks - base_time
+        : 0U;
+    return core.os_sleep_ticks_offset >
+            std::numeric_limits<std::uint64_t>::max() - elapsed_ticks
+        ? std::numeric_limits<std::uint64_t>::max()
+        : elapsed_ticks + core.os_sleep_ticks_offset;
+}
+
 std::uint32_t initialize_default_guest_thread(
     EspressoCore& core,
     std::uint32_t stack_start,
@@ -2070,38 +2104,7 @@ void register_coreinit_hle(HleDispatcher& dispatcher)
         "coreinit",
         "OSGetSystemTime",
         [](EspressoCore& core) {
-            const auto address = core.hle.bind_data_import(
-                "coreinit", "__affogato_internal_OSSystemInfo", core.memory);
-            if (!address)
-            {
-                throw HleExecutionError(
-                    "OSGetSystemTime internal OSSystemInfo data is not registered");
-            }
-
-            std::uint64_t base_time{};
-            try
-            {
-                base_time = core.memory.read64_be(*address + 0x08U);
-            }
-            catch (const GuestMemoryFault&)
-            {
-                throw HleExecutionError(
-                    "OSGetSystemTime OSSystemInfo baseTime is outside mapped guest memory");
-            }
-
-            // Affogato does not yet emulate Espresso's CPU time base. Until
-            // cycle accounting exists, derive elapsed timer ticks from the
-            // same host-clock epoch used for the persistent Cafe baseTime.
-            const std::uint64_t current_epoch_ticks = current_os_epoch_ticks();
-            const std::uint64_t elapsed_ticks = current_epoch_ticks >= base_time
-                ? current_epoch_ticks - base_time
-                : 0U;
-            const std::uint64_t system_time =
-                core.os_sleep_ticks_offset >
-                    std::numeric_limits<std::uint64_t>::max() - elapsed_ticks
-                    ? std::numeric_limits<std::uint64_t>::max()
-                    : elapsed_ticks + core.os_sleep_ticks_offset;
-            set_u64_return(core.state, system_time);
+            set_u64_return(core.state, get_os_system_time(core));
         });
     dispatcher.register_function(
         "coreinit",
