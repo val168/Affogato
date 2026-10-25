@@ -8914,6 +8914,122 @@ void recompiler_dcbf_differential_tests()
     assert(!fault.instruction_history.back().completed);
 }
 
+void recompiler_dcbz_differential_tests()
+{
+    struct Case
+    {
+        std::uint8_t base_register;
+        std::uint8_t index_register;
+        std::uint32_t base;
+        std::uint32_t index;
+    };
+    constexpr std::uint32_t start = 0x100U;
+    constexpr std::uint32_t dcbz_r3_r4 = x_form(0U, 3U, 4U, 1014U);
+    constexpr std::uint32_t dcbz_r0_r0 = x_form(0U, 0U, 0U, 1014U);
+    static_assert(dcbz_r3_r4 == 0x7C0327ECU);
+    constexpr std::array cases{
+        Case{3U, 4U, 0x130U, 0x2FU},
+        // rA=0 uses literal zero; rB=0 still reads the actual GPR0 value.
+        Case{0U, 0U, 0xDEADBEEFU, 0x15FU},
+    };
+
+    for (const Case& test : cases)
+    {
+        EspressoCore interpreted(0x1000U);
+        EspressoCore compiled(0x1000U);
+        const std::uint32_t instruction = test.base_register == 0U
+            ? dcbz_r0_r0 : dcbz_r3_r4;
+        for (EspressoCore* core : {&interpreted, &compiled})
+        {
+            core->memory.write32_be(start, instruction);
+            core->memory.write32_be(start + 4U, 0x38E0002AU); // addi r7,r0,42
+            for (std::uint32_t offset = 0U; offset < 64U; ++offset)
+            {
+                core->memory.write8(0x140U + offset,
+                    offset < 32U ? 0xA5U : 0x5AU);
+            }
+            core->state.cia = start;
+            core->state.gpr.fill(0xC001D00DU);
+            core->state.gpr[0] = test.index_register == 0U
+                ? test.index : 0xFACEB00CU;
+            if (test.base_register != 0U)
+                core->state.gpr[test.base_register] = test.base;
+            if (test.index_register != 0U)
+                core->state.gpr[test.index_register] = test.index;
+            core->state.cr = 0x91827364U;
+            core->state.xer = 0xA0000042U;
+            core->state.lr = 0x10203040U;
+            core->state.ctr = 0x50607080U;
+            core->state.fpscr = 0xCAFEBABEU;
+        }
+
+        const RunResult oracle = interpreted.run(2U);
+        Recompiler recompiler;
+        const RunResult actual = recompiler.run(compiled, 2U);
+        assert(actual.reason == oracle.reason && actual.steps == oracle.steps);
+        assert(actual.steps == 2U && actual.cia == oracle.cia);
+        assert(compiled.state.gpr == interpreted.state.gpr);
+        assert(compiled.state.fpr == interpreted.state.fpr);
+        assert(compiled.state.fpr_ps1 == interpreted.state.fpr_ps1);
+        assert(compiled.state.cr == interpreted.state.cr);
+        assert(compiled.state.xer == interpreted.state.xer);
+        assert(compiled.state.lr == interpreted.state.lr);
+        assert(compiled.state.ctr == interpreted.state.ctr);
+        assert(compiled.state.fpscr == interpreted.state.fpscr);
+        assert(compiled.state.gpr[7] == 42U);
+        assert(recompiler.statistics().native_instructions == 2U);
+        assert(recompiler.statistics().interpreter_fallbacks == 0U);
+        assert(actual.instruction_history.size() == 2U);
+        const InstructionHistoryEntry& history = actual.instruction_history.front();
+        assert(history.opcode_name == "dcbz" && history.completed);
+        assert(history.has_effective_address && history.effective_address == 0x140U);
+        assert(history.source_count == (test.base_register == 0U ? 1U : 2U));
+        if (test.base_register == 0U)
+        {
+            assert(history.source_registers[0] == 0U);
+            assert(history.source_values[0] == test.index);
+        }
+        else
+        {
+            assert(history.source_registers[0] == test.base_register);
+            assert(history.source_values[0] == test.base);
+            assert(history.source_registers[1] == test.index_register);
+            assert(history.source_values[1] == test.index);
+        }
+        assert(!history.has_destination);
+        for (std::uint32_t offset = 0U; offset < 32U; ++offset)
+            assert(compiled.memory.read8(0x140U + offset) == 0U);
+        for (std::uint32_t offset = 32U; offset < 64U; ++offset)
+            assert(compiled.memory.read8(0x140U + offset) == 0x5AU);
+    }
+
+    // The whole-line write must validate before changing any bytes.
+    EspressoCore faulting(0x1000U);
+    faulting.memory.map_region(0x2000U, 31U);
+    for (std::uint32_t offset = 0U; offset < 31U; ++offset)
+        faulting.memory.write8(0x2000U + offset, 0xA5U);
+    faulting.memory.write32_be(start, x_form(0U, 6U, 5U, 1014U));
+    faulting.state.cia = start;
+    faulting.state.gpr[6] = 0x2000U;
+    faulting.state.gpr[5] = 0x1FU;
+    const auto gprs_before = faulting.state.gpr;
+    Recompiler fault_recompiler;
+    const RunResult fault = fault_recompiler.run(faulting, 1U);
+    assert(fault.reason == StopReason::memory_fault);
+    assert(fault.detail.find("write 32 byte(s)") != std::string::npos);
+    assert(faulting.state.gpr == gprs_before && faulting.state.cia == start);
+    for (std::uint32_t offset = 0U; offset < 31U; ++offset)
+        assert(faulting.memory.read8(0x2000U + offset) == 0xA5U);
+    assert(!fault.instruction_history.empty());
+    assert(fault.instruction_history.back().opcode_name == "dcbz");
+    assert(fault.instruction_history.back().has_effective_address &&
+        fault.instruction_history.back().effective_address == 0x2000U);
+    assert(!fault.instruction_history.back().completed);
+    assert(!fault.instruction_history.back().has_destination);
+    assert(fault_recompiler.statistics().native_instructions == 0U);
+    assert(fault_recompiler.statistics().interpreter_fallbacks == 0U);
+}
+
 void recompiler_psq_st_differential_tests()
 {
     const auto encode_psq_st = [](
@@ -10041,6 +10157,7 @@ int main()
     recompiler_stmw_differential_tests();
     recompiler_dcbst_differential_tests();
     recompiler_dcbf_differential_tests();
+    recompiler_dcbz_differential_tests();
     recompiler_psq_st_differential_tests();
     recompiler_psq_l_differential_tests();
     recompiler_branch_test();

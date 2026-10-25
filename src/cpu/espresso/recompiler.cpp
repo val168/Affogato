@@ -3791,6 +3791,66 @@ extern "C" std::uint32_t native_memory_access(
     }
 }
 
+extern "C" void native_data_cache_block_zero(
+    NativeExecutionContext* context,
+    std::uint32_t address,
+    std::uint32_t base_value,
+    std::uint32_t index_value,
+    std::uint32_t instruction_index) noexcept
+{
+    constexpr std::uint32_t block_size = 32U;
+    if (instruction_index >= context->memory_records.size())
+    {
+        context->failed = true;
+        context->failed_address = address;
+        context->failed_width = block_size;
+        context->failed_flags = 1U;
+        context->failed_instruction_index = instruction_index;
+        return;
+    }
+
+    NativeMemoryRecord& record = context->memory_records[instruction_index];
+    record.address = address;
+    record.value = 0U;
+    record.base_value = base_value;
+    record.index_value = index_value;
+    record.indexed = true;
+
+    constexpr std::array<std::uint8_t, block_size> zero_block{};
+    try
+    {
+        ++context->memory_access_calls;
+        if (context->memory->has_write_watchpoint())
+        {
+            context->memory->set_current_guest_cia(
+                context->block_cia + instruction_index * 4U);
+        }
+        context->memory->write_bytes(address, zero_block);
+    }
+    catch (...)
+    {
+        context->failed = true;
+        context->failed_address = address;
+        context->failed_width = block_size;
+        context->failed_flags = 1U;
+        context->failed_instruction_index = instruction_index;
+        context->fault_cia = context->block_cia + instruction_index * 4U;
+        context->exception = std::current_exception();
+        try
+        {
+            std::rethrow_exception(context->exception);
+        }
+        catch (const GuestMemoryFault& fault)
+        {
+            context->guest_memory_fault = true;
+            context->failed_address = fault.address();
+        }
+        catch (...)
+        {
+        }
+    }
+}
+
 extern "C" void native_load_word_reserve(
     NativeExecutionContext* context,
     CpuState* state,
@@ -4811,6 +4871,7 @@ struct BlockCode
     case Opcode::store_halfword_byte_reverse_indexed:
     case Opcode::data_cache_block_store:
     case Opcode::data_cache_block_flush:
+    case Opcode::data_cache_block_zero:
     case Opcode::condition_bit_and:
     case Opcode::condition_bit_and_complement:
     case Opcode::condition_bit_or:
@@ -5026,6 +5087,7 @@ struct BlockCode
     case Opcode::store_halfword_byte_reverse_indexed: return "sthbrx";
     case Opcode::data_cache_block_store: return "dcbst";
     case Opcode::data_cache_block_flush: return "dcbf";
+    case Opcode::data_cache_block_zero: return "dcbz";
     case Opcode::condition_bit_and: return "crand";
     case Opcode::condition_bit_and_complement: return "crandc";
     case Opcode::condition_bit_or: return "cror";
@@ -5099,6 +5161,7 @@ struct BlockCode
     case Opcode::paired_single_quantized_load:
     case Opcode::data_cache_block_store:
     case Opcode::data_cache_block_flush:
+    case Opcode::data_cache_block_zero:
         return true;
     default:
         return false;
@@ -5139,6 +5202,8 @@ struct BlockCode
     case Opcode::store_double_indexed:
     case Opcode::store_double_indexed_update:
         return 8U;
+    case Opcode::data_cache_block_zero:
+        return 32U;
     default:
         return 4U;
     }
@@ -5163,7 +5228,8 @@ struct BlockCode
         opcode == Opcode::store_double_indexed ||
         opcode == Opcode::store_double_indexed_update ||
         opcode == Opcode::store_word_update || opcode == Opcode::store_single_update ||
-        opcode == Opcode::store_floating_as_integer_word_indexed;
+        opcode == Opcode::store_floating_as_integer_word_indexed ||
+        opcode == Opcode::data_cache_block_zero;
 }
 
 [[nodiscard]] bool is_indexed_memory(Opcode opcode) noexcept
@@ -5198,7 +5264,8 @@ struct BlockCode
         opcode == Opcode::store_double_indexed_update ||
         opcode == Opcode::store_floating_as_integer_word_indexed ||
         opcode == Opcode::data_cache_block_store ||
-        opcode == Opcode::data_cache_block_flush;
+        opcode == Opcode::data_cache_block_flush ||
+        opcode == Opcode::data_cache_block_zero;
 }
 
 [[nodiscard]] std::uint32_t immediate_value(const DecodedInstruction& insn) noexcept
@@ -9074,6 +9141,77 @@ struct Recompiler::Impl
                 compiler.bind(completed);
                 break;
             }
+            case Opcode::data_cache_block_zero:
+            {
+                const std::uint32_t cia = block.address +
+                    static_cast<std::uint32_t>(index * 4U);
+                const std::size_t record_base = offsetof(NativeExecutionContext,
+                    memory_records) + index * sizeof(NativeMemoryRecord);
+                x86::Gp base_value = compiler.new_gp32("dcbz_base");
+                if (insn.base == 0U)
+                {
+                    compiler.mov(base_value, imm(0U));
+                }
+                else
+                {
+                    compiler.mov(base_value, read_guest_gpr(insn.base));
+                }
+                x86::Gp index_value = compiler.new_gp32("dcbz_index");
+                compiler.mov(index_value, read_guest_gpr(insn.source));
+                x86::Gp address = compiler.new_gp32("dcbz_address");
+                compiler.mov(address, base_value);
+                compiler.add(address, index_value);
+                compiler.and_(address, imm(0xFFFFFFE0U));
+                compiler.mov(x86::dword_ptr(context, static_cast<std::int32_t>(
+                    record_base + offsetof(NativeMemoryRecord, address))), address);
+                compiler.mov(x86::dword_ptr(context, static_cast<std::int32_t>(
+                    record_base + offsetof(NativeMemoryRecord, base_value))), base_value);
+                compiler.mov(x86::dword_ptr(context, static_cast<std::int32_t>(
+                    record_base + offsetof(NativeMemoryRecord, index_value))), index_value);
+                compiler.mov(x86::byte_ptr(context, static_cast<std::int32_t>(
+                    record_base + offsetof(NativeMemoryRecord, indexed))), imm(1U));
+                compiler.mov(x86::dword_ptr(context, static_cast<std::int32_t>(
+                    offsetof(NativeExecutionContext, fault_cia))), imm(cia));
+
+                auto* invoke = static_cast<InvokeNode*>(nullptr);
+                const auto helper_address = static_cast<std::uint64_t>(
+                    reinterpret_cast<std::uintptr_t>(&native_data_cache_block_zero));
+                compiler.invoke(Out(invoke), helper_address,
+                    FuncSignature::build<void, NativeExecutionContext*,
+                        std::uint32_t, std::uint32_t, std::uint32_t,
+                        std::uint32_t>(CallConvId::kCDecl));
+                invoke->set_arg(0, context);
+                invoke->set_arg(1, address);
+                invoke->set_arg(2, base_value);
+                invoke->set_arg(3, index_value);
+                invoke->set_arg(4, imm(static_cast<std::uint32_t>(index)));
+
+                x86::Gp failed = compiler.new_gp32("dcbz_failed");
+                compiler.mov(failed, x86::byte_ptr(context, static_cast<std::int32_t>(
+                    offsetof(NativeExecutionContext, failed))));
+                compiler.test(failed, failed);
+                Label fault = compiler.new_label();
+                compiler.jnz(fault);
+
+                // dcbz writes a full cache line. Leave the current native block
+                // after every successful operation so self-modifying code is
+                // revalidated before any already-decoded instruction can run.
+                compiler.mov(x86::dword_ptr(state, static_cast<std::int32_t>(
+                    offsetof(CpuState, cia))), imm(cia + 4U));
+                flush_guest_gprs();
+                x86::Gp completed = compiler.new_gp32("dcbz_completed_count");
+                compiler.mov(completed, imm(static_cast<std::uint32_t>(index + 1U)));
+                compiler.ret(completed);
+
+                compiler.bind(fault);
+                compiler.mov(x86::dword_ptr(state, static_cast<std::int32_t>(
+                    offsetof(CpuState, cia))), imm(cia));
+                flush_guest_gprs();
+                x86::Gp executed = compiler.new_gp32("dcbz_fault_count");
+                compiler.mov(executed, imm(static_cast<std::uint32_t>(index)));
+                compiler.ret(executed);
+                break;
+            }
             case Opcode::load_word_zero:
             case Opcode::load_word_update:
             case Opcode::load_byte_zero:
@@ -10984,12 +11122,12 @@ RunResult Recompiler::run(EspressoCore& core, std::size_t max_steps)
                 }
             }
             if (insn.opcode == Opcode::data_cache_block_store ||
-                insn.opcode == Opcode::data_cache_block_flush)
+                insn.opcode == Opcode::data_cache_block_flush ||
+                insn.opcode == Opcode::data_cache_block_zero)
             {
                 // Cache-maintenance instructions have no architectural
-                // destination in Affogato's
-                // coherent-memory model; the byte read above exists only to
-                // retain its translation/protection fault behavior.
+                // destination. In the coherent-memory model, dcbz performs
+                // its line write while dcbst/dcbf only validate translation.
                 core.append_instruction_history(std::move(entry));
                 continue;
             }
