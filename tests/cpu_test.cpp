@@ -24216,6 +24216,15 @@ void gx2_draw_ex_hle_tests()
         4U, 12U, true, 4U, 0x12345678U, 16U, 2U, 19U};
     assert(register_state.draw_calls()[2].draw_call == expected_draw_ex2);
     assert(register_state.draw_calls()[3].draw_call == expected_indexed_draw_ex2);
+    run_draw_variant(
+        "GX2DrawIndexedImmediateEx",
+        {3U, 15U, 0U, 0x200U, 4U, 1U, 0xDEADBEEFU},
+        Gx2DrawCall{3U, 15U, true, 0U, 0x200U, 4U, 1U, 0U});
+    assert(register_state.draw_calls().size() == 5U);
+    constexpr Gx2DrawCall expected_immediate_draw{
+        3U, 15U, true, 0U, 0x200U, 4U, 1U, 0U};
+    assert(register_state.draw_calls().back().draw_call ==
+           expected_immediate_draw);
 }
 
 void gx2_gpu_time_to_cpu_time_hle_tests()
