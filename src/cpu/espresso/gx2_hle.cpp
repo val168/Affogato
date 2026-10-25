@@ -3392,6 +3392,22 @@ void register_gx2_hle(HleDispatcher& dispatcher)
 
     dispatcher.register_function(
         "gx2",
+        "GX2GetLineWidthReg",
+        [](EspressoCore& core) {
+            const std::uint32_t line_control =
+                core.memory.read32_be(core.state.gpr[3]);
+            const std::uint32_t output_address = core.state.gpr[4];
+            core.memory.validate_write_range(
+                output_address, sizeof(std::uint32_t));
+
+            const float width =
+                static_cast<float>(line_control & 0xFFFFU) * 0.125F;
+            core.memory.write32_be(
+                output_address, std::bit_cast<std::uint32_t>(width));
+        });
+
+    dispatcher.register_function(
+        "gx2",
         "GX2InitLineWidthReg",
         [](EspressoCore& core) {
             const float width = std::bit_cast<float>(
