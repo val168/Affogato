@@ -115,6 +115,14 @@ namespace
            (static_cast<std::uint32_t>(source_b) << 11U) | (528U << 1U);
 }
 
+[[nodiscard]] constexpr std::uint32_t ps_add_form(
+    std::uint8_t destination, std::uint8_t source_a, std::uint8_t source_b)
+{
+    return (4U << 26U) | (static_cast<std::uint32_t>(destination) << 21U) |
+           (static_cast<std::uint32_t>(source_a) << 16U) |
+           (static_cast<std::uint32_t>(source_b) << 11U) | (21U << 1U);
+}
+
 [[nodiscard]] constexpr std::uint32_t fctiwz_form(
     std::uint8_t destination, std::uint8_t source)
 {
@@ -1882,6 +1890,96 @@ void recompiler_fabs_differential_tests()
             assert(recompiler.statistics().native_instructions == 1U);
             assert(recompiler.statistics().interpreter_fallbacks == 0U);
             assert(actual.instruction_history.back().opcode_name == "fabs");
+        }
+    }
+}
+
+void recompiler_ps_add_differential_tests()
+{
+    constexpr std::uint32_t start = 0x100U;
+    constexpr std::uint64_t fpr_sentinel = 0xA5A5A5A5A5A5A5A5ULL;
+    constexpr std::uint64_t ps1_sentinel = 0xDEADBEEF01234567ULL;
+    constexpr std::uint32_t gpr_sentinel = 0xC001D00DU;
+    const auto raw = [](double value) { return std::bit_cast<std::uint64_t>(value); };
+    const std::array<std::array<std::uint64_t, 4U>, 4U> lane_inputs{{
+        {raw(1.0000000596046448), raw(-4.25), raw(0.000000059604644775390625), raw(1.5)},
+        {0x0000000000000000ULL, 0x8000000000000000ULL,
+            0x8000000000000000ULL, 0x8000000000000000ULL},
+        {0x7FF0000000000000ULL, 0xFFF0000000000000ULL,
+            0x3FF0000000000000ULL, 0xFFF0000000000000ULL},
+        {0x7FF8123456789ABCULL, 0x3FF0000000000000ULL,
+            0x4000000000000000ULL, 0xFFF0123456789ABCULL},
+    }};
+    constexpr std::array<std::array<std::uint8_t, 3U>, 4U> register_sets{{
+        {2U, 3U, 4U}, // distinct destination
+        {3U, 3U, 4U}, // destination aliases A
+        {4U, 3U, 4U}, // destination aliases B
+        {5U, 5U, 5U}, // all operands alias
+    }};
+
+    for (std::size_t input_index = 0; input_index < lane_inputs.size(); ++input_index)
+    {
+        for (const auto& registers : register_sets)
+        {
+            const std::uint8_t destination = registers[0];
+            const std::uint8_t source_a = registers[1];
+            const std::uint8_t source_b = registers[2];
+            const auto& input = lane_inputs[input_index];
+            const std::uint64_t a_ps0 = input[0];
+            const std::uint64_t a_ps1 = input[1];
+            const std::uint64_t b_ps0 = source_a == source_b ? a_ps0 : input[2];
+            const std::uint64_t b_ps1 = source_a == source_b ? a_ps1 : input[3];
+            const std::uint32_t instruction = ps_add_form(destination, source_a, source_b);
+            EspressoCore interpreted(0x1000U);
+            EspressoCore compiled(0x1000U);
+            for (EspressoCore* core : {&interpreted, &compiled})
+            {
+                core->memory.write32_be(start, instruction);
+                core->state.cia = start;
+                core->state.gpr.fill(gpr_sentinel);
+                core->state.fpr.fill(fpr_sentinel);
+                core->state.fpr_ps1.fill(ps1_sentinel);
+                core->state.fpr[source_a] = a_ps0;
+                core->state.fpr_ps1[source_a] = a_ps1;
+                core->state.fpr[source_b] = b_ps0;
+                core->state.fpr_ps1[source_b] = b_ps1;
+                core->state.cr = 0xA5C39E71U;
+                core->state.xer = 0x76543210U;
+                core->state.lr = 0xABCDEF00U;
+                core->state.ctr = 0xFEDCBA98U;
+                core->state.fpscr = 0x89ABCDEFU;
+            }
+
+            const RunResult oracle = interpreted.run(1U);
+            Recompiler recompiler;
+            const RunResult actual = recompiler.run(compiled, 1U);
+            assert(actual.reason == oracle.reason);
+            assert(actual.steps == oracle.steps && actual.steps == 1U);
+            assert(actual.cia == oracle.cia);
+            assert(compiled.state.gpr == interpreted.state.gpr);
+            assert(compiled.state.fpr == interpreted.state.fpr);
+            assert(compiled.state.fpr_ps1 == interpreted.state.fpr_ps1);
+            assert(compiled.state.cr == interpreted.state.cr);
+            assert(compiled.state.xer == interpreted.state.xer);
+            assert(compiled.state.lr == interpreted.state.lr);
+            assert(compiled.state.ctr == interpreted.state.ctr);
+            assert(compiled.state.fpscr == interpreted.state.fpscr);
+            assert(compiled.state.gpr[0] == gpr_sentinel);
+            assert(compiled.state.fpr_ps1[destination] ==
+                interpreted.state.fpr_ps1[destination]);
+            assert(recompiler.statistics().native_instructions == 1U);
+            assert(recompiler.statistics().interpreter_fallbacks == 0U);
+            assert(!actual.instruction_history.empty());
+            const InstructionHistoryEntry& history = actual.instruction_history.back();
+            assert(history.completed && history.opcode_name == "ps_add");
+            assert(history.has_paired_fp_state);
+            assert(history.paired_fp_source_a_ps0 == a_ps0);
+            assert(history.paired_fp_source_a_ps1 == a_ps1);
+            assert(history.paired_fp_source_b_ps0 == b_ps0);
+            assert(history.paired_fp_source_b_ps1 == b_ps1);
+            assert(history.paired_fp_destination_ps0 == compiled.state.fpr[destination]);
+            assert(history.paired_fp_destination_ps1 ==
+                compiled.state.fpr_ps1[destination]);
         }
     }
 }
@@ -4706,6 +4804,7 @@ int main()
     recompiler_fneg_differential_tests();
     recompiler_fctiwz_differential_tests();
     recompiler_fabs_differential_tests();
+    recompiler_ps_add_differential_tests();
     recompiler_ps_merge10_differential_tests();
     recompiler_ps_merge00_differential_tests();
     recompiler_stfs_differential_tests();
