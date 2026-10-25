@@ -513,6 +513,9 @@ int run_rpx_diagnostic(int argc, char* argv[])
     const auto load_start = std::chrono::steady_clock::now();
     const auto image = emulator.load_rpx(
         bytes, path.parent_path().parent_path() / "content");
+    // The command-line diagnostic has no scanout/display thread. Keep virtual
+    // vsync accounting, but avoid a host sleep per guest frame.
+    emulator.core().gx2.host_vsync_pacing_enabled = false;
     if (watched_guest_write_address.has_value())
     {
         emulator.core().memory.set_write_watchpoint(
@@ -540,6 +543,7 @@ int run_rpx_diagnostic(int argc, char* argv[])
               << emulator.core().hle.import_range_end() << ")" << std::dec
               << "\nExecution mode: " << (mode == affogato::ExecutionMode::recompiler
                     ? "recompiler" : "interpreter")
+              << "\nVSync pacing: disabled (headless diagnostic)"
               << "\nInstruction limit: " << instruction_limit << '\n';
 
     constexpr std::size_t chunk_size = 1'000'000U;

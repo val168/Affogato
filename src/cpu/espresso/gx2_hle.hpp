@@ -119,8 +119,9 @@ struct Gx2RuntimeState
     std::uint32_t hang_reset_swap_timeout{};
     std::uint32_t hang_reset_swaps_outstanding{};
     std::uint32_t swap_interval{};
-    // Headless single-lane virtual display cadence. This models the wait
+    // Single-lane virtual display cadence. This models the wait
     // boundary only; it does not imply that a guest frame was rendered.
+    bool host_vsync_pacing_enabled{true};
     std::chrono::steady_clock::time_point next_vsync_deadline{};
     bool vsync_deadline_initialized{};
     std::uint64_t vsync_count{};

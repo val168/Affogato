@@ -2464,7 +2464,13 @@ void register_gx2_hle(HleDispatcher& dispatcher)
             }
 
             const std::uint32_t attributes = core.state.gpr[3];
+            const bool host_vsync_pacing_enabled =
+                core.gx2.host_vsync_pacing_enabled;
             Gx2RuntimeState initialized = initialize_gx2(core, attributes);
+            // This host execution policy is configured by the launch path,
+            // not by guest GX2 initialization; preserve it across state setup.
+            initialized.host_vsync_pacing_enabled =
+                host_vsync_pacing_enabled;
             core.gx2 = initialized;
             // GX2Init is void: preserve all guest GPRs including r3.
         });
@@ -3563,30 +3569,32 @@ void register_gx2_hle(HleDispatcher& dispatcher)
         "gx2",
         "GX2WaitForVsync",
         [](EspressoCore& core) {
-            // The real GX2 call waits for its display-vsync scheduler queue.
-            // Affogato has no guest scanout/event thread yet, so pace a
-            // deterministic 60 Hz virtual display boundary on the host clock.
-            // This deliberately does not claim that a frame was rendered or
-            // invoke GX2 event callbacks; those require the renderer/event
-            // scheduler integration.
-            auto now = std::chrono::steady_clock::now();
-            if (!core.gx2.vsync_deadline_initialized)
+            if (core.gx2.host_vsync_pacing_enabled)
             {
-                core.gx2.next_vsync_deadline = now + gx2_virtual_vsync_period;
-                core.gx2.vsync_deadline_initialized = true;
-            }
-            else
-            {
-                while (core.gx2.next_vsync_deadline <= now)
+                // Interactive execution has a virtual 60 Hz boundary until
+                // scanout and guest event scheduling are integrated.
+                auto now = std::chrono::steady_clock::now();
+                if (!core.gx2.vsync_deadline_initialized)
                 {
-                    core.gx2.next_vsync_deadline += gx2_virtual_vsync_period;
+                    core.gx2.next_vsync_deadline = now + gx2_virtual_vsync_period;
+                    core.gx2.vsync_deadline_initialized = true;
                 }
+                else
+                {
+                    while (core.gx2.next_vsync_deadline <= now)
+                    {
+                        core.gx2.next_vsync_deadline += gx2_virtual_vsync_period;
+                    }
+                }
+
+                std::this_thread::sleep_until(core.gx2.next_vsync_deadline);
+                core.gx2.next_vsync_deadline += gx2_virtual_vsync_period;
             }
 
-            std::this_thread::sleep_until(core.gx2.next_vsync_deadline);
+            // Headless diagnostics have no display queue to wait on. Preserve
+            // tick/status state without throttling on host sleep calls.
             ++core.gx2.vsync_count;
             core.gx2.last_vsync_time = core.time_base_ticks();
-            core.gx2.next_vsync_deadline += gx2_virtual_vsync_period;
             // GX2WaitForVsync has a void ABI: preserve all PPC argument GPRs.
         });
 

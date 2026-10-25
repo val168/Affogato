@@ -20048,6 +20048,7 @@ void gx2_init_hle_tests()
     core.state.ctr = 0xCAFEBABEU;
     core.state.fpscr = 0x5A5AA55AU;
     core.state.gpr[3] = attributes_address;
+    core.gx2.host_vsync_pacing_enabled = false;
     const auto gprs_before = core.state.gpr;
     const auto fprs_before = core.state.fpr;
     const auto ps1_before = core.state.fpr_ps1;
@@ -20078,6 +20079,7 @@ void gx2_init_hle_tests()
     assert(core.gx2.hang_reset_swap_timeout == 1000U);
     assert(core.gx2.hang_reset_swaps_outstanding == 3U);
     assert(core.gx2.swap_interval == 1U);
+    assert(!core.gx2.host_vsync_pacing_enabled);
     assert(core.gx2.flip_request_count == 0U && core.gx2.flip_execute_count == 0U);
     assert(!core.gx2.db_stencilrefmask_valid && core.gx2.db_stencilrefmask == 0U);
     assert(!core.gx2.db_stencilrefmask_bf_valid && core.gx2.db_stencilrefmask_bf == 0U);
@@ -24125,6 +24127,19 @@ void gx2_wait_for_vsync_hle_tests()
     assert(core.memory.read32_be(0x104U) == 0U);
     assert(core.memory.read64_be(0x108U) == 0U);
     assert(core.memory.read64_be(0x110U) == core.gx2.last_vsync_time);
+
+    EspressoCore headless(0x1000U);
+    register_gx2_hle(headless.hle);
+    headless.gx2.host_vsync_pacing_enabled = false;
+    headless.state.lr = return_address;
+    headless.state.cia =
+        headless.hle.bind_import("gx2", "GX2WaitForVsync");
+    const RunResult headless_result = headless.run(1U);
+    assert(headless_result.reason == StopReason::instruction_limit);
+    assert(headless.state.cia == return_address);
+    assert(headless.gx2.vsync_count == 1U);
+    assert(headless.gx2.last_vsync_time != 0U);
+    assert(!headless.gx2.vsync_deadline_initialized);
 }
 
 void gx2_get_swap_status_hle_tests()
