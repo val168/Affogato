@@ -95,6 +95,8 @@ public:
     [[nodiscard]] std::optional<std::uint32_t> data_address(
         const std::string& library,
         const std::string& symbol) const;
+    [[nodiscard]] std::optional<std::string> import_name(
+        std::uint32_t address) const;
     [[nodiscard]] HleDispatchResult dispatch(EspressoCore& core, std::uint32_t address);
     [[nodiscard]] std::vector<HleCallStatistic> call_statistics_snapshot() const;
     [[nodiscard]] std::vector<HleCallTraceEntry> recent_call_trace_snapshot() const;

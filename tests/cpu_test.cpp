@@ -11726,6 +11726,9 @@ void rpx_loader_tests()
     static_cast<void>(load_rpx32_powerpc(imported_function_core, imported_function_file));
     const std::uint32_t function_address =
         imported_function_core.hle.bind_import("coreinit", "TestFunction");
+    assert(imported_function_core.hle.import_name(function_address) ==
+           std::optional<std::string>{"coreinit::TestFunction"});
+    assert(!imported_function_core.hle.import_name(function_address + 4U).has_value());
     assert(imported_function_core.memory.read32_be(0x0200000CU) == function_address);
     assert(imported_function_core.memory.read32_be(imported_data_slot) == function_address);
     imported_function_core.state.cia = function_address;

@@ -149,6 +149,16 @@ std::optional<std::uint32_t> HleDispatcher::data_address(
         : std::optional<std::uint32_t>{found->second};
 }
 
+std::optional<std::string> HleDispatcher::import_name(std::uint32_t address) const
+{
+    const auto found = bound_imports_.find(address);
+    if (found == bound_imports_.end())
+    {
+        return std::nullopt;
+    }
+    return found->second.name.first + "::" + found->second.name.second;
+}
+
 HleDispatchResult HleDispatcher::dispatch(EspressoCore& core, std::uint32_t address)
 {
     const auto imported = bound_imports_.find(address);

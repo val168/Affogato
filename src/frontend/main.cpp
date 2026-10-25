@@ -687,6 +687,11 @@ int run_rpx_diagnostic(int argc, char* argv[])
         std::cout << "Guest-code dump at 0x" << std::hex << std::uppercase
                   << dump_address << " (" << std::dec << word_count
                   << " words):\n";
+        if (const auto name = emulator.core().hle.import_name(dump_address);
+            name.has_value())
+        {
+            std::cout << "  HLE import: " << *name << '\n';
+        }
         for (std::uint32_t index = 0U; index < word_count; ++index)
         {
             const std::uint32_t cia =
