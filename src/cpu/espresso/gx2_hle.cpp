@@ -3466,6 +3466,30 @@ void register_gx2_hle(HleDispatcher& dispatcher)
 
     dispatcher.register_function(
         "gx2",
+        "GX2GetPointLimitsReg",
+        [](EspressoCore& core) {
+            const std::uint32_t point_limits =
+                core.memory.read32_be(core.state.gpr[3]);
+            const std::uint32_t minimum_output = core.state.gpr[4];
+            const std::uint32_t maximum_output = core.state.gpr[5];
+            core.memory.validate_write_range(
+                minimum_output, sizeof(std::uint32_t));
+            core.memory.validate_write_range(
+                maximum_output, sizeof(std::uint32_t));
+
+            const float minimum =
+                static_cast<float>(point_limits & 0xFFFFU) * 0.0625F;
+            const float maximum =
+                static_cast<float>((point_limits >> 16U) & 0xFFFFU) *
+                0.0625F;
+            core.memory.write32_be(
+                minimum_output, std::bit_cast<std::uint32_t>(minimum));
+            core.memory.write32_be(
+                maximum_output, std::bit_cast<std::uint32_t>(maximum));
+        });
+
+    dispatcher.register_function(
+        "gx2",
         "GX2InitLineWidthReg",
         [](EspressoCore& core) {
             const float width = std::bit_cast<float>(
