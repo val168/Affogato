@@ -47,6 +47,13 @@ public:
                 scan_buffer_swaps_.push_back(command);
                 continue;
             }
+            if (command.type == cpu::espresso::Gx2CommandType::draw)
+            {
+                // Preserve draw-call order and arguments for the future Latte
+                // command translator; recording is not GPU execution.
+                draw_calls_.push_back(command);
+                continue;
+            }
             if (command.type == cpu::espresso::Gx2CommandType::flush ||
                 command.type == cpu::espresso::Gx2CommandType::draw_done)
             {
@@ -176,6 +183,12 @@ public:
         return scan_buffer_swaps_;
     }
 
+    [[nodiscard]] std::span<const cpu::espresso::Gx2Command>
+    draw_calls() const noexcept
+    {
+        return draw_calls_;
+    }
+
 private:
     struct RegisterValue
     {
@@ -186,6 +199,7 @@ private:
     std::unordered_map<std::uint32_t, RegisterValue> registers_;
     std::vector<cpu::espresso::Gx2Command> gpu_fences_;
     std::vector<cpu::espresso::Gx2Command> scan_buffer_swaps_;
+    std::vector<cpu::espresso::Gx2Command> draw_calls_;
 };
 
 }

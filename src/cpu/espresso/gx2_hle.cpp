@@ -3440,6 +3440,24 @@ void register_gx2_hle(HleDispatcher& dispatcher)
 
     dispatcher.register_function(
         "gx2",
+        "GX2DrawEx",
+        [](EspressoCore& core) {
+            // Preserve the guest draw request in the ordered GX2 stream for
+            // the backend. Vertex fetch, shader execution, and rasterization
+            // remain renderer work and are not claimed by this capture path.
+            // For draw records the generic payload fields mean mode, vertex
+            // count, vertex offset, and instance count respectively.
+            core.gx2.pending_commands.push_back({
+                Gx2CommandType::draw,
+                core.state.gpr[3],
+                core.state.gpr[4],
+                core.state.gpr[5],
+                core.state.gpr[6],
+                0U});
+        });
+
+    dispatcher.register_function(
+        "gx2",
         "GX2SwapScanBuffers",
         [](EspressoCore& core) {
             // Cemu increments the shared request counter only on the GX2 main

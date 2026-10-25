@@ -20,6 +20,7 @@ enum class Gx2CommandType
     draw_done,
     gpu_fence,
     scan_buffer_swap,
+    draw,
 };
 
 struct Gx2Command
