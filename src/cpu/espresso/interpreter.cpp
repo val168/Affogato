@@ -5358,6 +5358,8 @@ StepResult EspressoCore::step()
         if (byte_count != 0U)
         {
             memory.read_bytes(address, std::span<std::uint8_t>(bytes).first(byte_count));
+            std::copy_n(bytes.begin(), byte_count,
+                pending_history_entry_.string_transfer_bytes.begin());
         }
 
         const std::size_t register_count = (byte_count + 3U) / 4U;
