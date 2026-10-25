@@ -57,6 +57,13 @@ namespace
         (static_cast<std::uint32_t>(ra) << 16U) | immediate;
 }
 
+[[nodiscard]] constexpr std::uint32_t andis_form(
+    std::uint8_t source, std::uint8_t destination, std::uint16_t immediate)
+{
+    return (29U << 26U) | (static_cast<std::uint32_t>(source) << 21U) |
+           (static_cast<std::uint32_t>(destination) << 16U) | immediate;
+}
+
 [[nodiscard]] constexpr std::uint32_t cmpw_form(
     std::uint8_t cr_field, std::uint8_t ra, std::uint8_t rb,
     bool unsigned_compare)
@@ -3156,6 +3163,70 @@ void recompiler_rlwnm_differential_tests()
     }
 }
 
+void recompiler_andis_differential_tests()
+{
+    constexpr std::uint32_t start = 0x100U;
+    constexpr std::array<std::uint32_t, 5U> inputs{
+        0U, 0xFFFFFFFFU, 0xA1B2C3D4U, 0x8000FFFFU, 0x7FFFFFFFU};
+    constexpr std::array<std::uint16_t, 5U> immediates{
+        0U, 1U, 0x00FFU, 0x8000U, 0xFFFFU};
+
+    for (const std::uint32_t input : inputs)
+    {
+        for (const std::uint16_t immediate : immediates)
+        {
+            for (const bool alias : {false, true})
+            {
+                for (const bool summary_overflow : {false, true})
+                {
+                    constexpr std::uint8_t source = 4U;
+                    const std::uint8_t destination = alias ? source : 7U;
+                    const std::uint32_t instruction =
+                        andis_form(source, destination, immediate);
+                    EspressoCore interpreted(0x1000U);
+                    EspressoCore compiled(0x1000U);
+                    for (EspressoCore* machine : {&interpreted, &compiled})
+                    {
+                        machine->memory.write32_be(start, instruction);
+                        machine->state.cia = start;
+                        machine->state.gpr.fill(0x6A5B4C3DU);
+                        machine->state.gpr[source] = input;
+                        if (!alias)
+                        {
+                            machine->state.gpr[destination] = 0xDEADBEEFU;
+                        }
+                        machine->state.cr = 0xA5C36E91U;
+                        machine->state.xer = summary_overflow ? 0x80000000U : 0U;
+                        machine->state.lr = 0x12345678U;
+                        machine->state.ctr = 0x87654321U;
+                        machine->state.fpscr = 0x13579BDFU;
+                    }
+
+                    const RunResult oracle = interpreted.run(1U);
+                    Recompiler recompiler;
+                    const RunResult actual = recompiler.run(compiled, 1U);
+                    assert(actual.reason == oracle.reason);
+                    assert(actual.steps == oracle.steps && actual.steps == 1U);
+                    assert(actual.cia == oracle.cia);
+                    assert(compiled.state.gpr == interpreted.state.gpr);
+                    assert(compiled.state.cr == interpreted.state.cr);
+                    assert(compiled.state.xer == interpreted.state.xer);
+                    assert(compiled.state.lr == interpreted.state.lr);
+                    assert(compiled.state.ctr == interpreted.state.ctr);
+                    assert(compiled.state.fpscr == interpreted.state.fpscr);
+                    assert(recompiler.statistics().native_instructions == 1U);
+                    assert(recompiler.statistics().interpreter_fallbacks == 0U);
+                    assert(!actual.instruction_history.empty());
+                    const auto& history = actual.instruction_history.back();
+                    assert(history.opcode_name == "andis.");
+                    assert(history.has_immediate && history.immediate == immediate);
+                    assert(history.immediate_hex);
+                }
+            }
+        }
+    }
+}
+
 void recompiler_lfd_differential_tests()
 {
     constexpr std::uint32_t start = 0x100U;
@@ -5077,6 +5148,7 @@ int main()
     recompiler_cntlzw_differential_tests();
     recompiler_rlwinm_differential_tests();
     recompiler_rlwnm_differential_tests();
+    recompiler_andis_differential_tests();
     recompiler_lfd_differential_tests();
     recompiler_lfdu_differential_tests();
     recompiler_lfs_differential_tests();

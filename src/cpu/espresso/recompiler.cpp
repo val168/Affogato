@@ -3827,6 +3827,8 @@ struct BlockCode
         return true;
     case Opcode::and_immediate_record:
         return true;
+    case Opcode::and_immediate_shifted_record:
+        return true;
     default:
         return false;
     }
@@ -3851,6 +3853,7 @@ struct BlockCode
     case Opcode::ori: return "ori";
     case Opcode::or_immediate_shifted: return "oris";
     case Opcode::and_immediate_record: return "andi";
+    case Opcode::and_immediate_shifted_record: return "andis";
     case Opcode::xor_immediate: return "xori";
     case Opcode::xor_immediate_shifted: return "xoris";
     case Opcode::add: return "add";
@@ -4095,6 +4098,7 @@ struct BlockCode
         return static_cast<std::uint32_t>(insn.immediate) << 16U;
     case Opcode::or_immediate_shifted:
     case Opcode::xor_immediate_shifted:
+    case Opcode::and_immediate_shifted_record:
         return static_cast<std::uint32_t>(insn.immediate) << 16U;
     default:
         return static_cast<std::uint32_t>(insn.immediate);
@@ -4134,6 +4138,7 @@ struct BlockCode
         insn.opcode == Opcode::multiply_low_immediate ||
         insn.opcode == Opcode::add_immediate_carry ||
         insn.opcode == Opcode::subtract_from_immediate_carry ||
+        insn.opcode == Opcode::and_immediate_shifted_record ||
         insn.opcode == Opcode::ori || insn.opcode == Opcode::or_immediate_shifted ||
         insn.opcode == Opcode::xor_immediate ||
         insn.opcode == Opcode::xor_immediate_shifted)
@@ -4143,7 +4148,8 @@ struct BlockCode
         entry.immediate_hex = insn.opcode == Opcode::ori ||
             insn.opcode == Opcode::or_immediate_shifted ||
             insn.opcode == Opcode::xor_immediate ||
-            insn.opcode == Opcode::xor_immediate_shifted;
+            insn.opcode == Opcode::xor_immediate_shifted ||
+            insn.opcode == Opcode::and_immediate_shifted_record;
     }
     return entry;
 }
@@ -4821,6 +4827,7 @@ struct Recompiler::Impl
             case Opcode::ori:
             case Opcode::or_immediate_shifted:
             case Opcode::and_immediate_record:
+            case Opcode::and_immediate_shifted_record:
             case Opcode::xor_immediate:
             case Opcode::xor_immediate_shifted:
             {
@@ -4830,7 +4837,10 @@ struct Recompiler::Impl
                     value = compiler.new_gp32("value");
                     compiler.mov(value, read_guest_gpr(insn.source));
                 }
-                if (insn.opcode == Opcode::and_immediate_record)
+                const bool and_immediate =
+                    insn.opcode == Opcode::and_immediate_record ||
+                    insn.opcode == Opcode::and_immediate_shifted_record;
+                if (and_immediate)
                 {
                     compiler.and_(value, imm(immediate_value(insn)));
                 }
@@ -4840,7 +4850,7 @@ struct Recompiler::Impl
                 else
                     compiler.xor_(value, imm(immediate_value(insn)));
                 write_guest_gpr(insn.destination, value);
-                if (insn.opcode == Opcode::and_immediate_record)
+                if (and_immediate)
                 {
                     x86::Gp field = compiler.new_gp32("andi_cr0_field");
                     compiler.mov(field, value);
