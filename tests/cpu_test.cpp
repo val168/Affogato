@@ -23341,6 +23341,132 @@ void gx2_get_context_state_display_list_hle_tests()
     assert(result.hle_call == "coreinit::GX2GetContextStateDisplayList");
 }
 
+void gx2_set_context_state_hle_tests()
+{
+    constexpr std::uint32_t context_state = 0x10000U;
+    constexpr std::uint32_t context_state_size = 0xA100U;
+    constexpr std::uint32_t display_list_size_offset = 0x9804U;
+    constexpr std::uint32_t context_area_offset = 0x2C00U;
+    constexpr std::uint32_t alu_area_offset = 0x3C00U;
+    constexpr std::uint32_t loop_area_offset = 0x5C00U;
+    constexpr std::uint32_t resource_area_offset = 0x5E00U;
+    constexpr std::uint32_t sampler_area_offset = 0x9500U;
+    constexpr std::uint32_t return_address = 0x2000U;
+
+    EspressoCore core(0x1000U);
+    register_gx2_hle(core.hle);
+    const std::uint32_t import =
+        core.hle.bind_import("gx2", "GX2SetContextState");
+    core.memory.map_region(context_state, context_state_size);
+    core.memory.zero_fill(context_state, context_state_size);
+    core.memory.write32_be(context_state + 0x300U * 4U, 0x11223344U);
+    core.memory.write32_be(
+        context_state + context_area_offset, 0x22334455U);
+    core.memory.write32_be(
+        context_state + alu_area_offset, 0x33445566U);
+    core.memory.write32_be(
+        context_state + loop_area_offset, 0x44556677U);
+    core.memory.write32_be(
+        context_state + resource_area_offset, 0x55667788U);
+    core.memory.write32_be(
+        context_state + sampler_area_offset, 0x66778899U);
+
+    core.gx2.initialized = true;
+    core.gx2.current_context_state = 0x76543210U;
+    core.gx2.context_state_shadowing_enabled = false;
+    core.gx2.pending_commands.push_back(
+        {Gx2CommandType::set_context_register, 0x28800U, 0xAABBCCDDU});
+    const auto prior_commands = core.gx2.pending_commands;
+    core.state.gpr.fill(0xD3000000U);
+    core.state.gpr[3] = context_state;
+    core.state.cia = import;
+    core.state.lr = return_address;
+    core.state.cr = 0x12345678U;
+    core.state.xer = 0x87654321U;
+    core.state.ctr = 0xABCDEF01U;
+    core.state.fpscr = 0xA5A55A5AU;
+    const auto gprs_before = core.state.gpr;
+    const auto fprs_before = core.state.fpr;
+    const auto ps1_before = core.state.fpr_ps1;
+    const RunResult result = core.run(1U);
+    assert(result.reason == StopReason::instruction_limit);
+    assert(result.steps == 1U);
+    assert(core.state.cia == return_address && core.state.lr == return_address);
+    assert(core.state.gpr == gprs_before);
+    assert(core.state.fpr == fprs_before && core.state.fpr_ps1 == ps1_before);
+    assert(core.state.cr == 0x12345678U);
+    assert(core.state.xer == 0x87654321U);
+    assert(core.state.ctr == 0xABCDEF01U);
+    assert(core.state.fpscr == 0xA5A55A5AU);
+    assert(core.gx2.current_context_state == context_state);
+    assert(core.gx2.context_state_shadowing_enabled);
+
+    const std::array expected{
+        Gx2Command{Gx2CommandType::set_context_register, 0x8C00U, 0x11223344U},
+        Gx2Command{Gx2CommandType::set_context_register, 0x28000U, 0x22334455U},
+        Gx2Command{Gx2CommandType::set_context_register, 0x30000U, 0x33445566U},
+        Gx2Command{Gx2CommandType::set_context_register, 0x3E200U, 0x44556677U},
+        Gx2Command{Gx2CommandType::set_shader_resource, 0x38000U, 0x55667788U},
+        Gx2Command{Gx2CommandType::set_shader_sampler, 0x3C000U, 0x66778899U},
+    };
+    assert(core.gx2.pending_commands.size() > prior_commands.size());
+    assert(std::equal(prior_commands.begin(), prior_commands.end(),
+                      core.gx2.pending_commands.begin()));
+    auto command_search_begin = core.gx2.pending_commands.begin();
+    for (const Gx2Command& expected_command : expected)
+    {
+        const auto found = std::find(
+            command_search_begin, core.gx2.pending_commands.end(),
+            expected_command);
+        assert(found != core.gx2.pending_commands.end());
+        command_search_begin = found + 1;
+    }
+    assert(core.gx2.pending_commands.front() == prior_commands.front());
+
+    // A serialized PM4 list cannot be silently treated as an empty shadow
+    // restore. Failure leaves the selected context and pending stream intact.
+    core.state.cia = core.hle.bind_import("gx2", "GX2SetContextState");
+    core.state.lr = return_address;
+    core.state.gpr[3] = context_state;
+    core.memory.write32_be(context_state + display_list_size_offset, 4U);
+    const auto commands_before_list_error = core.gx2.pending_commands;
+    const std::uint32_t active_context_before_list_error =
+        core.gx2.current_context_state;
+    const RunResult list_error = core.run(1U);
+    assert(list_error.reason == StopReason::hle_error);
+    assert(list_error.detail.find("PM4 context display-list playback") !=
+           std::string::npos);
+    assert(core.gx2.pending_commands == commands_before_list_error);
+    assert(core.gx2.current_context_state == active_context_before_list_error);
+    core.memory.write32_be(context_state + display_list_size_offset, 0U);
+
+    // A null pointer disables shadow tracking without discarding already queued
+    // register changes or manufacturing register-reset commands.
+    core.state.cia = core.hle.bind_import("gx2", "GX2SetContextState");
+    core.state.lr = return_address;
+    core.state.gpr[3] = 0U;
+    const auto commands_before_disable = core.gx2.pending_commands;
+    const std::uint32_t context_before_disable =
+        core.gx2.current_context_state;
+    const RunResult disable = core.run(1U);
+    assert(disable.reason == StopReason::instruction_limit);
+    assert(core.gx2.current_context_state == context_before_disable);
+    assert(!core.gx2.context_state_shadowing_enabled);
+    assert(core.gx2.pending_commands == commands_before_disable);
+
+    // An unmapped context must fail before adding any commands or changing the
+    // active context pointer.
+    core.state.cia = core.hle.bind_import("gx2", "GX2SetContextState");
+    core.state.lr = return_address;
+    core.state.gpr[3] = 0x50000U;
+    const auto commands_before_bad_pointer = core.gx2.pending_commands;
+    const RunResult bad_pointer = core.run(1U);
+    assert(bad_pointer.reason == StopReason::hle_error);
+    assert(bad_pointer.detail.find("GX2SetContextState") != std::string::npos);
+    assert(core.gx2.pending_commands == commands_before_bad_pointer);
+    assert(core.gx2.current_context_state == context_before_disable);
+}
+
 void gx2_calc_tv_size_hle_tests()
 {
     constexpr std::uint32_t tv_render_mode_wide_1080p = 5U;
@@ -34270,6 +34396,7 @@ int main(int argc, char* argv[])
     gx2_set_alpha_to_mask_hle_tests();
     gx2_setup_context_state_ex_hle_tests();
     gx2_get_context_state_display_list_hle_tests();
+    gx2_set_context_state_hle_tests();
     gx2_calc_surface_size_and_alignment_hle_tests();
     gx2r_create_surface_user_memory_hle_tests();
     gx2r_lock_surface_ex_hle_tests();

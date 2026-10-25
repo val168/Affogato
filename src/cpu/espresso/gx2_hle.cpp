@@ -11,6 +11,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <span>
 #include <string>
 #include <utility>
 
@@ -61,6 +62,67 @@ static_assert(gx2_context_shadow_state_size == gx2_context_profiling_offset);
 static_assert(gx2_context_display_list_offset +
                   gx2_context_display_list_capacity ==
               gx2_context_state_size);
+
+struct Gx2ContextRegisterLoadRange
+{
+    std::uint16_t first_register{};
+    std::uint16_t register_count{};
+};
+
+constexpr Gx2ContextRegisterLoadRange gx2_context_config_load_ranges[]{
+    {0x300U, 0x6U},
+    {0x900U, 0x48U}, {0x980U, 0x48U}, {0xA00U, 0x48U},
+    {0x310U, 0xCU}, {0x542U, 0x1U}, {0x235U, 0x1U},
+    {0x232U, 0x2U}, {0x23AU, 0x1U}, {0x256U, 0x1U},
+    {0x60CU, 0x1U}, {0x5C5U, 0x1U}, {0x2C8U, 0x1U},
+    {0x363U, 0x1U}, {0x404U, 0x2U},
+};
+constexpr Gx2ContextRegisterLoadRange gx2_context_context_load_ranges[]{
+    {0x0U, 0x2U}, {0x3U, 0x3U},
+    {0xAU, 0x4U}, {0x10U, 0x38U}, {0x50U, 0x34U},
+    {0x8EU, 0x4U}, {0x94U, 0x40U}, {0x100U, 0x9U},
+    {0x10CU, 0x3U}, {0x10FU, 0x60U}, {0x185U, 0xAU},
+    {0x191U, 0x27U}, {0x1E0U, 0x9U}, {0x200U, 0x1U},
+    {0x202U, 0x7U}, {0xE0U, 0x20U}, {0x210U, 0x29U},
+    {0x250U, 0x34U}, {0x290U, 0x1U}, {0x292U, 0x2U},
+    {0x2A1U, 0x1U}, {0x2A5U, 0x1U}, {0x2A8U, 0x2U},
+    {0x2ACU, 0x3U}, {0x2CAU, 0x1U}, {0x2CCU, 0x1U},
+    {0x2CEU, 0x1U}, {0x300U, 0x9U}, {0x30CU, 0x1U},
+    {0x312U, 0x1U}, {0x316U, 0x2U}, {0x343U, 0x2U},
+    {0x349U, 0x3U}, {0x34CU, 0x2U}, {0x351U, 0x1U},
+    {0x37EU, 0x6U}, {0x2B4U, 0x3U}, {0x2B8U, 0x3U},
+    {0x2BCU, 0x3U}, {0x2C0U, 0x3U}, {0x2C8U, 0x1U},
+    {0x29BU, 0x1U}, {0x8CU, 0x1U}, {0xD5U, 0x1U},
+    {0x284U, 0xCU},
+};
+constexpr Gx2ContextRegisterLoadRange gx2_context_alu_load_ranges[]{
+    {0U, 0x800U},
+};
+constexpr Gx2ContextRegisterLoadRange gx2_context_loop_load_ranges[]{
+    {0U, 0x60U},
+};
+constexpr Gx2ContextRegisterLoadRange gx2_context_resource_load_ranges[]{
+    {0U, 0x70U}, {0x380U, 0x70U},
+    {0x460U, 0x70U}, {0x7E0U, 0x70U}, {0x8B9U, 0x7U},
+    {0x8C0U, 0x70U}, {0x930U, 0x70U}, {0xCB0U, 0x70U},
+    {0xD89U, 0x7U},
+};
+constexpr Gx2ContextRegisterLoadRange gx2_context_sampler_load_ranges[]{
+    {0U, 0x36U},
+    {0x36U, 0x36U}, {0x6CU, 0x36U},
+};
+
+constexpr std::uint32_t context_shadow_area_size(std::uint32_t register_count)
+{
+    const std::uint32_t byte_size = register_count * sizeof(std::uint32_t);
+    return (byte_size + 0xFFU) & ~0xFFU;
+}
+
+static_assert(
+    context_shadow_area_size(0xB00U) + context_shadow_area_size(0x400U) +
+        context_shadow_area_size(0x800U) + context_shadow_area_size(0x60U) +
+        context_shadow_area_size(0xD9EU) + context_shadow_area_size(0xA2U) ==
+    gx2_context_shadow_state_size);
 constexpr std::uint32_t gx2_tv_render_mode_wide_720p = 3U;
 constexpr std::uint32_t gx2_tv_render_mode_wide_1080p = 5U;
 constexpr std::uint32_t gx2_drc_render_mode_single = 1U;
@@ -349,6 +411,78 @@ void validate_gx2_u64_output(
             std::string("gx2::") + api_name +
             ": timestamp output is outside mapped guest memory");
     }
+}
+
+template<std::size_t RangeCount>
+void append_gx2_context_register_load(
+    std::span<const std::uint8_t> context_bytes,
+    std::uint32_t shadow_area_offset,
+    std::uint32_t register_index_base,
+    const Gx2ContextRegisterLoadRange (&ranges)[RangeCount],
+    Gx2CommandType command_type,
+    std::vector<Gx2Command>& commands)
+{
+    for (const Gx2ContextRegisterLoadRange range : ranges)
+    {
+        for (std::uint32_t index = 0U; index < range.register_count; ++index)
+        {
+            const std::uint32_t register_index =
+                static_cast<std::uint32_t>(range.first_register) + index;
+            const std::uint32_t value_offset = shadow_area_offset +
+                register_index * sizeof(std::uint32_t);
+            const std::uint32_t register_address =
+                (register_index_base + register_index) * sizeof(std::uint32_t);
+            const std::uint32_t value =
+                (static_cast<std::uint32_t>(context_bytes[value_offset]) << 24U) |
+                (static_cast<std::uint32_t>(context_bytes[value_offset + 1U]) << 16U) |
+                (static_cast<std::uint32_t>(context_bytes[value_offset + 2U]) << 8U) |
+                static_cast<std::uint32_t>(context_bytes[value_offset + 3U]);
+            commands.push_back({
+                command_type,
+                register_address,
+                value});
+        }
+    }
+}
+
+std::vector<Gx2Command> read_gx2_context_restore_commands(
+    std::span<const std::uint8_t> context_bytes)
+{
+    std::vector<Gx2Command> commands;
+    // Exact shadow-memory region sizes and load ranges follow the Cafe GX2
+    // context-state layout. Preserve packet order because overlapping or
+    // aliased Latte register ranges are order-sensitive.
+    append_gx2_context_register_load(
+        context_bytes, 0U, 0x2000U, gx2_context_config_load_ranges,
+        Gx2CommandType::set_context_register, commands);
+    const std::uint32_t context_area = context_shadow_area_size(0xB00U);
+    append_gx2_context_register_load(
+        context_bytes, context_area, 0xA000U,
+        gx2_context_context_load_ranges,
+        Gx2CommandType::set_context_register, commands);
+    const std::uint32_t alu_area =
+        context_area + context_shadow_area_size(0x400U);
+    append_gx2_context_register_load(
+        context_bytes, alu_area, 0xC000U, gx2_context_alu_load_ranges,
+        Gx2CommandType::set_context_register, commands);
+    const std::uint32_t loop_area =
+        alu_area + context_shadow_area_size(0x800U);
+    append_gx2_context_register_load(
+        context_bytes, loop_area, 0xF880U, gx2_context_loop_load_ranges,
+        Gx2CommandType::set_context_register, commands);
+    const std::uint32_t resource_area =
+        loop_area + context_shadow_area_size(0x60U);
+    append_gx2_context_register_load(
+        context_bytes, resource_area, 0xE000U,
+        gx2_context_resource_load_ranges,
+        Gx2CommandType::set_shader_resource, commands);
+    const std::uint32_t sampler_area =
+        resource_area + context_shadow_area_size(0xD9EU);
+    append_gx2_context_register_load(
+        context_bytes, sampler_area, 0xF000U,
+        gx2_context_sampler_load_ranges,
+        Gx2CommandType::set_shader_sampler, commands);
+    return commands;
 }
 
 std::uint32_t fpr_float_argument_bits(
@@ -2857,6 +2991,72 @@ void register_gx2_hle(HleDispatcher& dispatcher)
                 core, out_size, api_name, "size output");
             core.memory.write32_be(out_display_list, display_list);
             core.memory.write32_be(out_size, display_list_size);
+        });
+
+    dispatcher.register_function(
+        "gx2",
+        "GX2SetContextState",
+        [](EspressoCore& core) {
+            constexpr const char* api_name = "GX2SetContextState";
+            const std::uint32_t context_state = core.state.gpr[3];
+            if (context_state == 0U)
+            {
+                // A null state disables shadow tracking. Affogato does not
+                // model the PM4 context-control packet itself; the register
+                // shadow and ordered register commands remain intact.
+                core.gx2.context_state_shadowing_enabled = false;
+                return;
+            }
+
+            const std::uint64_t context_end =
+                static_cast<std::uint64_t>(context_state) +
+                gx2_context_state_size;
+            if (context_end > guest_address_space_end)
+            {
+                throw HleExecutionError(
+                    std::string("gx2::") + api_name +
+                    ": context state range wraps guest address space");
+            }
+            std::vector<std::uint8_t> context_bytes(gx2_context_state_size);
+            try
+            {
+                core.memory.read_bytes(context_state, context_bytes);
+            }
+            catch (const GuestMemoryFault&)
+            {
+                throw HleExecutionError(
+                    std::string("gx2::") + api_name +
+                    ": context state is outside mapped guest memory");
+            }
+
+            const std::uint32_t size_offset =
+                gx2_context_display_list_size_offset;
+            const std::uint32_t display_list_size =
+                (static_cast<std::uint32_t>(context_bytes[size_offset]) << 24U) |
+                (static_cast<std::uint32_t>(context_bytes[size_offset + 1U]) << 16U) |
+                (static_cast<std::uint32_t>(context_bytes[size_offset + 2U]) << 8U) |
+                static_cast<std::uint32_t>(context_bytes[size_offset + 3U]);
+            if (display_list_size > gx2_context_display_list_capacity)
+            {
+                throw HleExecutionError(
+                    std::string("gx2::") + api_name +
+                    ": embedded display-list size exceeds its context buffer");
+            }
+            if (display_list_size != 0U)
+            {
+                throw HleExecutionError(
+                    std::string("gx2::") + api_name +
+                    ": PM4 context display-list playback is not implemented");
+            }
+
+            const std::vector<Gx2Command> restore_commands =
+                read_gx2_context_restore_commands(context_bytes);
+
+            core.gx2.pending_commands.insert(
+                core.gx2.pending_commands.end(),
+                restore_commands.begin(), restore_commands.end());
+            core.gx2.current_context_state = context_state;
+            core.gx2.context_state_shadowing_enabled = true;
         });
 
     dispatcher.register_function(
