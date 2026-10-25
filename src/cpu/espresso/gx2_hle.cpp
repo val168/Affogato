@@ -3871,6 +3871,28 @@ void register_gx2_hle(HleDispatcher& dispatcher)
 
     dispatcher.register_function(
         "gx2",
+        "GX2SetPointLimitsReg",
+        [](EspressoCore& core) {
+            if (!core.gx2.initialized)
+            {
+                throw HleExecutionError(
+                    "gx2::GX2SetPointLimitsReg: GX2 has not been initialized");
+            }
+
+            // GX2PointLimitsReg stores the packed PA_SU_POINT_MINMAX word.
+            // Preserve it verbatim; its 12.4 fields are already encoded.
+            const std::uint32_t limits =
+                core.memory.read32_be(core.state.gpr[3]);
+            auto& commands = core.gx2.pending_commands;
+            commands.reserve(commands.size() + 1U);
+            commands.push_back({
+                Gx2CommandType::set_context_register,
+                pa_su_point_minmax_register,
+                limits});
+        });
+
+    dispatcher.register_function(
+        "gx2",
         "GX2InitLineWidthReg",
         [](EspressoCore& core) {
             const float width = std::bit_cast<float>(
