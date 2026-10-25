@@ -3240,6 +3240,20 @@ void register_gx2_hle(HleDispatcher& dispatcher)
 
     dispatcher.register_function(
         "gx2",
+        "GX2InitColorControlReg",
+        [](EspressoCore& core) {
+            const std::uint32_t output = core.state.gpr[3];
+            core.memory.validate_write_range(output, sizeof(std::uint32_t));
+            const std::uint32_t packed = pack_color_control(
+                core.state.gpr[4],
+                core.state.gpr[5],
+                core.state.gpr[6],
+                core.state.gpr[7]);
+            core.memory.write32_be(output, packed);
+        });
+
+    dispatcher.register_function(
+        "gx2",
         "GX2SetBlendControl",
         [](EspressoCore& core) {
             if (!core.gx2.initialized)
