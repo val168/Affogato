@@ -3165,6 +3165,25 @@ void register_gx2_hle(HleDispatcher& dispatcher)
 
     dispatcher.register_function(
         "gx2",
+        "GX2SetAAMaskReg",
+        [](EspressoCore& core) {
+            if (!core.gx2.initialized)
+            {
+                throw HleExecutionError(
+                    "gx2::GX2SetAAMaskReg: GX2 has not been initialized");
+            }
+
+            // GX2AAMaskReg is exactly one big-endian pa_sc_aa_mask word. Read
+            // it before queuing the write so a bad guest pointer is atomic.
+            const std::uint32_t mask = core.memory.read32_be(core.state.gpr[3]);
+            core.gx2.pending_commands.push_back({
+                Gx2CommandType::set_context_register,
+                pa_sc_aa_mask_register,
+                mask});
+        });
+
+    dispatcher.register_function(
+        "gx2",
         "GX2SetScissor",
         [](EspressoCore& core) {
             if (!core.gx2.initialized)
