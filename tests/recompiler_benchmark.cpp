@@ -91,6 +91,17 @@ void install_cr_branch_loop(affogato::cpu::espresso::EspressoCore& core)
     core.state.gpr[3] = 1U;
 }
 
+void install_alternating_branch_loop(affogato::cpu::espresso::EspressoCore& core)
+{
+    // Each block contains one useful operation and a direct branch to the
+    // other block, stressing repeated cross-block target resolution.
+    core.memory.write32_be(0x100U, 0x38630001U); // addi r3,r3,1
+    core.memory.write32_be(0x104U, 0x480000FCU); // b 0x200
+    core.memory.write32_be(0x200U, 0x38630001U); // addi r3,r3,1
+    core.memory.write32_be(0x204U, 0x4BFFFEFCU); // b 0x100
+    core.state.cia = 0x100U;
+}
+
 }
 
 int main()
@@ -383,6 +394,58 @@ int main()
               << std::hex << cr_branch_interpreted.state.cr << "/0x"
               << cr_branch_compiled.state.cr << std::dec << '\n';
 
+    EspressoCore linked_interpreted(0x1000U);
+    EspressoCore linked_compiled(0x1000U);
+    install_alternating_branch_loop(linked_interpreted);
+    install_alternating_branch_loop(linked_compiled);
+    Recompiler linked_recompiler;
+    static_cast<void>(linked_recompiler.run(linked_compiled, 4U));
+    linked_compiled.state.cia = 0x100U;
+    linked_compiled.state.gpr[3] = 0U;
+    const RecompilerStatistics linked_stats_before = linked_recompiler.statistics();
+    const auto linked_interpreter_start = std::chrono::steady_clock::now();
+    const RunResult linked_interpreter_result =
+        linked_interpreted.run(pc_relative_benchmark_steps);
+    const auto linked_interpreter_end = std::chrono::steady_clock::now();
+    const auto linked_recompiler_start = std::chrono::steady_clock::now();
+    const RunResult linked_recompiler_result =
+        linked_recompiler.run(linked_compiled, pc_relative_benchmark_steps);
+    const auto linked_recompiler_end = std::chrono::steady_clock::now();
+    const auto linked_interpreter_ms = std::chrono::duration_cast<
+        std::chrono::milliseconds>(
+            linked_interpreter_end - linked_interpreter_start).count();
+    const auto linked_recompiler_ms = std::chrono::duration_cast<
+        std::chrono::milliseconds>(
+            linked_recompiler_end - linked_recompiler_start).count();
+    const RecompilerStatistics& linked_stats_after = linked_recompiler.statistics();
+    if (linked_interpreter_result.steps != pc_relative_benchmark_steps ||
+        linked_recompiler_result.steps != pc_relative_benchmark_steps ||
+        linked_interpreted.state.gpr != linked_compiled.state.gpr ||
+        linked_interpreted.state.cia != linked_compiled.state.cia)
+    {
+        std::cerr << "Direct-branch benchmark interpreter/JIT mismatch\n";
+        return 1;
+    }
+    std::cout << "\nAlternating two-block direct-branch lookup workload:"
+              << "\nGuest steps: " << pc_relative_benchmark_steps
+              << "\nInterpreter: " << linked_interpreter_ms << " ms"
+              << "\nRecompiler: " << linked_recompiler_ms << " ms"
+              << "\nSpeedup: " << std::fixed << std::setprecision(2)
+              << static_cast<double>(linked_interpreter_ms) /
+                    static_cast<double>(linked_recompiler_ms)
+              << "x vs interpreter"
+              << "\nDispatcher entries: "
+              << linked_stats_after.dispatcher_entries -
+                    linked_stats_before.dispatcher_entries
+              << "\nFast lookup hits: "
+              << linked_stats_after.fast_lookup_hits -
+                    linked_stats_before.fast_lookup_hits
+              << "\nDirect-link hits: "
+              << linked_stats_after.direct_link_hits -
+                    linked_stats_before.direct_link_hits
+              << "\nGPR3 interpreter/JIT: " << linked_interpreted.state.gpr[3]
+              << '/' << linked_compiled.state.gpr[3] << '\n';
+
     EspressoCore memory_interpreted(0x1000U);
     EspressoCore memory_compiled(0x1000U);
     install_memory_loop(memory_interpreted);
@@ -429,6 +492,9 @@ int main()
         pc_interpreter_result.steps == pc_relative_benchmark_steps &&
         pc_recompiler_result.steps == pc_relative_benchmark_steps &&
         pc_interpreted.state.gpr[3] == pc_compiled.state.gpr[3] &&
+        linked_interpreter_result.steps == pc_relative_benchmark_steps &&
+        linked_recompiler_result.steps == pc_relative_benchmark_steps &&
+        linked_interpreted.state.gpr[3] == linked_compiled.state.gpr[3] &&
         memory_interpreter_result.steps == benchmark_steps &&
         memory_recompiler_result.steps == benchmark_steps &&
         memory_interpreted.memory.read32_be(0x800U) ==
