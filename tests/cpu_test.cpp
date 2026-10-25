@@ -23786,6 +23786,55 @@ void gx2_flush_hle_tests()
            (Gx2Command{Gx2CommandType::flush, 0U, 0U}));
 }
 
+void gx2_draw_done_hle_tests()
+{
+    constexpr std::uint32_t return_address = 0x2000U;
+    EspressoCore core(0x1000U);
+    register_gx2_hle(core.hle);
+    core.gx2.initialized = true;
+    core.gx2.pending_commands = {
+        {Gx2CommandType::set_context_register, 0x28800U, 0x11223344U},
+    };
+    const auto commands_before = core.gx2.pending_commands;
+    core.state.gpr.fill(0xD3000000U);
+    core.state.gpr[3] = 0x12345678U;
+    core.state.gpr[4] = 0x87654321U;
+    core.state.lr = return_address;
+    core.state.cr = 0xA5A55A5AU;
+    core.state.xer = 0x87654321U;
+    core.state.ctr = 0xABCDEF01U;
+    core.state.fpscr = 0x5A5AA5A5U;
+    const auto gprs_before = core.state.gpr;
+    const auto fprs_before = core.state.fpr;
+    const auto ps1_before = core.state.fpr_ps1;
+    core.state.cia = core.hle.bind_import("gx2", "GX2DrawDone");
+
+    const RunResult result = core.run(1U);
+    assert(result.reason == StopReason::instruction_limit);
+    assert(result.steps == 1U);
+    assert(core.state.cia == return_address && core.state.lr == return_address);
+    for (std::size_t reg = 0U; reg < core.state.gpr.size(); ++reg)
+    {
+        if (reg != 3U)
+        {
+            assert(core.state.gpr[reg] == gprs_before[reg]);
+        }
+    }
+    assert(core.state.gpr[3] == 1U);
+    assert(core.state.fpr == fprs_before && core.state.fpr_ps1 == ps1_before);
+    assert(core.state.cr == 0xA5A55A5AU);
+    assert(core.state.xer == 0x87654321U);
+    assert(core.state.ctr == 0xABCDEF01U);
+    assert(core.state.fpscr == 0x5A5AA5A5U);
+    assert(core.gx2.pending_commands.size() == commands_before.size() + 2U);
+    assert(std::equal(commands_before.begin(), commands_before.end(),
+                      core.gx2.pending_commands.begin()));
+    assert(core.gx2.pending_commands[1] ==
+           (Gx2Command{Gx2CommandType::flush, 0U, 0U}));
+    assert(core.gx2.pending_commands[2] ==
+           (Gx2Command{Gx2CommandType::draw_done, 0U, 0U}));
+}
+
 void gx2_calc_tv_size_hle_tests()
 {
     constexpr std::uint32_t tv_render_mode_wide_1080p = 5U;
@@ -24950,13 +24999,14 @@ void gx2_register_state_tests()
     using affogato::gpu::LatteSamplerWords;
     using affogato::gpu::LatteTextureResourceWords;
 
-    constexpr std::array<Gx2Command, 5U> commands{{
+    constexpr std::array<Gx2Command, 6U> commands{{
         {Gx2CommandType::set_context_register, 0x0000A400U, 0x3F800000U},
         {Gx2CommandType::set_shader_resource, 0x00038000U, 0x12345678U},
         {Gx2CommandType::set_shader_sampler, 0x0003C000U, 0xAABBCCDDU},
         // Later writes to the same Latte register replace the previous value.
         {Gx2CommandType::set_context_register, 0x0000A400U, 0xBF800000U},
         {Gx2CommandType::flush, 0U, 0U},
+        {Gx2CommandType::draw_done, 0U, 0U},
     }};
 
     Gx2RuntimeState runtime;
@@ -34723,6 +34773,7 @@ int main(int argc, char* argv[])
     gx2_get_context_state_display_list_hle_tests();
     gx2_set_context_state_hle_tests();
     gx2_flush_hle_tests();
+    gx2_draw_done_hle_tests();
     gx2_calc_surface_size_and_alignment_hle_tests();
     gx2r_create_surface_user_memory_hle_tests();
     gx2r_lock_surface_ex_hle_tests();

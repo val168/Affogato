@@ -32,10 +32,11 @@ public:
     {
         for (const cpu::espresso::Gx2Command& command : commands)
         {
-            if (command.type == cpu::espresso::Gx2CommandType::flush)
+            if (command.type == cpu::espresso::Gx2CommandType::flush ||
+                command.type == cpu::espresso::Gx2CommandType::draw_done)
             {
-                // Submission boundaries preserve command ordering but do not
-                // themselves write a Latte register.
+                // Submission/synchronization boundaries preserve command
+                // ordering but do not themselves write a Latte register.
                 continue;
             }
             registers_[command.register_address] = {command.type, command.value};

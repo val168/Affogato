@@ -3425,6 +3425,21 @@ void register_gx2_hle(HleDispatcher& dispatcher)
 
     dispatcher.register_function(
         "gx2",
+        "GX2DrawDone",
+        [](EspressoCore& core) {
+            // Preserve the Cafe flush-then-draw-done ordering. This emulator
+            // does not submit guest draw work to Vulkan yet, so the fence is
+            // already retired when recorded. Once guest draws are submitted,
+            // this boundary must wait for renderer-side completion.
+            core.gx2.pending_commands.push_back(
+                {Gx2CommandType::flush, 0U, 0U});
+            core.gx2.pending_commands.push_back(
+                {Gx2CommandType::draw_done, 0U, 0U});
+            core.state.gpr[3] = 1U;
+        });
+
+    dispatcher.register_function(
+        "gx2",
         "GX2SampleTopGPUCycle",
         [](EspressoCore& core) {
             const std::uint32_t timestamp_output = core.state.gpr[3];
