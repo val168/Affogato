@@ -810,6 +810,37 @@ extern "C" void native_raise_fpscr_snan_if_present(
     }
 }
 
+extern "C" void native_raise_fpscr_compare_invalid_if_present(
+    CpuState* state,
+    std::uint64_t a_raw,
+    std::uint64_t b_raw,
+    std::uint32_t ordered) noexcept
+{
+    constexpr std::uint64_t exponent_mask = 0x7FF0000000000000ULL;
+    constexpr std::uint64_t fraction_mask = 0x000FFFFFFFFFFFFFULL;
+    constexpr std::uint64_t quiet_bit = 0x0008000000000000ULL;
+    const auto is_nan = [&](std::uint64_t value) {
+        return (value & exponent_mask) == exponent_mask &&
+            (value & fraction_mask) != 0U;
+    };
+    const auto is_signaling_nan = [&](std::uint64_t value) {
+        return is_nan(value) && (value & quiet_bit) == 0U;
+    };
+    const bool signaling_nan =
+        is_signaling_nan(a_raw) || is_signaling_nan(b_raw);
+    const bool any_nan = is_nan(a_raw) || is_nan(b_raw);
+    if (signaling_nan)
+    {
+        native_raise_fpscr_exception(state, fpscr::vxsnan_mask);
+    }
+    if (ordered != 0U &&
+        ((signaling_nan && (state->fpscr & fpscr::ve_mask) == 0U) ||
+         (!signaling_nan && any_nan)))
+    {
+        native_raise_fpscr_exception(state, fpscr::vxvc_mask);
+    }
+}
+
 extern "C" void native_fctiwz(
     NativeExecutionContext* context,
     CpuState* state,
@@ -4015,6 +4046,7 @@ struct BlockCode
     case Opcode::floating_compare_unordered:
     case Opcode::paired_single_compare_unordered0:
     case Opcode::paired_single_compare_unordered1:
+    case Opcode::paired_single_compare_ordered0:
     case Opcode::floating_convert_to_integer_word_zero:
     case Opcode::floating_reciprocal_square_root_estimate:
     case Opcode::floating_round_to_single:
@@ -4211,6 +4243,7 @@ struct BlockCode
     case Opcode::floating_compare_unordered: return "fcmpu";
     case Opcode::paired_single_compare_unordered0: return "ps_cmpu0";
     case Opcode::paired_single_compare_unordered1: return "ps_cmpu1";
+    case Opcode::paired_single_compare_ordered0: return "ps_cmpo0";
     case Opcode::move_condition_register_field: return "mcrf";
     case Opcode::move_from_condition_register: return "mfcr";
     case Opcode::move_to_condition_register_fields: return "mtcrf";
@@ -5842,6 +5875,7 @@ struct Recompiler::Impl
             case Opcode::floating_compare_unordered:
             case Opcode::paired_single_compare_unordered0:
             case Opcode::paired_single_compare_unordered1:
+            case Opcode::paired_single_compare_ordered0:
             {
                 const std::uint32_t compare_record_offset = static_cast<std::uint32_t>(
                     offsetof(NativeExecutionContext, fp_compare_records) +
@@ -5893,15 +5927,27 @@ struct Recompiler::Impl
                 compiler.test(unordered, unordered);
                 compiler.jz(ordered);
                 compiler.mov(comparison, imm(1U));
-                auto* invoke_snan = static_cast<InvokeNode*>(nullptr);
-                const auto snan_helper = static_cast<std::uint64_t>(
-                    reinterpret_cast<std::uintptr_t>(&native_raise_fpscr_snan_if_present));
-                compiler.invoke(Out(invoke_snan), snan_helper,
-                    FuncSignature::build<void, CpuState*, std::uint64_t, std::uint64_t>(
-                        CallConvId::kCDecl));
-                invoke_snan->set_arg(0, state);
-                invoke_snan->set_arg(1, a_raw);
-                invoke_snan->set_arg(2, b_raw);
+                auto* invoke_invalid = static_cast<InvokeNode*>(nullptr);
+                if (insn.opcode == Opcode::paired_single_compare_ordered0)
+                {
+                    compiler.invoke(Out(invoke_invalid),
+                        reinterpret_cast<std::uintptr_t>(
+                            &native_raise_fpscr_compare_invalid_if_present),
+                        FuncSignature::build<void, CpuState*, std::uint64_t,
+                            std::uint64_t, std::uint32_t>(CallConvId::kCDecl));
+                    invoke_invalid->set_arg(3, imm(1U));
+                }
+                else
+                {
+                    compiler.invoke(Out(invoke_invalid),
+                        reinterpret_cast<std::uintptr_t>(
+                            &native_raise_fpscr_snan_if_present),
+                        FuncSignature::build<void, CpuState*, std::uint64_t,
+                            std::uint64_t>(CallConvId::kCDecl));
+                }
+                invoke_invalid->set_arg(0, state);
+                invoke_invalid->set_arg(1, a_raw);
+                invoke_invalid->set_arg(2, b_raw);
                 compiler.bind(ordered);
 
                 const std::uint32_t cr_shift =
@@ -8919,7 +8965,8 @@ RunResult Recompiler::run(EspressoCore& core, std::size_t max_steps)
             }
             if (insn.opcode == Opcode::floating_compare_unordered ||
                 insn.opcode == Opcode::paired_single_compare_unordered0 ||
-                insn.opcode == Opcode::paired_single_compare_unordered1)
+                insn.opcode == Opcode::paired_single_compare_unordered1 ||
+                insn.opcode == Opcode::paired_single_compare_ordered0)
             {
                 InstructionHistoryEntry entry = native_history(insn, cia);
                 const NativeFpCompareRecord& record = context.fp_compare_records[i];
