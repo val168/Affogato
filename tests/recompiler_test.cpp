@@ -2855,15 +2855,18 @@ void recompiler_fabs_differential_tests()
     }();
     constexpr std::uint64_t ps1_sentinel = 0xDEADBEEF01234567ULL;
 
-    for (std::uint8_t source = 0U; source < 32U; ++source)
+    for (const bool negative_absolute : {false, true})
     {
-        for (std::uint8_t destination = 0U; destination < 32U; ++destination)
+        for (std::uint8_t source = 0U; source < 32U; ++source)
         {
+            for (std::uint8_t destination = 0U; destination < 32U; ++destination)
+            {
             EspressoCore interpreted(0x1000U);
             EspressoCore compiled(0x1000U);
             const std::uint32_t instruction =
                 (63U << 26U) | (static_cast<std::uint32_t>(destination) << 21U) |
-                (static_cast<std::uint32_t>(source) << 11U) | (264U << 1U);
+                (static_cast<std::uint32_t>(source) << 11U) |
+                ((negative_absolute ? 136U : 264U) << 1U);
             for (EspressoCore* core : {&interpreted, &compiled})
             {
                 core->memory.write32_be(start, instruction);
@@ -2887,7 +2890,9 @@ void recompiler_fabs_differential_tests()
             assert(compiled.state.fpr == interpreted.state.fpr);
             assert(compiled.state.fpr_ps1 == interpreted.state.fpr_ps1);
             assert(compiled.state.fpr[destination] ==
-                (source_values[source] & 0x7FFFFFFFFFFFFFFFULL));
+                (negative_absolute
+                    ? source_values[source] | 0x8000000000000000ULL
+                    : source_values[source] & 0x7FFFFFFFFFFFFFFFULL));
             assert(compiled.state.fpr_ps1[destination] == ps1_sentinel);
             assert(compiled.state.cr == interpreted.state.cr);
             assert(compiled.state.xer == interpreted.state.xer);
@@ -2896,7 +2901,9 @@ void recompiler_fabs_differential_tests()
             assert(compiled.state.fpscr == interpreted.state.fpscr);
             assert(recompiler.statistics().native_instructions == 1U);
             assert(recompiler.statistics().interpreter_fallbacks == 0U);
-            assert(actual.instruction_history.back().opcode_name == "fabs");
+            assert(actual.instruction_history.back().opcode_name ==
+                (negative_absolute ? "fnabs" : "fabs"));
+            }
         }
     }
 }

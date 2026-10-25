@@ -4137,6 +4137,7 @@ struct BlockCode
     case Opcode::floating_move_register:
     case Opcode::floating_negate:
     case Opcode::floating_absolute_value:
+    case Opcode::floating_negative_absolute_value:
     case Opcode::paired_single_merge00:
     case Opcode::paired_single_merge01:
     case Opcode::paired_single_merge10:
@@ -4313,6 +4314,7 @@ struct BlockCode
     case Opcode::floating_move_register: return "fmr";
     case Opcode::floating_negate: return "fneg";
     case Opcode::floating_absolute_value: return "fabs";
+    case Opcode::floating_negative_absolute_value: return "fnabs";
     case Opcode::floating_convert_to_integer_word_zero: return "fctiwz";
     case Opcode::floating_reciprocal_square_root_estimate: return "frsqrte";
     case Opcode::floating_round_to_single: return "frsp";
@@ -6811,6 +6813,7 @@ struct Recompiler::Impl
             case Opcode::floating_move_register:
             case Opcode::floating_negate:
             case Opcode::floating_absolute_value:
+            case Opcode::floating_negative_absolute_value:
             {
                 x86::Gp value = compiler.new_gp64("fpr");
                 compiler.mov(value, x86::qword_ptr(
@@ -6822,6 +6825,10 @@ struct Recompiler::Impl
                 else if (insn.opcode == Opcode::floating_absolute_value)
                 {
                     compiler.btr(value, imm(63U));
+                }
+                else if (insn.opcode == Opcode::floating_negative_absolute_value)
+                {
+                    compiler.bts(value, imm(63U));
                 }
                 compiler.mov(x86::qword_ptr(
                     state, static_cast<std::int32_t>(fpr_offset(insn.fp_register))), value);
