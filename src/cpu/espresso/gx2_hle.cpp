@@ -3414,6 +3414,25 @@ void register_gx2_hle(HleDispatcher& dispatcher)
 
     dispatcher.register_function(
         "gx2",
+        "GX2SetLineWidthReg",
+        [](EspressoCore& core) {
+            if (!core.gx2.initialized)
+            {
+                throw HleExecutionError(
+                    "gx2::GX2SetLineWidthReg: GX2 has not been initialized");
+            }
+
+            // GX2LineWidthReg contains one already-packed pa_su_line_cntl word.
+            const std::uint32_t line_control =
+                core.memory.read32_be(core.state.gpr[3]);
+            core.gx2.pending_commands.push_back({
+                Gx2CommandType::set_context_register,
+                pa_su_line_cntl_register,
+                line_control});
+        });
+
+    dispatcher.register_function(
+        "gx2",
         "GX2SetViewport",
         [](EspressoCore& core) {
             if (!core.gx2.initialized)
