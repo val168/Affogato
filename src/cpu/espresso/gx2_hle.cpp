@@ -3218,6 +3218,28 @@ void register_gx2_hle(HleDispatcher& dispatcher)
 
     dispatcher.register_function(
         "gx2",
+        "GX2SetColorControlReg",
+        [](EspressoCore& core) {
+            if (!core.gx2.initialized)
+            {
+                throw HleExecutionError(
+                    "gx2::GX2SetColorControlReg: GX2 has not been initialized");
+            }
+
+            const std::uint32_t control =
+                core.memory.read32_be(core.state.gpr[3]);
+            auto& commands = core.gx2.pending_commands;
+            commands.reserve(commands.size() + 1U);
+            core.gx2.cb_color_control = control;
+            core.gx2.cb_color_control_valid = true;
+            commands.push_back({
+                Gx2CommandType::set_context_register,
+                cb_color_control_register,
+                control});
+        });
+
+    dispatcher.register_function(
+        "gx2",
         "GX2SetBlendControl",
         [](EspressoCore& core) {
             if (!core.gx2.initialized)
