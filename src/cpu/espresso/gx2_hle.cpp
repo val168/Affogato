@@ -56,6 +56,7 @@ constexpr std::uint32_t pa_sc_generic_scissor_br_register = 0x00028244U;
 constexpr std::uint32_t pa_sc_window_offset_register = 0x00028200U;
 constexpr std::uint32_t pa_su_point_size_register = 0x00028A00U;
 constexpr std::uint32_t pa_su_point_minmax_register = 0x00028A04U;
+constexpr std::uint32_t pa_su_line_cntl_register = 0x00028A08U;
 constexpr std::uint32_t pa_su_poly_offset_front_scale_register = 0x00028B80U;
 constexpr std::uint32_t pa_su_poly_offset_front_offset_register = 0x00028B84U;
 constexpr std::uint32_t pa_su_poly_offset_back_scale_register = 0x00028B88U;
@@ -698,12 +699,11 @@ std::uint32_t fpr_float_argument_bits(
     return std::bit_cast<std::uint32_t>(single_value);
 }
 
-std::uint16_t pack_gx2_fixed_12_4(float value, float scale)
+std::uint16_t pack_gx2_scaled_i16_field(float value, float scale)
 {
-    // Point-size arguments are full dimensions, so the half-dimension radius
-    // is dimension * 8 in 12.4. Point limits are already radii and use *16.
-    // GX2's fixed-point conversion truncates toward zero and writes the low
-    // 16 bits after the signed conversion.
+    // GX2 converts scaled float register inputs toward zero, then uses the low
+    // 16 bits of the signed integer word. Each caller supplies scaling based
+    // on the documented fixed-point or subpixel units of its register.
     const float fixed_value = value * scale;
     std::int32_t fixed_integer{};
     if (std::isnan(fixed_value) || fixed_value < -2147483648.0F)
@@ -3257,10 +3257,10 @@ void register_gx2_hle(HleDispatcher& dispatcher)
                 fpr_float_argument_bits(core, 2U));
             const std::uint32_t packed =
                 (static_cast<std::uint32_t>(
-                     pack_gx2_fixed_12_4(width, 8.0F))
+                     pack_gx2_scaled_i16_field(width, 8.0F))
                  << 16U) |
                 static_cast<std::uint32_t>(
-                    pack_gx2_fixed_12_4(height, 8.0F));
+                    pack_gx2_scaled_i16_field(height, 8.0F));
 
             core.gx2.pending_commands.push_back({
                 Gx2CommandType::set_context_register,
@@ -3285,9 +3285,9 @@ void register_gx2_hle(HleDispatcher& dispatcher)
             const float maximum = std::bit_cast<float>(
                 fpr_float_argument_bits(core, 2U));
             const std::uint32_t packed =
-                static_cast<std::uint32_t>(pack_gx2_fixed_12_4(
+                static_cast<std::uint32_t>(pack_gx2_scaled_i16_field(
                     maximum, 16.0F)) << 16U |
-                static_cast<std::uint32_t>(pack_gx2_fixed_12_4(
+                static_cast<std::uint32_t>(pack_gx2_scaled_i16_field(
                     minimum, 16.0F));
 
             core.gx2.pending_commands.push_back({
@@ -3295,6 +3295,28 @@ void register_gx2_hle(HleDispatcher& dispatcher)
                 pa_su_point_minmax_register,
                 packed});
             // The min/max parameters are the radius limits stored by Latte.
+        });
+
+    dispatcher.register_function(
+        "gx2",
+        "GX2SetLineWidth",
+        [](EspressoCore& core) {
+            if (!core.gx2.initialized)
+            {
+                throw HleExecutionError(
+                    "gx2::GX2SetLineWidth: GX2 has not been initialized");
+            }
+
+            const float width = std::bit_cast<float>(
+                fpr_float_argument_bits(core, 1U));
+            // PA_SU_LINE_CNTL stores half of the full width in 1/16-pixel
+            // subpixels, which is equivalent to multiplying by eight.
+            const std::uint32_t packed =
+                pack_gx2_scaled_i16_field(width, 8.0F);
+            core.gx2.pending_commands.push_back({
+                Gx2CommandType::set_context_register,
+                pa_su_line_cntl_register,
+                packed});
         });
 
     dispatcher.register_function(
