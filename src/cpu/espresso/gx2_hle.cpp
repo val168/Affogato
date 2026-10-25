@@ -3510,6 +3510,59 @@ void register_gx2_hle(HleDispatcher& dispatcher)
 
     dispatcher.register_function(
         "gx2",
+        "GX2SetViewportReg",
+        [](EspressoCore& core) {
+            if (!core.gx2.initialized)
+            {
+                throw HleExecutionError(
+                    "gx2::GX2SetViewportReg: GX2 has not been initialized");
+            }
+
+            const std::uint32_t input = core.state.gpr[3];
+            constexpr std::size_t register_count = 12U;
+            constexpr std::uint64_t structure_size =
+                register_count * sizeof(std::uint32_t);
+            if (static_cast<std::uint64_t>(input) + structure_size >
+                guest_address_space_end)
+            {
+                throw HleExecutionError(
+                    "gx2::GX2SetViewportReg: input range wraps guest address space");
+            }
+
+            std::array<std::uint32_t, register_count> values{};
+            for (std::size_t index = 0U; index < values.size(); ++index)
+            {
+                values[index] = core.memory.read32_be(
+                    input + static_cast<std::uint32_t>(
+                        index * sizeof(std::uint32_t)));
+            }
+            constexpr std::array<std::uint32_t, register_count> registers{
+                pa_cl_vport_xscale_register,
+                pa_cl_vport_xscale_register + 0x04U,
+                pa_cl_vport_xscale_register + 0x08U,
+                pa_cl_vport_xscale_register + 0x0CU,
+                pa_cl_vport_xscale_register + 0x10U,
+                pa_cl_vport_xscale_register + 0x14U,
+                pa_cl_gb_vert_clip_adj_register,
+                pa_cl_gb_vert_disc_adj_register,
+                pa_cl_gb_horz_clip_adj_register,
+                pa_cl_gb_horz_disc_adj_register,
+                pa_sc_vport_zmin_register,
+                pa_sc_vport_zmax_register,
+            };
+            auto& commands = core.gx2.pending_commands;
+            commands.reserve(commands.size() + values.size());
+            for (std::size_t index = 0U; index < values.size(); ++index)
+            {
+                commands.push_back({
+                    Gx2CommandType::set_context_register,
+                    registers[index],
+                    values[index]});
+            }
+        });
+
+    dispatcher.register_function(
+        "gx2",
         "GX2InitScissorReg",
         [](EspressoCore& core) {
             const auto packed = pack_scissor(
