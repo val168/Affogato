@@ -764,6 +764,15 @@ std::uint32_t pack_gx2_point_size(float width, float height)
                pack_gx2_scaled_i16_field(height, 8.0F));
 }
 
+std::uint32_t pack_gx2_point_limits(float minimum, float maximum)
+{
+    return (static_cast<std::uint32_t>(
+                pack_gx2_scaled_i16_field(maximum, 16.0F))
+            << 16U) |
+           static_cast<std::uint32_t>(
+               pack_gx2_scaled_i16_field(minimum, 16.0F));
+}
+
 std::uint32_t pack_alpha_to_mask(
     std::uint32_t enabled,
     std::uint32_t mode)
@@ -3436,16 +3445,26 @@ void register_gx2_hle(HleDispatcher& dispatcher)
             const float maximum = std::bit_cast<float>(
                 fpr_float_argument_bits(core, 2U));
             const std::uint32_t packed =
-                static_cast<std::uint32_t>(pack_gx2_scaled_i16_field(
-                    maximum, 16.0F)) << 16U |
-                static_cast<std::uint32_t>(pack_gx2_scaled_i16_field(
-                    minimum, 16.0F));
+                pack_gx2_point_limits(minimum, maximum);
 
             core.gx2.pending_commands.push_back({
                 Gx2CommandType::set_context_register,
                 pa_su_point_minmax_register,
                 packed});
             // The min/max parameters are the radius limits stored by Latte.
+        });
+
+    dispatcher.register_function(
+        "gx2",
+        "GX2InitPointLimitsReg",
+        [](EspressoCore& core) {
+            const float minimum = std::bit_cast<float>(
+                fpr_float_argument_bits(core, 1U));
+            const float maximum = std::bit_cast<float>(
+                fpr_float_argument_bits(core, 2U));
+            core.memory.write32_be(
+                core.state.gpr[3],
+                pack_gx2_point_limits(minimum, maximum));
         });
 
     dispatcher.register_function(
