@@ -17315,6 +17315,36 @@ void mem_get_base_heap_handle_hle_tests()
     assert(small_success.memory.read32_be(small_success.base_heap_handles[8]) ==
            0x46524D48U);
 
+    // A substantial RPX gap gives MEM2 more than the old quarter-share, but
+    // still leaves a distinct foreground heap and enough legacy bump space to
+    // allocate the MEM2-sized pool plus a later default-heap allocation.
+    EspressoCore expanded_heap(0x02000000U);
+    register_coreinit_hle(expanded_heap.hle);
+    expanded_heap.configure_guest_heap(0x1000U, 0x01F00000U);
+    assert(initialize_default_guest_heaps(expanded_heap));
+    const std::uint32_t expanded_mem2 = expanded_heap.base_heap_handles[1];
+    const std::uint32_t expanded_foreground = expanded_heap.base_heap_handles[8];
+    const std::uint32_t expanded_mem2_free_size =
+        expanded_heap.memory.read32_be(expanded_mem2 + 0x58U);
+    assert(expanded_mem2_free_size > 0x00A00000U);
+    assert(expanded_foreground > expanded_heap.guest_heap_cursor);
+    assert(expanded_foreground < expanded_mem2);
+
+    const std::uint32_t default_allocate = expanded_heap.hle.bind_import(
+        "coreinit", "MEMAllocFromDefaultHeapEx");
+    expanded_heap.state.gpr[3] = expanded_mem2_free_size;
+    expanded_heap.state.gpr[4] = 4U;
+    expanded_heap.state.lr = 0x02005EE8U;
+    expanded_heap.state.cia = default_allocate;
+    assert(expanded_heap.step() == StepResult::executed);
+    assert(expanded_heap.state.gpr[3] != 0U);
+    expanded_heap.state.gpr[3] = 0x00100000U;
+    expanded_heap.state.gpr[4] = 4U;
+    expanded_heap.state.lr = 0x02005EE8U;
+    expanded_heap.state.cia = default_allocate;
+    assert(expanded_heap.step() == StepResult::executed);
+    assert(expanded_heap.state.gpr[3] != 0U);
+
     EspressoCore unaligned_boundary(0x4000U);
     unaligned_boundary.configure_guest_heap(0x1001U, 0x280BU);
     assert(initialize_default_guest_heaps(unaligned_boundary));

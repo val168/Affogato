@@ -1356,13 +1356,25 @@ bool initialize_default_guest_heaps(EspressoCore& core)
 
     const std::uint64_t available =
         static_cast<std::uint64_t>(allocation_end) - allocation_begin;
-    // Reserve one quarter of the loader-selected gap for MEM2 while retaining
-    // most of it for existing bump-allocated Cafe OS objects.
+    // The RPX loader only exposes a synthetic flat-memory gap, rather than
+    // Cafe's full physical MEM2 range. Give the expanded heap a larger share
+    // of a substantial gap, while preserving a foreground heap and a separate
+    // legacy bump region. Small test/utility gaps retain the old quarter-share
+    // policy, subject to the minimum space needed by all three heaps.
+    constexpr std::uint64_t large_gap_threshold = 0x01000000U;
+    constexpr std::uint64_t minimum_foreground_size = 0x50U;
     const std::uint64_t desired_mem2_size = std::max<std::uint64_t>(
         mem2_minimum_heap_size,
-        (available + 3U) / 4U);
-    const std::uint64_t aligned_mem2_size =
-        (desired_mem2_size + 0xFU) & ~std::uint64_t{0xFU};
+        available >= large_gap_threshold
+            ? (available + 2U) / 3U
+            : (available + 3U) / 4U);
+    const std::uint64_t maximum_mem2_size = available >
+            default_bump_heap_minimum_remaining + minimum_foreground_size
+        ? available - default_bump_heap_minimum_remaining - minimum_foreground_size
+        : 0U;
+    const std::uint64_t aligned_mem2_size = std::min<std::uint64_t>(
+        (desired_mem2_size + 0xFU) & ~std::uint64_t{0xFU},
+        maximum_mem2_size & ~std::uint64_t{0xFU});
     if (aligned_mem2_size > available)
     {
         return false;
@@ -1390,8 +1402,11 @@ bool initialize_default_guest_heaps(EspressoCore& core)
     }
     const std::uint64_t max_foreground_size =
         (lower_span - default_bump_heap_minimum_remaining) & ~std::uint64_t{0xFU};
-    const std::uint64_t foreground_size =
-        std::min(aligned_mem2_size, max_foreground_size);
+    const std::uint64_t desired_foreground_size = available >= large_gap_threshold
+        ? ((available + 3U) / 4U + 0xFU) & ~std::uint64_t{0xFU}
+        : aligned_mem2_size;
+    const std::uint64_t foreground_size = std::min(
+        desired_foreground_size, max_foreground_size);
     if (foreground_size < 0x50U)
     {
         return false;
