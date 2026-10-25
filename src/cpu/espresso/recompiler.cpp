@@ -66,6 +66,12 @@ struct NativeFpIntegerConversionRecord
     bool write_suppressed{};
 };
 
+struct NativeMffsRecord
+{
+    std::uint32_t fpscr{};
+    std::uint64_t result{};
+};
+
 struct NativeFrspRecord
 {
     std::uint64_t source_raw{};
@@ -319,6 +325,7 @@ struct NativeExecutionContext
     std::array<NativeStringStoreRecord, 64> stswi_records{};
     std::array<NativeFpCompareRecord, 64> fp_compare_records{};
     std::array<NativeFpIntegerConversionRecord, 64> fp_integer_conversion_records{};
+    std::array<NativeMffsRecord, 64> mffs_records{};
     std::array<NativeFrspRecord, 64> frsp_records{};
     std::array<NativeFrsqrteRecord, 64> frsqrte_records{};
     std::array<NativeFmulRecord, 64> fmul_records{};
@@ -4139,6 +4146,7 @@ struct BlockCode
     case Opcode::floating_negate:
     case Opcode::floating_absolute_value:
     case Opcode::floating_negative_absolute_value:
+    case Opcode::floating_move_from_fpscr:
     case Opcode::paired_single_merge00:
     case Opcode::paired_single_merge01:
     case Opcode::paired_single_merge10:
@@ -4317,6 +4325,7 @@ struct BlockCode
     case Opcode::floating_negate: return "fneg";
     case Opcode::floating_absolute_value: return "fabs";
     case Opcode::floating_negative_absolute_value: return "fnabs";
+    case Opcode::floating_move_from_fpscr: return "mffs";
     case Opcode::floating_convert_to_integer_word_zero: return "fctiwz";
     case Opcode::floating_reciprocal_square_root_estimate: return "frsqrte";
     case Opcode::floating_round_to_single: return "frsp";
@@ -6836,6 +6845,26 @@ struct Recompiler::Impl
                 }
                 compiler.mov(x86::qword_ptr(
                     state, static_cast<std::int32_t>(fpr_offset(insn.fp_register))), value);
+                break;
+            }
+            case Opcode::floating_move_from_fpscr:
+            {
+                const std::size_t record_offset = offsetof(NativeExecutionContext,
+                    mffs_records) + index * sizeof(NativeMffsRecord);
+                x86::Gp fpscr_value = compiler.new_gp32("mffs_fpscr");
+                x86::Gp result = compiler.new_gp64("mffs_result");
+                x86::Gp fpscr_low = compiler.new_gp64("mffs_fpscr_low");
+                compiler.mov(fpscr_value, x86::dword_ptr(state,
+                    static_cast<std::int32_t>(offsetof(CpuState, fpscr))));
+                compiler.mov(result, imm(0xFFFFFFFF00000000ULL));
+                compiler.mov(fpscr_low.r32(), fpscr_value);
+                compiler.or_(result, fpscr_low);
+                compiler.mov(x86::qword_ptr(state,
+                    static_cast<std::int32_t>(fpr_offset(insn.fp_register))), result);
+                compiler.mov(x86::dword_ptr(context, static_cast<std::int32_t>(
+                    record_offset + offsetof(NativeMffsRecord, fpscr))), fpscr_value);
+                compiler.mov(x86::qword_ptr(context, static_cast<std::int32_t>(
+                    record_offset + offsetof(NativeMffsRecord, result))), result);
                 break;
             }
             case Opcode::floating_convert_to_integer_word_zero:
@@ -9387,6 +9416,19 @@ RunResult Recompiler::run(EspressoCore& core, std::size_t max_steps)
                 entry.paired_fp_source_c_ps1 = record.source_c_ps1;
                 entry.paired_fp_destination_ps0 = record.destination_ps0;
                 entry.paired_fp_destination_ps1 = record.destination_ps1;
+                core.append_instruction_history(std::move(entry));
+                continue;
+            }
+            if (insn.opcode == Opcode::floating_move_from_fpscr)
+            {
+                InstructionHistoryEntry entry = native_history(insn, cia);
+                const NativeMffsRecord& record = context.mffs_records[i];
+                entry.has_fp_status_move = true;
+                entry.fp_status_move_destination = insn.fp_register;
+                entry.fp_status_move_source = record.fpscr;
+                entry.fp_status_move_result = record.result;
+                entry.fp_status_move_destination_ps1 =
+                    core.state.fpr_ps1[insn.fp_register];
                 core.append_instruction_history(std::move(entry));
                 continue;
             }
