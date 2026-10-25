@@ -8647,6 +8647,71 @@ void recompiler_memory_tests()
     assert(indexed_recompiler.statistics().native_instructions == indexed_program.size());
     assert(indexed_recompiler.statistics().interpreter_fallbacks == 0U);
 
+    // stwbrx reverses the source word before the checked big-endian store,
+    // while retaining the original register value in native history.
+    EspressoCore reverse_store_interpreted(0x1000U);
+    EspressoCore reverse_store_compiled(0x1000U);
+    constexpr std::uint32_t stwbrx = x_form(6, 4, 5, 662);
+    static_assert(stwbrx == 0x7CC42D2CU);
+    for (EspressoCore* core : {&reverse_store_interpreted,
+                               &reverse_store_compiled})
+    {
+        core->memory.write32_be(0x100U, stwbrx); // stwbrx r6,r4,r5
+        core->state.cia = 0x100U;
+        core->state.gpr[4] = 0x200U;
+        core->state.gpr[5] = 0x20U;
+        core->state.gpr[6] = 0x11223344U;
+    }
+    const RunResult reverse_store_oracle = reverse_store_interpreted.run(1U);
+    Recompiler reverse_store_recompiler;
+    const RunResult reverse_store_actual = reverse_store_recompiler.run(
+        reverse_store_compiled, 1U);
+    assert(reverse_store_actual.steps == reverse_store_oracle.steps);
+    assert(reverse_store_compiled.memory.read32_be(0x220U) == 0x44332211U);
+    assert(reverse_store_compiled.state.gpr == reverse_store_interpreted.state.gpr);
+    assert(reverse_store_compiled.memory.read32_be(0x220U) ==
+           reverse_store_interpreted.memory.read32_be(0x220U));
+    assert(reverse_store_actual.instruction_history.front().opcode_name == "stwbrx");
+    assert(reverse_store_actual.instruction_history.front().source_count == 3U);
+    assert(reverse_store_actual.instruction_history.front().source_values[2] ==
+           0x11223344U);
+    assert(reverse_store_recompiler.statistics().native_instructions == 1U);
+    assert(reverse_store_recompiler.statistics().interpreter_fallbacks == 0U);
+
+    // The source may alias rA: address and data both use its pre-instruction value.
+    EspressoCore reverse_store_alias(0x1000U);
+    reverse_store_alias.memory.write32_be(0x100U, x_form(4, 4, 5, 662));
+    reverse_store_alias.state.cia = 0x100U;
+    reverse_store_alias.state.gpr[4] = 0x240U;
+    reverse_store_alias.state.gpr[5] = 4U;
+    Recompiler reverse_store_alias_recompiler;
+    const RunResult reverse_store_alias_result =
+        reverse_store_alias_recompiler.run(reverse_store_alias, 1U);
+    assert(reverse_store_alias_result.steps == 1U);
+    assert(reverse_store_alias.memory.read32_be(0x244U) == 0x40020000U);
+    assert(reverse_store_alias.state.gpr[4] == 0x240U);
+
+    // A partial mapping cannot be modified by the failed four-byte store.
+    EspressoCore reverse_store_fault(0x1000U);
+    reverse_store_fault.memory.map_region(0x2000U, 2U);
+    reverse_store_fault.memory.write16_be(0x2000U, 0xAABBU);
+    reverse_store_fault.memory.write32_be(0x100U, x_form(6, 4, 5, 662));
+    reverse_store_fault.state.cia = 0x100U;
+    reverse_store_fault.state.gpr[4] = 0x2000U;
+    reverse_store_fault.state.gpr[5] = 0U;
+    reverse_store_fault.state.gpr[6] = 0x11223344U;
+    Recompiler reverse_store_fault_recompiler;
+    const RunResult reverse_store_fault_result =
+        reverse_store_fault_recompiler.run(reverse_store_fault, 1U);
+    assert(reverse_store_fault_result.reason == StopReason::memory_fault);
+    assert(reverse_store_fault_result.detail.find("write 4 byte(s)") !=
+           std::string::npos);
+    assert(reverse_store_fault.memory.read16_be(0x2000U) == 0xAABBU);
+    assert(reverse_store_fault.state.gpr[6] == 0x11223344U);
+    assert(!reverse_store_fault_result.instruction_history.front().completed);
+    assert(reverse_store_fault_recompiler.statistics().native_instructions == 0U);
+    assert(reverse_store_fault_recompiler.statistics().interpreter_fallbacks == 0U);
+
     // A checked store crossing a page boundary advances both page generations
     // and the global write generation exactly once.
     EspressoCore boundary_store(0x2000U);

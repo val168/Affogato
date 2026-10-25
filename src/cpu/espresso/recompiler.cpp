@@ -32,6 +32,7 @@ struct NativeMemoryRecord
 {
     std::uint32_t address{};
     std::uint32_t value{};
+    std::uint32_t source_value{};
     std::uint64_t fp_value{};
     std::uint32_t base_value{};
     std::uint32_t index_value{};
@@ -4234,6 +4235,7 @@ struct BlockCode
     case Opcode::load_halfword_algebraic_indexed_update:
     case Opcode::store_word_indexed:
     case Opcode::store_word_indexed_update:
+    case Opcode::store_word_byte_reverse_indexed:
     case Opcode::store_word_conditional_indexed:
     case Opcode::store_byte_indexed:
     case Opcode::store_byte_indexed_update:
@@ -4438,6 +4440,7 @@ struct BlockCode
     case Opcode::load_halfword_algebraic_indexed_update: return "lhaux";
     case Opcode::store_word_indexed: return "stwx";
     case Opcode::store_word_indexed_update: return "stwux";
+    case Opcode::store_word_byte_reverse_indexed: return "stwbrx";
     case Opcode::store_byte_indexed: return "stbx";
     case Opcode::store_byte_indexed_update: return "stbux";
     case Opcode::store_halfword_indexed: return "sthx";
@@ -4506,6 +4509,7 @@ struct BlockCode
     case Opcode::load_halfword_algebraic_indexed_update:
     case Opcode::store_word_indexed:
     case Opcode::store_word_indexed_update:
+    case Opcode::store_word_byte_reverse_indexed:
     case Opcode::store_word_conditional_indexed:
     case Opcode::store_byte_indexed:
     case Opcode::store_byte_indexed_update:
@@ -4565,6 +4569,7 @@ struct BlockCode
         opcode == Opcode::store_halfword || opcode == Opcode::store_halfword_update ||
         opcode == Opcode::store_word_indexed ||
         opcode == Opcode::store_word_indexed_update ||
+        opcode == Opcode::store_word_byte_reverse_indexed ||
         opcode == Opcode::store_word_conditional_indexed ||
         opcode == Opcode::store_byte_update || opcode == Opcode::store_byte_indexed ||
         opcode == Opcode::store_byte_indexed_update ||
@@ -4598,6 +4603,7 @@ struct BlockCode
         opcode == Opcode::load_halfword_algebraic_indexed_update ||
         opcode == Opcode::store_word_indexed ||
         opcode == Opcode::store_word_indexed_update ||
+        opcode == Opcode::store_word_byte_reverse_indexed ||
         opcode == Opcode::store_word_conditional_indexed ||
         opcode == Opcode::store_byte_indexed ||
         opcode == Opcode::store_byte_indexed_update ||
@@ -8255,6 +8261,7 @@ struct Recompiler::Impl
             case Opcode::load_halfword_algebraic_indexed_update:
             case Opcode::store_word_indexed:
             case Opcode::store_word_indexed_update:
+            case Opcode::store_word_byte_reverse_indexed:
             case Opcode::store_word_conditional_indexed:
             case Opcode::store_byte_indexed:
             case Opcode::store_byte_indexed_update:
@@ -8357,6 +8364,13 @@ struct Recompiler::Impl
                 else
                 {
                     compiler.mov(stored_value, imm(0));
+                }
+                if (insn.opcode == Opcode::store_word_byte_reverse_indexed)
+                {
+                    compiler.mov(x86::dword_ptr(context, static_cast<std::int32_t>(
+                        record_base + offsetof(NativeMemoryRecord, source_value))),
+                        stored_value);
+                    compiler.bswap(stored_value);
                 }
                 compiler.mov(x86::dword_ptr(context, static_cast<std::int32_t>(
                     offsetof(NativeExecutionContext, fault_cia))), imm(cia));
@@ -10119,7 +10133,9 @@ RunResult Recompiler::run(EspressoCore& core, std::size_t max_steps)
                     insn.destination != insn.base)
                 {
                     entry.source_registers[entry.source_count] = insn.destination;
-                    entry.source_values[entry.source_count++] = record.value;
+                    entry.source_values[entry.source_count++] =
+                        insn.opcode == Opcode::store_word_byte_reverse_indexed
+                        ? record.source_value : record.value;
                 }
                 if (insn.opcode == Opcode::store_halfword ||
                     insn.opcode == Opcode::store_halfword_update ||
