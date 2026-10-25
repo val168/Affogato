@@ -4306,6 +4306,39 @@ void register_gx2_hle(HleDispatcher& dispatcher)
 
     dispatcher.register_function(
         "gx2",
+        "GX2GetAlphaToMaskReg",
+        [](EspressoCore& core) {
+            constexpr const char* api_name = "GX2GetAlphaToMaskReg";
+            const std::uint32_t register_value =
+                core.memory.read32_be(core.state.gpr[3]);
+            const std::uint32_t pattern = (register_value >> 8U) & 0xFFU;
+            std::uint32_t mode{};
+            switch (pattern)
+            {
+            case 0xAAU: mode = 0U; break;
+            case 0x78U: mode = 1U; break;
+            case 0xC6U: mode = 2U; break;
+            case 0x2DU: mode = 3U; break;
+            case 0x93U: mode = 4U; break;
+            default:
+                throw HleExecutionError(
+                    std::string("gx2::") + api_name +
+                    ": unsupported alpha-to-mask dither pattern " +
+                    std::to_string(pattern));
+            }
+
+            const std::uint32_t enabled_output = core.state.gpr[4];
+            const std::uint32_t mode_output = core.state.gpr[5];
+            validate_gx2_u32_output(
+                core, enabled_output, api_name, "enable output");
+            validate_gx2_u32_output(
+                core, mode_output, api_name, "mode output");
+            core.memory.write32_be(enabled_output, register_value & 1U);
+            core.memory.write32_be(mode_output, mode);
+        });
+
+    dispatcher.register_function(
+        "gx2",
         "GX2SetAlphaToMaskReg",
         [](EspressoCore& core) {
             if (!core.gx2.initialized)

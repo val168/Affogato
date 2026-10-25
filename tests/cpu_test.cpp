@@ -26428,6 +26428,106 @@ void gx2_init_alpha_to_mask_reg_hle_tests()
     assert(!core.gx2.initialized);
 }
 
+void gx2_get_alpha_to_mask_reg_hle_tests()
+{
+    constexpr std::uint32_t return_address = 0x02750A96U;
+    constexpr std::uint32_t input_address = 0x503U;
+    constexpr std::array<std::uint32_t, 2U> outputs{0x601U, 0x612U};
+    constexpr std::array<std::uint32_t, 5U> patterns{
+        0xAAU, 0x78U, 0xC6U, 0x2DU, 0x93U};
+
+    EspressoCore core(0x10000U);
+    register_gx2_hle(core.hle);
+    const std::uint32_t import =
+        core.hle.bind_import("gx2", "GX2GetAlphaToMaskReg");
+    const std::uint32_t wrong_library =
+        core.hle.bind_import("coreinit", "GX2GetAlphaToMaskReg");
+    assert(import != 0U && wrong_library != 0U);
+    for (const std::uint32_t output : outputs)
+    {
+        core.memory.write32_be(output, 0xDEADBEEFU);
+    }
+    core.state.gpr.fill(0xB1000000U);
+    core.state.gpr[3] = input_address;
+    core.state.gpr[4] = outputs[0];
+    core.state.gpr[5] = outputs[1];
+    core.state.cr = 0x12345678U;
+    core.state.xer = 0xA5A55A5AU;
+    core.state.ctr = 0x87654321U;
+    core.state.fpscr = 0x5A5AA55AU;
+    const auto gprs_before = core.state.gpr;
+    const auto fprs_before = core.state.fpr;
+    const auto ps1_before = core.state.fpr_ps1;
+
+    for (std::uint32_t mode = 0U; mode < patterns.size(); ++mode)
+    {
+        for (const std::uint32_t enabled : {0U, 1U})
+        {
+            const std::uint32_t packed = (patterns[mode] << 8U) | enabled;
+            core.memory.write32_be(input_address, packed);
+            core.state.cia = import;
+            core.state.lr = return_address;
+            const RunResult result = core.run(1U);
+            assert(result.reason == StopReason::instruction_limit);
+            assert(result.steps == 1U && core.state.cia == return_address);
+            assert(core.memory.read32_be(outputs[0]) == enabled);
+            assert(core.memory.read32_be(outputs[1]) == mode);
+            assert(core.memory.read32_be(input_address) == packed);
+            assert(core.state.gpr == gprs_before);
+            assert(core.state.fpr == fprs_before &&
+                   core.state.fpr_ps1 == ps1_before);
+            assert(core.state.cr == 0x12345678U);
+            assert(core.state.xer == 0xA5A55A5AU);
+            assert(core.state.ctr == 0x87654321U);
+            assert(core.state.fpscr == 0x5A5AA55AU);
+            assert(!core.gx2.initialized);
+            assert(core.gx2.pending_commands.empty());
+        }
+    }
+
+    core.state.cia = wrong_library;
+    core.state.lr = return_address;
+    const RunResult wrong_library_result = core.run(1U);
+    assert(wrong_library_result.reason == StopReason::unimplemented_hle_call);
+    assert(wrong_library_result.hle_call == "coreinit::GX2GetAlphaToMaskReg");
+
+    // A late output fault must not commit the earlier result.
+    core.memory.write32_be(outputs[0], 0x11111111U);
+    core.state.gpr[4] = outputs[0];
+    core.state.gpr[5] = 0x10000U;
+    core.state.cia = import;
+    core.state.lr = return_address;
+    const RunResult late_output_fault = core.run(1U);
+    assert(late_output_fault.reason == StopReason::memory_fault);
+    assert(core.memory.read32_be(outputs[0]) == 0x11111111U);
+
+    // Unknown packed offsets are rejected before writing either output.
+    core.memory.write32_be(input_address, 0x00001201U);
+    core.memory.write32_be(outputs[0], 0x22222222U);
+    core.memory.write32_be(outputs[1], 0x33333333U);
+    core.state.gpr[4] = outputs[0];
+    core.state.gpr[5] = outputs[1];
+    core.state.cia = import;
+    core.state.lr = return_address;
+    const RunResult unsupported_pattern = core.run(1U);
+    assert(unsupported_pattern.reason == StopReason::hle_error);
+    assert(unsupported_pattern.detail.find("unsupported alpha-to-mask dither") !=
+           std::string::npos);
+    assert(core.memory.read32_be(outputs[0]) == 0x22222222U);
+    assert(core.memory.read32_be(outputs[1]) == 0x33333333U);
+
+    // The packed input is snapshotted before output writes, so aliasing the
+    // first output with the input does not corrupt the decoded mode.
+    core.memory.write32_be(input_address, (patterns[4] << 8U) | 1U);
+    core.state.gpr[4] = input_address;
+    core.state.gpr[5] = outputs[1];
+    core.state.cia = import;
+    core.state.lr = return_address;
+    assert(core.run(1U).reason == StopReason::instruction_limit);
+    assert(core.memory.read32_be(input_address) == 1U);
+    assert(core.memory.read32_be(outputs[1]) == 4U);
+}
+
 void gx2_init_alpha_test_reg_hle_tests()
 {
     constexpr std::uint32_t return_address = 0x02750A98U;
@@ -39313,6 +39413,7 @@ int main(int argc, char* argv[])
     gx2_set_alpha_to_mask_hle_tests();
     gx2_set_alpha_to_mask_reg_hle_tests();
     gx2_init_alpha_to_mask_reg_hle_tests();
+    gx2_get_alpha_to_mask_reg_hle_tests();
     gx2_init_alpha_test_reg_hle_tests();
     gx2_get_alpha_test_reg_hle_tests();
     gx2_set_alpha_test_reg_hle_tests();
