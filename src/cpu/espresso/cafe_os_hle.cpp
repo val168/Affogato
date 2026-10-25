@@ -89,6 +89,7 @@ constexpr std::uint32_t os_message_queue_capacity_offset = 0x30U;
 constexpr std::uint32_t os_message_queue_first_offset = 0x34U;
 constexpr std::uint32_t os_message_queue_used_offset = 0x38U;
 constexpr std::uint32_t kpad_unified_wpad_status_size = 0x44U;
+constexpr std::int32_t kpad_read_error_no_controller = -2;
 constexpr std::uint32_t kpad_mpls_work_size = 0x5FE0U;
 constexpr std::uint32_t os_message_size = 0x10U;
 constexpr std::uint32_t os_message_flag_blocking = 1U << 0U;
@@ -1780,6 +1781,37 @@ void register_coreinit_hle(HleDispatcher& dispatcher)
             core.kpad_initialized = true;
             core.kpad_unified_status_buffer = buffer;
             core.kpad_unified_status_count = count;
+        });
+    dispatcher.register_function(
+        "padscore",
+        "KPADReadEx",
+        [](EspressoCore& core) {
+            const std::uint32_t error_output = core.state.gpr[6];
+            if (error_output != 0U)
+            {
+                try
+                {
+                    core.memory.validate_write_range(
+                        error_output, sizeof(std::uint32_t));
+                }
+                catch (const GuestMemoryFault&)
+                {
+                    throw HleExecutionError(
+                        "padscore::KPADReadEx error output is outside mapped guest memory");
+                }
+            }
+
+            // This build has no controller-input provider. Match the KPAD
+            // no-controller result: zero samples, no writes to the sample
+            // array, and KPADReadError::NoController (-2) when requested.
+            if (error_output != 0U)
+            {
+                core.memory.write32_be(
+                    error_output,
+                    static_cast<std::uint32_t>(
+                        kpad_read_error_no_controller));
+            }
+            core.state.gpr[3] = 0U;
         });
     dispatcher.register_function(
         "padscore",

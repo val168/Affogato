@@ -14360,6 +14360,83 @@ void kpad_init_ex_hle_tests()
     assert(core.kpad_unified_status_count == 0U);
 }
 
+void kpad_read_ex_hle_tests()
+{
+    constexpr std::uint32_t status_buffer = 0x200U;
+    constexpr std::uint32_t status_count = 16U;
+    constexpr std::uint32_t status_size = 0xF0U;
+    constexpr std::uint32_t error_output = 0x1800U;
+    constexpr std::uint32_t return_address = 0x0274012CU;
+
+    EspressoCore core(0x2000U);
+    register_coreinit_hle(core.hle);
+    core.memory.fill_bytes(
+        status_buffer, status_count * status_size, 0xA5U);
+    core.memory.write32_be(error_output, 0x12345678U);
+    core.state.gpr.fill(0xD3000000U);
+    core.state.gpr[3] = 0U; // WPAD channel 0; no input backend is connected.
+    core.state.gpr[4] = status_buffer;
+    core.state.gpr[5] = status_count;
+    core.state.gpr[6] = error_output;
+    core.state.lr = return_address;
+    core.state.cr = 0x12345678U;
+    core.state.xer = 0x87654321U;
+    core.state.ctr = 0xABCDEF01U;
+    core.state.fpscr = 0x5A5AA5A5U;
+    const auto gprs_before = core.state.gpr;
+    const auto fprs_before = core.state.fpr;
+    const auto ps1_before = core.state.fpr_ps1;
+    const std::uint32_t import = core.hle.bind_import(
+        "padscore", "KPADReadEx");
+    core.state.cia = import;
+
+    const RunResult result = core.run(1U);
+    assert(result.reason == StopReason::instruction_limit);
+    assert(core.state.cia == return_address && core.state.lr == return_address);
+    assert(core.state.gpr[3] == 0U); // no samples available
+    for (std::size_t index = 1U; index < core.state.gpr.size(); ++index)
+    {
+        assert(core.state.gpr[index] == gprs_before[index]);
+    }
+    assert(core.state.fpr == fprs_before && core.state.fpr_ps1 == ps1_before);
+    assert(core.state.cr == 0x12345678U);
+    assert(core.state.xer == 0x87654321U);
+    assert(core.state.ctr == 0xABCDEF01U);
+    assert(core.state.fpscr == 0x5A5AA5A5U);
+    assert(core.memory.read32_be(error_output) == 0xFFFFFFFEU);
+    assert(core.memory.read8(status_buffer) == 0xA5U);
+    assert(core.memory.read8(status_buffer + status_count * status_size - 1U) ==
+           0xA5U);
+
+    // The error output is optional; without it, the same no-controller result
+    // is returned and the status buffer remains untouched.
+    core.state.cia = import;
+    core.state.lr = return_address;
+    core.state.gpr[3] = 0U;
+    core.state.gpr[4] = 0xFFFFFFFCU; // no sample is written/dereferenced
+    core.state.gpr[5] = 1U;
+    core.state.gpr[6] = 0U;
+    assert(core.run(1U).reason == StopReason::instruction_limit);
+    assert(core.state.gpr[3] == 0U);
+    assert(core.state.gpr[4] == 0xFFFFFFFCU);
+
+    // A requested error word must be writable before any output/state changes.
+    core.state.cia = import;
+    core.state.lr = return_address;
+    core.state.gpr[3] = 0U;
+    core.state.gpr[4] = status_buffer;
+    core.state.gpr[5] = status_count;
+    core.state.gpr[6] = 0x50000U;
+    core.state.gpr[3] = 0xCAFEBABEU;
+    const auto gprs_before_bad_error = core.state.gpr;
+    const RunResult bad_error = core.run(1U);
+    assert(bad_error.reason == StopReason::hle_error);
+    assert(bad_error.detail.find("KPADReadEx") != std::string::npos);
+    assert(core.state.gpr == gprs_before_bad_error);
+    assert(core.memory.read32_be(error_output) == 0xFFFFFFFEU);
+    assert(core.memory.read8(status_buffer) == 0xA5U);
+}
+
 void os_create_thread_hle_tests()
 {
     constexpr std::uint32_t thread = 0x1000U;
@@ -34369,6 +34446,7 @@ int main(int argc, char* argv[])
     home_button_menu_state_hle_tests();
     wpad_enable_urcc_hle_tests();
     kpad_init_ex_hle_tests();
+    kpad_read_ex_hle_tests();
     os_create_thread_hle_tests();
     os_set_thread_name_hle_tests();
     os_set_thread_affinity_hle_tests();
