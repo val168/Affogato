@@ -3478,6 +3478,39 @@ void register_gx2_hle(HleDispatcher& dispatcher)
 
     dispatcher.register_function(
         "gx2",
+        "GX2DrawEx2",
+        [](EspressoCore& core) {
+            core.gx2.pending_commands.push_back({
+                Gx2CommandType::draw,
+                0U,
+                0U,
+                0U,
+                0U,
+                0U,
+                Gx2DrawCall{
+                    core.state.gpr[3], core.state.gpr[4], false, 0U, 0U,
+                    core.state.gpr[5], core.state.gpr[6], core.state.gpr[7]}});
+        });
+
+    dispatcher.register_function(
+        "gx2",
+        "GX2DrawIndexedEx2",
+        [](EspressoCore& core) {
+            core.gx2.pending_commands.push_back({
+                Gx2CommandType::draw,
+                0U,
+                0U,
+                0U,
+                0U,
+                0U,
+                Gx2DrawCall{
+                    core.state.gpr[3], core.state.gpr[4], true,
+                    core.state.gpr[5], core.state.gpr[6], core.state.gpr[7],
+                    core.state.gpr[8], core.state.gpr[9]}});
+        });
+
+    dispatcher.register_function(
+        "gx2",
         "GX2SwapScanBuffers",
         [](EspressoCore& core) {
             // Cemu increments the shared request counter only on the GX2 main

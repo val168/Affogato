@@ -24180,6 +24180,42 @@ void gx2_draw_ex_hle_tests()
     assert(register_state.size() == 0U);
     assert(register_state.draw_calls().size() == 2U);
     assert(register_state.draw_calls().back() == expected_indexed_draw);
+
+    const auto run_draw_variant = [&](
+        const char* symbol,
+        const std::array<std::uint32_t, 7U>& arguments,
+        const Gx2DrawCall& expected) {
+        for (std::size_t index = 0U; index < arguments.size(); ++index)
+        {
+            core.state.gpr[index + 3U] = arguments[index];
+        }
+        core.state.lr = return_address;
+        core.state.cia = core.hle.bind_import("gx2", symbol);
+        const auto registers_before = core.state.gpr;
+        assert(core.run(1U).reason == StopReason::instruction_limit);
+        assert(core.state.gpr == registers_before);
+        const auto variant_commands = take_gx2_commands(core.gx2);
+        assert(variant_commands.size() == 1U);
+        assert(variant_commands.front().draw_call == expected);
+        register_state.apply(variant_commands);
+    };
+
+    run_draw_variant(
+        "GX2DrawEx2",
+        {6U, 3U, 5U, 1U, 7U, 0xA5U, 0x5AU},
+        Gx2DrawCall{6U, 3U, false, 0U, 0U, 5U, 1U, 7U});
+    run_draw_variant(
+        "GX2DrawIndexedEx2",
+        {4U, 12U, 4U, 0x12345678U, 16U, 2U, 19U},
+        Gx2DrawCall{4U, 12U, true, 4U, 0x12345678U, 16U, 2U, 19U});
+    assert(register_state.size() == 0U);
+    assert(register_state.draw_calls().size() == 4U);
+    constexpr Gx2DrawCall expected_draw_ex2{
+        6U, 3U, false, 0U, 0U, 5U, 1U, 7U};
+    constexpr Gx2DrawCall expected_indexed_draw_ex2{
+        4U, 12U, true, 4U, 0x12345678U, 16U, 2U, 19U};
+    assert(register_state.draw_calls()[2].draw_call == expected_draw_ex2);
+    assert(register_state.draw_calls()[3].draw_call == expected_indexed_draw_ex2);
 }
 
 void gx2_gpu_time_to_cpu_time_hle_tests()
