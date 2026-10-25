@@ -3947,7 +3947,8 @@ struct BlockCode
         insn.opcode == Opcode::bitwise_and || insn.opcode == Opcode::bitwise_xor ||
         insn.opcode == Opcode::bitwise_nor || insn.opcode == Opcode::bitwise_equivalence ||
         insn.opcode == Opcode::bitwise_nand ||
-        insn.opcode == Opcode::bitwise_and_complement))
+        insn.opcode == Opcode::bitwise_and_complement ||
+        insn.opcode == Opcode::bitwise_or_complement))
     {
         return true;
     }
@@ -4034,6 +4035,7 @@ struct BlockCode
     case Opcode::bitwise_or:
     case Opcode::bitwise_and:
     case Opcode::bitwise_and_complement:
+    case Opcode::bitwise_or_complement:
     case Opcode::bitwise_xor:
     case Opcode::bitwise_equivalence:
     case Opcode::bitwise_nor:
@@ -4238,6 +4240,7 @@ struct BlockCode
     case Opcode::bitwise_or: return "or";
     case Opcode::bitwise_and: return "and";
     case Opcode::bitwise_and_complement: return "andc";
+    case Opcode::bitwise_or_complement: return "orc";
     case Opcode::bitwise_xor: return "xor";
     case Opcode::bitwise_equivalence: return "eqv";
     case Opcode::bitwise_nor: return "nor";
@@ -5319,6 +5322,7 @@ struct Recompiler::Impl
             case Opcode::bitwise_or:
             case Opcode::bitwise_and:
             case Opcode::bitwise_and_complement:
+            case Opcode::bitwise_or_complement:
             case Opcode::bitwise_xor:
             case Opcode::bitwise_equivalence:
             case Opcode::bitwise_nor:
@@ -5327,13 +5331,21 @@ struct Recompiler::Impl
                 x86::Gp lhs = compiler.new_gp32("lhs");
                 x86::Gp source_a = read_guest_gpr(insn.base);
                 x86::Gp source_b = read_guest_gpr(insn.source);
-                if (insn.opcode == Opcode::bitwise_and_complement)
+                if (insn.opcode == Opcode::bitwise_and_complement ||
+                    insn.opcode == Opcode::bitwise_or_complement)
                 {
                     compiler.mov(lhs, source_b);
                     x86::Gp complemented = compiler.new_gp32("andc_complemented_rhs");
                     compiler.mov(complemented, source_a);
                     compiler.not_(complemented);
-                    compiler.and_(lhs, complemented);
+                    if (insn.opcode == Opcode::bitwise_and_complement)
+                    {
+                        compiler.and_(lhs, complemented);
+                    }
+                    else
+                    {
+                        compiler.or_(lhs, complemented);
+                    }
                 }
                 else if (insn.opcode == Opcode::add || insn.opcode == Opcode::bitwise_or ||
                     insn.opcode == Opcode::bitwise_and || insn.opcode == Opcode::bitwise_xor ||
@@ -5375,6 +5387,7 @@ struct Recompiler::Impl
                     }
                 }
                 if (insn.opcode == Opcode::bitwise_and_complement ||
+                    insn.opcode == Opcode::bitwise_or_complement ||
                     insn.opcode == Opcode::add ||
                     insn.opcode == Opcode::bitwise_or ||
                     insn.opcode == Opcode::bitwise_and ||
