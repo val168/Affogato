@@ -3811,6 +3811,7 @@ struct BlockCode
     case Opcode::load_halfword_algebraic_indexed:
     case Opcode::load_halfword_algebraic_indexed_update:
     case Opcode::store_word_indexed:
+    case Opcode::store_word_indexed_update:
     case Opcode::store_word_conditional_indexed:
     case Opcode::store_byte_indexed:
     case Opcode::store_halfword_indexed:
@@ -3972,6 +3973,7 @@ struct BlockCode
     case Opcode::load_halfword_algebraic_indexed: return "lhax";
     case Opcode::load_halfword_algebraic_indexed_update: return "lhaux";
     case Opcode::store_word_indexed: return "stwx";
+    case Opcode::store_word_indexed_update: return "stwux";
     case Opcode::store_byte_indexed: return "stbx";
     case Opcode::store_halfword_indexed: return "sthx";
     case Opcode::data_cache_block_store: return "dcbst";
@@ -4028,6 +4030,7 @@ struct BlockCode
     case Opcode::load_halfword_algebraic_indexed:
     case Opcode::load_halfword_algebraic_indexed_update:
     case Opcode::store_word_indexed:
+    case Opcode::store_word_indexed_update:
     case Opcode::store_word_conditional_indexed:
     case Opcode::store_byte_indexed:
     case Opcode::store_halfword_indexed:
@@ -4079,6 +4082,7 @@ struct BlockCode
     return opcode == Opcode::store_word || opcode == Opcode::store_byte ||
         opcode == Opcode::store_halfword || opcode == Opcode::store_halfword_update ||
         opcode == Opcode::store_word_indexed ||
+        opcode == Opcode::store_word_indexed_update ||
         opcode == Opcode::store_word_conditional_indexed ||
         opcode == Opcode::store_byte_update || opcode == Opcode::store_byte_indexed ||
         opcode == Opcode::store_halfword_indexed ||
@@ -4100,6 +4104,7 @@ struct BlockCode
         opcode == Opcode::load_halfword_algebraic_indexed ||
         opcode == Opcode::load_halfword_algebraic_indexed_update ||
         opcode == Opcode::store_word_indexed ||
+        opcode == Opcode::store_word_indexed_update ||
         opcode == Opcode::store_word_conditional_indexed ||
         opcode == Opcode::store_byte_indexed ||
         opcode == Opcode::store_halfword_indexed ||
@@ -6956,6 +6961,7 @@ struct Recompiler::Impl
             case Opcode::load_halfword_algebraic_indexed:
             case Opcode::load_halfword_algebraic_indexed_update:
             case Opcode::store_word_indexed:
+            case Opcode::store_word_indexed_update:
             case Opcode::store_word_conditional_indexed:
             case Opcode::store_byte_indexed:
             case Opcode::store_halfword_indexed:
@@ -6986,6 +6992,7 @@ struct Recompiler::Impl
                     insn.opcode == Opcode::load_halfword_algebraic_indexed_update ||
                     insn.opcode == Opcode::store_byte_update ||
                     insn.opcode == Opcode::store_word_update ||
+                    insn.opcode == Opcode::store_word_indexed_update ||
                     insn.opcode == Opcode::store_halfword_update ||
                     insn.opcode == Opcode::store_single_update ||
                     insn.opcode == Opcode::store_double_update;
