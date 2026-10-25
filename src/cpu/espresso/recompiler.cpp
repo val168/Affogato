@@ -2426,6 +2426,71 @@ extern "C" void native_ps_madd(
     state->fpr_ps1[destination] = record.destination_ps1;
 }
 
+extern "C" void native_ps_madds0(
+    NativeExecutionContext* context,
+    CpuState* state,
+    std::uint32_t destination,
+    std::uint32_t source_a,
+    std::uint32_t source_b,
+    std::uint32_t source_c,
+    std::uint32_t instruction_index) noexcept
+{
+    if (destination >= state->fpr.size() || source_a >= state->fpr.size() ||
+        source_b >= state->fpr.size() || source_c >= state->fpr.size() ||
+        instruction_index >= context->ps_madd_records.size())
+    {
+        context->failed = true;
+        context->failed_instruction_index = instruction_index;
+        return;
+    }
+
+    NativePsMaddRecord& record = context->ps_madd_records[instruction_index];
+    record.source_a_ps0 = state->fpr[source_a];
+    record.source_a_ps1 = state->fpr_ps1[source_a];
+    record.source_b_ps0 = state->fpr[source_b];
+    record.source_b_ps1 = state->fpr_ps1[source_b];
+    record.source_c_ps0 = state->fpr[source_c];
+    record.source_c_ps1 = state->fpr_ps1[source_c];
+
+    constexpr std::uint64_t exponent_mask = 0x7FF0000000000000ULL;
+    constexpr std::uint64_t fraction_mask = 0x000FFFFFFFFFFFFFULL;
+    const std::uint64_t scalar_raw = record.source_c_ps0;
+    const std::uint64_t exponent = scalar_raw & exponent_mask;
+    const std::uint64_t fraction = scalar_raw & fraction_mask;
+    std::uint64_t rounded_scalar_raw{};
+    if (exponent == 0U && fraction != 0U)
+    {
+        const unsigned shift = static_cast<unsigned>(std::countl_zero(fraction) - 11);
+        const std::int64_t signed_keep_mask =
+            std::bit_cast<std::int64_t>(0xFFFFFFFFF8000000ULL);
+        const std::uint64_t keep_mask =
+            static_cast<std::uint64_t>(signed_keep_mask >> shift);
+        rounded_scalar_raw = (scalar_raw & keep_mask) +
+            (scalar_raw & (0x0000000008000000ULL >> shift));
+    }
+    else
+    {
+        rounded_scalar_raw =
+            (scalar_raw & 0xFFFFFFFFF8000000ULL) +
+            (scalar_raw & 0x0000000008000000ULL);
+    }
+
+    const double scalar = std::bit_cast<double>(rounded_scalar_raw);
+    const auto multiply_add_lane = [scalar](std::uint64_t a_raw,
+                                             std::uint64_t b_raw) {
+        const double a = std::bit_cast<double>(a_raw);
+        const double b = std::bit_cast<double>(b_raw);
+        const float result = static_cast<float>(a * scalar + b);
+        return std::bit_cast<std::uint64_t>(static_cast<double>(result));
+    };
+    record.destination_ps0 = multiply_add_lane(record.source_a_ps0,
+        record.source_b_ps0);
+    record.destination_ps1 = multiply_add_lane(record.source_a_ps1,
+        record.source_b_ps1);
+    state->fpr[destination] = record.destination_ps0;
+    state->fpr_ps1[destination] = record.destination_ps1;
+}
+
 extern "C" void native_ps_msub(
     NativeExecutionContext* context,
     CpuState* state,
@@ -3875,6 +3940,7 @@ struct BlockCode
     case Opcode::paired_single_multiply_scalar1:
     case Opcode::paired_single_multiply_add:
     case Opcode::paired_single_multiply_subtract:
+    case Opcode::paired_single_multiply_add_scalar0:
     case Opcode::branch:
     case Opcode::conditional_branch:
     case Opcode::conditional_branch_to_link_register:
@@ -4082,6 +4148,7 @@ struct BlockCode
     case Opcode::paired_single_multiply_scalar1: return "ps_muls1";
     case Opcode::paired_single_multiply_add: return "ps_madd";
     case Opcode::paired_single_multiply_subtract: return "ps_msub";
+    case Opcode::paired_single_multiply_add_scalar0: return "ps_madds0";
     case Opcode::shift_left_word: return "slw";
     case Opcode::shift_right_word: return "srw";
     case Opcode::arithmetic_shift_right_immediate: return "srawi";
@@ -6546,12 +6613,15 @@ struct Recompiler::Impl
             }
             case Opcode::paired_single_multiply_add:
             case Opcode::paired_single_multiply_subtract:
+            case Opcode::paired_single_multiply_add_scalar0:
             {
                 auto* invoke = static_cast<InvokeNode*>(nullptr);
                 const auto helper_address = static_cast<std::uint64_t>(
                     reinterpret_cast<std::uintptr_t>(
-                        insn.opcode == Opcode::paired_single_multiply_add
-                            ? &native_ps_madd : &native_ps_msub));
+                        insn.opcode == Opcode::paired_single_multiply_add_scalar0
+                            ? &native_ps_madds0
+                            : (insn.opcode == Opcode::paired_single_multiply_add
+                                ? &native_ps_madd : &native_ps_msub)));
                 compiler.invoke(Out(invoke), helper_address,
                     FuncSignature::build<void, NativeExecutionContext*, CpuState*,
                         std::uint32_t, std::uint32_t, std::uint32_t,
@@ -8611,7 +8681,8 @@ RunResult Recompiler::run(EspressoCore& core, std::size_t max_steps)
                 continue;
             }
             if (insn.opcode == Opcode::paired_single_multiply_add ||
-                insn.opcode == Opcode::paired_single_multiply_subtract)
+                insn.opcode == Opcode::paired_single_multiply_subtract ||
+                insn.opcode == Opcode::paired_single_multiply_add_scalar0)
             {
                 InstructionHistoryEntry entry = native_history(insn, cia);
                 const NativePsMaddRecord& record = context.ps_madd_records[i];
@@ -8620,6 +8691,8 @@ RunResult Recompiler::run(EspressoCore& core, std::size_t max_steps)
                     insn.opcode == Opcode::paired_single_multiply_add;
                 entry.paired_fp_multiply_subtract =
                     insn.opcode == Opcode::paired_single_multiply_subtract;
+                entry.paired_fp_multiply_add_scalar0 =
+                    insn.opcode == Opcode::paired_single_multiply_add_scalar0;
                 entry.paired_fp_destination_register = insn.fp_register;
                 entry.paired_fp_source_a_register = insn.fp_source_a;
                 entry.paired_fp_source_b_register = insn.fp_source_b;
