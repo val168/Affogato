@@ -3440,6 +3440,17 @@ void register_gx2_hle(HleDispatcher& dispatcher)
 
     dispatcher.register_function(
         "gx2",
+        "GX2GPUTimeToCPUTime",
+        [](EspressoCore& core) {
+            // Affogato has no GPU timestamp clock. Return zero as the
+            // unavailable-time sentinel used by Cemu; do not fabricate a
+            // conversion from host time or the unrelated OS timer.
+            core.state.gpr[3] = 0U;
+            core.state.gpr[4] = 0U;
+        });
+
+    dispatcher.register_function(
+        "gx2",
         "GX2SampleTopGPUCycle",
         [](EspressoCore& core) {
             const std::uint32_t timestamp_output = core.state.gpr[3];
