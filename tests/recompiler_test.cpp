@@ -2154,6 +2154,96 @@ void recompiler_divwuo_differential_test()
     }
 }
 
+void recompiler_divwo_differential_test()
+{
+    struct Case
+    {
+        std::uint32_t dividend;
+        std::uint32_t divisor;
+        std::uint8_t ra;
+        std::uint8_t rb;
+        std::uint8_t destination;
+        bool record;
+        std::uint32_t initial_xer;
+        std::uint32_t initial_cr;
+    };
+    constexpr std::array cases{
+        Case{0xFFFFFFF9U, 2U, 4U, 5U, 3U, false, 0xE5A5A5A5U, 0x13579BDFU},
+        Case{0x80000000U, 0xFFFFFFFFU, 4U, 5U, 4U, true, 0x20000000U, 0xA5C36E91U},
+        Case{0xFFFFFFF9U, 0U, 4U, 5U, 5U, true, 0x40000000U, 0x87654321U},
+        Case{7U, 0U, 7U, 8U, 7U, false, 0xA0000000U, 0xFFFFFFFFU},
+        Case{0xFFFFFFFEU, 0xFFFFFFFEU, 9U, 9U, 9U, true,
+            0x60000000U, 0xA5A5A5A5U},
+    };
+    static_assert(x_form(3U, 4U, 5U, 1003U) == 0x7C642FD6U);
+
+    for (const Case& test : cases)
+    {
+        EspressoCore interpreted(0x1000U);
+        EspressoCore compiled(0x1000U);
+        const std::uint32_t instruction = x_form(
+            test.destination, test.ra, test.rb, 1003U, test.record);
+        assert(decode(instruction).opcode == Opcode::divide_word_signed_overflow);
+        for (EspressoCore* core : {&interpreted, &compiled})
+        {
+            core->memory.write32_be(0x100U, instruction);
+            core->state.cia = 0x100U;
+            core->state.gpr.fill(0x10203040U);
+            core->state.gpr[test.ra] = test.dividend;
+            core->state.gpr[test.rb] = test.divisor;
+            core->state.xer = test.initial_xer;
+            core->state.cr = test.initial_cr;
+            core->state.lr = 0x12345678U;
+            core->state.ctr = 0x87654321U;
+            core->state.fpscr = 0x89ABCDEFU;
+        }
+
+        const RunResult oracle = interpreted.run(1U);
+        Recompiler recompiler;
+        const RunResult actual = recompiler.run(compiled, 1U);
+        assert(actual.reason == oracle.reason);
+        assert(actual.steps == oracle.steps && actual.steps == 1U);
+        assert(actual.cia == oracle.cia);
+        assert(compiled.state.gpr == interpreted.state.gpr);
+        assert(compiled.state.cr == interpreted.state.cr);
+        assert(compiled.state.xer == interpreted.state.xer);
+        assert(compiled.state.lr == interpreted.state.lr);
+        assert(compiled.state.ctr == interpreted.state.ctr);
+        assert(compiled.state.fpscr == interpreted.state.fpscr);
+
+        const std::int32_t dividend = std::bit_cast<std::int32_t>(test.dividend);
+        const std::int32_t divisor = std::bit_cast<std::int32_t>(test.divisor);
+        const bool overflow = divisor == 0 ||
+            (dividend == std::numeric_limits<std::int32_t>::min() && divisor == -1);
+        std::uint32_t expected = 0U;
+        if (divisor == 0)
+        {
+            expected = dividend < 0 ? 0xFFFFFFFFU : 0U;
+        }
+        else if (dividend == std::numeric_limits<std::int32_t>::min() && divisor == -1)
+        {
+            expected = 0xFFFFFFFFU;
+        }
+        else
+        {
+            expected = static_cast<std::uint32_t>(dividend / divisor);
+        }
+        const bool old_so = (test.initial_xer & 0x80000000U) != 0U;
+        assert(compiled.state.gpr[test.destination] == expected);
+        assert(((compiled.state.xer & 0x40000000U) != 0U) == overflow);
+        assert(((compiled.state.xer & 0x80000000U) != 0U) == (old_so || overflow));
+        assert((compiled.state.xer & ~0xC0000000U) ==
+            (test.initial_xer & ~0xC0000000U));
+        assert(recompiler.statistics().native_instructions == 1U);
+        assert(recompiler.statistics().interpreter_fallbacks == 0U);
+        assert(!actual.instruction_history.empty());
+        const InstructionHistoryEntry& history = actual.instruction_history.back();
+        assert(history.opcode_name == (test.record ? "divwo." : "divwo"));
+        assert(history.has_overflow_result && history.overflow_result == overflow);
+        assert(history.summary_overflow_result == (old_so || overflow));
+    }
+}
+
 void recompiler_adde_differential_test()
 {
     struct Case
@@ -11582,6 +11672,7 @@ int main()
     recompiler_subfe_differential_test();
     recompiler_subfeo_differential_test();
     recompiler_divwuo_differential_test();
+    recompiler_divwo_differential_test();
     recompiler_adde_differential_test();
     recompiler_addeo_differential_test();
     recompiler_addo_subfo_differential_test();
