@@ -10789,6 +10789,104 @@ void recompiler_psq_st_differential_tests()
     assert(fault_stats.native_instructions == 0U);
 }
 
+void recompiler_psq_stx_differential_tests()
+{
+    const auto encode_psq_stx = [](
+        std::uint8_t source, std::uint8_t base, std::uint8_t index,
+        bool single_element, std::uint8_t gqr) {
+        return (4U << 26U) |
+            (static_cast<std::uint32_t>(source) << 21U) |
+            (static_cast<std::uint32_t>(base) << 16U) |
+            (static_cast<std::uint32_t>(index) << 11U) |
+            (static_cast<std::uint32_t>(single_element) << 10U) |
+            (static_cast<std::uint32_t>(gqr & 0x7U) << 7U) | (7U << 1U);
+    };
+    const auto double_bits = [](double value) { return std::bit_cast<std::uint64_t>(value); };
+    constexpr std::uint32_t start = 0x100U;
+    const auto run_pair = [](EspressoCore& interpreter, EspressoCore& compiled,
+                             std::uint32_t instruction) {
+        interpreter.memory.write32_be(start, instruction);
+        compiled.memory.write32_be(start, instruction);
+        interpreter.state.cia = start;
+        compiled.state.cia = start;
+        const RunResult expected = interpreter.run(1U);
+        Recompiler recompiler;
+        const RunResult actual = recompiler.run(compiled, 1U);
+        assert(actual.reason == expected.reason && actual.steps == expected.steps);
+        return std::pair{actual, recompiler.statistics()};
+    };
+
+    // Indexed float-pair store, with RA=RB to verify source capture and history
+    // deduplication while the effective address still adds the register twice.
+    EspressoCore interpreted(0x1000U);
+    EspressoCore compiled(0x1000U);
+    for (EspressoCore* core : {&interpreted, &compiled})
+    {
+        core->state.gpr[4] = 0x100U;
+        core->state.fpr[7] = double_bits(1.25);
+        core->state.fpr_ps1[7] = double_bits(-6.5);
+    }
+    const auto [result, stats] = run_pair(
+        interpreted, compiled, encode_psq_stx(7U, 4U, 4U, false, 0U));
+    assert(result.reason == StopReason::instruction_limit && result.steps == 1U);
+    assert(compiled.memory.read32_be(0x200U) == std::bit_cast<std::uint32_t>(1.25F));
+    assert(compiled.memory.read32_be(0x204U) == std::bit_cast<std::uint32_t>(-6.5F));
+    assert(stats.native_instructions == 1U && stats.interpreter_fallbacks == 0U);
+    const InstructionHistoryEntry& history = result.instruction_history.back();
+    assert(history.opcode_name == "psq_stx" && history.completed);
+    assert(history.has_effective_address && history.effective_address == 0x200U);
+    assert(history.source_count == 1U && history.source_registers[0] == 4U);
+    assert(history.has_paired_fp_state && history.paired_fp_quantized_store);
+    assert(history.paired_fp_store_value0 == std::bit_cast<std::uint32_t>(1.25F));
+
+    // RA=0 is literal zero while RB=0 remains the real GPR0 index; W=1 stores
+    // only PS0 and the existing GQR U8 quantizer is shared with psq_st.
+    EspressoCore scalar_interpreted(0x1000U);
+    EspressoCore scalar_compiled(0x1000U);
+    for (EspressoCore* core : {&scalar_interpreted, &scalar_compiled})
+    {
+        core->state.gpr[0] = 0x300U;
+        core->state.gqr[2] = (1U << 8U) | 4U;
+        core->state.fpr[3] = double_bits(10.75);
+        core->state.fpr_ps1[3] = double_bits(200.0);
+        core->memory.write8(0x302U, 0xCCU);
+    }
+    const auto [scalar_result, scalar_stats] = run_pair(
+        scalar_interpreted, scalar_compiled,
+        encode_psq_stx(3U, 0U, 0U, true, 2U));
+    assert(scalar_result.reason == StopReason::instruction_limit);
+    assert(scalar_compiled.memory.read8(0x300U) == 21U);
+    assert(scalar_compiled.memory.read8(0x301U) == 0U);
+    assert(scalar_compiled.memory.read8(0x302U) == 0xCCU);
+    assert(scalar_stats.native_instructions == 1U && scalar_stats.interpreter_fallbacks == 0U);
+
+    // A pair crossing the mapped-range boundary faults before modifying lane 0.
+    EspressoCore fault_interpreted(0x1000U);
+    EspressoCore fault_compiled(0x1000U);
+    for (EspressoCore* core : {&fault_interpreted, &fault_compiled})
+    {
+        core->memory.map_region(0x2000U, 4U);
+        core->memory.write32_be(0x2000U, 0xAABBCCDDU);
+        core->state.gpr[5] = 0x1FF0U;
+        core->state.gpr[6] = 0x10U;
+        core->state.fpr[8] = double_bits(9.0);
+        core->state.fpr_ps1[8] = double_bits(10.0);
+    }
+    const auto [fault, fault_stats] = run_pair(
+        fault_interpreted, fault_compiled,
+        encode_psq_stx(8U, 5U, 6U, false, 0U));
+    assert(fault.reason == StopReason::memory_fault);
+    assert(fault.detail.find("write 8 byte(s) at guest address 0x00002000") !=
+        std::string::npos);
+    assert(fault_compiled.memory.read32_be(0x2000U) == 0xAABBCCDDU);
+    assert(fault_compiled.state.cia == start);
+    assert(!fault.instruction_history.back().completed);
+    assert(fault.instruction_history.back().opcode_name == "psq_stx");
+    assert(fault.instruction_history.back().has_effective_address &&
+        fault.instruction_history.back().effective_address == 0x2000U);
+    assert(fault_stats.native_instructions == 0U && fault_stats.interpreter_fallbacks == 0U);
+}
+
 void recompiler_psq_l_differential_tests()
 {
     const auto encode_psq_l = [](
@@ -11990,6 +12088,7 @@ int main()
     recompiler_dcbf_differential_tests();
     recompiler_dcbz_differential_tests();
     recompiler_psq_st_differential_tests();
+    recompiler_psq_stx_differential_tests();
     recompiler_psq_l_differential_tests();
     recompiler_psq_lx_differential_tests();
     recompiler_psq_lux_differential_tests();
