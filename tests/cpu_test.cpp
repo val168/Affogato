@@ -26158,6 +26158,61 @@ void gx2_set_swap_interval_hle_tests()
     assert(wrong_library_result.hle_call == "coreinit::GX2SetSwapInterval");
 }
 
+void gx2_set_event_callback_hle_tests()
+{
+    constexpr std::uint32_t return_address = 0x0274C3BCU;
+    EspressoCore core(0x1000U);
+    register_gx2_hle(core.hle);
+    const std::uint32_t import =
+        core.hle.bind_import("gx2", "GX2SetEventCallback");
+    assert(import != 0U);
+
+    const auto invoke = [&](std::uint32_t event, std::uint32_t function,
+                            std::uint32_t user_data) {
+        core.state.gpr[3] = event;
+        core.state.gpr[4] = function;
+        core.state.gpr[5] = user_data;
+        core.state.cia = import;
+        core.state.lr = return_address;
+        return core.run(1U);
+    };
+
+    for (std::uint32_t event = 2U; event <= 4U; ++event)
+    {
+        const std::uint32_t function = 0x02001000U + event * 0x100U;
+        const std::uint32_t user_data = 0x10000000U + event;
+        const RunResult result = invoke(event, function, user_data);
+        assert(result.reason == StopReason::instruction_limit);
+        assert(result.steps == 1U);
+        assert((core.gx2.event_callbacks[event - 2U] ==
+                Gx2EventCallback{function, user_data}));
+        assert(core.state.gpr[3] == event && core.state.gpr[4] == function &&
+               core.state.gpr[5] == user_data);
+        assert(core.state.cia == return_address &&
+               core.state.lr == return_address);
+    }
+
+    // Null function pointers unregister an event; keep the supplied user data
+    // as part of the registration tuple just as the ABI passes it.
+    assert(invoke(3U, 0U, 0xDEADBEEFU).reason ==
+           StopReason::instruction_limit);
+    assert((core.gx2.event_callbacks[1U] ==
+            Gx2EventCallback{0U, 0xDEADBEEFU}));
+
+    const auto callbacks_before = core.gx2.event_callbacks;
+    const RunResult invalid = invoke(1U, 0x02002000U, 0x12345678U);
+    assert(invalid.reason == StopReason::hle_error);
+    assert(invalid.detail.find("unsupported event type 1") !=
+           std::string::npos);
+    assert(core.gx2.event_callbacks == callbacks_before);
+
+    // The callback is stored, not executed: event delivery and guest callback
+    // invocation are outside this HLE's current scheduling model.
+    core.reset();
+    assert((core.gx2.event_callbacks ==
+            std::array<Gx2EventCallback, 3U>{}));
+}
+
 void compare_and_conditional_branch_tests()
 {
     EspressoCore unsigned_compare_core(8);
@@ -33833,6 +33888,7 @@ int main(int argc, char* argv[])
     gx2_set_drc_buffer_hle_tests();
     gx2_set_drc_scale_hle_tests();
     gx2_set_swap_interval_hle_tests();
+    gx2_set_event_callback_hle_tests();
     mem_get_total_free_size_for_exp_heap_hle_tests();
     mem_get_allocatable_size_for_exp_heap_ex_hle_tests();
     compare_and_conditional_branch_tests();

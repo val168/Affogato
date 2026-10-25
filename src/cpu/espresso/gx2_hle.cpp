@@ -68,6 +68,9 @@ constexpr std::uint32_t gx2_surface_format_unorm_r8_g8_b8_a8 = 0x1AU;
 constexpr std::uint32_t gx2_buffering_mode_single = 1U;
 constexpr std::uint32_t gx2_buffering_mode_double = 2U;
 constexpr std::uint32_t gx2_buffering_mode_triple = 3U;
+constexpr std::uint32_t gx2_event_type_vsync = 2U;
+constexpr std::uint32_t gx2_event_type_flip = 3U;
+constexpr std::uint32_t gx2_event_type_display_list_overrun = 4U;
 // The Wii U GFD/GX2 resource format identifies this platform as GPU version 2.
 constexpr std::uint32_t gx2_gpu_version = 2U;
 constexpr std::uint32_t gx2_fetch_shader_instruction_size = 0x10U;
@@ -3169,6 +3172,29 @@ void register_gx2_hle(HleDispatcher& dispatcher)
             // Retain the raw uint32 request (Decaf semantics). VSync waits,
             // flip scheduling, and host presentation remain deferred.
             core.gx2.swap_interval = interval;
+        });
+
+    dispatcher.register_function(
+        "gx2",
+        "GX2SetEventCallback",
+        [](EspressoCore& core) {
+            const std::uint32_t event_type = core.state.gpr[3];
+            if (event_type < gx2_event_type_vsync ||
+                event_type > gx2_event_type_display_list_overrun)
+            {
+                throw HleExecutionError(
+                    "gx2::GX2SetEventCallback: unsupported event type " +
+                    std::to_string(event_type));
+            }
+
+            Gx2EventCallback callback{};
+            callback.function = core.state.gpr[4];
+            callback.user_data = core.state.gpr[5];
+            core.gx2.event_callbacks[event_type - gx2_event_type_vsync] =
+                callback;
+
+            // This records the guest registration only. Callback delivery
+            // requires GX2 event scheduling, which is not modeled yet.
         });
 
     dispatcher.register_function(

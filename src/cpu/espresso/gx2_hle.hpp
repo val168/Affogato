@@ -34,6 +34,14 @@ struct Gx2ClearColorRequest
     bool operator==(const Gx2ClearColorRequest&) const = default;
 };
 
+struct Gx2EventCallback
+{
+    std::uint32_t function{};
+    std::uint32_t user_data{};
+
+    bool operator==(const Gx2EventCallback&) const = default;
+};
+
 struct Gx2TextureBinding
 {
     std::uint32_t texture_address{};
@@ -105,6 +113,8 @@ struct Gx2RuntimeState
     std::uint32_t swap_interval{};
     std::uint32_t flip_request_count{};
     std::uint32_t flip_execute_count{};
+    // GX2EventType values 2 (vsync), 3 (flip), and 4 (display-list overrun).
+    std::array<Gx2EventCallback, 3U> event_callbacks{};
     bool tv_scan_buffer_configured{};
     std::uint32_t tv_scan_buffer_address{};
     std::uint32_t tv_scan_buffer_size{};
