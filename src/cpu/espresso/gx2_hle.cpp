@@ -743,6 +743,18 @@ std::uint32_t pack_target_channel_masks(
     return packed;
 }
 
+std::uint32_t pack_aa_mask(
+    std::uint32_t upper_left,
+    std::uint32_t upper_right,
+    std::uint32_t lower_left,
+    std::uint32_t lower_right)
+{
+    return (upper_left & 0xFFU) |
+           ((upper_right & 0xFFU) << 8U) |
+           ((lower_left & 0xFFU) << 16U) |
+           ((lower_right & 0xFFU) << 24U);
+}
+
 std::uint32_t pack_alpha_to_mask(
     std::uint32_t enabled,
     std::uint32_t mode)
@@ -3151,16 +3163,28 @@ void register_gx2_hle(HleDispatcher& dispatcher)
             // PA_SC_AA_MASK register retains those four bytes in UL, UR, LL,
             // LR order; do not expand them into the later 16-sample register
             // pair used by newer AMD GPU generations.
-            const std::uint32_t packed =
-                (core.state.gpr[3] & 0xFFU) |
-                ((core.state.gpr[4] & 0xFFU) << 8U) |
-                ((core.state.gpr[5] & 0xFFU) << 16U) |
-                ((core.state.gpr[6] & 0xFFU) << 24U);
+            const std::uint32_t packed = pack_aa_mask(
+                core.state.gpr[3],
+                core.state.gpr[4],
+                core.state.gpr[5],
+                core.state.gpr[6]);
 
             core.gx2.pending_commands.push_back({
                 Gx2CommandType::set_context_register,
                 pa_sc_aa_mask_register,
                 packed});
+        });
+
+    dispatcher.register_function(
+        "gx2",
+        "GX2InitAAMaskReg",
+        [](EspressoCore& core) {
+            const std::uint32_t packed = pack_aa_mask(
+                core.state.gpr[4],
+                core.state.gpr[5],
+                core.state.gpr[6],
+                core.state.gpr[7]);
+            core.memory.write32_be(core.state.gpr[3], packed);
         });
 
     dispatcher.register_function(
