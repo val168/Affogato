@@ -60,6 +60,7 @@ static_assert(gx2_context_shadow_state_size == gx2_context_profiling_offset);
 static_assert(gx2_context_display_list_offset +
                   gx2_context_display_list_capacity ==
               gx2_context_state_size);
+constexpr std::uint32_t gx2_tv_render_mode_wide_720p = 3U;
 constexpr std::uint32_t gx2_tv_render_mode_wide_1080p = 5U;
 constexpr std::uint32_t gx2_drc_render_mode_single = 1U;
 constexpr std::uint32_t gx2_drc_render_mode_double = 2U;
@@ -136,13 +137,17 @@ struct DrcScanGeometry
 
 TvDimensions get_tv_dimensions(std::uint32_t render_mode, const char* api_name)
 {
-    if (render_mode != gx2_tv_render_mode_wide_1080p)
+    switch (render_mode)
     {
+    case gx2_tv_render_mode_wide_720p:
+        return {1280U, 720U};
+    case gx2_tv_render_mode_wide_1080p:
+        return {1920U, 1080U};
+    default:
         throw HleExecutionError(
             std::string("gx2::") + api_name + ": unsupported TV render mode " +
             std::to_string(render_mode));
     }
-    return {1920U, 1080U};
 }
 
 void validate_scan_surface_format(

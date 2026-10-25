@@ -23365,6 +23365,13 @@ void gx2_calc_tv_size_hle_tests()
     run_size(2U, 0x00FD2000U);
     run_size(3U, 0x017BB000U);
 
+    // GX2_TV_RENDER_MODE_WIDE_720P uses a 1280x720 scan surface.
+    set_arguments(core, 3U, rgba8_format, 2U,
+                  out_size_address, out_unk_address);
+    assert(invoke(core, import).reason == StopReason::instruction_limit);
+    assert(core.memory.read32_be(out_size_address) == 0x00708000U);
+    assert(core.memory.read32_be(out_unk_address) == 0U);
+
     // Same-pointer output alias is valid; API write order leaves outUnk's zero.
     constexpr std::uint32_t alias_output = 0x7000U;
     core.memory.write32_be(alias_output, 0xDEADBEEFU);
@@ -24961,6 +24968,31 @@ void gx2_set_tv_buffer_hle_tests()
            StopReason::instruction_limit);
     expect_tv_metadata(integration.gx2, buffer_address, buffer_size,
                        double_buffering);
+
+    // The 720p mode is also accepted by buffer registration and stores the
+    // corresponding scan dimensions, not the 1080p dimensions.
+    integration.state.gpr[3] = 3U;
+    integration.state.gpr[4] = surface_format;
+    integration.state.gpr[5] = double_buffering;
+    integration.state.gpr[6] = size_out;
+    integration.state.gpr[7] = unk_out;
+    integration.state.cia = integration.hle.bind_import("gx2", "GX2CalcTVSize");
+    integration.state.lr = return_address;
+    assert(integration.run(1U).reason == StopReason::instruction_limit);
+    assert(integration.memory.read32_be(size_out) == 0x00708000U);
+    set_arguments(integration, buffer_address, 0x00708000U, 3U,
+                  surface_format, double_buffering);
+    assert(invoke(integration,
+                  integration.hle.bind_import("gx2", "GX2SetTVBuffer")).reason ==
+           StopReason::instruction_limit);
+    assert(integration.gx2.tv_scan_buffer_configured);
+    assert(integration.gx2.tv_scan_buffer_address == buffer_address);
+    assert(integration.gx2.tv_scan_buffer_size == 0x00708000U);
+    assert(integration.gx2.tv_render_mode == 3U);
+    assert(integration.gx2.tv_surface_format == surface_format);
+    assert(integration.gx2.tv_buffering_mode == double_buffering);
+    assert(integration.gx2.tv_scan_width == 1280U);
+    assert(integration.gx2.tv_scan_height == 720U);
 }
 
 void gx2_set_tv_scale_hle_tests()
