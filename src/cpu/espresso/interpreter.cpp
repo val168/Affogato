@@ -6717,6 +6717,15 @@ RunResult EspressoCore::run(std::size_t max_steps)
 {
     RunResult result{};
     result.cia = state.cia;
+    const auto append_pending_history_entry = [&]() {
+        if (!has_pending_history_entry_)
+        {
+            return;
+        }
+
+        append_instruction_history(std::move(pending_history_entry_));
+        has_pending_history_entry_ = false;
+    };
     const auto include_history = [&]() {
         result.instruction_history = instruction_history_snapshot();
     };
@@ -6730,11 +6739,7 @@ RunResult EspressoCore::run(std::size_t max_steps)
         }
         catch (const GuestMemoryFault& fault)
         {
-            if (has_pending_history_entry_)
-            {
-                append_instruction_history(std::move(pending_history_entry_));
-                has_pending_history_entry_ = false;
-            }
+            append_pending_history_entry();
             result.reason = StopReason::memory_fault;
             result.cia = state.cia;
             result.has_instruction_word = current_instruction_word_fetched_;
@@ -6750,11 +6755,7 @@ RunResult EspressoCore::run(std::size_t max_steps)
         }
         catch (const HleExecutionError& error)
         {
-            if (has_pending_history_entry_)
-            {
-                append_instruction_history(std::move(pending_history_entry_));
-                has_pending_history_entry_ = false;
-            }
+            append_pending_history_entry();
             result.reason = StopReason::hle_error;
             result.cia = state.cia;
             result.detail = error.what();
@@ -6763,11 +6764,7 @@ RunResult EspressoCore::run(std::size_t max_steps)
         }
         catch (const std::exception& error)
         {
-            if (has_pending_history_entry_)
-            {
-                append_instruction_history(std::move(pending_history_entry_));
-                has_pending_history_entry_ = false;
-            }
+            append_pending_history_entry();
             result.reason = StopReason::memory_fault;
             result.cia = state.cia;
             result.detail = error.what();
