@@ -9,6 +9,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <string>
 #include <vector>
@@ -28,6 +29,7 @@ public:
     void poll_events();
     void render_frame();
     void set_guest_clear_color(const std::array<float, 4U>& rgba) noexcept;
+    [[nodiscard]] bool set_guest_scanout(Rgba8TextureStaging scanout);
     void consume_guest_commands(
         std::span<const cpu::espresso::Gx2Command> commands);
     [[nodiscard]] std::size_t upload_rgba8_texture(
@@ -64,6 +66,13 @@ private:
         std::uint32_t height{};
     };
 
+    struct ScanoutUploadBuffer
+    {
+        VkBuffer buffer{};
+        VkDeviceMemory memory{};
+        bool memory_coherent{};
+    };
+
     void create_instance();
     void create_surface();
     void select_physical_device();
@@ -74,6 +83,8 @@ private:
     void create_framebuffers();
     void create_command_resources();
     void create_synchronization();
+    void create_scanout_upload_buffers();
+    void destroy_scanout_upload_buffers() noexcept;
     void recreate_swapchain();
     void destroy_swapchain() noexcept;
     void destroy_uploaded_textures() noexcept;
@@ -108,6 +119,13 @@ private:
     std::vector<VkSemaphore> render_finished_;
     std::array<VkFence, frames_in_flight> in_flight_{};
     std::vector<VkFence> images_in_flight_;
+    std::vector<bool> swapchain_images_initialized_;
+    std::array<ScanoutUploadBuffer, frames_in_flight> scanout_upload_buffers_{};
+    VkDeviceSize scanout_upload_buffer_size_{};
+    std::vector<std::uint8_t> scaled_scanout_pixels_;
+    bool supports_swapchain_transfer_dst_{};
+    bool guest_scanout_dirty_{};
+    std::optional<Rgba8TextureStaging> guest_scanout_;
     std::vector<UploadedTexture> uploaded_textures_;
     std::size_t current_frame_{};
     std::array<float, 4U> guest_clear_color_{0.025F, 0.055F, 0.09F, 1.0F};

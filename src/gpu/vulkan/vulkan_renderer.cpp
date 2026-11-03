@@ -9,6 +9,7 @@
 #include <set>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace affogato::gpu::vulkan
@@ -16,7 +17,7 @@ namespace affogato::gpu::vulkan
 namespace
 {
 
-constexpr const char* window_title = "Affogato — Vulkan output (clear test)";
+constexpr const char* window_title = "Affogato — Vulkan output";
 constexpr std::array<const char*, 1U> device_extensions{
     VK_KHR_SWAPCHAIN_EXTENSION_NAME,
 };
@@ -170,6 +171,30 @@ void VulkanRenderer::set_guest_clear_color(
     const std::array<float, 4U>& rgba) noexcept
 {
     guest_clear_color_ = rgba;
+}
+
+bool VulkanRenderer::set_guest_scanout(Rgba8TextureStaging scanout)
+{
+    constexpr std::uint64_t bytes_per_pixel = 4U;
+    if (scanout.width == 0U || scanout.height == 0U ||
+        scanout.height > std::numeric_limits<std::uint64_t>::max() /
+            (static_cast<std::uint64_t>(scanout.width) * bytes_per_pixel))
+    {
+        throw std::invalid_argument("Guest scanout has invalid RGBA8 dimensions or size");
+    }
+    const std::uint64_t expected_size =
+        static_cast<std::uint64_t>(scanout.width) * scanout.height * bytes_per_pixel;
+    if (expected_size != scanout.pixels.size())
+    {
+        throw std::invalid_argument("Guest scanout has invalid RGBA8 dimensions or size");
+    }
+    if (!supports_swapchain_transfer_dst_)
+    {
+        return false;
+    }
+    guest_scanout_ = std::move(scanout);
+    guest_scanout_dirty_ = true;
+    return true;
 }
 
 void VulkanRenderer::consume_guest_commands(
@@ -647,8 +672,18 @@ void VulkanRenderer::create_swapchain()
         return format.format == VK_FORMAT_B8G8R8A8_SRGB &&
             format.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
     });
-    const VkSurfaceFormatKHR surface_format = preferred_format != formats.end()
-        ? *preferred_format
+    auto selected_format = preferred_format;
+    if (selected_format == formats.end())
+    {
+        selected_format = std::ranges::find_if(formats, [](const auto& format)
+        {
+            return format.format == VK_FORMAT_B8G8R8A8_UNORM ||
+                format.format == VK_FORMAT_R8G8B8A8_SRGB ||
+                format.format == VK_FORMAT_R8G8B8A8_UNORM;
+        });
+    }
+    const VkSurfaceFormatKHR surface_format = selected_format != formats.end()
+        ? *selected_format
         : (formats.size() == 1U && formats.front().format == VK_FORMAT_UNDEFINED
             ? VkSurfaceFormatKHR{VK_FORMAT_B8G8R8A8_UNORM, formats.front().colorSpace}
             : formats.front());
@@ -681,6 +716,20 @@ void VulkanRenderer::create_swapchain()
         swapchain_extent_.height = std::clamp(static_cast<std::uint32_t>(std::max(height, 1)),
             capabilities.minImageExtent.height, capabilities.maxImageExtent.height);
     }
+    supports_swapchain_transfer_dst_ =
+        (capabilities.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_DST_BIT) != 0U;
+    VkFormatProperties swapchain_format_properties{};
+    vkGetPhysicalDeviceFormatProperties(
+        physical_device_, swapchain_format_, &swapchain_format_properties);
+    const bool has_rgba8_swapchain_format =
+        swapchain_format_ == VK_FORMAT_B8G8R8A8_SRGB ||
+        swapchain_format_ == VK_FORMAT_B8G8R8A8_UNORM ||
+        swapchain_format_ == VK_FORMAT_R8G8B8A8_SRGB ||
+        swapchain_format_ == VK_FORMAT_R8G8B8A8_UNORM;
+    supports_swapchain_transfer_dst_ = supports_swapchain_transfer_dst_ &&
+        has_rgba8_swapchain_format &&
+        (swapchain_format_properties.optimalTilingFeatures &
+         VK_FORMAT_FEATURE_TRANSFER_DST_BIT) != 0U;
 
     std::uint32_t image_count = capabilities.minImageCount + 1U;
     if (capabilities.maxImageCount != 0U && image_count > capabilities.maxImageCount)
@@ -698,6 +747,10 @@ void VulkanRenderer::create_swapchain()
     create_info.imageExtent = swapchain_extent_;
     create_info.imageArrayLayers = 1U;
     create_info.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+    if (supports_swapchain_transfer_dst_)
+    {
+        create_info.imageUsage |= VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    }
     if (families.graphics != families.present)
     {
         create_info.imageSharingMode = VK_SHARING_MODE_CONCURRENT;
@@ -738,6 +791,7 @@ void VulkanRenderer::create_swapchain()
     check(vkGetSwapchainImagesKHR(device_, swapchain_, &actual_count, swapchain_images_.data()),
         "vkGetSwapchainImagesKHR");
     images_in_flight_.assign(actual_count, VK_NULL_HANDLE);
+    swapchain_images_initialized_.assign(actual_count, false);
 
     render_finished_.resize(actual_count, VK_NULL_HANDLE);
     VkSemaphoreCreateInfo semaphore_info{};
@@ -747,6 +801,74 @@ void VulkanRenderer::create_swapchain()
         check(vkCreateSemaphore(device_, &semaphore_info, nullptr, &semaphore),
             "vkCreateSemaphore(present ready)");
     }
+    if (supports_swapchain_transfer_dst_)
+    {
+        create_scanout_upload_buffers();
+    }
+}
+
+void VulkanRenderer::create_scanout_upload_buffers()
+{
+    const std::uint64_t pixel_count =
+        static_cast<std::uint64_t>(swapchain_extent_.width) * swapchain_extent_.height;
+    if (pixel_count > std::numeric_limits<VkDeviceSize>::max() / 4U)
+    {
+        throw std::runtime_error("Vulkan swapchain extent overflows scanout buffer size");
+    }
+    scanout_upload_buffer_size_ = static_cast<VkDeviceSize>(pixel_count * 4U);
+
+    for (ScanoutUploadBuffer& upload : scanout_upload_buffers_)
+    {
+        VkBufferCreateInfo buffer_info = make_info<VkBufferCreateInfo>(
+            VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO);
+        buffer_info.size = scanout_upload_buffer_size_;
+        buffer_info.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+        buffer_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        check(vkCreateBuffer(device_, &buffer_info, nullptr, &upload.buffer),
+            "vkCreateBuffer(guest scanout)");
+
+        VkMemoryRequirements requirements{};
+        vkGetBufferMemoryRequirements(device_, upload.buffer, &requirements);
+        const std::uint32_t memory_type_index = find_memory_type(
+            requirements.memoryTypeBits,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT,
+            VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+        VkPhysicalDeviceMemoryProperties memory_properties{};
+        vkGetPhysicalDeviceMemoryProperties(physical_device_, &memory_properties);
+        upload.memory_coherent =
+            (memory_properties.memoryTypes[memory_type_index].propertyFlags &
+             VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) != 0U;
+        VkMemoryAllocateInfo allocation_info = make_info<VkMemoryAllocateInfo>(
+            VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO);
+        allocation_info.allocationSize = requirements.size;
+        allocation_info.memoryTypeIndex = memory_type_index;
+        check(vkAllocateMemory(device_, &allocation_info, nullptr, &upload.memory),
+            "vkAllocateMemory(guest scanout)");
+        check(vkBindBufferMemory(device_, upload.buffer, upload.memory, 0U),
+            "vkBindBufferMemory(guest scanout)");
+    }
+}
+
+void VulkanRenderer::destroy_scanout_upload_buffers() noexcept
+{
+    if (device_ == VK_NULL_HANDLE)
+    {
+        return;
+    }
+    for (ScanoutUploadBuffer& upload : scanout_upload_buffers_)
+    {
+        if (upload.buffer != VK_NULL_HANDLE)
+        {
+            vkDestroyBuffer(device_, upload.buffer, nullptr);
+            upload.buffer = VK_NULL_HANDLE;
+        }
+        if (upload.memory != VK_NULL_HANDLE)
+        {
+            vkFreeMemory(device_, upload.memory, nullptr);
+            upload.memory = VK_NULL_HANDLE;
+        }
+    }
+    scanout_upload_buffer_size_ = 0U;
 }
 
 void VulkanRenderer::create_image_views()
@@ -908,21 +1030,162 @@ void VulkanRenderer::render_frame()
     begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     check(vkBeginCommandBuffer(command_buffer, &begin_info), "vkBeginCommandBuffer");
 
-    VkClearValue clear{};
-    std::copy(guest_clear_color_.begin(), guest_clear_color_.end(),
-        clear.color.float32);
-    VkRenderPassBeginInfo render_info = make_info<VkRenderPassBeginInfo>(
-        VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO);
-    render_info.renderPass = render_pass_;
-    render_info.framebuffer = framebuffers_[image_index];
-    render_info.renderArea.extent = swapchain_extent_;
-    render_info.clearValueCount = 1U;
-    render_info.pClearValues = &clear;
-    vkCmdBeginRenderPass(command_buffer, &render_info, VK_SUBPASS_CONTENTS_INLINE);
-    vkCmdEndRenderPass(command_buffer);
+    const bool present_guest_scanout =
+        guest_scanout_.has_value() && supports_swapchain_transfer_dst_;
+    if (present_guest_scanout)
+    {
+        const bool swapchain_is_bgra =
+            swapchain_format_ == VK_FORMAT_B8G8R8A8_SRGB ||
+            swapchain_format_ == VK_FORMAT_B8G8R8A8_UNORM;
+        const bool swapchain_is_rgba =
+            swapchain_format_ == VK_FORMAT_R8G8B8A8_SRGB ||
+            swapchain_format_ == VK_FORMAT_R8G8B8A8_UNORM;
+        if (!swapchain_is_bgra && !swapchain_is_rgba)
+        {
+            throw std::runtime_error(
+                "Vulkan swapchain format cannot present RGBA8 guest scanout");
+        }
+
+        const std::uint32_t source_width = guest_scanout_->width;
+        const std::uint32_t source_height = guest_scanout_->height;
+        const std::size_t output_pixel_count =
+            static_cast<std::size_t>(swapchain_extent_.width) *
+            swapchain_extent_.height;
+        if (guest_scanout_dirty_ ||
+            scaled_scanout_pixels_.size() != output_pixel_count * 4U)
+        {
+            scaled_scanout_pixels_.resize(output_pixel_count * 4U);
+            for (std::uint32_t output_y = 0U;
+                 output_y < swapchain_extent_.height;
+                 ++output_y)
+            {
+                const std::uint32_t source_y = static_cast<std::uint32_t>(
+                    (static_cast<std::uint64_t>(output_y) * source_height) /
+                    swapchain_extent_.height);
+                for (std::uint32_t output_x = 0U;
+                     output_x < swapchain_extent_.width;
+                     ++output_x)
+                {
+                    const std::uint32_t source_x = static_cast<std::uint32_t>(
+                        (static_cast<std::uint64_t>(output_x) * source_width) /
+                        swapchain_extent_.width);
+                    const std::size_t source_offset =
+                        (static_cast<std::size_t>(source_y) * source_width + source_x) * 4U;
+                    const std::size_t output_offset =
+                        (static_cast<std::size_t>(output_y) * swapchain_extent_.width +
+                         output_x) * 4U;
+                    const auto& source_pixels = guest_scanout_->pixels;
+                    scaled_scanout_pixels_[output_offset] =
+                        source_pixels[source_offset + (swapchain_is_bgra ? 2U : 0U)];
+                    scaled_scanout_pixels_[output_offset + 1U] =
+                        source_pixels[source_offset + 1U];
+                    scaled_scanout_pixels_[output_offset + 2U] =
+                        source_pixels[source_offset + (swapchain_is_bgra ? 0U : 2U)];
+                    scaled_scanout_pixels_[output_offset + 3U] =
+                        source_pixels[source_offset + 3U];
+                }
+            }
+            guest_scanout_dirty_ = false;
+        }
+
+        ScanoutUploadBuffer& upload = scanout_upload_buffers_[current_frame_];
+        void* mapped_memory = nullptr;
+        check(vkMapMemory(
+            device_, upload.memory, 0U, scanout_upload_buffer_size_, 0U, &mapped_memory),
+            "vkMapMemory(guest scanout)");
+        std::memcpy(
+            mapped_memory,
+            scaled_scanout_pixels_.data(),
+            scaled_scanout_pixels_.size());
+        if (!upload.memory_coherent)
+        {
+            VkMappedMemoryRange flush_range = make_info<VkMappedMemoryRange>(
+                VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE);
+            flush_range.memory = upload.memory;
+            flush_range.offset = 0U;
+            flush_range.size = VK_WHOLE_SIZE;
+            check(vkFlushMappedMemoryRanges(device_, 1U, &flush_range),
+                "vkFlushMappedMemoryRanges(guest scanout)");
+        }
+        vkUnmapMemory(device_, upload.memory);
+
+        VkImageMemoryBarrier to_transfer = make_info<VkImageMemoryBarrier>(
+            VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER);
+        to_transfer.srcAccessMask = 0U;
+        to_transfer.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        to_transfer.oldLayout = swapchain_images_initialized_[image_index]
+            ? VK_IMAGE_LAYOUT_PRESENT_SRC_KHR
+            : VK_IMAGE_LAYOUT_UNDEFINED;
+        to_transfer.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        to_transfer.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        to_transfer.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        to_transfer.image = swapchain_images_[image_index];
+        to_transfer.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        to_transfer.subresourceRange.baseMipLevel = 0U;
+        to_transfer.subresourceRange.levelCount = 1U;
+        to_transfer.subresourceRange.baseArrayLayer = 0U;
+        to_transfer.subresourceRange.layerCount = 1U;
+        vkCmdPipelineBarrier(
+            command_buffer,
+            VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+            VK_PIPELINE_STAGE_TRANSFER_BIT,
+            0U,
+            0U,
+            nullptr,
+            0U,
+            nullptr,
+            1U,
+            &to_transfer);
+
+        VkBufferImageCopy copy{};
+        copy.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        copy.imageSubresource.layerCount = 1U;
+        copy.imageExtent = {swapchain_extent_.width, swapchain_extent_.height, 1U};
+        vkCmdCopyBufferToImage(
+            command_buffer,
+            upload.buffer,
+            swapchain_images_[image_index],
+            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            1U,
+            &copy);
+
+        VkImageMemoryBarrier to_present = to_transfer;
+        to_present.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        to_present.dstAccessMask = 0U;
+        to_present.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        to_present.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+        vkCmdPipelineBarrier(
+            command_buffer,
+            VK_PIPELINE_STAGE_TRANSFER_BIT,
+            VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
+            0U,
+            0U,
+            nullptr,
+            0U,
+            nullptr,
+            1U,
+            &to_present);
+    }
+    else
+    {
+        VkClearValue clear{};
+        std::copy(guest_clear_color_.begin(), guest_clear_color_.end(),
+            clear.color.float32);
+        VkRenderPassBeginInfo render_info = make_info<VkRenderPassBeginInfo>(
+            VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO);
+        render_info.renderPass = render_pass_;
+        render_info.framebuffer = framebuffers_[image_index];
+        render_info.renderArea.extent = swapchain_extent_;
+        render_info.clearValueCount = 1U;
+        render_info.pClearValues = &clear;
+        vkCmdBeginRenderPass(command_buffer, &render_info, VK_SUBPASS_CONTENTS_INLINE);
+        vkCmdEndRenderPass(command_buffer);
+    }
     check(vkEndCommandBuffer(command_buffer), "vkEndCommandBuffer");
 
-    constexpr VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    const VkPipelineStageFlags wait_stage = present_guest_scanout
+        ? VK_PIPELINE_STAGE_TRANSFER_BIT
+        : VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
     VkSubmitInfo submit_info = make_info<VkSubmitInfo>(VK_STRUCTURE_TYPE_SUBMIT_INFO);
     submit_info.waitSemaphoreCount = 1U;
     submit_info.pWaitSemaphores = &image_available_[current_frame_];
@@ -933,6 +1196,10 @@ void VulkanRenderer::render_frame()
     submit_info.pSignalSemaphores = &render_finished_[image_index];
     check(vkQueueSubmit(graphics_queue_, 1U, &submit_info, in_flight_[current_frame_]),
         "vkQueueSubmit");
+    if (present_guest_scanout)
+    {
+        swapchain_images_initialized_[image_index] = true;
+    }
 
     VkPresentInfoKHR present_info = make_info<VkPresentInfoKHR>(VK_STRUCTURE_TYPE_PRESENT_INFO_KHR);
     present_info.waitSemaphoreCount = 1U;
@@ -967,6 +1234,7 @@ void VulkanRenderer::recreate_swapchain()
     check(vkDeviceWaitIdle(device_), "vkDeviceWaitIdle(swapchain recreation)");
     destroy_swapchain();
     create_swapchain();
+    guest_scanout_dirty_ = guest_scanout_.has_value();
     create_image_views();
     create_render_pass();
     create_framebuffers();
@@ -1007,6 +1275,8 @@ void VulkanRenderer::destroy_swapchain() noexcept
         }
     }
     render_finished_.clear();
+    swapchain_images_initialized_.clear();
+    destroy_scanout_upload_buffers();
     swapchain_images_.clear();
     images_in_flight_.clear();
     if (swapchain_ != VK_NULL_HANDLE)

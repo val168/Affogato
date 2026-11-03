@@ -22,6 +22,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <span>
 #include <stdexcept>
 #include <sstream>
 #include <string>
@@ -58,6 +59,90 @@ fs::path path_from_utf8(std::string_view text)
         encoded.push_back(static_cast<char8_t>(byte));
     }
     return fs::path(encoded);
+}
+
+std::optional<affogato::gpu::Rgba8TextureStaging> capture_tv_scanout(
+    const affogato::Emulator& emulator,
+    std::span<const affogato::cpu::espresso::Gx2Command> commands)
+{
+    using affogato::cpu::espresso::Gx2CommandType;
+    const auto& gx2 = emulator.core().gx2;
+    if (!gx2.tv_scan_buffer_configured || gx2.tv_output_enabled == false)
+    {
+        return std::nullopt;
+    }
+
+    std::uint32_t flip_request_count = 0U;
+    bool has_scan_buffer_swap = false;
+    for (const auto& command : commands)
+    {
+        if (command.type == Gx2CommandType::scan_buffer_swap)
+        {
+            flip_request_count = command.value;
+            has_scan_buffer_swap = true;
+        }
+    }
+    if (!has_scan_buffer_swap)
+    {
+        return std::nullopt;
+    }
+
+    std::uint32_t buffer_count = 0U;
+    switch (gx2.tv_buffering_mode)
+    {
+    case 1U:
+        buffer_count = 1U;
+        break;
+    case 2U:
+        buffer_count = 2U;
+        break;
+    case 3U:
+        buffer_count = 3U;
+        break;
+    default: return std::nullopt;
+    }
+
+    constexpr std::uint64_t bytes_per_pixel = 4U;
+    if (gx2.tv_scan_width == 0U || gx2.tv_scan_height == 0U ||
+        gx2.tv_scan_buffer_address == 0U)
+    {
+        return std::nullopt;
+    }
+    const std::uint64_t row_size =
+        static_cast<std::uint64_t>(gx2.tv_scan_width) * bytes_per_pixel;
+    if (gx2.tv_scan_height > std::numeric_limits<std::uint64_t>::max() / row_size)
+    {
+        return std::nullopt;
+    }
+    const std::uint64_t frame_size = row_size * gx2.tv_scan_height;
+    const std::uint32_t buffer_index = flip_request_count == 0U
+        ? 0U
+        : (flip_request_count - 1U) % buffer_count;
+    const std::uint64_t frame_offset = frame_size * buffer_index;
+    if (frame_size > std::numeric_limits<std::uint32_t>::max() ||
+        frame_offset + frame_size > gx2.tv_scan_buffer_size ||
+        static_cast<std::uint64_t>(gx2.tv_scan_buffer_address) + frame_offset >
+            std::numeric_limits<std::uint32_t>::max())
+    {
+        return std::nullopt;
+    }
+
+    std::vector<std::uint8_t> guest_pixels(static_cast<std::size_t>(frame_size));
+    try
+    {
+        emulator.core().memory.read_bytes(
+            static_cast<std::uint32_t>(gx2.tv_scan_buffer_address + frame_offset),
+            guest_pixels);
+    }
+    catch (const affogato::cpu::espresso::GuestMemoryFault&)
+    {
+        return std::nullopt;
+    }
+    return affogato::gpu::stage_rgba8_scanout(
+        gx2.tv_scan_width,
+        gx2.tv_scan_height,
+        gx2.tv_scan_width,
+        guest_pixels);
 }
 
 std::string lower_ascii(std::string value)
@@ -860,6 +945,8 @@ struct WorkerResult
     std::string message;
     std::optional<affogato::cpu::espresso::Gx2ClearColorRequest> latest_guest_clear;
     std::uint64_t guest_clear_sequence{};
+    std::optional<affogato::gpu::Rgba8TextureStaging> latest_guest_scanout;
+    std::uint64_t guest_scanout_sequence{};
     std::vector<affogato::cpu::espresso::Gx2Command> pending_gx2_commands;
     std::atomic_bool running{};
 };
@@ -881,6 +968,8 @@ void launch_game(
     {
         std::lock_guard lock(worker.mutex);
         worker.message = "Reading RPX " + path_utf8(path) + " ...";
+        worker.latest_guest_scanout.reset();
+        ++worker.guest_scanout_sequence;
     }
     thread = std::jthread([path, &worker, execution_mode]
     {
@@ -948,6 +1037,13 @@ void launch_game(
                 }
                 if (!run_result.gx2_commands.empty())
                 {
+                    if (auto scanout = capture_tv_scanout(
+                            emulator, run_result.gx2_commands))
+                    {
+                        std::lock_guard lock(worker.mutex);
+                        worker.latest_guest_scanout = std::move(*scanout);
+                        ++worker.guest_scanout_sequence;
+                    }
                     std::lock_guard lock(worker.mutex);
                     worker.pending_gx2_commands.insert(
                         worker.pending_gx2_commands.end(),
@@ -1158,6 +1254,7 @@ int run_frontend()
     bool use_recompiler = false;
     bool done = false;
     std::uint64_t shown_guest_clear_sequence = 0U;
+    std::uint64_t shown_guest_scanout_sequence = 0U;
     while (!done)
     {
         if (vulkan_output)
@@ -1411,10 +1508,18 @@ int run_frontend()
             current_stage = "presenting Vulkan output";
             std::optional<affogato::cpu::espresso::Gx2ClearColorRequest> guest_clear;
             std::uint64_t guest_clear_sequence = 0U;
+            std::optional<affogato::gpu::Rgba8TextureStaging> guest_scanout;
+            std::uint64_t guest_scanout_sequence = 0U;
             {
                 std::lock_guard lock(worker.mutex);
                 guest_clear = worker.latest_guest_clear;
                 guest_clear_sequence = worker.guest_clear_sequence;
+                guest_scanout_sequence = worker.guest_scanout_sequence;
+                if (guest_scanout_sequence != shown_guest_scanout_sequence &&
+                    worker.latest_guest_scanout.has_value())
+                {
+                    guest_scanout = std::move(worker.latest_guest_scanout);
+                }
             }
             if (!guest_commands.empty())
             {
@@ -1425,6 +1530,16 @@ int run_frontend()
                 vulkan_output->set_guest_clear_color(guest_clear->rgba);
                 shown_guest_clear_sequence = guest_clear_sequence;
             }
+            if (guest_scanout)
+            {
+                if (!vulkan_output->set_guest_scanout(std::move(*guest_scanout)))
+                {
+                    std::lock_guard lock(worker.mutex);
+                    worker.message =
+                        "Vulkan surface does not support guest scanout presentation.";
+                }
+            }
+            shown_guest_scanout_sequence = guest_scanout_sequence;
             vulkan_output->render_frame();
         }
     }
@@ -1488,8 +1603,15 @@ int run_vulkan_texture_upload_smoke_test()
     {
         throw std::runtime_error("Vulkan texture upload accepted invalid staging data");
     }
-    std::cout << "Vulkan RGBA8 upload smoke test passed on " << renderer.device_name()
-              << "; image view created and retained until renderer teardown.\n";
+    if (!renderer.set_guest_scanout(texture))
+    {
+        throw std::runtime_error(
+            "Vulkan surface does not support guest scanout presentation");
+    }
+    renderer.render_frame();
+    std::cout << "Vulkan RGBA8 upload and scanout presentation smoke test passed on "
+              << renderer.device_name()
+              << "; uploaded images remained valid through a presented scanout frame.\n";
     return 0;
 }
 

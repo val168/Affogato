@@ -30669,6 +30669,22 @@ void gx2_register_state_tests()
 
 void latte_texture_staging_tests()
 {
+    const std::array<std::uint8_t, 24U> padded_scanout_bytes{
+        1U, 2U, 3U, 4U, 5U, 6U, 7U, 8U, 99U, 98U, 97U, 96U,
+        9U, 10U, 11U, 12U, 13U, 14U, 15U, 16U, 95U, 94U, 93U, 92U};
+    const auto staged_scanout = affogato::gpu::stage_rgba8_scanout(
+        2U, 2U, 3U, padded_scanout_bytes);
+    assert(staged_scanout.has_value());
+    assert(staged_scanout->width == 2U);
+    assert(staged_scanout->height == 2U);
+    assert((staged_scanout->pixels == std::vector<std::uint8_t>{
+        1U, 2U, 3U, 4U, 5U, 6U, 7U, 8U,
+        9U, 10U, 11U, 12U, 13U, 14U, 15U, 16U}));
+    assert(!affogato::gpu::stage_rgba8_scanout(
+        3U, 2U, 2U, padded_scanout_bytes));
+    assert(!affogato::gpu::stage_rgba8_scanout(
+        2U, 2U, 3U, std::span<const std::uint8_t>(padded_scanout_bytes).first(23U)));
+
     affogato::gpu::LatteTextureResourceDescriptor descriptor{};
     descriptor.dimension = 1U;
     descriptor.tile_mode = 1U;

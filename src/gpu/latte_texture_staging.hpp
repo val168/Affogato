@@ -2,6 +2,7 @@
 
 #include "gpu/latte_texture_resource.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -21,6 +22,57 @@ struct Rgba8TextureStaging
 
     bool operator==(const Rgba8TextureStaging&) const = default;
 };
+
+[[nodiscard]] inline std::optional<Rgba8TextureStaging> stage_rgba8_scanout(
+    std::uint32_t width,
+    std::uint32_t height,
+    std::uint32_t pitch_pixels,
+    std::span<const std::uint8_t> guest_bytes)
+{
+    constexpr std::uint64_t bytes_per_pixel = 4U;
+    if (width == 0U || height == 0U || pitch_pixels < width)
+    {
+        return std::nullopt;
+    }
+
+    const std::uint64_t row_size =
+        static_cast<std::uint64_t>(pitch_pixels) * bytes_per_pixel;
+    if (height > std::numeric_limits<std::uint64_t>::max() / row_size)
+    {
+        return std::nullopt;
+    }
+    const std::uint64_t storage_size = row_size * height;
+    const std::uint64_t output_row_size =
+        static_cast<std::uint64_t>(width) * bytes_per_pixel;
+    if (storage_size > guest_bytes.size() ||
+        height > std::numeric_limits<std::uint64_t>::max() / output_row_size)
+    {
+        return std::nullopt;
+    }
+
+    const std::uint64_t output_size = output_row_size * height;
+    if (output_size > std::numeric_limits<std::size_t>::max())
+    {
+        return std::nullopt;
+    }
+
+    Rgba8TextureStaging result{};
+    result.width = width;
+    result.height = height;
+    result.pixels.resize(static_cast<std::size_t>(output_size));
+    for (std::uint32_t row = 0U; row < height; ++row)
+    {
+        const std::size_t source_offset =
+            static_cast<std::size_t>(row) * static_cast<std::size_t>(row_size);
+        const std::size_t destination_offset =
+            static_cast<std::size_t>(row) * static_cast<std::size_t>(output_row_size);
+        std::copy_n(
+            guest_bytes.begin() + static_cast<std::ptrdiff_t>(source_offset),
+            static_cast<std::size_t>(output_row_size),
+            result.pixels.begin() + static_cast<std::ptrdiff_t>(destination_offset));
+    }
+    return result;
+}
 
 // Converts explicitly supported linear GX2 formats to tightly packed RGBA8
 // bytes suitable for a Vulkan staging buffer. GuestMemory range
