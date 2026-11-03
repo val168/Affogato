@@ -270,32 +270,14 @@ public:
     // are validated before the destination is modified.
     void copy_bytes(std::uint32_t source, std::uint32_t destination, std::size_t length)
     {
-        if (length == 0)
-        {
-            return;
-        }
-        validate_access(source, length, GuestMemoryAccess::read);
-        validate_access(destination, length, GuestMemoryAccess::write);
-
-        std::vector<std::uint8_t> temporary(length);
-        read_bytes(source, temporary);
-        write_bytes(destination, temporary);
+        transfer_bytes(source, destination, length);
     }
 
     // Guest ranges may overlap, matching memmove's contract. Validate both
     // complete ranges before staging and writing so faults never partially move.
     void move_bytes(std::uint32_t source, std::uint32_t destination, std::size_t length)
     {
-        if (length == 0)
-        {
-            return;
-        }
-        validate_access(source, length, GuestMemoryAccess::read);
-        validate_access(destination, length, GuestMemoryAccess::write);
-
-        std::vector<std::uint8_t> temporary(length);
-        read_bytes(source, temporary);
-        write_bytes(destination, temporary);
+        transfer_bytes(source, destination, length);
     }
 
     void fill_bytes(std::uint32_t address, std::size_t length, std::uint8_t value)
@@ -510,6 +492,24 @@ public:
 private:
     static constexpr std::uint32_t guest_page_size = 0x1000U;
     static constexpr std::size_t write_watch_event_capacity = 256U;
+
+    void transfer_bytes(
+        std::uint32_t source,
+        std::uint32_t destination,
+        std::size_t length)
+    {
+        if (length == 0)
+        {
+            return;
+        }
+
+        validate_access(source, length, GuestMemoryAccess::read);
+        validate_access(destination, length, GuestMemoryAccess::write);
+
+        std::vector<std::uint8_t> temporary(length);
+        read_bytes(source, temporary);
+        write_bytes(destination, temporary);
+    }
 
     void record_write_watch_event(std::uint32_t address, std::size_t width)
     {
