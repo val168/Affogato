@@ -5217,9 +5217,15 @@ StepResult EspressoCore::step()
                 }
                 break;
             }
-            case 1U: rounded = std::trunc(source); break;
-            case 2U: rounded = std::ceil(source); break;
-            case 3U: rounded = std::floor(source); break;
+            case 1U:
+                rounded = std::trunc(source);
+                break;
+            case 2U:
+                rounded = std::ceil(source);
+                break;
+            case 3U:
+                rounded = std::floor(source);
+                break;
             default: break;
             }
 
@@ -6109,11 +6115,17 @@ StepResult EspressoCore::step()
         const auto store_lane = [&](std::uint32_t lane_address, std::uint32_t value) {
             switch (store_type)
             {
-            case 0U: memory.write32_be(lane_address, value); break;
+            case 0U:
+                memory.write32_be(lane_address, value);
+                break;
             case 4U:
-            case 6U: memory.write8(lane_address, static_cast<std::uint8_t>(value)); break;
+            case 6U:
+                memory.write8(lane_address, static_cast<std::uint8_t>(value));
+                break;
             case 5U:
-            case 7U: memory.write16_be(lane_address, static_cast<std::uint16_t>(value)); break;
+            case 7U:
+                memory.write16_be(lane_address, static_cast<std::uint16_t>(value));
+                break;
             default: break;
             }
         };
