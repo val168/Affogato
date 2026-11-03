@@ -780,11 +780,21 @@ std::uint32_t pack_alpha_to_mask(
     std::uint32_t offsets = 0U;
     switch (mode)
     {
-    case 0U: offsets = 0xAAU; break;
-    case 1U: offsets = 0x78U; break;
-    case 2U: offsets = 0xC6U; break;
-    case 3U: offsets = 0x2DU; break;
-    case 4U: offsets = 0x93U; break;
+    case 0U:
+        offsets = 0xAAU;
+        break;
+    case 1U:
+        offsets = 0x78U;
+        break;
+    case 2U:
+        offsets = 0xC6U;
+        break;
+    case 3U:
+        offsets = 0x2DU;
+        break;
+    case 4U:
+        offsets = 0x93U;
+        break;
     default: break;
     }
 
@@ -4771,11 +4781,21 @@ void register_gx2_hle(HleDispatcher& dispatcher)
             std::uint32_t mode{};
             switch (pattern)
             {
-            case 0xAAU: mode = 0U; break;
-            case 0x78U: mode = 1U; break;
-            case 0xC6U: mode = 2U; break;
-            case 0x2DU: mode = 3U; break;
-            case 0x93U: mode = 4U; break;
+            case 0xAAU:
+                mode = 0U;
+                break;
+            case 0x78U:
+                mode = 1U;
+                break;
+            case 0xC6U:
+                mode = 2U;
+                break;
+            case 0x2DU:
+                mode = 3U;
+                break;
+            case 0x93U:
+                mode = 4U;
+                break;
             default:
                 throw HleExecutionError(
                     std::string("gx2::") + api_name +
