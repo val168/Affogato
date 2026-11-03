@@ -4021,11 +4021,15 @@ extern "C" std::uint32_t native_memory_access(
         if ((flags & 2U) != 0U)
         {
             if (width == 1U)
+            {
                 loaded = static_cast<std::uint32_t>(static_cast<std::int32_t>(
                     std::bit_cast<std::int8_t>(static_cast<std::uint8_t>(loaded))));
+            }
             else if (width == 2U)
+            {
                 loaded = static_cast<std::uint32_t>(static_cast<std::int32_t>(
                     std::bit_cast<std::int16_t>(static_cast<std::uint16_t>(loaded))));
+            }
         }
         record.value = loaded;
         return loaded;
@@ -6659,9 +6663,13 @@ struct Recompiler::Impl
                 }
                 else if (insn.opcode == Opcode::ori ||
                     insn.opcode == Opcode::or_immediate_shifted)
+                {
                     compiler.or_(value, imm(immediate_value(insn)));
+                }
                 else
+                {
                     compiler.xor_(value, imm(immediate_value(insn)));
+                }
                 write_guest_gpr(insn.destination, value);
                 if (and_immediate)
                 {
@@ -11382,7 +11390,9 @@ RunResult Recompiler::run(EspressoCore& core, std::size_t max_steps)
                             impl_->last_cache_address = 0U;
                         }
                         if (found->second.block.function != nullptr)
+                        {
                             static_cast<void>(impl_->runtime.release(found->second.block.function));
+                        }
                         impl_->cache.erase(found);
                         found = impl_->cache.end();
                     }
@@ -11512,7 +11522,9 @@ RunResult Recompiler::run(EspressoCore& core, std::size_t max_steps)
                 result.cia = core.state.cia;
                 result.has_instruction_word = core.current_instruction_word_fetched_;
                 if (result.has_instruction_word)
+                {
                     result.instruction_word = core.current_instruction_word_;
+                }
                 result.detail = memory_fault_text(fault, result.cia);
                 include_history();
                 return result;
@@ -13271,7 +13283,9 @@ RunResult Recompiler::run(EspressoCore& core, std::size_t max_steps)
                     static_cast<void>(core.step());
                 }
                 else if (context.exception)
+                {
                     std::rethrow_exception(context.exception);
+                }
                 result.reason = StopReason::hle_error;
                 {
                     std::ostringstream detail;

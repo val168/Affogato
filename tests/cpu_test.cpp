@@ -20655,7 +20655,9 @@ void gx2r_create_buffer_user_memory_hle_tests()
     for (std::size_t index = 0U; index < core.state.gpr.size(); ++index)
     {
         if (index != 3U)
+        {
             assert(core.state.gpr[index] == gprs_before[index]);
+        }
     }
     assert(core.memory.read32_be(buffer_address) == expected_flags);
     assert(core.memory.read32_be(buffer_address + 4U) == 12U);
@@ -20748,7 +20750,9 @@ void gx2r_buffer_exists_hle_tests()
     for (std::size_t index = 1U; index < core.state.gpr.size(); ++index)
     {
         if (index != 3U)
+        {
             assert(core.state.gpr[index] == gprs_before[index]);
+        }
     }
 
     result = invoke(buffer_address + 2U);
@@ -20819,7 +20823,9 @@ void gx2r_get_buffer_allocation_size_hle_tests()
     for (std::size_t index = 1U; index < core.state.gpr.size(); ++index)
     {
         if (index != 3U)
+        {
             assert(core.state.gpr[index] == gprs_before[index]);
+        }
     }
 
     result = invoke(0U);
@@ -20882,7 +20888,9 @@ void gx2r_get_buffer_alignment_hle_tests()
     for (std::size_t index = 1U; index < core.state.gpr.size(); ++index)
     {
         if (index != 3U)
+        {
             assert(core.state.gpr[index] == gprs_before[index]);
+        }
     }
 }
 
@@ -20952,7 +20960,9 @@ void gx2r_lock_buffer_ex_hle_tests()
     for (std::size_t index = 1U; index < core.state.gpr.size(); ++index)
     {
         if (index != 3U)
+        {
             assert(core.state.gpr[index] == gprs_before[index]);
+        }
     }
 
     result = invoke(0U);
@@ -21026,7 +21036,9 @@ void gx2r_buffer_cache_notification_hle_tests()
     for (std::size_t index = 1U; index < core.state.gpr.size(); ++index)
     {
         if (index != 3U)
+        {
             assert(core.state.gpr[index] == gprs_before[index]);
+        }
     }
 }
 
@@ -29700,7 +29712,9 @@ void gx2r_create_surface_user_memory_hle_tests()
     for (std::size_t index = 1U; index < core.state.gpr.size(); ++index)
     {
         if (index != 3U)
+        {
             assert(core.state.gpr[index] == gprs_before[index]);
+        }
     }
     assert(core.state.fpr == fprs_before && core.state.fpr_ps1 == ps1_before);
     assert(core.state.cr == cr_before && core.state.xer == xer_before);
@@ -29802,7 +29816,9 @@ void gx2r_lock_surface_ex_hle_tests()
     for (std::size_t index = 1U; index < core.state.gpr.size(); ++index)
     {
         if (index != 3U)
+        {
             assert(core.state.gpr[index] == gprs_before[index]);
+        }
     }
 
     result = invoke(0U);
@@ -29883,7 +29899,9 @@ void gx2r_surface_exists_hle_tests()
     for (std::size_t index = 1U; index < core.state.gpr.size(); ++index)
     {
         if (index != 3U)
+        {
             assert(core.state.gpr[index] == gprs_before[index]);
+        }
     }
 
     result = invoke(surface_address + 2U);
@@ -29954,7 +29972,9 @@ void gx2r_unlock_surface_ex_hle_tests()
     for (std::size_t index = 1U; index < core.state.gpr.size(); ++index)
     {
         if (index != 3U)
+        {
             assert(core.state.gpr[index] == gprs_before[index]);
+        }
     }
 
     result = invoke(0U);
@@ -30174,7 +30194,9 @@ void gx2_set_vertex_and_geometry_texture_hle_tests()
     assert(vertex_import != 0U && geometry_import != 0U && compute_import != 0U);
 
     for (std::uint32_t offset = 0U; offset < 0x9CU; offset += 4U)
+    {
         core.memory.write32_be(texture_address + offset, 0U);
+    }
     core.memory.write32_be(texture_address + 0x24U, 0x00001200U);
     core.memory.write32_be(texture_address + 0x88U, 0xA0U);
     core.memory.write32_be(texture_address + 0x8CU, 0xA1U);

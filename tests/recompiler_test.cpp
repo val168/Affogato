@@ -3765,8 +3765,10 @@ void recompiler_logical_differential_test()
     for (EspressoCore* core : {&interpreted, &compiled})
     {
         for (std::size_t i = 0; i < program.size(); ++i)
+        {
             core->memory.write32_be(0x100U + static_cast<std::uint32_t>(i * 4U),
                                     program[i]);
+        }
         core->state.cia = 0x100U;
     }
     const RunResult oracle = interpreted.run(program.size());
@@ -5575,7 +5577,9 @@ void recompiler_ps_merge00_differential_tests()
         const std::uint8_t source_b = static_cast<std::uint8_t>((index * 13U + 9U) % 32U);
         std::uint8_t destination = static_cast<std::uint8_t>((index * 11U + 6U) % 32U);
         if (destination == 1U)
+        {
             destination = 0U;
+        }
         program[index] = ps_merge00_form(destination, source_a, source_b);
     }
 
@@ -5629,7 +5633,9 @@ void recompiler_ps_merge00_differential_tests()
     assert(recompiler.statistics().interpreter_fallbacks == 0U);
     assert(actual.instruction_history.size() == program.size());
     for (const InstructionHistoryEntry& history : actual.instruction_history)
+    {
         assert(history.opcode_name == "ps_merge00");
+    }
 }
 
 void recompiler_ps_mr_differential_tests()
@@ -8689,9 +8695,13 @@ void recompiler_dcbt_differential_test()
             core->state.gpr[0] = test.index_register == 0U
                 ? test.index : 0xFACEB00CU;
             if (test.base_register != 0U)
+            {
                 core->state.gpr[test.base_register] = test.base;
+            }
             if (test.index_register != 0U)
+            {
                 core->state.gpr[test.index_register] = test.index;
+            }
             core->state.cr = 0x91827364U;
             core->state.xer = 0xA0000042U;
             core->state.lr = 0x10203040U;
@@ -10370,9 +10380,13 @@ void recompiler_dcbst_differential_tests()
             core->state.gpr[0] = test.index_register == 0U
                 ? test.index : 0xDEADBEEFU;
             if (test.base_register != 0U)
+            {
                 core->state.gpr[test.base_register] = test.base;
+            }
             if (test.index_register != 0U)
+            {
                 core->state.gpr[test.index_register] = test.index;
+            }
             core->state.cr = 0x12345678U;
             core->state.xer = 0xA00000A5U;
             core->state.lr = 0x10203040U;
@@ -10552,9 +10566,13 @@ void recompiler_dcbz_differential_tests()
             core->state.gpr[0] = test.index_register == 0U
                 ? test.index : 0xFACEB00CU;
             if (test.base_register != 0U)
+            {
                 core->state.gpr[test.base_register] = test.base;
+            }
             if (test.index_register != 0U)
+            {
                 core->state.gpr[test.index_register] = test.index;
+            }
             core->state.cr = 0x91827364U;
             core->state.xer = 0xA0000042U;
             core->state.lr = 0x10203040U;
@@ -10597,16 +10615,22 @@ void recompiler_dcbz_differential_tests()
         }
         assert(!history.has_destination);
         for (std::uint32_t offset = 0U; offset < 32U; ++offset)
+        {
             assert(compiled.memory.read8(0x140U + offset) == 0U);
+        }
         for (std::uint32_t offset = 32U; offset < 64U; ++offset)
+        {
             assert(compiled.memory.read8(0x140U + offset) == 0x5AU);
+        }
     }
 
     // The whole-line write must validate before changing any bytes.
     EspressoCore faulting(0x1000U);
     faulting.memory.map_region(0x2000U, 31U);
     for (std::uint32_t offset = 0U; offset < 31U; ++offset)
+    {
         faulting.memory.write8(0x2000U + offset, 0xA5U);
+    }
     faulting.memory.write32_be(start, x_form(0U, 6U, 5U, 1014U));
     faulting.state.cia = start;
     faulting.state.gpr[6] = 0x2000U;
@@ -10618,7 +10642,9 @@ void recompiler_dcbz_differential_tests()
     assert(fault.detail.find("write 32 byte(s)") != std::string::npos);
     assert(faulting.state.gpr == gprs_before && faulting.state.cia == start);
     for (std::uint32_t offset = 0U; offset < 31U; ++offset)
+    {
         assert(faulting.memory.read8(0x2000U + offset) == 0xA5U);
+    }
     assert(!fault.instruction_history.empty());
     assert(fault.instruction_history.back().opcode_name == "dcbz");
     assert(fault.instruction_history.back().has_effective_address &&
@@ -11437,7 +11463,9 @@ void recompiler_memory_tests()
     for (EspressoCore* core : {&interpreted, &compiled})
     {
         for (std::size_t i = 0; i < program.size(); ++i)
+        {
             core->memory.write32_be(0x100U + static_cast<std::uint32_t>(i * 4U), program[i]);
+        }
         core->memory.write32_be(0x200U, 0xFEDCBA98U);
         core->state.cia = 0x100U;
         core->state.gpr[4] = 0x200U;
@@ -11483,8 +11511,10 @@ void recompiler_memory_tests()
     for (EspressoCore* core : {&indexed_interpreted, &indexed_compiled})
     {
         for (std::size_t i = 0; i < indexed_program.size(); ++i)
+        {
             core->memory.write32_be(0x100U + static_cast<std::uint32_t>(i * 4U),
                                     indexed_program[i]);
+        }
         core->memory.write32_be(0x220U, 0xFEDCBA98U);
         core->memory.write16_be(0x204U, 0x8001U);
         core->memory.write16_be(0x224U, 0x8001U);
@@ -11764,7 +11794,9 @@ void recompiler_lswx_differential_tests()
         assert(recompiler.statistics().native_instructions == 1U);
         assert(recompiler.statistics().interpreter_fallbacks == 0U);
         if (test.byte_count == 0U)
+        {
             assert(recompiler.statistics().memory_slow_path_calls == 0U);
+        }
         assert(actual.instruction_history.size() == 1U);
         const InstructionHistoryEntry& history = actual.instruction_history.back();
         const InstructionHistoryEntry& expected = oracle.instruction_history.back();
@@ -11865,7 +11897,9 @@ void recompiler_stswx_differential_tests()
                 ? 0U : core->state.gpr[test.base_register];
             const std::uint32_t address = base + core->state.gpr[test.index_register];
             for (std::uint32_t byte = 0U; byte < test.byte_count; ++byte)
+            {
                 core->memory.write8(address + byte, 0xEEU);
+            }
         }
         const auto original_memory = interpreted.memory.read8(0x200U);
         const RunResult oracle = interpreted.run(1U);

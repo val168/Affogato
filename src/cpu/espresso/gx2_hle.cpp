@@ -1134,7 +1134,9 @@ void calculate_gx2_surface_size_and_alignment(
     {
         std::uint32_t depth_levels = 1U;
         for (std::uint32_t extent = depth; extent > 1U; extent >>= 1U)
+        {
             ++depth_levels;
+        }
         max_levels = std::max(max_levels, depth_levels);
     }
     mip_levels = std::min(mip_levels, max_levels);
@@ -1609,7 +1611,9 @@ void initialize_gx2_texture_registers(
     const std::uint32_t base_format = format & 0x3FU;
     const bool compressed = base_format >= 0x31U && base_format <= 0x35U;
     if (!compressed)
+    {
         (void)gx2_surface_format_bits(format);
+    }
     if ((format & ~0x0F3FU) != 0U)
     {
         throw HleExecutionError(std::string(api_name) +
@@ -1762,7 +1766,9 @@ void set_gx2_texture(
             std::string(api_name) + ": unsupported low-byte swizzle bits");
     }
     if (mipmap_address == 0U)
+    {
         mipmap_address = image_address;
+    }
 
     // Latte resource words store 256-byte address units. Cafe guest addresses
     // in Affogato's RAM map are the GPU-visible address values, so retain the
@@ -1774,7 +1780,9 @@ void set_gx2_texture(
             ? image_address ^ (swizzle & 0xFFFFU)
             : image_address;
     if (macro_tiled && swizzle_stop_level > 1U)
+    {
         mipmap_address ^= swizzle & 0xFFFFU;
+    }
 
     Gx2TextureBinding binding{};
     binding.texture_address = texture_address;

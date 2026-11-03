@@ -1333,9 +1333,11 @@ int run_frontend()
                     {
                         selected_game = i;
                         if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
-                        launch_game(games[i].rpx_path, worker, launch_thread,
-                            use_recompiler ? affogato::ExecutionMode::recompiler
-                                           : affogato::ExecutionMode::interpreter);
+                        {
+                            launch_game(games[i].rpx_path, worker, launch_thread,
+                                use_recompiler ? affogato::ExecutionMode::recompiler
+                                               : affogato::ExecutionMode::interpreter);
+                        }
                     }
                     ImGui::TextWrapped("%s", path_utf8(games[i].rpx_path).c_str());
                     ImGui::EndGroup();
@@ -1353,9 +1355,11 @@ int run_frontend()
             const bool launch_in_progress = worker.running.load();
             ImGui::BeginDisabled(launch_in_progress);
             if (ImGui::Button("Launch"))
+            {
                 launch_game(games[*selected_game].rpx_path, worker, launch_thread,
                     use_recompiler ? affogato::ExecutionMode::recompiler
                                    : affogato::ExecutionMode::interpreter);
+            }
             ImGui::EndDisabled();
         }
         ImGui::BeginDisabled(worker.running.load());
