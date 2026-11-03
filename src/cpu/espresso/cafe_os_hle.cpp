@@ -2430,9 +2430,15 @@ void register_coreinit_hle(HleDispatcher& dispatcher)
             std::int32_t priority_namespace_base{};
             switch (type)
             {
-            case 0U: priority_namespace_base = 0; break;  // Driver
-            case 1U: priority_namespace_base = 32; break; // I/O
-            case 2U: priority_namespace_base = 64; break; // Application
+            case 0U: // Driver
+                priority_namespace_base = 0;
+                break;
+            case 1U: // I/O
+                priority_namespace_base = 32;
+                break;
+            case 2U: // Application
+                priority_namespace_base = 64;
+                break;
             default:
                 throw HleExecutionError(
                     "OSGetThreadPriority encountered unsupported thread type");
