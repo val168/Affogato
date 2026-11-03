@@ -828,11 +828,17 @@ extern "C" std::uint32_t native_psq_store(
             ++context->memory_access_calls;
             switch (store_type)
             {
-            case 0U: context->memory->write32_be(lane_address, value); break;
+            case 0U:
+                context->memory->write32_be(lane_address, value);
+                break;
             case 4U:
-            case 6U: context->memory->write8(lane_address, static_cast<std::uint8_t>(value)); break;
+            case 6U:
+                context->memory->write8(lane_address, static_cast<std::uint8_t>(value));
+                break;
             case 5U:
-            case 7U: context->memory->write16_be(lane_address, static_cast<std::uint16_t>(value)); break;
+            case 7U:
+                context->memory->write16_be(lane_address, static_cast<std::uint16_t>(value));
+                break;
             default: break;
             }
         }
@@ -3972,9 +3978,15 @@ extern "C" std::uint32_t native_memory_access(
         {
             switch (width)
             {
-            case 1: context->memory->write8(address, static_cast<std::uint8_t>(value)); break;
-            case 2: context->memory->write16_be(address, static_cast<std::uint16_t>(value)); break;
-            case 4: context->memory->write32_be(address, value); break;
+            case 1:
+                context->memory->write8(address, static_cast<std::uint8_t>(value));
+                break;
+            case 2:
+                context->memory->write16_be(address, static_cast<std::uint16_t>(value));
+                break;
+            case 4:
+                context->memory->write32_be(address, value);
+                break;
             default:
                 context->failed = true;
                 context->failed_address = address;
@@ -3989,9 +4001,15 @@ extern "C" std::uint32_t native_memory_access(
         std::uint32_t loaded{};
         switch (width)
         {
-        case 1: loaded = context->memory->read8(address); break;
-        case 2: loaded = context->memory->read16_be(address); break;
-        case 4: loaded = context->memory->read32_be(address); break;
+        case 1:
+            loaded = context->memory->read8(address);
+            break;
+        case 2:
+            loaded = context->memory->read16_be(address);
+            break;
+        case 4:
+            loaded = context->memory->read32_be(address);
+            break;
         default:
             context->failed = true;
             context->failed_address = address;
@@ -8552,12 +8570,16 @@ struct Recompiler::Impl
                 std::uint32_t clear_mask = 0U;
                 switch (insn.fpscr_field)
                 {
-                case 0U: clear_mask = fpscr::fx_mask | fpscr::ox_mask; break;
+                case 0U:
+                    clear_mask = fpscr::fx_mask | fpscr::ox_mask;
+                    break;
                 case 1U: clear_mask = fpscr::ux_mask | fpscr::zx_mask |
                     fpscr::xx_mask | fpscr::vxsnan_mask; break;
                 case 2U: clear_mask = fpscr::vxisi_mask | fpscr::vxidi_mask |
                     fpscr::vxzdz_mask | fpscr::vximz_mask; break;
-                case 3U: clear_mask = fpscr::vxvc_mask; break;
+                case 3U:
+                    clear_mask = fpscr::vxvc_mask;
+                    break;
                 case 5U: clear_mask = fpscr::vxsoft_mask | fpscr::vxsqrt_mask |
                     fpscr::vxcvi_mask; break;
                 default: break;
