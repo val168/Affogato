@@ -15227,6 +15227,8 @@ void guest_thread_cooperative_context_switch_tests()
     core.state.gpr[7] = worker_stack_top;
     core.state.gpr[8] = worker_stack_top - worker_stack_bottom;
     core.state.gpr[9] = 16U;
+    core.state.gpr[2] = 0x10203040U;
+    core.state.gpr[13] = 0x50607080U;
     assert(core.run(1U).reason == StopReason::instruction_limit);
     assert(core.state.cia == 0x500U);
     assert(core.current_thread_address == default_thread);
@@ -15275,6 +15277,8 @@ void guest_thread_cooperative_context_switch_tests()
     assert(core.current_thread_address == worker);
     assert(core.state.cia == worker_entry);
     assert(core.state.gpr[1] == (worker_stack_top - 8U));
+    assert(core.state.gpr[2] == 0x10203040U);
+    assert(core.state.gpr[13] == 0x50607080U);
     assert(core.state.gpr[3] == worker_argument);
     assert(core.state.gqr[2] == 0x00040004U);
     assert(core.state.gqr[3] == 0x00050005U);

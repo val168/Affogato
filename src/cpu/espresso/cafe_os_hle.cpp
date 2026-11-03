@@ -2093,10 +2093,17 @@ void register_coreinit_hle(HleDispatcher& dispatcher)
             core.memory.write64_be(thread, os_context_tag);
             core.memory.write32_be(thread + os_context_gpr_offset + 1U * 4U,
                                    aligned_stack_top - 8U);
+            // Cafe's ABI reserves r2 and r13 for small-data bases. A child
+            // thread starts with the creator's bases until its code changes
+            // them, so initialize them before the first guest instruction.
+            core.memory.write32_be(thread + os_context_gpr_offset + 2U * 4U,
+                                   core.state.gpr[2]);
             core.memory.write32_be(thread + os_context_gpr_offset + 3U * 4U,
                                    argument);
             core.memory.write32_be(thread + os_context_gpr_offset + 4U * 4U,
                                    argument_pointer);
+            core.memory.write32_be(thread + os_context_gpr_offset + 13U * 4U,
+                                   core.state.gpr[13]);
             core.memory.write32_be(thread + os_context_lr_offset, context_return);
             core.memory.write32_be(thread + os_context_srr0_offset, entry);
             core.memory.write32_be(thread + os_context_srr1_offset, 0x9032U);
