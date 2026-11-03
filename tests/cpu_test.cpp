@@ -8919,7 +8919,12 @@ void divide_word_signed_overflow_tests()
 
 void bitwise_nand_nor_or_complement_tests()
 {
-    struct Case { std::uint32_t xo; Opcode opcode; std::uint32_t expected; };
+    struct Case
+    {
+        std::uint32_t xo;
+        Opcode opcode;
+        std::uint32_t expected;
+    };
     constexpr std::array<Case, 3> cases{{
         {476U, Opcode::bitwise_nand, 0xFFFFFFFFU},
         {124U, Opcode::bitwise_nor, 0x00000000U},
