@@ -159,7 +159,10 @@ std::vector<Game> discover_games(const std::vector<fs::path>& roots)
                 };
                 const auto best = *std::min_element(group.begin(), group.end(), [&](auto a, auto b)
                 {
-                    if (rank(a) != rank(b)) return rank(a) < rank(b);
+                    if (rank(a) != rank(b))
+                    {
+                        return rank(a) < rank(b);
+                    }
                     return candidates[a].filename() < candidates[b].filename();
                 });
                 const std::string title_directory = path_utf8(title_dir.filename());
@@ -239,10 +242,14 @@ void append_fallback_profile(
 {
     std::vector<std::pair<std::uint16_t, std::uint64_t>> fallbacks(
         statistics.fallbacks_by_opcode.begin(), statistics.fallbacks_by_opcode.end());
-    std::ranges::sort(fallbacks, [](const auto& lhs, const auto& rhs) {
+    std::ranges::sort(fallbacks, [](const auto& lhs, const auto& rhs)
+    {
         return lhs.second > rhs.second;
     });
-    if (fallbacks.empty()) return;
+    if (fallbacks.empty())
+    {
+        return;
+    }
 
     text << "\nTop interpreter fallback opcodes:";
     const std::size_t count = std::min<std::size_t>(8U, fallbacks.size());
@@ -294,16 +301,25 @@ std::string format_result(const affogato::EmulatorRunResult& result)
         break;
     case StopReason::hle_error:
         text << "\nStopped: HLE error";
-        if (!result.execution.detail.empty()) text << "\nDetail: " << result.execution.detail;
+        if (!result.execution.detail.empty())
+        {
+            text << "\nDetail: " << result.execution.detail;
+        }
         break;
     case StopReason::memory_fault:
         text << "\nStopped: memory fault";
-        if (!result.execution.detail.empty()) text << "\nDetail: " << result.execution.detail;
+        if (!result.execution.detail.empty())
+        {
+            text << "\nDetail: " << result.execution.detail;
+        }
         break;
     }
     const std::string history =
         affogato::cpu::espresso::format_instruction_history(result.execution);
-    if (!history.empty()) text << '\n' << history;
+    if (!history.empty())
+    {
+        text << '\n' << history;
+    }
     if (result.gpr3 == 42)
     {
         text << "\nReturned value observed in r3: 42";
@@ -368,7 +384,10 @@ std::string format_progress(
     text << "\nGX2 HLE calls observed: " << gx2_call_total;
     const std::string history =
         affogato::cpu::espresso::format_instruction_history(result.execution);
-    if (!history.empty()) text << "\nRecent instruction trace:\n" << history;
+    if (!history.empty())
+    {
+        text << "\nRecent instruction trace:\n" << history;
+    }
     return text.str();
 }
 
@@ -855,7 +874,10 @@ void launch_game(
     {
         return;
     }
-    if (thread.joinable()) thread.join();
+    if (thread.joinable())
+    {
+        thread.join();
+    }
     {
         std::lock_guard lock(worker.mutex);
         worker.message = "Reading RPX " + path_utf8(path) + " ...";
@@ -985,7 +1007,10 @@ struct FolderDialogRequest
 void SDLCALL folder_selected(void* userdata, const char* const* filelist, int)
 {
     std::unique_ptr<FolderDialogRequest> request(static_cast<FolderDialogRequest*>(userdata));
-    if (!request || !request->selection) return;
+    if (!request || !request->selection)
+    {
+        return;
+    }
 
     const auto selection = request->selection;
     try
@@ -1138,15 +1163,21 @@ int run_frontend()
         if (vulkan_output)
         {
             vulkan_output->poll_events();
-            if (vulkan_output->should_close()) done = true;
+            if (vulkan_output->should_close())
+            {
+                done = true;
+            }
         }
         SDL_Event event;
         while (SDL_PollEvent(&event))
         {
             ImGui_ImplSDL3_ProcessEvent(&event);
             if (event.type == SDL_EVENT_QUIT ||
-                (event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED && event.window.windowID == SDL_GetWindowID(window)))
+                (event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED &&
+                 event.window.windowID == SDL_GetWindowID(window)))
+            {
                 done = true;
+            }
         }
 
         // SDL may invoke the folder dialog callback on a worker thread. Move
@@ -1228,9 +1259,15 @@ int run_frontend()
             SDL_ShowOpenFolderDialog(folder_selected, request, window, nullptr, true);
         }
         ImGui::SameLine();
-        if (ImGui::Button("List View")) grid_view = false;
+        if (ImGui::Button("List View"))
+        {
+            grid_view = false;
+        }
         ImGui::SameLine();
-        if (ImGui::Button("Grid View")) grid_view = true;
+        if (ImGui::Button("Grid View"))
+        {
+            grid_view = true;
+        }
         ImGui::SameLine();
         ImGui::Text("%zu titles", games.size());
         if (scan_running)
@@ -1240,22 +1277,40 @@ int run_frontend()
         }
         ImGui::Separator();
 
-        ImGui::BeginChild("GameList", ImVec2(0, ImGui::GetContentRegionAvail().y * 0.60f), ImGuiChildFlags_Borders);
-        if (!library_error.empty()) ImGui::TextWrapped("Library scan failed: %s", library_error.c_str());
-        else if (games.empty() && !scan_running) ImGui::TextWrapped("No RPX titles found. Add a folder containing an extracted Wii U title or RPX.");
-        else if (games.empty()) ImGui::TextWrapped("Scanning added folders for RPX titles...");
+        ImGui::BeginChild(
+            "GameList",
+            ImVec2(0, ImGui::GetContentRegionAvail().y * 0.60f),
+            ImGuiChildFlags_Borders);
+        if (!library_error.empty())
+        {
+            ImGui::TextWrapped("Library scan failed: %s", library_error.c_str());
+        }
+        else if (games.empty() && !scan_running)
+        {
+            ImGui::TextWrapped(
+                "No RPX titles found. Add a folder containing an extracted Wii U title or RPX.");
+        }
+        else if (games.empty())
+        {
+            ImGui::TextWrapped("Scanning added folders for RPX titles...");
+        }
         else if (!grid_view)
         {
             for (std::size_t i = 0; i < games.size(); ++i)
             {
                 ImGui::PushID(static_cast<int>(i));
-                if (ImGui::Selectable(games[i].title.c_str(), selected_game == i, ImGuiSelectableFlags_AllowDoubleClick))
+                if (ImGui::Selectable(
+                        games[i].title.c_str(),
+                        selected_game == i,
+                        ImGuiSelectableFlags_AllowDoubleClick))
                 {
                     selected_game = i;
                     if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
+                    {
                         launch_game(games[i].rpx_path, worker, launch_thread,
                             use_recompiler ? affogato::ExecutionMode::recompiler
                                            : affogato::ExecutionMode::interpreter);
+                    }
                 }
                 ImGui::SameLine(260);
                 ImGui::TextDisabled("%s", path_utf8(games[i].rpx_path).c_str());
@@ -1306,8 +1361,14 @@ int run_frontend()
         ImGui::BeginDisabled(worker.running.load());
         ImGui::Checkbox("Use experimental x86-64 recompiler", &use_recompiler);
         ImGui::EndDisabled();
-        if (worker.running) ImGui::SameLine();
-        if (worker.running) ImGui::Text("RPX loading / guest execution in progress...");
+        if (worker.running)
+        {
+            ImGui::SameLine();
+        }
+        if (worker.running)
+        {
+            ImGui::Text("RPX loading / guest execution in progress...");
+        }
         ImGui::SeparatorText("Launch diagnostics");
         std::string message;
         {
@@ -1366,8 +1427,14 @@ int run_frontend()
 
     current_stage = "saving game folders and shutting down";
     save_folders(config_file, folders);
-    if (library_scan_thread.joinable()) library_scan_thread.join();
-    if (launch_thread.joinable()) launch_thread.join();
+    if (library_scan_thread.joinable())
+    {
+        library_scan_thread.join();
+    }
+    if (launch_thread.joinable())
+    {
+        launch_thread.join();
+    }
     ImGui_ImplSDLRenderer3_Shutdown();
     ImGui_ImplSDL3_Shutdown();
     ImGui::DestroyContext();
