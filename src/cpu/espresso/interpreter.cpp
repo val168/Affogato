@@ -1976,19 +1976,8 @@ std::string format_instruction_history(const RunResult& result)
         }
         if (entry.has_fp_integer_conversion)
         {
-            text << " f" << std::dec
-                 << static_cast<unsigned>(entry.fp_integer_conversion_source) << '=';
-            if (is_binary64_nan(entry.fp_integer_conversion_source_raw))
-            {
-                text << "NaN";
-            }
-            else
-            {
-                text << std::setprecision(17)
-                     << std::bit_cast<double>(entry.fp_integer_conversion_source_raw);
-            }
-            text << " [0x" << std::hex << std::setw(16)
-                 << entry.fp_integer_conversion_source_raw << ']';
+            append_floating_operand(text, entry.fp_integer_conversion_source,
+                                    entry.fp_integer_conversion_source_raw);
             if (entry.completed)
             {
                 const std::int32_t integer = std::bit_cast<std::int32_t>(
