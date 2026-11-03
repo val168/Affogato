@@ -1778,6 +1778,23 @@ void add_history_source(
     return entry;
 }
 
+void append_floating_operand(
+    std::ostringstream& text,
+    std::uint8_t register_index,
+    std::uint64_t raw_value)
+{
+    text << " f" << std::dec << static_cast<unsigned>(register_index) << '=';
+    if (is_binary64_nan(raw_value))
+    {
+        text << "NaN";
+    }
+    else
+    {
+        text << std::setprecision(17) << std::bit_cast<double>(raw_value);
+    }
+    text << " [0x" << std::hex << std::setw(16) << raw_value << ']';
+}
+
 }
 
 const char* opcode_mnemonic(Opcode opcode) noexcept
@@ -1930,22 +1947,12 @@ std::string format_instruction_history(const RunResult& result)
         }
         if (entry.has_fp_compare)
         {
-            const auto print_operand = [&](std::uint8_t reg, std::uint64_t raw) {
-                text << " f" << std::dec << static_cast<unsigned>(reg) << '=';
-                if (is_binary64_nan(raw))
-                {
-                    text << "NaN";
-                }
-                else
-                {
-                    text << std::setprecision(17) << std::bit_cast<double>(raw);
-                }
-                text << " [0x" << std::hex << std::setw(16) << raw << ']';
-            };
             text << " cr" << std::dec
                  << static_cast<unsigned>(entry.fp_compare_cr_field);
-            print_operand(entry.fp_compare_a_register, entry.fp_compare_a_raw);
-            print_operand(entry.fp_compare_b_register, entry.fp_compare_b_raw);
+            append_floating_operand(text, entry.fp_compare_a_register,
+                                    entry.fp_compare_a_raw);
+            append_floating_operand(text, entry.fp_compare_b_register,
+                                    entry.fp_compare_b_raw);
             if (entry.completed)
             {
                 text << " -> " << floating_compare_result_name(entry.fp_compare_result)
@@ -1957,21 +1964,9 @@ std::string format_instruction_history(const RunResult& result)
         }
         if (entry.has_fp_select)
         {
-            const auto print_operand = [&](std::uint8_t reg, std::uint64_t raw) {
-                text << " f" << std::dec << static_cast<unsigned>(reg) << '=';
-                if (is_binary64_nan(raw))
-                {
-                    text << "NaN";
-                }
-                else
-                {
-                    text << std::setprecision(17) << std::bit_cast<double>(raw);
-                }
-                text << " [0x" << std::hex << std::setw(16) << raw << ']';
-            };
-            print_operand(entry.fp_select_a, entry.fp_select_a_raw);
-            print_operand(entry.fp_select_c, entry.fp_select_c_raw);
-            print_operand(entry.fp_select_b, entry.fp_select_b_raw);
+            append_floating_operand(text, entry.fp_select_a, entry.fp_select_a_raw);
+            append_floating_operand(text, entry.fp_select_c, entry.fp_select_c_raw);
+            append_floating_operand(text, entry.fp_select_b, entry.fp_select_b_raw);
             if (entry.completed)
             {
                 text << " -> f" << std::dec
@@ -2025,33 +2020,25 @@ std::string format_instruction_history(const RunResult& result)
         }
         if (entry.has_fp_arithmetic)
         {
-            const auto print_operand = [&](std::uint8_t reg, std::uint64_t raw) {
-                text << " f" << std::dec << static_cast<unsigned>(reg) << '=';
-                if (is_binary64_nan(raw))
-                {
-                    text << "NaN";
-                }
-                else
-                {
-                    text << std::setprecision(17) << std::bit_cast<double>(raw);
-                }
-                text << " [0x" << std::hex << std::setw(16) << raw << ']';
-            };
-            print_operand(entry.fp_arithmetic_source_a, entry.fp_arithmetic_a_raw);
+            append_floating_operand(text, entry.fp_arithmetic_source_a,
+                                    entry.fp_arithmetic_a_raw);
             if (entry.has_fp_arithmetic_source_c)
             {
                 // Multiply/FMA assembly uses frA and frC; FMA then adds frB.
-                print_operand(entry.fp_arithmetic_source_c, entry.fp_arithmetic_c_raw);
+                append_floating_operand(text, entry.fp_arithmetic_source_c,
+                                        entry.fp_arithmetic_c_raw);
                 if (entry.fp_arithmetic_source_count == 3U)
                 {
-                    print_operand(entry.fp_arithmetic_source_b, entry.fp_arithmetic_b_raw);
+                    append_floating_operand(text, entry.fp_arithmetic_source_b,
+                                            entry.fp_arithmetic_b_raw);
                 }
             }
             else
             {
                 if (entry.fp_arithmetic_source_count > 1U)
                 {
-                    print_operand(entry.fp_arithmetic_source_b, entry.fp_arithmetic_b_raw);
+                    append_floating_operand(text, entry.fp_arithmetic_source_b,
+                                            entry.fp_arithmetic_b_raw);
                 }
             }
             if (entry.has_fp_arithmetic_result)
