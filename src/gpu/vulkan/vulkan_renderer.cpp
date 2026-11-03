@@ -396,16 +396,34 @@ std::size_t VulkanRenderer::upload_rgba8_texture(const Rgba8TextureStaging& stag
     }
     catch (...)
     {
-        if (staging_mapped) vkUnmapMemory(device_, staging_memory);
+        if (staging_mapped)
+        {
+            vkUnmapMemory(device_, staging_memory);
+        }
         if (upload_command != VK_NULL_HANDLE)
         {
             vkFreeCommandBuffers(device_, command_pool_, 1U, &upload_command);
         }
-        if (view != VK_NULL_HANDLE) vkDestroyImageView(device_, view, nullptr);
-        if (image != VK_NULL_HANDLE) vkDestroyImage(device_, image, nullptr);
-        if (image_memory != VK_NULL_HANDLE) vkFreeMemory(device_, image_memory, nullptr);
-        if (staging_buffer != VK_NULL_HANDLE) vkDestroyBuffer(device_, staging_buffer, nullptr);
-        if (staging_memory != VK_NULL_HANDLE) vkFreeMemory(device_, staging_memory, nullptr);
+        if (view != VK_NULL_HANDLE)
+        {
+            vkDestroyImageView(device_, view, nullptr);
+        }
+        if (image != VK_NULL_HANDLE)
+        {
+            vkDestroyImage(device_, image, nullptr);
+        }
+        if (image_memory != VK_NULL_HANDLE)
+        {
+            vkFreeMemory(device_, image_memory, nullptr);
+        }
+        if (staging_buffer != VK_NULL_HANDLE)
+        {
+            vkDestroyBuffer(device_, staging_buffer, nullptr);
+        }
+        if (staging_memory != VK_NULL_HANDLE)
+        {
+            vkFreeMemory(device_, staging_memory, nullptr);
+        }
         throw;
     }
 }
@@ -620,7 +638,10 @@ void VulkanRenderer::create_swapchain()
     std::vector<VkSurfaceFormatKHR> formats(format_count);
     check(vkGetPhysicalDeviceSurfaceFormatsKHR(physical_device_, surface_, &format_count, formats.data()),
         "vkGetPhysicalDeviceSurfaceFormatsKHR");
-    if (formats.empty()) throw std::runtime_error("Surface exposes no formats");
+    if (formats.empty())
+    {
+        throw std::runtime_error("Surface exposes no formats");
+    }
     const auto preferred_format = std::ranges::find_if(formats, [](const auto& format)
     {
         return format.format == VK_FORMAT_B8G8R8A8_SRGB &&
@@ -700,7 +721,10 @@ void VulkanRenderer::create_swapchain()
         {
             return (capabilities.supportedCompositeAlpha & value) != 0U;
         });
-        if (choice == choices.end()) throw std::runtime_error("Surface exposes no composite alpha mode");
+        if (choice == choices.end())
+        {
+            throw std::runtime_error("Surface exposes no composite alpha mode");
+        }
         create_info.compositeAlpha = *choice;
     }
     create_info.presentMode = present_mode;
@@ -950,10 +974,16 @@ void VulkanRenderer::recreate_swapchain()
 
 void VulkanRenderer::destroy_swapchain() noexcept
 {
-    if (device_ == VK_NULL_HANDLE) return;
+    if (device_ == VK_NULL_HANDLE)
+    {
+        return;
+    }
     for (const VkFramebuffer framebuffer : framebuffers_)
     {
-        if (framebuffer != VK_NULL_HANDLE) vkDestroyFramebuffer(device_, framebuffer, nullptr);
+        if (framebuffer != VK_NULL_HANDLE)
+        {
+            vkDestroyFramebuffer(device_, framebuffer, nullptr);
+        }
     }
     framebuffers_.clear();
     if (render_pass_ != VK_NULL_HANDLE)
@@ -963,12 +993,18 @@ void VulkanRenderer::destroy_swapchain() noexcept
     }
     for (const VkImageView view : image_views_)
     {
-        if (view != VK_NULL_HANDLE) vkDestroyImageView(device_, view, nullptr);
+        if (view != VK_NULL_HANDLE)
+        {
+            vkDestroyImageView(device_, view, nullptr);
+        }
     }
     image_views_.clear();
     for (const VkSemaphore semaphore : render_finished_)
     {
-        if (semaphore != VK_NULL_HANDLE) vkDestroySemaphore(device_, semaphore, nullptr);
+        if (semaphore != VK_NULL_HANDLE)
+        {
+            vkDestroySemaphore(device_, semaphore, nullptr);
+        }
     }
     render_finished_.clear();
     swapchain_images_.clear();
@@ -982,15 +1018,24 @@ void VulkanRenderer::destroy_swapchain() noexcept
 
 void VulkanRenderer::destroy_uploaded_textures() noexcept
 {
-    if (device_ == VK_NULL_HANDLE) return;
+    if (device_ == VK_NULL_HANDLE)
+    {
+        return;
+    }
     for (const UploadedTexture& texture : uploaded_textures_)
     {
         if (texture.view != VK_NULL_HANDLE)
+        {
             vkDestroyImageView(device_, texture.view, nullptr);
+        }
         if (texture.image != VK_NULL_HANDLE)
+        {
             vkDestroyImage(device_, texture.image, nullptr);
+        }
         if (texture.memory != VK_NULL_HANDLE)
+        {
             vkFreeMemory(device_, texture.memory, nullptr);
+        }
     }
     uploaded_textures_.clear();
 }
@@ -1004,11 +1049,19 @@ void VulkanRenderer::cleanup() noexcept
         destroy_swapchain();
         for (std::size_t index = 0U; index < frames_in_flight; ++index)
         {
-            if (in_flight_[index] != VK_NULL_HANDLE) vkDestroyFence(device_, in_flight_[index], nullptr);
+            if (in_flight_[index] != VK_NULL_HANDLE)
+            {
+                vkDestroyFence(device_, in_flight_[index], nullptr);
+            }
             if (image_available_[index] != VK_NULL_HANDLE)
+            {
                 vkDestroySemaphore(device_, image_available_[index], nullptr);
+            }
         }
-        if (command_pool_ != VK_NULL_HANDLE) vkDestroyCommandPool(device_, command_pool_, nullptr);
+        if (command_pool_ != VK_NULL_HANDLE)
+        {
+            vkDestroyCommandPool(device_, command_pool_, nullptr);
+        }
         vkDestroyDevice(device_, nullptr);
         device_ = VK_NULL_HANDLE;
     }
@@ -1021,7 +1074,10 @@ void VulkanRenderer::cleanup() noexcept
     {
         const auto destroy_messenger = reinterpret_cast<PFN_vkDestroyDebugUtilsMessengerEXT>(
             vkGetInstanceProcAddr(instance_, "vkDestroyDebugUtilsMessengerEXT"));
-        if (destroy_messenger != nullptr) destroy_messenger(instance_, debug_messenger_, nullptr);
+        if (destroy_messenger != nullptr)
+        {
+            destroy_messenger(instance_, debug_messenger_, nullptr);
+        }
         debug_messenger_ = VK_NULL_HANDLE;
     }
     if (instance_ != VK_NULL_HANDLE)
