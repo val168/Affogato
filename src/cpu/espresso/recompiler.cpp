@@ -6816,10 +6816,22 @@ struct Recompiler::Impl
                     {
                         compiler.mov(lhs, source_a);
                     }
-                    if (insn.opcode == Opcode::add) compiler.add(lhs, rhs);
-                    else if (insn.opcode == Opcode::bitwise_or) compiler.or_(lhs, rhs);
-                    else if (insn.opcode == Opcode::bitwise_and) compiler.and_(lhs, rhs);
-                    else if (insn.opcode == Opcode::bitwise_xor) compiler.xor_(lhs, rhs);
+                    if (insn.opcode == Opcode::add)
+                    {
+                        compiler.add(lhs, rhs);
+                    }
+                    else if (insn.opcode == Opcode::bitwise_or)
+                    {
+                        compiler.or_(lhs, rhs);
+                    }
+                    else if (insn.opcode == Opcode::bitwise_and)
+                    {
+                        compiler.and_(lhs, rhs);
+                    }
+                    else if (insn.opcode == Opcode::bitwise_xor)
+                    {
+                        compiler.xor_(lhs, rhs);
+                    }
                     else if (insn.opcode == Opcode::bitwise_equivalence)
                     {
                         compiler.xor_(lhs, rhs);
@@ -8321,11 +8333,23 @@ struct Recompiler::Impl
                 x86::Gp greater = compiler.new_gp32("cmp_greater");
                 x86::Gp equal = compiler.new_gp32("cmp_equal");
                 compiler.mov(less, imm(0));
-                if (signed_compare) compiler.setl(less.r8());
-                else compiler.setb(less.r8());
+                if (signed_compare)
+                {
+                    compiler.setl(less.r8());
+                }
+                else
+                {
+                    compiler.setb(less.r8());
+                }
                 compiler.mov(greater, imm(0));
-                if (signed_compare) compiler.setg(greater.r8());
-                else compiler.seta(greater.r8());
+                if (signed_compare)
+                {
+                    compiler.setg(greater.r8());
+                }
+                else
+                {
+                    compiler.seta(greater.r8());
+                }
                 compiler.mov(equal, imm(0));
                 compiler.sete(equal.r8());
 
@@ -8845,8 +8869,14 @@ struct Recompiler::Impl
                     compiler.mov(x86::dword_ptr(
                         state, static_cast<std::int32_t>(offsetof(CpuState, ctr))), ctr);
                     compiler.test(ctr, ctr);
-                    if (count_sense) compiler.jnz(not_taken);
-                    else compiler.jz(not_taken);
+                    if (count_sense)
+                    {
+                        compiler.jnz(not_taken);
+                    }
+                    else
+                    {
+                        compiler.jz(not_taken);
+                    }
                 }
                 if (!ignore_condition)
                 {
@@ -11134,14 +11164,19 @@ struct Recompiler::Impl
     }
 };
 
-Recompiler::Recompiler() : impl_(std::make_unique<Impl>()) {}
+Recompiler::Recompiler() : impl_(std::make_unique<Impl>())
+{
+}
 Recompiler::~Recompiler() = default;
 Recompiler::Recompiler(Recompiler&&) noexcept = default;
 Recompiler& Recompiler::operator=(Recompiler&&) noexcept = default;
 
 void Recompiler::clear_cache() noexcept
 {
-    if (impl_) impl_->clear();
+    if (impl_)
+    {
+        impl_->clear();
+    }
 }
 
 const RecompilerStatistics& Recompiler::statistics() const noexcept
@@ -11363,7 +11398,10 @@ RunResult Recompiler::run(EspressoCore& core, std::size_t max_steps)
                         }
                         catch (const GuestMemoryFault&)
                         {
-                            if (candidate.instructions.empty()) throw;
+                            if (candidate.instructions.empty())
+                            {
+                                throw;
+                            }
                             break;
                         }
                         const DecodedInstruction decoded = decode(word);
