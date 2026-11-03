@@ -178,10 +178,16 @@ public:
         std::uint32_t base{};
         switch (stage)
         {
-        case Gx2ShaderStage::pixel: base = 0x00038000U; break;
+        case Gx2ShaderStage::pixel:
+            base = 0x00038000U;
+            break;
         case Gx2ShaderStage::vertex:
-        case Gx2ShaderStage::compute: base = 0x00039180U; break;
-        case Gx2ShaderStage::geometry: base = 0x0003A4C0U; break;
+        case Gx2ShaderStage::compute:
+            base = 0x00039180U;
+            break;
+        case Gx2ShaderStage::geometry:
+            base = 0x0003A4C0U;
+            break;
         default: return std::nullopt;
         }
 
@@ -215,10 +221,16 @@ public:
         std::uint32_t base{};
         switch (stage)
         {
-        case Gx2ShaderStage::pixel: base = 0x0003C000U; break;
+        case Gx2ShaderStage::pixel:
+            base = 0x0003C000U;
+            break;
         case Gx2ShaderStage::vertex:
-        case Gx2ShaderStage::compute: base = 0x0003C0D8U; break;
-        case Gx2ShaderStage::geometry: base = 0x0003C1B0U; break;
+        case Gx2ShaderStage::compute:
+            base = 0x0003C0D8U;
+            break;
+        case Gx2ShaderStage::geometry:
+            base = 0x0003C1B0U;
+            break;
         default: return std::nullopt;
         }
 
