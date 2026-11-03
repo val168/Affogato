@@ -24,6 +24,15 @@ namespace
     return static_cast<std::int32_t>((value ^ sign_bit) - sign_bit);
 }
 
+constexpr void decode_d_form_operands(
+    DecodedInstruction& instruction,
+    std::uint32_t raw) noexcept
+{
+    instruction.destination = static_cast<std::uint8_t>(field(raw, 21U, 0x1FU));
+    instruction.base = static_cast<std::uint8_t>(field(raw, 16U, 0x1FU));
+    instruction.immediate = sign_extend(raw, 16U);
+}
+
 }
 
 DecodedInstruction decode(std::uint32_t raw) noexcept
@@ -1404,9 +1413,7 @@ DecodedInstruction decode(std::uint32_t raw) noexcept
 
     case 32: // lwz
         instruction.opcode = Opcode::load_word_zero;
-        instruction.destination = static_cast<std::uint8_t>(field(raw, 21, 0x1FU));
-        instruction.base = static_cast<std::uint8_t>(field(raw, 16, 0x1FU));
-        instruction.immediate = sign_extend(raw, 16);
+        decode_d_form_operands(instruction, raw);
         break;
 
     case 33: // lwzu (rA must not be zero)
@@ -1421,9 +1428,7 @@ DecodedInstruction decode(std::uint32_t raw) noexcept
 
     case 34: // lbz
         instruction.opcode = Opcode::load_byte_zero;
-        instruction.destination = static_cast<std::uint8_t>(field(raw, 21, 0x1FU));
-        instruction.base = static_cast<std::uint8_t>(field(raw, 16, 0x1FU));
-        instruction.immediate = sign_extend(raw, 16);
+        decode_d_form_operands(instruction, raw);
         break;
 
     case 35: // lbzu (rA must not be zero)
@@ -1438,9 +1443,7 @@ DecodedInstruction decode(std::uint32_t raw) noexcept
 
     case 36: // stw
         instruction.opcode = Opcode::store_word;
-        instruction.destination = static_cast<std::uint8_t>(field(raw, 21, 0x1FU));
-        instruction.base = static_cast<std::uint8_t>(field(raw, 16, 0x1FU));
-        instruction.immediate = sign_extend(raw, 16);
+        decode_d_form_operands(instruction, raw);
         break;
 
     case 37: // stwu (rA must not be zero)
@@ -1456,9 +1459,7 @@ DecodedInstruction decode(std::uint32_t raw) noexcept
 
     case 38: // stb
         instruction.opcode = Opcode::store_byte;
-        instruction.destination = static_cast<std::uint8_t>(field(raw, 21, 0x1FU));
-        instruction.base = static_cast<std::uint8_t>(field(raw, 16, 0x1FU));
-        instruction.immediate = sign_extend(raw, 16);
+        decode_d_form_operands(instruction, raw);
         break;
 
     case 39: // stbu (rA must not be zero)
@@ -1473,9 +1474,7 @@ DecodedInstruction decode(std::uint32_t raw) noexcept
 
     case 40: // lhz
         instruction.opcode = Opcode::load_halfword_zero;
-        instruction.destination = static_cast<std::uint8_t>(field(raw, 21, 0x1FU));
-        instruction.base = static_cast<std::uint8_t>(field(raw, 16, 0x1FU));
-        instruction.immediate = sign_extend(raw, 16);
+        decode_d_form_operands(instruction, raw);
         break;
 
     case 41: // lhzu (rA must be nonzero and must not equal rD)
@@ -1491,16 +1490,12 @@ DecodedInstruction decode(std::uint32_t raw) noexcept
 
     case 42: // lha
         instruction.opcode = Opcode::load_halfword_algebraic;
-        instruction.destination = static_cast<std::uint8_t>(field(raw, 21, 0x1FU));
-        instruction.base = static_cast<std::uint8_t>(field(raw, 16, 0x1FU));
-        instruction.immediate = sign_extend(raw, 16);
+        decode_d_form_operands(instruction, raw);
         break;
 
     case 44: // sth
         instruction.opcode = Opcode::store_halfword;
-        instruction.destination = static_cast<std::uint8_t>(field(raw, 21, 0x1FU));
-        instruction.base = static_cast<std::uint8_t>(field(raw, 16, 0x1FU));
-        instruction.immediate = sign_extend(raw, 16);
+        decode_d_form_operands(instruction, raw);
         break;
 
     case 45: // sthu (rA must not be zero)
@@ -1515,9 +1510,7 @@ DecodedInstruction decode(std::uint32_t raw) noexcept
 
     case 46: // lmw
         instruction.opcode = Opcode::load_multiple_word;
-        instruction.destination = static_cast<std::uint8_t>(field(raw, 21, 0x1FU));
-        instruction.base = static_cast<std::uint8_t>(field(raw, 16, 0x1FU));
-        instruction.immediate = sign_extend(raw, 16);
+        decode_d_form_operands(instruction, raw);
         break;
 
     case 47: // stmw
