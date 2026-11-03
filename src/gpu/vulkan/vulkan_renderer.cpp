@@ -43,6 +43,7 @@ void check(VkResult result, const char* operation)
     }
 }
 
+#ifndef NDEBUG
 bool has_instance_layer(const char* name)
 {
     std::uint32_t count = 0U;
@@ -60,6 +61,7 @@ bool has_instance_layer(const char* name)
         return std::strcmp(layer.layerName, name) == 0;
     });
 }
+#endif
 
 bool has_instance_extension(const char* name)
 {
