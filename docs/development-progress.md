@@ -620,6 +620,20 @@ snapshot is verified before both ranges are decoded. The visible test shows
 two distinct diagnostic triangles; this validates ordered routing and draw
 payload snapshots, not guest render-target writes.
 
+Indexed draw HLE now snapshots its index stream when diagnostic vertex capture
+is enabled. It recognizes WUT index types U16_LE, U32_LE, U16, and U32, applies
+the submitted byte offset, and snapshots the contiguous bound vertex-buffer
+range addressed by the minimum and maximum indices. A regression checks all
+four byte encodings, nonzero index offset, nonzero minimum vertex index,
+post-submit guest-memory mutation, and an out-of-range vertex index. This is
+asynchronous input preservation only: the Vulkan diagnostic consumer still
+rejects indexed draws, so no indexed geometry was submitted or displayed.
+Debug/Release builds and CTest (2/2 in each) pass; the existing non-indexed
+visible and smoke tests continue to pass. Index enum values follow WUT's
+[`GX2IndexType`](https://raw.githubusercontent.com/devkitPro/wut/master/include/gx2/enum.h)
+and indexed draw ABI follows WUT's
+[`draw.h`](https://raw.githubusercontent.com/devkitPro/wut/master/include/gx2/draw.h).
+
 The desktop frontend now has an explicit `Diagnostic GX2 draws (host shader,
 host window)` option. For that run, it enables HLE-time non-indexed vertex
 snapshots, preserves the host option across guest `GX2Init`, and forwards each

@@ -29323,6 +29323,111 @@ void gx2_draw_ex_hle_tests()
     assert(invalid_snapshot_commands.front().draw_vertex_data.size() == 1U);
     assert(!invalid_snapshot_commands.front().draw_vertex_data.front().is_valid);
     assert(invalid_snapshot_commands.front().draw_vertex_data.front().bytes.empty());
+
+    snapshot_core.memory.write8(snapshot_address + 8U, 9U);
+    constexpr std::uint32_t index_buffer_address = 0x900U;
+    constexpr std::array<std::uint8_t, 8U> little_endian_indices{
+        0xFFU, 0xFFU, 1U, 0U, 3U, 0U, 2U, 0U};
+    for (std::size_t byte = 0U; byte < little_endian_indices.size(); ++byte)
+    {
+        snapshot_core.memory.write8(
+            index_buffer_address + static_cast<std::uint32_t>(byte),
+            little_endian_indices[byte]);
+    }
+    snapshot_core.state.gpr[3] = 4U;
+    snapshot_core.state.gpr[4] = 3U;
+    snapshot_core.state.gpr[5] = 0U;
+    snapshot_core.state.gpr[6] = index_buffer_address;
+    snapshot_core.state.gpr[7] = 2U;
+    snapshot_core.state.gpr[8] = 1U;
+    snapshot_core.state.lr = return_address;
+    snapshot_core.state.cia = snapshot_core.hle.bind_import(
+        "gx2", "GX2DrawIndexedEx");
+    assert(snapshot_core.run(1U).reason == StopReason::instruction_limit);
+    const auto indexed_snapshot_commands = take_gx2_commands(snapshot_core.gx2);
+    assert(indexed_snapshot_commands.size() == 1U);
+    const Gx2Command& indexed_snapshot_command =
+        indexed_snapshot_commands.front();
+    assert(indexed_snapshot_command.draw_index_data.has_value());
+    assert(indexed_snapshot_command.draw_index_data->is_valid);
+    assert(indexed_snapshot_command.draw_index_data->index_type == 0U);
+    assert(indexed_snapshot_command.draw_index_data->byte_offset == 2U);
+    assert((indexed_snapshot_command.draw_index_data->bytes ==
+            std::vector<std::uint8_t>{1U, 0U, 3U, 0U, 2U, 0U}));
+    assert(indexed_snapshot_command.draw_vertex_data.size() == 1U);
+    const Gx2VertexBufferSnapshot& indexed_vertex_snapshot =
+        indexed_snapshot_command.draw_vertex_data.front();
+    assert(indexed_vertex_snapshot.is_valid);
+    assert(indexed_vertex_snapshot.byte_offset == 8U);
+    assert(indexed_vertex_snapshot.bytes.size() == 24U);
+    assert(indexed_vertex_snapshot.bytes.front() == 9U);
+    assert(indexed_vertex_snapshot.bytes.back() == 32U);
+
+    snapshot_core.memory.write8(index_buffer_address + 2U, 0U);
+    snapshot_core.memory.write8(snapshot_address + 8U, 0xFFU);
+    assert(indexed_snapshot_command.draw_index_data->bytes.front() == 1U);
+    assert(indexed_vertex_snapshot.bytes.front() == 9U);
+
+    const auto verify_index_format = [&snapshot_core, return_address,
+                                      index_buffer_address](
+        std::uint32_t index_type,
+        std::span<const std::uint8_t> index_bytes) {
+        for (std::size_t byte = 0U; byte < index_bytes.size(); ++byte)
+        {
+            snapshot_core.memory.write8(
+                index_buffer_address + static_cast<std::uint32_t>(byte),
+                index_bytes[byte]);
+        }
+        snapshot_core.state.gpr[3] = 4U;
+        snapshot_core.state.gpr[4] = 3U;
+        snapshot_core.state.gpr[5] = index_type;
+        snapshot_core.state.gpr[6] = index_buffer_address;
+        snapshot_core.state.gpr[7] = 0U;
+        snapshot_core.state.gpr[8] = 1U;
+        snapshot_core.state.lr = return_address;
+        snapshot_core.state.cia = snapshot_core.hle.bind_import(
+            "gx2", "GX2DrawIndexedEx");
+        assert(snapshot_core.run(1U).reason == StopReason::instruction_limit);
+        const auto commands = take_gx2_commands(snapshot_core.gx2);
+        assert(commands.size() == 1U);
+        assert(commands.front().draw_index_data.has_value());
+        assert(commands.front().draw_index_data->is_valid);
+        assert(commands.front().draw_index_data->bytes.size() == index_bytes.size());
+        assert(commands.front().draw_vertex_data.size() == 1U);
+        assert(commands.front().draw_vertex_data.front().is_valid);
+        assert(commands.front().draw_vertex_data.front().byte_offset == 8U);
+        assert(commands.front().draw_vertex_data.front().bytes.size() == 24U);
+    };
+    constexpr std::array<std::uint8_t, 12U> little_endian_u32_indices{
+        1U, 0U, 0U, 0U, 3U, 0U, 0U, 0U, 2U, 0U, 0U, 0U};
+    verify_index_format(
+        1U, std::span<const std::uint8_t>{little_endian_u32_indices});
+    constexpr std::array<std::uint8_t, 6U> big_endian_u16_indices{
+        0U, 1U, 0U, 3U, 0U, 2U};
+    verify_index_format(
+        4U, std::span<const std::uint8_t>{big_endian_u16_indices});
+    constexpr std::array<std::uint8_t, 12U> big_endian_u32_indices{
+        0U, 0U, 0U, 1U, 0U, 0U, 0U, 3U, 0U, 0U, 0U, 2U};
+    verify_index_format(
+        9U, std::span<const std::uint8_t>{big_endian_u32_indices});
+
+    snapshot_core.state.gpr[3] = 4U;
+    snapshot_core.state.gpr[4] = 3U;
+    snapshot_core.state.gpr[5] = 0U;
+    snapshot_core.state.gpr[6] = index_buffer_address;
+    snapshot_core.state.gpr[7] = 2U;
+    snapshot_core.state.gpr[8] = 1U;
+    snapshot_core.state.lr = return_address;
+    snapshot_core.state.cia = snapshot_core.hle.bind_import(
+        "gx2", "GX2DrawIndexedEx");
+    snapshot_core.memory.write8(index_buffer_address + 2U, 4U);
+    assert(snapshot_core.run(1U).reason == StopReason::instruction_limit);
+    const auto out_of_range_indexed_commands =
+        take_gx2_commands(snapshot_core.gx2);
+    assert(out_of_range_indexed_commands.size() == 1U);
+    assert(out_of_range_indexed_commands.front().draw_index_data->is_valid);
+    assert(out_of_range_indexed_commands.front().draw_vertex_data.size() == 1U);
+    assert(!out_of_range_indexed_commands.front().draw_vertex_data.front().is_valid);
 }
 
 void gx2_gpu_time_to_cpu_time_hle_tests()

@@ -72,6 +72,16 @@ struct Gx2VertexBufferSnapshot
     bool operator==(const Gx2VertexBufferSnapshot&) const = default;
 };
 
+struct Gx2IndexBufferSnapshot
+{
+    std::uint32_t index_type{};
+    std::uint32_t byte_offset{};
+    bool is_valid{};
+    std::vector<std::uint8_t> bytes;
+
+    bool operator==(const Gx2IndexBufferSnapshot&) const = default;
+};
+
 struct Gx2FetchShaderBinding
 {
     std::uint32_t descriptor_address{};
@@ -220,6 +230,7 @@ struct Gx2Command
     std::optional<Gx2ColorBufferScanCopy> scan_buffer_copy;
     std::optional<Gx2ClearColorRequest> clear_color;
     std::vector<Gx2VertexBufferSnapshot> draw_vertex_data;
+    std::optional<Gx2IndexBufferSnapshot> draw_index_data;
 
     constexpr Gx2Command() = default;
     constexpr Gx2Command(
@@ -237,7 +248,8 @@ struct Gx2Command
         std::optional<Gx2DepthBufferBinding> command_depth_buffer = std::nullopt,
         std::optional<Gx2ColorBufferScanCopy> command_scan_buffer_copy = std::nullopt,
         std::optional<Gx2ClearColorRequest> command_clear_color = std::nullopt,
-        std::vector<Gx2VertexBufferSnapshot> command_draw_vertex_data = {})
+        std::vector<Gx2VertexBufferSnapshot> command_draw_vertex_data = {},
+        std::optional<Gx2IndexBufferSnapshot> command_draw_index_data = std::nullopt)
         : type(command_type),
           register_address(command_register_address),
           value(command_value),
@@ -252,7 +264,8 @@ struct Gx2Command
           depth_buffer(command_depth_buffer),
           scan_buffer_copy(command_scan_buffer_copy),
           clear_color(command_clear_color),
-          draw_vertex_data(std::move(command_draw_vertex_data))
+          draw_vertex_data(std::move(command_draw_vertex_data)),
+          draw_index_data(std::move(command_draw_index_data))
     {
     }
 

@@ -2456,6 +2456,160 @@ void register_gx2_hle(HleDispatcher& dispatcher)
         return snapshots;
     };
 
+    const auto capture_indexed_draw_data = [](
+        const EspressoCore& core,
+        const Gx2DrawCall& draw_call)
+        -> std::optional<Gx2IndexBufferSnapshot> {
+        if (!core.gx2.capture_draw_vertex_data || !draw_call.indexed ||
+            draw_call.element_count == 0U)
+        {
+            return std::nullopt;
+        }
+
+        std::uint32_t index_size_bytes = 0U;
+        switch (draw_call.index_type)
+        {
+        case 0U: // GX2_INDEX_TYPE_U16_LE
+        case 4U: // GX2_INDEX_TYPE_U16
+            index_size_bytes = sizeof(std::uint16_t);
+            break;
+        case 1U: // GX2_INDEX_TYPE_U32_LE
+        case 9U: // GX2_INDEX_TYPE_U32
+            index_size_bytes = sizeof(std::uint32_t);
+            break;
+        default:
+            return Gx2IndexBufferSnapshot{
+                draw_call.index_type, draw_call.element_offset, false, {}};
+        }
+
+        Gx2IndexBufferSnapshot snapshot{};
+        snapshot.index_type = draw_call.index_type;
+        snapshot.byte_offset = draw_call.element_offset;
+        const std::uint64_t byte_count =
+            static_cast<std::uint64_t>(draw_call.element_count) * index_size_bytes;
+        const std::uint64_t guest_address =
+            static_cast<std::uint64_t>(draw_call.element_address) +
+            draw_call.element_offset;
+        if (byte_count > std::numeric_limits<std::size_t>::max() ||
+            guest_address > std::numeric_limits<std::uint32_t>::max() ||
+            byte_count > (std::uint64_t{1U} << 32U) - guest_address)
+        {
+            return snapshot;
+        }
+
+        snapshot.bytes.resize(static_cast<std::size_t>(byte_count));
+        try
+        {
+            core.memory.read_bytes(
+                static_cast<std::uint32_t>(guest_address), snapshot.bytes);
+            snapshot.is_valid = true;
+        }
+        catch (const GuestMemoryFault&)
+        {
+            snapshot.bytes.clear();
+        }
+        return snapshot;
+    };
+
+    const auto capture_indexed_vertex_data = [](
+        const EspressoCore& core,
+        const Gx2DrawCall& draw_call,
+        const Gx2IndexBufferSnapshot& index_snapshot) {
+        std::vector<Gx2VertexBufferSnapshot> snapshots;
+        if (!index_snapshot.is_valid || index_snapshot.bytes.empty())
+        {
+            return snapshots;
+        }
+
+        std::uint32_t index_size_bytes = 0U;
+        switch (index_snapshot.index_type)
+        {
+        case 0U:
+        case 4U:
+            index_size_bytes = sizeof(std::uint16_t);
+            break;
+        case 1U:
+        case 9U:
+            index_size_bytes = sizeof(std::uint32_t);
+            break;
+        default:
+            return snapshots;
+        }
+
+        const auto read_index = [&index_snapshot, index_size_bytes](
+            std::size_t index_number) {
+            const std::size_t byte_index = index_number * index_size_bytes;
+            const bool little_endian =
+                index_snapshot.index_type == 0U || index_snapshot.index_type == 1U;
+            std::uint32_t value = 0U;
+            for (std::uint32_t byte_number = 0U;
+                 byte_number < index_size_bytes;
+                 ++byte_number)
+            {
+                const std::uint32_t shift = little_endian
+                    ? byte_number * 8U
+                    : (index_size_bytes - byte_number - 1U) * 8U;
+                value |= static_cast<std::uint32_t>(
+                    index_snapshot.bytes[byte_index + byte_number]) << shift;
+            }
+            return value;
+        };
+
+        std::uint32_t minimum_index = read_index(0U);
+        std::uint32_t maximum_index = minimum_index;
+        for (std::size_t index_number = 1U;
+             index_number < draw_call.element_count;
+             ++index_number)
+        {
+            const std::uint32_t index = read_index(index_number);
+            minimum_index = std::min(minimum_index, index);
+            maximum_index = std::max(maximum_index, index);
+        }
+
+        for (const auto& optional_binding : core.gx2.vertex_buffers)
+        {
+            if (!optional_binding || optional_binding->stride == 0U)
+            {
+                continue;
+            }
+
+            const Gx2VertexBufferBinding& binding = *optional_binding;
+            Gx2VertexBufferSnapshot snapshot{};
+            snapshot.binding = binding;
+            const std::uint64_t byte_offset =
+                static_cast<std::uint64_t>(minimum_index) * binding.stride;
+            const std::uint64_t vertex_count =
+                static_cast<std::uint64_t>(maximum_index) - minimum_index + 1U;
+            const std::uint64_t byte_count = vertex_count * binding.stride;
+            const std::uint64_t guest_address =
+                static_cast<std::uint64_t>(binding.guest_address) + byte_offset;
+            if (byte_offset > binding.size ||
+                byte_count > binding.size - byte_offset ||
+                guest_address > std::numeric_limits<std::uint32_t>::max() ||
+                byte_count > std::numeric_limits<std::size_t>::max())
+            {
+                snapshots.push_back(std::move(snapshot));
+                continue;
+            }
+
+            snapshot.byte_offset = static_cast<std::uint32_t>(byte_offset);
+            snapshot.bytes.resize(static_cast<std::size_t>(byte_count));
+            try
+            {
+                core.memory.read_bytes(
+                    static_cast<std::uint32_t>(guest_address), snapshot.bytes);
+                snapshot.is_valid = true;
+            }
+            catch (const GuestMemoryFault&)
+            {
+                snapshot.bytes.clear();
+            }
+            snapshots.push_back(std::move(snapshot));
+        }
+
+        return snapshots;
+    };
+
     dispatcher.register_function(
         "gx2",
         "GX2TempGetGPUVersion",
@@ -5884,20 +6038,26 @@ void register_gx2_hle(HleDispatcher& dispatcher)
     dispatcher.register_function(
         "gx2",
         "GX2DrawIndexedEx",
-        [](EspressoCore& core) {
-            // Index-buffer contents are consumed by the renderer later; keep
-            // the guest address and all draw parameters in stream order.
-            core.gx2.pending_commands.push_back({
+        [capture_indexed_draw_data, capture_indexed_vertex_data](EspressoCore& core) {
+            const Gx2DrawCall draw_call{
+                core.state.gpr[3], core.state.gpr[4], true,
+                core.state.gpr[5], core.state.gpr[6], core.state.gpr[7],
+                core.state.gpr[8], 0U};
+            Gx2Command command{
                 Gx2CommandType::draw,
                 0U,
                 0U,
                 0U,
                 0U,
                 0U,
-                Gx2DrawCall{
-                    core.state.gpr[3], core.state.gpr[4], true,
-                    core.state.gpr[5], core.state.gpr[6], core.state.gpr[7],
-                    core.state.gpr[8], 0U}});
+                draw_call};
+            command.draw_index_data = capture_indexed_draw_data(core, draw_call);
+            if (command.draw_index_data)
+            {
+                command.draw_vertex_data = capture_indexed_vertex_data(
+                    core, draw_call, *command.draw_index_data);
+            }
+            core.gx2.pending_commands.push_back(std::move(command));
         });
 
     dispatcher.register_function(
@@ -5925,37 +6085,53 @@ void register_gx2_hle(HleDispatcher& dispatcher)
     dispatcher.register_function(
         "gx2",
         "GX2DrawIndexedEx2",
-        [](EspressoCore& core) {
-            core.gx2.pending_commands.push_back({
+        [capture_indexed_draw_data, capture_indexed_vertex_data](EspressoCore& core) {
+            const Gx2DrawCall draw_call{
+                core.state.gpr[3], core.state.gpr[4], true,
+                core.state.gpr[5], core.state.gpr[6], core.state.gpr[7],
+                core.state.gpr[8], core.state.gpr[9]};
+            Gx2Command command{
                 Gx2CommandType::draw,
                 0U,
                 0U,
                 0U,
                 0U,
                 0U,
-                Gx2DrawCall{
-                    core.state.gpr[3], core.state.gpr[4], true,
-                    core.state.gpr[5], core.state.gpr[6], core.state.gpr[7],
-                    core.state.gpr[8], core.state.gpr[9]}});
+                draw_call};
+            command.draw_index_data = capture_indexed_draw_data(core, draw_call);
+            if (command.draw_index_data)
+            {
+                command.draw_vertex_data = capture_indexed_vertex_data(
+                    core, draw_call, *command.draw_index_data);
+            }
+            core.gx2.pending_commands.push_back(std::move(command));
         });
 
     dispatcher.register_function(
         "gx2",
         "GX2DrawIndexedImmediateEx",
-        [](EspressoCore& core) {
-            // Immediate index data is still guest memory and remains owned by
-            // the asynchronous renderer after this ordered request is queued.
-            core.gx2.pending_commands.push_back({
+        [capture_indexed_draw_data, capture_indexed_vertex_data](EspressoCore& core) {
+            // Capture the immediate index bytes and referenced vertices before
+            // the asynchronous frontend can observe later guest writes.
+            const Gx2DrawCall draw_call{
+                core.state.gpr[3], core.state.gpr[4], true,
+                core.state.gpr[5], core.state.gpr[6], core.state.gpr[7],
+                core.state.gpr[8], 0U};
+            Gx2Command command{
                 Gx2CommandType::draw,
                 0U,
                 0U,
                 0U,
                 0U,
                 0U,
-                Gx2DrawCall{
-                    core.state.gpr[3], core.state.gpr[4], true,
-                    core.state.gpr[5], core.state.gpr[6], core.state.gpr[7],
-                    core.state.gpr[8], 0U}});
+                draw_call};
+            command.draw_index_data = capture_indexed_draw_data(core, draw_call);
+            if (command.draw_index_data)
+            {
+                command.draw_vertex_data = capture_indexed_vertex_data(
+                    core, draw_call, *command.draw_index_data);
+            }
+            core.gx2.pending_commands.push_back(std::move(command));
         });
 
     dispatcher.register_function(
