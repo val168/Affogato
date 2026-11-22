@@ -75,6 +75,14 @@ public:
                 }
                 continue;
             }
+            if (command.type == cpu::espresso::Gx2CommandType::clear_color_buffer)
+            {
+                if (command.clear_color)
+                {
+                    clear_color_operations_.push_back(*command.clear_color);
+                }
+                continue;
+            }
             if (command.type == cpu::espresso::Gx2CommandType::draw)
             {
                 // Preserve draw-call order and arguments for the future Latte
@@ -296,6 +304,12 @@ public:
         return scan_buffer_copies_;
     }
 
+    [[nodiscard]] std::span<const cpu::espresso::Gx2ClearColorRequest>
+    clear_color_operations() const noexcept
+    {
+        return clear_color_operations_;
+    }
+
     [[nodiscard]] std::span<const cpu::espresso::Gx2Command>
     draw_calls() const noexcept
     {
@@ -426,6 +440,7 @@ private:
     std::vector<cpu::espresso::Gx2Command> gpu_fences_;
     std::vector<cpu::espresso::Gx2Command> scan_buffer_swaps_;
     std::vector<cpu::espresso::Gx2ColorBufferScanCopy> scan_buffer_copies_;
+    std::vector<cpu::espresso::Gx2ClearColorRequest> clear_color_operations_;
     std::vector<cpu::espresso::Gx2Command> draw_calls_;
     std::array<std::optional<cpu::espresso::Gx2VertexBufferBinding>, 16U>
         vertex_buffers_{};

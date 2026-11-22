@@ -27,6 +27,7 @@
 #include <filesystem>
 #include <iostream>
 #include <iterator>
+#include <limits>
 #include <optional>
 #include <span>
 #include <sstream>
@@ -23231,11 +23232,40 @@ void gx2_set_viewport_reg_hle_tests()
 void gx2_clear_color_hle_tests()
 {
     constexpr std::uint32_t return_address = 0x02750600U;
-    constexpr std::uint32_t color_buffer = 0x10203040U;
+    constexpr std::uint32_t color_buffer = 0x4000U;
+    constexpr std::uint32_t image_address = 0x10000U;
+    constexpr std::uint32_t width = 16U;
+    constexpr std::uint32_t height = 8U;
+    constexpr std::uint32_t pitch = 20U;
+    constexpr std::uint32_t image_size = pitch * height * 4U;
     EspressoCore core(0x20000U);
     register_gx2_hle(core.hle);
     core.gx2.initialized = true;
     const std::uint32_t import = core.hle.bind_import("gx2", "GX2ClearColor");
+
+    std::array<std::uint32_t, 39U> descriptor{};
+    descriptor[0U] = 1U;
+    descriptor[1U] = width;
+    descriptor[2U] = height;
+    descriptor[3U] = 1U;
+    descriptor[4U] = 1U;
+    descriptor[5U] = 0x1AU;
+    descriptor[7U] = 0x0AU;
+    descriptor[8U] = image_size;
+    descriptor[9U] = image_address;
+    descriptor[12U] = 1U;
+    descriptor[14U] = 256U;
+    descriptor[15U] = pitch;
+    descriptor[31U] = 1U;
+    for (std::size_t index = 0U; index < descriptor.size(); ++index)
+    {
+        core.memory.write32_be(
+            color_buffer + static_cast<std::uint32_t>(index * 4U),
+            descriptor[index]);
+    }
+    std::vector<std::uint8_t> image_bytes(image_size, 0xCDU);
+    core.memory.write_bytes(image_address, image_bytes);
+
     core.state.gpr[3] = color_buffer;
     core.state.gpr[4] = 0x44444444U;
     core.state.cr = 0x12345678U;
@@ -23263,15 +23293,44 @@ void gx2_clear_color_hle_tests()
     assert(core.gx2.latest_clear_color->color_buffer == color_buffer);
     assert(core.gx2.latest_clear_color->rgba ==
         (std::array<float, 4U>{0.25F, 0.5F, 0.75F, 1.0F}));
+    std::array<std::uint8_t, 4U> pixel{};
+    core.memory.read_bytes(image_address, pixel);
+    assert((pixel == std::array<std::uint8_t, 4U>{64U, 128U, 191U, 255U}));
+    core.memory.read_bytes(image_address + 16U * 4U, pixel);
+    assert((pixel == std::array<std::uint8_t, 4U>{0xCDU, 0xCDU, 0xCDU, 0xCDU}));
     assert(core.state.gpr == gprs_before);
     assert(core.state.cr == cr_before);
     assert(core.state.xer == xer_before);
     assert(core.state.ctr == ctr_before);
 
+    core.memory.read_bytes(image_address, image_bytes);
+    core.memory.write32_be(color_buffer + 0x30U, 4U);
+    core.state.cia = import;
+    core.state.lr = return_address;
+    const RunResult tiled_clear = core.run(1U);
+    assert(tiled_clear.reason == StopReason::hle_error);
+    assert(core.gx2.clear_color_sequence == 1U);
+    assert(core.gx2.pending_commands.size() == 1U);
+    std::vector<std::uint8_t> after_rejected_clear(image_size);
+    core.memory.read_bytes(image_address, after_rejected_clear);
+    assert(after_rejected_clear == image_bytes);
+
+    core.memory.write32_be(color_buffer + 0x30U, 1U);
     core.state.cia = import;
     core.state.lr = return_address;
     assert(core.run(1U).reason == StopReason::instruction_limit);
     assert(core.gx2.clear_color_sequence == 2U);
+    assert(core.gx2.pending_commands.size() == 2U);
+
+    core.state.fpr[1U] = std::bit_cast<std::uint64_t>(
+        std::numeric_limits<double>::quiet_NaN());
+    core.state.cia = import;
+    core.state.lr = return_address;
+    assert(core.run(1U).reason == StopReason::hle_error);
+    assert(core.gx2.clear_color_sequence == 2U);
+    assert(core.gx2.pending_commands.size() == 2U);
+    core.memory.read_bytes(image_address, after_rejected_clear);
+    assert(after_rejected_clear == image_bytes);
 }
 
 void gx2_copy_color_buffer_to_scan_buffer_hle_tests()
@@ -23291,7 +23350,7 @@ void gx2_copy_color_buffer_to_scan_buffer_hle_tests()
     constexpr std::uint32_t source_size = pitch * height * bytes_per_pixel;
     constexpr std::uint32_t scan_buffer_size = frame_size * scan_buffer_count;
     constexpr std::array<std::uint8_t, 4U> first_color{
-        0x12U, 0x34U, 0x56U, 0x78U};
+        64U, 128U, 191U, 255U};
     constexpr std::array<std::uint8_t, 4U> second_color{
         0xA1U, 0xB2U, 0xC3U, 0xD4U};
 
@@ -23322,17 +23381,6 @@ void gx2_copy_color_buffer_to_scan_buffer_hle_tests()
     }
 
     std::vector<std::uint8_t> source(source_size, 0xEEU);
-    for (std::uint32_t row = 0U; row < height; ++row)
-    {
-        for (std::uint32_t column = 0U; column < width; ++column)
-        {
-            const std::size_t offset =
-                (static_cast<std::size_t>(row) * pitch + column) *
-                bytes_per_pixel;
-            std::copy(first_color.begin(), first_color.end(), source.begin() +
-                static_cast<std::ptrdiff_t>(offset));
-        }
-    }
     core.memory.write_bytes(source_image_address, source);
 
     std::vector<std::uint8_t> destination(
@@ -23349,6 +23397,31 @@ void gx2_copy_color_buffer_to_scan_buffer_hle_tests()
     core.state.cia = set_tv_buffer;
     core.state.lr = return_address;
     assert(core.run(1U).reason == StopReason::instruction_limit);
+
+    const std::uint32_t clear_color = core.hle.bind_import(
+        "gx2", "GX2ClearColor");
+    constexpr std::array<double, 4U> clear_rgba{
+        0.25, 0.5, 0.75, 1.0};
+    core.state.gpr[3] = color_buffer_address;
+    for (std::size_t index = 0U; index < clear_rgba.size(); ++index)
+    {
+        core.state.fpr[index + 1U] =
+            std::bit_cast<std::uint64_t>(clear_rgba[index]);
+    }
+    core.state.cia = clear_color;
+    core.state.lr = return_address;
+    assert(core.run(1U).reason == StopReason::instruction_limit);
+    const std::vector<Gx2Command> clear_commands = take_gx2_commands(core.gx2);
+    assert(clear_commands.size() == 1U);
+    assert(clear_commands.front().type == Gx2CommandType::clear_color_buffer);
+
+    std::array<std::uint8_t, 4U> source_pixel{};
+    core.memory.read_bytes(source_image_address, source_pixel);
+    assert(source_pixel == first_color);
+    core.memory.read_bytes(
+        source_image_address + width * bytes_per_pixel, source_pixel);
+    assert((source_pixel == std::array<std::uint8_t, 4U>{
+        0xEEU, 0xEEU, 0xEEU, 0xEEU}));
 
     const std::uint32_t copy_color_buffer = core.hle.bind_import(
         "gx2", "GX2CopyColorBufferToScanBuffer");
@@ -23444,6 +23517,8 @@ void gx2_copy_color_buffer_to_scan_buffer_hle_tests()
 
     std::vector<Gx2Command> ordered_commands;
     ordered_commands.insert(
+        ordered_commands.end(), clear_commands.begin(), clear_commands.end());
+    ordered_commands.insert(
         ordered_commands.end(), first_copy_commands.begin(),
         first_copy_commands.end());
     ordered_commands.insert(
@@ -23451,8 +23526,16 @@ void gx2_copy_color_buffer_to_scan_buffer_hle_tests()
     ordered_commands.insert(
         ordered_commands.end(), second_copy_commands.begin(),
         second_copy_commands.end());
+    assert(ordered_commands.size() == 4U);
+    assert(ordered_commands[0U].type == Gx2CommandType::clear_color_buffer);
+    assert(ordered_commands[1U].type ==
+        Gx2CommandType::copy_color_buffer_to_scan_buffer);
+    assert(ordered_commands[2U].type == Gx2CommandType::scan_buffer_swap);
+    assert(ordered_commands[3U].type ==
+        Gx2CommandType::copy_color_buffer_to_scan_buffer);
     affogato::gpu::Gx2RegisterState register_state;
     register_state.apply(ordered_commands);
+    assert(register_state.clear_color_operations().size() == 1U);
     assert(register_state.scan_buffer_copies().size() == 2U);
     assert(register_state.scan_buffer_copies()[0U].buffer_index == 0U);
     assert(register_state.scan_buffer_swaps().size() == 1U);

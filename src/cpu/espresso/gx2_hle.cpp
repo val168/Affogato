@@ -555,6 +555,126 @@ std::uint32_t get_scan_buffer_count(
     }
 }
 
+std::uint64_t validate_linear_rgba8_color_buffer(
+    const Gx2ColorBufferState& color_buffer,
+    const char* api_name)
+{
+    if (color_buffer.dimension != gx2_surface_dim_2d ||
+        color_buffer.depth != 1U || color_buffer.mip_levels != 1U ||
+        color_buffer.format != gx2_surface_format_unorm_r8_g8_b8_a8 ||
+        color_buffer.aa_mode != 0U ||
+        (color_buffer.use & gx2_surface_use_color_buffer) == 0U ||
+        color_buffer.tile_mode != gx2_tile_mode_linear_aligned ||
+        color_buffer.swizzle != 0U || color_buffer.view_mip != 0U ||
+        color_buffer.view_first_slice != 0U ||
+        color_buffer.view_num_slices != 1U ||
+        color_buffer.aa_buffer_address != 0U || color_buffer.aa_size != 0U)
+    {
+        throw HleExecutionError(
+            std::string(api_name) +
+            ": source must be a linear, single-sample 2D RGBA8 color buffer "
+            "with a base-level, single-slice view and no swizzle");
+    }
+
+    constexpr std::uint64_t bytes_per_pixel = 4U;
+    if (color_buffer.width == 0U || color_buffer.height == 0U ||
+        color_buffer.image_address == 0U ||
+        color_buffer.pitch < color_buffer.width ||
+        color_buffer.alignment == 0U ||
+        color_buffer.image_address % color_buffer.alignment != 0U)
+    {
+        throw HleExecutionError(
+            std::string(api_name) +
+            ": source image address, dimensions, pitch, or alignment is invalid");
+    }
+
+    const std::uint64_t source_row_size =
+        static_cast<std::uint64_t>(color_buffer.pitch) * bytes_per_pixel;
+    if (color_buffer.height >
+        std::numeric_limits<std::uint64_t>::max() / source_row_size)
+    {
+        throw HleExecutionError(
+            std::string(api_name) + ": source image size overflows");
+    }
+
+    const std::uint64_t source_size =
+        source_row_size * static_cast<std::uint64_t>(color_buffer.height);
+    const std::uint64_t guest_address_space_end = std::uint64_t{1} << 32U;
+    if (source_size > color_buffer.image_size ||
+        source_size > std::numeric_limits<std::size_t>::max() ||
+        static_cast<std::uint64_t>(color_buffer.image_address) + source_size >
+            guest_address_space_end)
+    {
+        throw HleExecutionError(
+            std::string(api_name) +
+            ": source image size or guest address range is invalid");
+    }
+
+    return source_size;
+}
+
+[[nodiscard]] std::uint8_t quantize_unorm8(float value, const char* api_name)
+{
+    if (std::isnan(value))
+    {
+        throw HleExecutionError(
+            std::string(api_name) + ": NaN clear color components are unsupported");
+    }
+
+    const double scaled = static_cast<double>(std::clamp(value, 0.0F, 1.0F)) *
+        255.0;
+    const double floor_value = std::floor(scaled);
+    std::uint32_t rounded = static_cast<std::uint32_t>(floor_value);
+    const double fraction = scaled - floor_value;
+    if (fraction > 0.5 ||
+        (fraction == 0.5 && (rounded & 1U) != 0U))
+    {
+        ++rounded;
+    }
+    return static_cast<std::uint8_t>(rounded);
+}
+
+void clear_linear_rgba8_color_buffer(
+    EspressoCore& core,
+    const Gx2ClearColorRequest& request)
+{
+    constexpr const char* api_name = "gx2::GX2ClearColor";
+    const Gx2ColorBufferState color_buffer =
+        read_color_buffer(core, request.color_buffer);
+    const std::uint64_t image_size =
+        validate_linear_rgba8_color_buffer(color_buffer, api_name);
+
+    const std::array<std::uint8_t, 4U> rgba{
+        quantize_unorm8(request.rgba[0U], api_name),
+        quantize_unorm8(request.rgba[1U], api_name),
+        quantize_unorm8(request.rgba[2U], api_name),
+        quantize_unorm8(request.rgba[3U], api_name)};
+    core.memory.validate_read_range(
+        color_buffer.image_address, static_cast<std::size_t>(image_size));
+    core.memory.validate_write_range(
+        color_buffer.image_address, static_cast<std::size_t>(image_size));
+
+    std::vector<std::uint8_t> image_bytes(
+        static_cast<std::size_t>(image_size));
+    core.memory.read_bytes(color_buffer.image_address, image_bytes);
+
+    for (std::uint32_t row = 0U; row < color_buffer.height; ++row)
+    {
+        const std::size_t row_offset = static_cast<std::size_t>(
+            static_cast<std::uint64_t>(row) * color_buffer.pitch * rgba.size());
+        for (std::uint32_t column = 0U; column < color_buffer.width; ++column)
+        {
+            const std::size_t pixel_offset = row_offset +
+                static_cast<std::size_t>(column) * rgba.size();
+            std::copy(
+                rgba.begin(), rgba.end(),
+                image_bytes.begin() + static_cast<std::ptrdiff_t>(pixel_offset));
+        }
+    }
+
+    core.memory.write_bytes(color_buffer.image_address, image_bytes);
+}
+
 void copy_color_buffer_to_tv_scan_buffer(
     EspressoCore& core,
     std::uint32_t color_buffer_address,
@@ -587,22 +707,8 @@ void copy_color_buffer_to_tv_scan_buffer(
 
     const Gx2ColorBufferState color_buffer =
         read_color_buffer(core, color_buffer_address);
-    if (color_buffer.dimension != gx2_surface_dim_2d ||
-        color_buffer.depth != 1U || color_buffer.mip_levels != 1U ||
-        color_buffer.format != gx2_surface_format_unorm_r8_g8_b8_a8 ||
-        color_buffer.aa_mode != 0U ||
-        (color_buffer.use & gx2_surface_use_color_buffer) == 0U ||
-        color_buffer.tile_mode != gx2_tile_mode_linear_aligned ||
-        color_buffer.swizzle != 0U || color_buffer.view_mip != 0U ||
-        color_buffer.view_first_slice != 0U ||
-        color_buffer.view_num_slices != 1U ||
-        color_buffer.aa_buffer_address != 0U || color_buffer.aa_size != 0U)
-    {
-        throw HleExecutionError(
-            std::string(api_name) +
-            ": source must be a linear, single-sample 2D RGBA8 color buffer "
-            "with a base-level, single-slice view and no swizzle");
-    }
+    const std::uint64_t source_size =
+        validate_linear_rgba8_color_buffer(color_buffer, api_name);
 
     if (color_buffer.width != core.gx2.tv_scan_width ||
         color_buffer.height != core.gx2.tv_scan_height)
@@ -611,30 +717,8 @@ void copy_color_buffer_to_tv_scan_buffer(
             std::string(api_name) +
             ": source dimensions must match the configured TV scan mode");
     }
-    if (color_buffer.image_address == 0U || color_buffer.pitch < color_buffer.width ||
-        color_buffer.alignment == 0U ||
-        color_buffer.image_address % color_buffer.alignment != 0U)
-    {
-        throw HleExecutionError(
-            std::string(api_name) +
-            ": source image address or pitch is invalid");
-    }
-
     constexpr std::uint64_t bytes_per_pixel = 4U;
-    const std::uint64_t source_row_size =
-        static_cast<std::uint64_t>(color_buffer.pitch) * bytes_per_pixel;
-    const std::uint64_t source_size =
-        source_row_size * static_cast<std::uint64_t>(color_buffer.height);
     const std::uint64_t guest_address_space_end = std::uint64_t{1} << 32U;
-    if (source_size > color_buffer.image_size ||
-        source_size > std::numeric_limits<std::size_t>::max() ||
-        static_cast<std::uint64_t>(color_buffer.image_address) + source_size >
-            guest_address_space_end)
-    {
-        throw HleExecutionError(
-            std::string(api_name) +
-            ": source image size or guest address range is invalid");
-    }
 
     const std::uint32_t scan_buffer_count = get_scan_buffer_count(
         core.gx2.tv_buffering_mode, api_name);
@@ -6139,9 +6223,7 @@ void register_gx2_hle(HleDispatcher& dispatcher)
                     "gx2::GX2ClearColor: GX2 has not been initialized");
             }
 
-            // WUT's ABI places these float arguments in FPR1-FPR4. The HLE
-            // records the guest operation; the frontend forwards the latest
-            // clear request to its Vulkan presentation thread.
+            // WUT's ABI places these float arguments in FPR1-FPR4.
             Gx2ClearColorRequest request{};
             request.color_buffer = core.state.gpr[3];
             for (std::size_t index = 0U; index < request.rgba.size(); ++index)
@@ -6149,8 +6231,16 @@ void register_gx2_hle(HleDispatcher& dispatcher)
                 const double value = std::bit_cast<double>(core.state.fpr[index + 1U]);
                 request.rgba[index] = static_cast<float>(value);
             }
+
+            clear_linear_rgba8_color_buffer(core, request);
             core.gx2.latest_clear_color = request;
             ++core.gx2.clear_color_sequence;
+
+            Gx2Command command{};
+            command.type = Gx2CommandType::clear_color_buffer;
+            command.register_address = request.color_buffer;
+            command.clear_color = request;
+            core.gx2.pending_commands.push_back(std::move(command));
         });
 }
 

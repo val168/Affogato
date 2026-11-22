@@ -19,6 +19,7 @@ enum class Gx2CommandType
     flush,
     draw_done,
     gpu_fence,
+    clear_color_buffer,
     copy_color_buffer_to_scan_buffer,
     scan_buffer_swap,
     set_vertex_buffer,
@@ -183,6 +184,14 @@ struct Gx2ColorBufferScanCopy
     bool operator==(const Gx2ColorBufferScanCopy&) const = default;
 };
 
+struct Gx2ClearColorRequest
+{
+    std::uint32_t color_buffer{};
+    std::array<float, 4U> rgba{};
+
+    bool operator==(const Gx2ClearColorRequest&) const = default;
+};
+
 struct Gx2Command
 {
     Gx2CommandType type{};
@@ -198,6 +207,7 @@ struct Gx2Command
     std::optional<Gx2ColorBufferBinding> color_buffer;
     std::optional<Gx2DepthBufferBinding> depth_buffer;
     std::optional<Gx2ColorBufferScanCopy> scan_buffer_copy;
+    std::optional<Gx2ClearColorRequest> clear_color;
 
     constexpr Gx2Command() = default;
     constexpr Gx2Command(
@@ -213,7 +223,8 @@ struct Gx2Command
         std::optional<Gx2ProgramShaderBinding> command_program_shader = std::nullopt,
         std::optional<Gx2ColorBufferBinding> command_color_buffer = std::nullopt,
         std::optional<Gx2DepthBufferBinding> command_depth_buffer = std::nullopt,
-        std::optional<Gx2ColorBufferScanCopy> command_scan_buffer_copy = std::nullopt)
+        std::optional<Gx2ColorBufferScanCopy> command_scan_buffer_copy = std::nullopt,
+        std::optional<Gx2ClearColorRequest> command_clear_color = std::nullopt)
         : type(command_type),
           register_address(command_register_address),
           value(command_value),
@@ -226,19 +237,12 @@ struct Gx2Command
           program_shader(command_program_shader),
           color_buffer(command_color_buffer),
           depth_buffer(command_depth_buffer),
-          scan_buffer_copy(command_scan_buffer_copy)
+          scan_buffer_copy(command_scan_buffer_copy),
+          clear_color(command_clear_color)
     {
     }
 
     constexpr bool operator==(const Gx2Command&) const = default;
-};
-
-struct Gx2ClearColorRequest
-{
-    std::uint32_t color_buffer{};
-    std::array<float, 4U> rgba{};
-
-    bool operator==(const Gx2ClearColorRequest&) const = default;
 };
 
 struct Gx2EventCallback

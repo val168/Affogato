@@ -1,6 +1,6 @@
 # Affogato Development Status
 
-This snapshot is based on the source and repository notes at `f0fbfef` (`main`, 2026-10-25). It distinguishes implemented paths from complete console behavior.
+This snapshot is based on the source and repository notes at `f0fbfef` (`main`, 2026-10-25), with verified updates below through 2026-11-22. It distinguishes implemented paths from complete console behavior.
 
 ## Current source update (2026-11-03)
 
@@ -18,7 +18,7 @@ The frontend now snapshots a configured TV scan buffer at `GX2SwapScanBuffers` a
 ## Verified boundaries and limitations
 
 - The frontend can load and execute RPX code to a bounded stop. That is not a game-compatibility claim.
-- GX2 HLE and GPU state capture are present. Guest scan-buffer pixels can be copied to Vulkan at swap requests, but guest shader translation, draw submission, GPU framebuffer writes, and full guest image production are not connected into an end-to-end renderer.
+- GX2 HLE supports `GX2ClearColor` and `GX2CopyColorBufferToScanBuffer` for a bounded linear RGBA8 TV0 configuration, with guest-memory writes and ordered command capture. Guest draw execution, shader translation, tiled render targets, and full game frame production remain unimplemented.
 - CPU, loader, HLE, and graphics support is incremental. Full IOSU, multicore scheduling, complete CPU/FPU behavior, audio, complete input, encrypted-title loading, and broad game compatibility remain out of scope or unimplemented.
 - `docs/development-progress.md` records diagnostic runs and measured observations. Its latest notes report WWHD stopping at an unsupported null-target fetch (`0x46524D48`) after 6,081,749 instructions, and BOTW reaching a 50-million instruction cap at CIA `0x2F18DDC`. Neither run reaches a guest draw submission. These figures describe those recorded runs, not current environmental verification or compatibility.
 - The repository provides CPU and recompiler test executables plus a benchmark executable. In the current environment (GCC 16.2.0, CMake 4.4.4, Ninja 1.13.2), the Debug and Release presets build successfully and Debug CTest passes 2/2. The Vulkan path was not exercised in a live title during this update.
@@ -35,14 +35,14 @@ The frontend now snapshots a configured TV scan buffer at `GX2SwapScanBuffers` a
 The detailed queue in `development-progress.md` is the project-specific source for next implementation priorities. The current high-level priorities are:
 
 1. Continue investigating the recorded WWHD/BOTW startup stops through guest initialization and existing HLE behavior; do not fabricate successful callbacks or results.
-2. Implement actual guest color-buffer writes for a verified supported surface, beginning with `GX2ClearColor`, then test the copy-to-scanout path through normal guest execution. Trace the title's actual color-buffer and shader paths before extending format or tiling support.
+2. Add a controlled guest execution test that drives GX2 setup, clear, copy, and swap through normal HLE dispatch, then verifies the resulting scanout through the existing Vulkan presentation path. Trace title surface layouts before extending format or tiling support.
 3. Keep interpreter/recompiler semantics aligned and add native lowerings only with differential tests and repeatable Release measurements where performance is the objective.
 4. Extend loaders and HLE only for observed guest requirements, preserving transactional guest-memory effects and explicit unsupported behavior.
 5. Keep validating changes with both configured builds and the registered CTest suite; add Vulkan presentation checks that remain usable without a display where practical.
 
 ## Next implementation area
 
-Guest color-buffer writes and Latte draw execution are not emulated yet. `GX2CopyColorBufferToScanBuffer` supports only the verified linear-aligned, single-sample 2D UNORM RGBA8 to matching TV0 scanout subset documented in the source update below. Full game rendering additionally requires tiled color-buffer handling, Latte command execution, and guest shader translation.
+The implemented color-buffer clear and copy path is limited to linear-aligned, single-sample 2D UNORM RGBA8 surfaces and matching TV0 scanout. Full game rendering additionally requires tiled color-buffer handling, Latte command execution, guest vertex/index processing, and guest shader translation.
 
 ## Verified update (2026-11-22)
 
@@ -81,6 +81,22 @@ unsupported tiled input and DRC targets, undersized output memory, unmapped
 source memory, and copy/swap ordering. Debug and Release builds succeeded, and
 Debug CTest passed 2/2. `C:\devkitPro` is absent in this environment, so the
 WUT RPX fixture could not be compiled and no live guest or Vulkan-window output
-was verified. The next step is guest-visible `GX2ClearColor` writes for this
-same supported source layout, followed by a WUT graphics fixture when the WUT
-toolchain is available.
+was verified.
+
+## Guest color-buffer clear update (2026-11-22)
+
+`GX2ClearColor` now accepts the same bounded linear-aligned, single-sample 2D
+RGBA8 base-level/single-slice color-buffer layout. It validates the descriptor
+and full guest-memory range, clamps components to UNORM [0, 1], rejects NaN,
+quantizes RGBA8, writes active pixels, and preserves row padding. Successful
+clears enter the ordered GX2 command stream; unsupported layouts fail before
+guest pixels or clear-success state are changed.
+
+CPU HLE tests verify the guest bytes, padded-row preservation, invalid tiled
+layout and NaN rejection, and clear → copy → swap order. Debug and Release
+builds succeeded, Debug CTest passed 2/2, and the existing Vulkan texture-upload
+smoke test passed on an NVIDIA GeForce RTX 5070 Laptop GPU. That smoke test
+uses host-provided texture data and does not verify guest-generated output.
+The next priority is a controlled test that invokes these HLE operations via
+the emulator and validates the resulting scanout; a WUT RPX build remains
+unavailable because `C:\devkitPro` is not installed.
