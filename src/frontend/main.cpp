@@ -1845,27 +1845,11 @@ int run_gx2_guest_triangle_test(bool visible_window = false)
             "GX2 triangle call or vertex-buffer binding was not captured correctly");
     }
 
-    std::array<affogato::gpu::vulkan::DiagnosticVertex, 3U> guest_vertices{};
-    const auto& vertex_bytes =
-        captured_state.draw_calls()[0U].draw_vertex_data[0U].bytes;
-    const auto read_be32 = [&vertex_bytes](std::size_t offset) {
-        return (static_cast<std::uint32_t>(vertex_bytes[offset]) << 24U) |
-            (static_cast<std::uint32_t>(vertex_bytes[offset + 1U]) << 16U) |
-            (static_cast<std::uint32_t>(vertex_bytes[offset + 2U]) << 8U) |
-            static_cast<std::uint32_t>(vertex_bytes[offset + 3U]);
-    };
-    for (std::size_t index = 0U; index < guest_vertices.size(); ++index)
-    {
-        guest_vertices[index].x =
-            std::bit_cast<float>(read_be32(index * 8U));
-        guest_vertices[index].y =
-            std::bit_cast<float>(read_be32(index * 8U + 4U));
-    }
-
     affogato::gpu::vulkan::VulkanRenderer renderer(visible_window);
-    renderer.consume_guest_commands(commands);
+    renderer.consume_guest_commands(
+        commands,
+        affogato::gpu::vulkan::GuestDrawPolicy::diagnostic_float2_position);
     renderer.set_guest_clear_color({0.08F, 0.75F, 0.2F, 1.0F});
-    renderer.set_guest_diagnostic_vertices(guest_vertices);
     renderer.render_frame();
     while (visible_window && !renderer.should_close())
     {

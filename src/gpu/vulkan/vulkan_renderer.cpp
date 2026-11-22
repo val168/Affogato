@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cmath>
 #include <cstddef>
 #include <cstdio>
@@ -114,6 +115,65 @@ VkDebugUtilsMessengerCreateInfoEXT debug_messenger_info()
         VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
     info.pfnUserCallback = validation_callback;
     return info;
+}
+
+std::vector<DiagnosticVertex> decode_diagnostic_float2_draw(
+    const cpu::espresso::Gx2Command& command)
+{
+    constexpr std::uint32_t gx2_primitive_mode_triangles = 4U;
+    constexpr std::uint32_t diagnostic_vertex_stride = 2U * sizeof(float);
+
+    if (!command.draw_call)
+    {
+        throw std::runtime_error(
+            "Vulkan diagnostic draw has no captured GX2 draw parameters");
+    }
+    const cpu::espresso::Gx2DrawCall& draw = *command.draw_call;
+    if (draw.indexed || draw.primitive_mode != gx2_primitive_mode_triangles ||
+        draw.instance_count != 1U || draw.base_instance != 0U ||
+        draw.element_count == 0U || draw.element_count % 3U != 0U)
+    {
+        throw std::runtime_error(
+            "Vulkan float2 diagnostic supports only non-indexed, single-instance triangle lists");
+    }
+    if (command.draw_vertex_data.size() != 1U)
+    {
+        throw std::runtime_error(
+            "Vulkan float2 diagnostic requires exactly one captured vertex buffer");
+    }
+
+    const cpu::espresso::Gx2VertexBufferSnapshot& snapshot =
+        command.draw_vertex_data.front();
+    const std::uint64_t expected_offset =
+        static_cast<std::uint64_t>(draw.element_offset) *
+        diagnostic_vertex_stride;
+    const std::uint64_t expected_size =
+        static_cast<std::uint64_t>(draw.element_count) *
+        diagnostic_vertex_stride;
+    if (!snapshot.is_valid || snapshot.binding.stride != diagnostic_vertex_stride ||
+        snapshot.byte_offset != expected_offset ||
+        snapshot.bytes.size() != expected_size)
+    {
+        throw std::runtime_error(
+            "Vulkan float2 diagnostic received an invalid or unsupported vertex-buffer snapshot");
+    }
+
+    const auto read_be32 = [&snapshot](std::size_t offset) {
+        return (static_cast<std::uint32_t>(snapshot.bytes[offset]) << 24U) |
+            (static_cast<std::uint32_t>(snapshot.bytes[offset + 1U]) << 16U) |
+            (static_cast<std::uint32_t>(snapshot.bytes[offset + 2U]) << 8U) |
+            static_cast<std::uint32_t>(snapshot.bytes[offset + 3U]);
+    };
+
+    std::vector<DiagnosticVertex> vertices(draw.element_count);
+    for (std::size_t index = 0U; index < vertices.size(); ++index)
+    {
+        const std::size_t vertex_offset = index * diagnostic_vertex_stride;
+        vertices[index].x = std::bit_cast<float>(read_be32(vertex_offset));
+        vertices[index].y = std::bit_cast<float>(
+            read_be32(vertex_offset + sizeof(float)));
+    }
+    return vertices;
 }
 
 }
@@ -287,9 +347,37 @@ bool VulkanRenderer::set_guest_scanout(Rgba8TextureStaging scanout)
 }
 
 void VulkanRenderer::consume_guest_commands(
-    std::span<const cpu::espresso::Gx2Command> commands)
+    std::span<const cpu::espresso::Gx2Command> commands,
+    GuestDrawPolicy draw_policy)
 {
     guest_register_state_.apply(commands);
+    if (draw_policy == GuestDrawPolicy::capture_only)
+    {
+        return;
+    }
+
+    std::vector<DiagnosticVertex> diagnostic_vertices;
+    std::size_t draw_count = 0U;
+    for (const cpu::espresso::Gx2Command& command : commands)
+    {
+        if (command.type != cpu::espresso::Gx2CommandType::draw)
+        {
+            continue;
+        }
+        ++draw_count;
+        if (draw_count > 1U)
+        {
+            throw std::runtime_error(
+                "Vulkan float2 diagnostic currently accepts one draw per command batch");
+        }
+        diagnostic_vertices = decode_diagnostic_float2_draw(command);
+    }
+    if (diagnostic_vertices.empty())
+    {
+        throw std::runtime_error(
+            "Vulkan diagnostic draw policy received no guest draw commands");
+    }
+    set_guest_diagnostic_vertices(diagnostic_vertices);
 }
 
 std::uint32_t VulkanRenderer::find_memory_type(

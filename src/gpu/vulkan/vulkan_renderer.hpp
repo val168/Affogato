@@ -23,6 +23,12 @@ struct DiagnosticVertex
     float y{};
 };
 
+enum class GuestDrawPolicy
+{
+    capture_only,
+    diagnostic_float2_position,
+};
+
 class VulkanRenderer
 {
 public:
@@ -39,7 +45,8 @@ public:
         std::span<const DiagnosticVertex> vertices);
     [[nodiscard]] bool set_guest_scanout(Rgba8TextureStaging scanout);
     void consume_guest_commands(
-        std::span<const cpu::espresso::Gx2Command> commands);
+        std::span<const cpu::espresso::Gx2Command> commands,
+        GuestDrawPolicy draw_policy = GuestDrawPolicy::capture_only);
     [[nodiscard]] std::size_t upload_rgba8_texture(
         const Rgba8TextureStaging& staging);
     [[nodiscard]] VkImageView uploaded_texture_view(std::size_t texture_id) const;

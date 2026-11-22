@@ -580,3 +580,13 @@ bytes after submission and confirms the queued snapshot is unchanged. Indexed
 draws and fetch-format decoding are not covered yet. Debug/Release builds and
 CTest passed (2/2 in each configuration); the standalone diagnostic triangle
 smoke test also passed.
+
+The controlled triangle now enters `VulkanRenderer::consume_guest_commands`
+with the explicit `diagnostic_float2_position` policy. The renderer validates
+the single non-indexed triangle-list draw, its stride and captured byte range,
+then decodes big-endian float2 positions from the immutable payload and uses
+the existing diagnostic Vulkan pipeline. The manual vertex setter is no
+longer used by this test. The updated visible test again displayed the
+triangle, and the Debug/Release smoke tests and CTest suites passed. This
+policy is opt-in; normal frontend guest commands still only update captured
+GX2 state and are not yet submitted as game draws.
