@@ -625,18 +625,23 @@ is enabled. It recognizes WUT index types U16_LE, U32_LE, U16, and U32, applies
 the submitted byte offset, and snapshots the contiguous bound vertex-buffer
 range addressed by the minimum and maximum indices. A regression checks all
 four byte encodings, nonzero index offset, nonzero minimum vertex index,
-post-submit guest-memory mutation, and an out-of-range vertex index. This is
-asynchronous input preservation only: the Vulkan diagnostic consumer still
-rejects indexed draws, so no indexed geometry was submitted or displayed.
-Debug/Release builds and CTest (2/2 in each) pass; the existing non-indexed
-visible and smoke tests continue to pass. Index enum values follow WUT's
+post-submit guest-memory mutation, and an out-of-range vertex index. The
+diagnostic consumer expands supported U16/U32 indices in little- or big-endian
+order into sequential float2 vertices and submits the resulting triangle list
+through Vulkan. It rejects primitive restart because GX2 restart state is not
+captured. The visible controlled test routed one `GX2DrawEx` and one
+`GX2DrawIndexedEx` through PPC/HLE capture and displayed both using the fixed
+diagnostic host shader; their fixture geometry is spatially separated, so the
+visible result confirms that captured indices select the intended guest
+vertices. It does not verify a
+guest render-target write or Latte shader execution. Debug/Release builds and
+CTest (2/2 in each) pass; the hidden tests also pass. Index enum values follow WUT's
 [`GX2IndexType`](https://raw.githubusercontent.com/devkitPro/wut/master/include/gx2/enum.h)
 and indexed draw ABI follows WUT's
 [`draw.h`](https://raw.githubusercontent.com/devkitPro/wut/master/include/gx2/draw.h).
 
 The desktop frontend now has an explicit `Diagnostic GX2 draws (host shader,
-host window)` option. For that run, it enables HLE-time non-indexed vertex
-snapshots, preserves the host option across guest `GX2Init`, and forwards each
+host window)` option. For that run, it enables HLE-time vertex and index snapshots, preserves the host option across guest `GX2Init`, and forwards each
 draw batch through the renderer's diagnostic policy. Accepted diagnostic draws
 take precedence over scanout until the option is turned off; unsupported
 layouts are shown in the frontend diagnostics. This connects the real frontend

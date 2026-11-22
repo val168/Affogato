@@ -133,12 +133,12 @@ std::vector<DiagnosticVertex> decode_diagnostic_float2_draw(
             "Vulkan diagnostic draw has no captured GX2 draw parameters");
     }
     const cpu::espresso::Gx2DrawCall& draw = *command.draw_call;
-    if (draw.indexed || draw.primitive_mode != gx2_primitive_mode_triangles ||
+    if (draw.primitive_mode != gx2_primitive_mode_triangles ||
         draw.instance_count != 1U || draw.base_instance != 0U ||
         draw.element_count == 0U || draw.element_count % 3U != 0U)
     {
         throw std::runtime_error(
-            "Vulkan float2 diagnostic supports only non-indexed, single-instance triangle lists");
+            "Vulkan float2 diagnostic supports only single-instance triangle lists without base instance");
     }
     const std::vector<LatteVertexAttribute> attributes =
         decode_latte_vertex_fetch_shader(fetch_shader);
@@ -173,22 +173,58 @@ std::vector<DiagnosticVertex> decode_diagnostic_float2_draw(
     const cpu::espresso::Gx2VertexBufferSnapshot& snapshot = *vertex_buffer;
     const std::uint32_t position_byte_size =
         diagnostic_position_components * bytes_per_float;
-    const std::uint64_t expected_offset =
-        static_cast<std::uint64_t>(draw.element_offset) *
-        snapshot.binding.stride;
-    const std::uint64_t expected_size =
-        static_cast<std::uint64_t>(draw.element_count) *
-        snapshot.binding.stride;
     if (!snapshot.is_valid || snapshot.binding.stride == 0U ||
         position_attribute->endian_swap != 2U ||
         position_attribute->byte_offset > snapshot.binding.stride ||
         position_byte_size > snapshot.binding.stride -
-            position_attribute->byte_offset ||
-        snapshot.byte_offset != expected_offset ||
-        snapshot.bytes.size() != expected_size)
+            position_attribute->byte_offset)
     {
         throw std::runtime_error(
             "Vulkan float2 diagnostic received an invalid or unsupported vertex-buffer snapshot");
+    }
+
+    std::optional<std::size_t> index_size_bytes;
+    if (draw.indexed)
+    {
+        switch (draw.index_type)
+        {
+        case 0U: // GX2_INDEX_TYPE_U16_LE
+        case 4U: // GX2_INDEX_TYPE_U16
+            index_size_bytes = sizeof(std::uint16_t);
+            break;
+        case 1U: // GX2_INDEX_TYPE_U32_LE
+        case 9U: // GX2_INDEX_TYPE_U32
+            index_size_bytes = sizeof(std::uint32_t);
+            break;
+        default:
+            throw std::runtime_error(
+                "Vulkan float2 diagnostic does not support this GX2 index type");
+        }
+        if (!command.draw_index_data ||
+            !command.draw_index_data->is_valid ||
+            command.draw_index_data->index_type != draw.index_type ||
+            command.draw_index_data->byte_offset != draw.element_offset ||
+            command.draw_index_data->bytes.size() !=
+                static_cast<std::size_t>(draw.element_count) * *index_size_bytes)
+        {
+            throw std::runtime_error(
+                "Vulkan float2 diagnostic received an invalid indexed draw snapshot");
+        }
+    }
+    else
+    {
+        const std::uint64_t expected_offset =
+            static_cast<std::uint64_t>(draw.element_offset) *
+            snapshot.binding.stride;
+        const std::uint64_t expected_size =
+            static_cast<std::uint64_t>(draw.element_count) *
+            snapshot.binding.stride;
+        if (snapshot.byte_offset != expected_offset ||
+            snapshot.bytes.size() != expected_size)
+        {
+            throw std::runtime_error(
+                "Vulkan float2 diagnostic received a mismatched non-indexed vertex snapshot");
+        }
     }
 
     const auto read_be32 = [&snapshot](std::size_t offset) {
@@ -198,11 +234,67 @@ std::vector<DiagnosticVertex> decode_diagnostic_float2_draw(
             static_cast<std::uint32_t>(snapshot.bytes[offset + 3U]);
     };
 
+    const auto read_index = [&command, &draw, &index_size_bytes](
+        std::size_t index_number) {
+        if (!draw.indexed)
+        {
+            return static_cast<std::uint32_t>(draw.element_offset + index_number);
+        }
+
+        const cpu::espresso::Gx2IndexBufferSnapshot& index_snapshot =
+            *command.draw_index_data;
+        const std::size_t byte_offset = index_number * *index_size_bytes;
+        const bool little_endian = draw.index_type == 0U || draw.index_type == 1U;
+        std::uint32_t value = 0U;
+        for (std::size_t byte_number = 0U;
+             byte_number < *index_size_bytes;
+             ++byte_number)
+        {
+            const std::size_t shift = little_endian
+                ? byte_number * 8U
+                : (*index_size_bytes - byte_number - 1U) * 8U;
+            value |= static_cast<std::uint32_t>(
+                index_snapshot.bytes[byte_offset + byte_number]) << shift;
+        }
+        return value;
+    };
+
     std::vector<DiagnosticVertex> vertices(draw.element_count);
     for (std::size_t index = 0U; index < vertices.size(); ++index)
     {
-        const std::size_t vertex_offset =
-            index * snapshot.binding.stride + position_attribute->byte_offset;
+        const std::uint32_t vertex_index = read_index(index);
+        if (draw.indexed)
+        {
+            const std::uint32_t primitive_restart_index =
+                *index_size_bytes == sizeof(std::uint16_t)
+                ? std::numeric_limits<std::uint16_t>::max()
+                : std::numeric_limits<std::uint32_t>::max();
+            if (vertex_index == primitive_restart_index)
+            {
+                throw std::runtime_error(
+                    "Vulkan float2 diagnostic cannot process primitive-restart indices");
+            }
+        }
+        const std::uint64_t vertex_byte_address =
+            static_cast<std::uint64_t>(vertex_index) * snapshot.binding.stride;
+        if (vertex_byte_address < snapshot.byte_offset)
+        {
+            throw std::runtime_error(
+                "Vulkan float2 diagnostic index precedes its captured vertex range");
+        }
+        const std::uint64_t captured_vertex_offset =
+            vertex_byte_address - snapshot.byte_offset;
+        if (captured_vertex_offset > snapshot.bytes.size() ||
+            position_attribute->byte_offset >
+                snapshot.bytes.size() - captured_vertex_offset ||
+            position_byte_size > snapshot.bytes.size() - captured_vertex_offset -
+                position_attribute->byte_offset)
+        {
+            throw std::runtime_error(
+                "Vulkan float2 diagnostic index exceeds its captured vertex range");
+        }
+        const std::size_t vertex_offset = static_cast<std::size_t>(
+            captured_vertex_offset + position_attribute->byte_offset);
         vertices[index].x = std::bit_cast<float>(read_be32(vertex_offset));
         vertices[index].y = std::bit_cast<float>(
             read_be32(vertex_offset + sizeof(float)));
