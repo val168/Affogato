@@ -123,6 +123,8 @@ std::vector<DiagnosticVertex> decode_diagnostic_float2_draw(
     const cpu::espresso::Gx2FetchShaderBinding& fetch_shader)
 {
     constexpr std::uint32_t gx2_primitive_mode_triangles = 4U;
+    constexpr std::uint32_t gx2_primitive_mode_triangle_fan = 5U;
+    constexpr std::uint32_t gx2_primitive_mode_triangle_strip = 6U;
     constexpr std::uint32_t diagnostic_position_location = 0U;
     constexpr std::uint32_t diagnostic_position_components = 2U;
     constexpr std::uint32_t bytes_per_float = sizeof(float);
@@ -133,12 +135,20 @@ std::vector<DiagnosticVertex> decode_diagnostic_float2_draw(
             "Vulkan diagnostic draw has no captured GX2 draw parameters");
     }
     const cpu::espresso::Gx2DrawCall& draw = *command.draw_call;
-    if (draw.primitive_mode != gx2_primitive_mode_triangles ||
+    const bool triangle_list =
+        draw.primitive_mode == gx2_primitive_mode_triangles;
+    const bool triangle_strip =
+        draw.primitive_mode == gx2_primitive_mode_triangle_strip;
+    const bool triangle_fan =
+        draw.primitive_mode == gx2_primitive_mode_triangle_fan;
+    if ((!triangle_list && !triangle_strip && !triangle_fan) ||
         draw.instance_count != 1U || draw.base_instance != 0U ||
-        draw.element_count == 0U || draw.element_count % 3U != 0U)
+        draw.element_count == 0U ||
+        (triangle_list && draw.element_count % 3U != 0U) ||
+        ((triangle_strip || triangle_fan) && draw.element_count < 3U))
     {
         throw std::runtime_error(
-            "Vulkan float2 diagnostic supports only single-instance triangle lists without base instance");
+            "Vulkan float2 diagnostic supports triangle lists, strips, and fans without instancing or base instance");
     }
     const std::vector<LatteVertexAttribute> attributes =
         decode_latte_vertex_fetch_shader(fetch_shader);
@@ -259,8 +269,8 @@ std::vector<DiagnosticVertex> decode_diagnostic_float2_draw(
         return value;
     };
 
-    std::vector<DiagnosticVertex> vertices(draw.element_count);
-    for (std::size_t index = 0U; index < vertices.size(); ++index)
+    std::vector<DiagnosticVertex> source_vertices(draw.element_count);
+    for (std::size_t index = 0U; index < source_vertices.size(); ++index)
     {
         const std::uint32_t vertex_index = read_index(index);
         if (draw.indexed)
@@ -295,11 +305,39 @@ std::vector<DiagnosticVertex> decode_diagnostic_float2_draw(
         }
         const std::size_t vertex_offset = static_cast<std::size_t>(
             captured_vertex_offset + position_attribute->byte_offset);
-        vertices[index].x = std::bit_cast<float>(read_be32(vertex_offset));
-        vertices[index].y = std::bit_cast<float>(
+        source_vertices[index].x = std::bit_cast<float>(read_be32(vertex_offset));
+        source_vertices[index].y = std::bit_cast<float>(
             read_be32(vertex_offset + sizeof(float)));
     }
-    return vertices;
+
+    if (triangle_list)
+    {
+        return source_vertices;
+    }
+
+    const std::size_t triangle_count = source_vertices.size() - 2U;
+    std::vector<DiagnosticVertex> triangle_vertices;
+    triangle_vertices.reserve(triangle_count * 3U);
+    for (std::size_t triangle_index = 0U;
+         triangle_index < triangle_count;
+         ++triangle_index)
+    {
+        if (triangle_fan)
+        {
+            triangle_vertices.push_back(source_vertices[0U]);
+            triangle_vertices.push_back(source_vertices[triangle_index + 1U]);
+            triangle_vertices.push_back(source_vertices[triangle_index + 2U]);
+            continue;
+        }
+
+        const bool reverse_winding = triangle_index % 2U != 0U;
+        triangle_vertices.push_back(
+            source_vertices[triangle_index + (reverse_winding ? 1U : 0U)]);
+        triangle_vertices.push_back(
+            source_vertices[triangle_index + (reverse_winding ? 0U : 1U)]);
+        triangle_vertices.push_back(source_vertices[triangle_index + 2U]);
+    }
+    return triangle_vertices;
 }
 
 }

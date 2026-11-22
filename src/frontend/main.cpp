@@ -1815,9 +1815,12 @@ int run_gx2_guest_triangle_test(bool visible_window = false)
     constexpr std::uint32_t attribute_stream_address = 0x3200U;
     constexpr std::uint32_t guest_bctrl_instruction = 0x4E800421U;
     constexpr std::uint32_t gx2_primitive_mode_triangles = 4U;
+    constexpr std::uint32_t gx2_primitive_mode_triangle_fan = 5U;
+    constexpr std::uint32_t gx2_primitive_mode_triangle_strip = 6U;
     constexpr std::uint32_t vertex_buffer_index = 2U;
     constexpr std::uint32_t vertex_buffer_stride = 16U;
     constexpr std::uint32_t position_attribute_offset = 4U;
+    constexpr std::uint32_t vertex_buffer_size = 4U * vertex_buffer_stride;
     constexpr std::array<affogato::gpu::vulkan::DiagnosticVertex, 3U> vertices{{
         {-0.65F, -0.60F}, {0.65F, -0.60F}, {0.0F, 0.70F}}};
 
@@ -1826,17 +1829,22 @@ int run_gx2_guest_triangle_test(bool visible_window = false)
     core.configure_guest_heap(
         0x02000000U, static_cast<std::uint32_t>(core.memory.size()));
     core.memory.write32_be(call_stub_address, guest_bctrl_instruction);
-    for (std::size_t index = 0U; index < vertices.size(); ++index)
+    const auto write_vertex_positions = [&core](
+        std::span<const affogato::gpu::vulkan::DiagnosticVertex> positions)
     {
-        core.memory.write32_be(
-            vertex_buffer_address + static_cast<std::uint32_t>(
-                index * vertex_buffer_stride + position_attribute_offset),
-            std::bit_cast<std::uint32_t>(vertices[index].x));
-        core.memory.write32_be(
-            vertex_buffer_address + static_cast<std::uint32_t>(
-                index * vertex_buffer_stride + position_attribute_offset + 4U),
-            std::bit_cast<std::uint32_t>(vertices[index].y));
-    }
+        for (std::size_t index = 0U; index < positions.size(); ++index)
+        {
+            core.memory.write32_be(
+                vertex_buffer_address + static_cast<std::uint32_t>(
+                    index * vertex_buffer_stride + position_attribute_offset),
+                std::bit_cast<std::uint32_t>(positions[index].x));
+            core.memory.write32_be(
+                vertex_buffer_address + static_cast<std::uint32_t>(
+                    index * vertex_buffer_stride + position_attribute_offset + 4U),
+                std::bit_cast<std::uint32_t>(positions[index].y));
+        }
+    };
+    write_vertex_positions(vertices);
 
     const auto invoke = [&](const char* symbol,
                             std::span<const std::uint32_t> arguments) {
@@ -1867,7 +1875,7 @@ int run_gx2_guest_triangle_test(bool visible_window = false)
     core.gx2.capture_draw_vertex_data = true;
     invoke("GX2SetAttribBuffer", std::array<std::uint32_t, 4U>{
         vertex_buffer_index,
-        static_cast<std::uint32_t>(vertices.size() * vertex_buffer_stride),
+        vertex_buffer_size,
         vertex_buffer_stride,
         vertex_buffer_address});
     constexpr std::array<std::uint32_t, 8U> attribute_stream{
@@ -1894,17 +1902,7 @@ int run_gx2_guest_triangle_test(bool visible_window = false)
     constexpr std::array<affogato::gpu::vulkan::DiagnosticVertex, 3U>
         second_vertices{{
             {0.72F, -0.35F}, {0.98F, -0.35F}, {0.85F, 0.20F}}};
-    for (std::size_t index = 0U; index < second_vertices.size(); ++index)
-    {
-        core.memory.write32_be(
-            vertex_buffer_address + static_cast<std::uint32_t>(
-                index * vertex_buffer_stride + position_attribute_offset),
-            std::bit_cast<std::uint32_t>(second_vertices[index].x));
-        core.memory.write32_be(
-            vertex_buffer_address + static_cast<std::uint32_t>(
-                index * vertex_buffer_stride + position_attribute_offset + 4U),
-            std::bit_cast<std::uint32_t>(second_vertices[index].y));
-    }
+    write_vertex_positions(second_vertices);
     constexpr std::array<std::uint8_t, 6U> indices{2U, 0U, 0U, 0U, 1U, 0U};
     core.memory.write16_be(index_buffer_address, 0xEEEEU);
     for (std::size_t byte = 0U; byte < indices.size(); ++byte)
@@ -1924,17 +1922,7 @@ int run_gx2_guest_triangle_test(bool visible_window = false)
     constexpr std::array<affogato::gpu::vulkan::DiagnosticVertex, 3U>
         third_vertices{{
             {-0.98F, -0.35F}, {-0.72F, -0.35F}, {-0.85F, 0.20F}}};
-    for (std::size_t index = 0U; index < third_vertices.size(); ++index)
-    {
-        core.memory.write32_be(
-            vertex_buffer_address + static_cast<std::uint32_t>(
-                index * vertex_buffer_stride + position_attribute_offset),
-            std::bit_cast<std::uint32_t>(third_vertices[index].x));
-        core.memory.write32_be(
-            vertex_buffer_address + static_cast<std::uint32_t>(
-                index * vertex_buffer_stride + position_attribute_offset + 4U),
-            std::bit_cast<std::uint32_t>(third_vertices[index].y));
-    }
+    write_vertex_positions(third_vertices);
     constexpr std::array<std::uint8_t, 12U> big_endian_indices{
         0U, 0U, 0U, 2U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 1U};
     core.memory.write32_be(big_endian_index_buffer_address, 0xEEEEEEEEU);
@@ -1952,24 +1940,46 @@ int run_gx2_guest_triangle_test(bool visible_window = false)
         4U,
         1U});
 
+    constexpr std::array<affogato::gpu::vulkan::DiagnosticVertex, 4U>
+        strip_vertices{{
+            {0.55F, 0.35F}, {0.90F, 0.35F}, {0.55F, 0.65F}, {0.90F, 0.65F}}};
+    write_vertex_positions(strip_vertices);
+    invoke("GX2DrawEx", std::array<std::uint32_t, 4U>{
+        gx2_primitive_mode_triangle_strip, 4U, 0U, 1U});
+
+    constexpr std::array<affogato::gpu::vulkan::DiagnosticVertex, 4U>
+        fan_vertices{{
+            {-0.95F, 0.35F}, {-0.60F, 0.35F}, {-0.60F, 0.65F}, {-0.95F, 0.65F}}};
+    write_vertex_positions(fan_vertices);
+    invoke("GX2DrawEx", std::array<std::uint32_t, 4U>{
+        gx2_primitive_mode_triangle_fan, 4U, 0U, 1U});
+
     const auto commands = affogato::cpu::espresso::take_gx2_commands(core.gx2);
     affogato::gpu::Gx2RegisterState captured_state;
     captured_state.apply(commands);
-    if (captured_state.draw_calls().size() != 3U ||
-        captured_state.draw_vertex_buffers().size() != 3U ||
+    if (captured_state.draw_calls().size() != 5U ||
+        captured_state.draw_vertex_buffers().size() != 5U ||
         !captured_state.draw_vertex_buffers()[0U][vertex_buffer_index] ||
         !captured_state.draw_vertex_buffers()[1U][vertex_buffer_index] ||
         !captured_state.draw_vertex_buffers()[2U][vertex_buffer_index] ||
-        captured_state.draw_fetch_shaders().size() != 3U ||
+        !captured_state.draw_vertex_buffers()[3U][vertex_buffer_index] ||
+        !captured_state.draw_vertex_buffers()[4U][vertex_buffer_index] ||
+        captured_state.draw_fetch_shaders().size() != 5U ||
         !captured_state.draw_fetch_shaders()[0U] ||
         !captured_state.draw_fetch_shaders()[1U] ||
         !captured_state.draw_fetch_shaders()[2U] ||
+        !captured_state.draw_fetch_shaders()[3U] ||
+        !captured_state.draw_fetch_shaders()[4U] ||
         captured_state.draw_calls()[0U].draw_vertex_data.size() != 1U ||
         captured_state.draw_calls()[1U].draw_vertex_data.size() != 1U ||
         captured_state.draw_calls()[2U].draw_vertex_data.size() != 1U ||
+        captured_state.draw_calls()[3U].draw_vertex_data.size() != 1U ||
+        captured_state.draw_calls()[4U].draw_vertex_data.size() != 1U ||
         !captured_state.draw_calls()[0U].draw_vertex_data[0U].is_valid ||
         !captured_state.draw_calls()[1U].draw_vertex_data[0U].is_valid ||
         !captured_state.draw_calls()[2U].draw_vertex_data[0U].is_valid ||
+        !captured_state.draw_calls()[3U].draw_vertex_data[0U].is_valid ||
+        !captured_state.draw_calls()[4U].draw_vertex_data[0U].is_valid ||
         captured_state.draw_calls()[0U].draw_vertex_data[0U].bytes ==
             captured_state.draw_calls()[1U].draw_vertex_data[0U].bytes ||
         captured_state.draw_calls()[1U].draw_vertex_data[0U].bytes ==
@@ -2010,6 +2020,28 @@ int run_gx2_guest_triangle_test(bool visible_window = false)
                     big_endian_index_buffer_address,
                     4U,
                     1U,
+                    0U}} ||
+        captured_state.draw_calls()[3U].draw_call !=
+            std::optional<affogato::cpu::espresso::Gx2DrawCall>{
+                affogato::cpu::espresso::Gx2DrawCall{
+                    gx2_primitive_mode_triangle_strip,
+                    4U,
+                    false,
+                    0U,
+                    0U,
+                    0U,
+                    1U,
+                    0U}} ||
+        captured_state.draw_calls()[4U].draw_call !=
+            std::optional<affogato::cpu::espresso::Gx2DrawCall>{
+                affogato::cpu::espresso::Gx2DrawCall{
+                    gx2_primitive_mode_triangle_fan,
+                    4U,
+                    false,
+                    0U,
+                    0U,
+                    0U,
+                    1U,
                     0U}})
     {
         throw std::runtime_error(
@@ -2027,7 +2059,7 @@ int run_gx2_guest_triangle_test(bool visible_window = false)
         renderer.poll_events();
         renderer.render_frame();
     }
-    std::cout << "Non-indexed, U16_LE-indexed, and U32-indexed GX2 triangles "
+    std::cout << "GX2 triangle-list, indexed, strip, and fan geometry "
               << "using guest memory were submitted "
               << "with the diagnostic Vulkan shader on " << renderer.device_name()
               << ". Guest Latte shaders are not translated.\n";

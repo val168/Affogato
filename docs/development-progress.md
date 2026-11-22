@@ -627,18 +627,22 @@ range addressed by the minimum and maximum indices. A regression checks all
 four byte encodings, nonzero index offset, nonzero minimum vertex index,
 post-submit guest-memory mutation, and an out-of-range vertex index. The
 diagnostic consumer expands supported U16/U32 indices in little- or big-endian
-order into sequential float2 vertices and submits the resulting triangle list
-through Vulkan. It rejects primitive restart because GX2 restart state is not
-captured. The visible controlled test routed one `GX2DrawEx` and two
-`GX2DrawIndexedEx` calls through PPC/HLE capture. It displayed separate
-triangles selected by U16_LE indices at byte offset 2 and U32 big-endian
-indices at byte offset 4, confirming both decoding paths select the intended
-guest vertices using the fixed diagnostic host shader. It does not verify guest
-render-target writes or Latte shader execution. Debug/Release builds and
+order into sequential float2 vertices and supports triangle lists, strips, and
+fans. Strips alternate triangle winding; fans use their first vertex as the hub
+when converted to Vulkan triangle lists. It rejects primitive restart because
+GX2 restart state is not captured. The visible controlled test routed
+triangle-list, indexed, strip, and fan calls through PPC/HLE capture. It
+displayed separate guest triangles selected by U16_LE indices at byte offset 2
+and U32 big-endian indices at byte offset 4, plus diagnostic rectangles from
+strip and fan input. This verifies both index byte orders and the supported
+triangle topologies using the fixed diagnostic host shader. It does not verify
+guest render-target writes or Latte shader execution. Debug/Release builds and
 CTest (2/2 in each) pass; the hidden tests also pass. Index enum values follow WUT's
 [`GX2IndexType`](https://raw.githubusercontent.com/devkitPro/wut/master/include/gx2/enum.h)
 and indexed draw ABI follows WUT's
 [`draw.h`](https://raw.githubusercontent.com/devkitPro/wut/master/include/gx2/draw.h).
+Primitive-mode values follow WUT's
+[`GX2PrimitiveMode`](https://raw.githubusercontent.com/devkitPro/wut/master/include/gx2/enum.h).
 
 The desktop frontend now has an explicit `Diagnostic GX2 draws (host shader,
 host window)` option. For that run, it enables HLE-time vertex and index snapshots, preserves the host option across guest `GX2Init`, and forwards each
