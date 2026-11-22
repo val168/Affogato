@@ -120,4 +120,46 @@ inline void move_to_msr_tests()
     assert(jit_translated.state.cia == translated.state.cia);
 }
 
+inline void save_restore_spr_tests()
+{
+    using namespace affogato::cpu::espresso;
+    using namespace affogato::cpu::espresso::msr;
+
+    constexpr std::uint32_t move_from_srr0 = 0x7C7A02A6U;
+    constexpr std::uint32_t move_to_srr1 = 0x7C9B03A6U;
+    const DecodedInstruction read_srr0 = decode(move_from_srr0);
+    const DecodedInstruction write_srr1 = decode(move_to_srr1);
+
+    assert(read_srr0.opcode == Opcode::move_from_spr);
+    assert(read_srr0.destination == 3U);
+    assert(read_srr0.special_register == 26U);
+    assert(write_srr1.opcode == Opcode::move_to_spr);
+    assert(write_srr1.destination == 4U);
+    assert(write_srr1.special_register == 27U);
+
+    EspressoCore core(0x2000U);
+    core.memory.write32_be(0x1000U, move_from_srr0);
+    core.memory.write32_be(0x1004U, move_to_srr1);
+    core.state.cia = 0x1000U;
+    core.state.srr0 = 0x12345678U;
+    core.state.srr1 = 0x00008002U;
+    core.state.gpr[4] = 0xABCDEF01U;
+
+    assert(core.step() == StepResult::executed);
+    assert(core.state.gpr[3] == 0x12345678U);
+    assert(core.step() == StepResult::executed);
+    assert(core.state.srr1 == 0xABCDEF01U);
+
+    EspressoCore user(0x2000U);
+    user.memory.write32_be(0x1000U, move_from_srr0);
+    user.state.cia = 0x1000U;
+    user.state.msr = pr_mask;
+    user.state.srr0 = 0x12345678U;
+
+    assert(user.step() == StepResult::executed);
+    assert(user.state.srr0 == 0x1000U);
+    assert(user.state.srr1 == (pr_mask | 0x00040000U));
+    assert(user.state.cia == program_exception_vector);
+}
+
 }

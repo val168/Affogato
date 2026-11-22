@@ -39949,6 +39949,7 @@ int main(int argc, char* argv[])
     affogato::tests::cpu_program_exception_tests();
     affogato::tests::move_from_msr_tests();
     affogato::tests::move_to_msr_tests();
+    affogato::tests::save_restore_spr_tests();
     bool recompiler_requested = false;
     const char* rpx_path = nullptr;
     std::size_t rpx_instruction_limit = 5'000'000'000ULL;

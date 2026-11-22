@@ -732,6 +732,8 @@ void set_xer_carry(CpuState& state, bool carry) noexcept
     case Opcode::move_to_xer: return "mtxer";
     case Opcode::move_from_msr: return "mfmsr";
     case Opcode::move_to_msr: return "mtmsr";
+    case Opcode::move_from_spr: return "mfspr";
+    case Opcode::move_to_spr: return "mtspr";
     case Opcode::move_from_gqr: return "mfgqr";
     case Opcode::move_to_gqr: return "mtgqr";
     case Opcode::move_from_time_base_lower: return "mftb";
@@ -1634,6 +1636,7 @@ void add_history_source(
     case Opcode::move_to_count_register:
     case Opcode::move_to_xer:
     case Opcode::move_to_msr:
+    case Opcode::move_to_spr:
     case Opcode::move_to_gqr:
         add_history_source(entry, state, instruction.destination);
         break;
@@ -1729,6 +1732,7 @@ void add_history_source(
     case Opcode::move_from_count_register:
     case Opcode::move_from_xer:
     case Opcode::move_from_msr:
+    case Opcode::move_from_spr:
     case Opcode::move_from_gqr:
     case Opcode::move_from_time_base_lower:
     case Opcode::move_from_time_base_upper:
@@ -5349,6 +5353,21 @@ StepResult EspressoCore::step()
         }
         break;
 
+    case Opcode::move_from_spr:
+        if ((state.msr & msr::pr_mask) != 0U)
+        {
+            enter_program_exception(state, ProgramExceptionCause::privileged_instruction);
+            next_cia = state.cia;
+            instruction_completed = false;
+        }
+        else
+        {
+            state.gpr[instruction.destination] = instruction.special_register == 26U
+                ? state.srr0
+                : state.srr1;
+        }
+        break;
+
     case Opcode::move_to_msr:
     {
         if ((state.msr & msr::pr_mask) != 0U)
@@ -5379,6 +5398,23 @@ StepResult EspressoCore::step()
         state.msr = requested_msr & supported_write_mask;
         break;
     }
+
+    case Opcode::move_to_spr:
+        if ((state.msr & msr::pr_mask) != 0U)
+        {
+            enter_program_exception(state, ProgramExceptionCause::privileged_instruction);
+            next_cia = state.cia;
+            instruction_completed = false;
+        }
+        else if (instruction.special_register == 26U)
+        {
+            state.srr0 = state.gpr[instruction.destination];
+        }
+        else
+        {
+            state.srr1 = state.gpr[instruction.destination];
+        }
+        break;
 
     case Opcode::move_from_gqr:
         state.gpr[instruction.destination] =

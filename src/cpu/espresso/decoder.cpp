@@ -654,7 +654,16 @@ DecodedInstruction decode(std::uint32_t raw) noexcept
             // order: the encoded rA field contains SPR[0:4].
             const std::uint32_t spr =
                 (field(raw, 11, 0x1FU) << 5U) | field(raw, 16, 0x1FU);
-            if (spr == 1 && extended_opcode == 339 && (raw & 1U) == 0U)
+            if ((spr == 26U || spr == 27U) && (raw & 1U) == 0U)
+            {
+                instruction.opcode = extended_opcode == 339U
+                    ? Opcode::move_from_spr
+                    : Opcode::move_to_spr;
+                instruction.destination =
+                    static_cast<std::uint8_t>(field(raw, 21U, 0x1FU));
+                instruction.special_register = static_cast<std::uint16_t>(spr);
+            }
+            else if (spr == 1 && extended_opcode == 339 && (raw & 1U) == 0U)
             {
                 instruction.opcode = Opcode::move_from_xer;
                 instruction.destination =

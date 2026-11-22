@@ -163,6 +163,8 @@ enum class Opcode
     move_to_xer,
     move_from_msr,
     move_to_msr,
+    move_from_spr,
+    move_to_spr,
     move_from_gqr,
     move_to_gqr,
     move_from_time_base_lower,
@@ -270,6 +272,7 @@ struct DecodedInstruction
     std::uint8_t mask_end{};
     std::uint8_t string_byte_count{};
     std::uint8_t quantized_register{};
+    std::uint16_t special_register{};
 
     // Signed for immediate arithmetic and branch displacement; unsigned for logical ops.
     std::int32_t immediate{};
