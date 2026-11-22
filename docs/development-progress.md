@@ -619,3 +619,23 @@ second draw updates guest memory after the first submission, and its separate
 snapshot is verified before both ranges are decoded. The visible test shows
 two distinct diagnostic triangles; this validates ordered routing and draw
 payload snapshots, not guest render-target writes.
+
+The desktop frontend now has an explicit `Diagnostic GX2 draws (host shader,
+host window)` option. For that run, it enables HLE-time non-indexed vertex
+snapshots, preserves the host option across guest `GX2Init`, and forwards each
+draw batch through the renderer's diagnostic policy. Accepted diagnostic draws
+take precedence over scanout until the option is turned off; unsupported
+layouts are shown in the frontend diagnostics. This connects the real frontend
+command queue to the existing diagnostic path, but no actual game draw has yet
+been accepted through it. The draw pipeline still uses the fixed host shader
+and host swapchain rather than a guest render target.
+
+With the updated Release build, a bounded WWHD run again stopped at 6,081,749
+instructions (limit 7,000,000), CIA `0x00000000`, on unsupported instruction
+word `0x46524D48`. Its last recorded GX2 HLE call was
+`GX2CalcSurfaceSizeAndAlignment`; a filtered trace for `GX2DrawEx` produced no
+draw calls. This reproduces the startup blocker and does not exercise the new
+frontend draw route. No WUT installation was found at `C:\devkitPro`, so no
+guest graphics RPX was built. Debug and Release builds and CTest (2/2 each)
+passed; both triangle smoke tests passed, and the two distinct diagnostic
+triangles were visible in the Vulkan window, which closed cleanly.
