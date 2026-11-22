@@ -161,6 +161,7 @@ enum class Opcode
     move_to_count_register,
     move_from_xer,
     move_to_xer,
+    move_from_msr,
     move_from_gqr,
     move_to_gqr,
     move_from_time_base_lower,

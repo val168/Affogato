@@ -1,4 +1,5 @@
 #include "cpu/espresso/interpreter.hpp"
+#include "cpu/espresso/cpu_exceptions.hpp"
 
 #include "cpu/espresso/decoder.hpp"
 
@@ -729,6 +730,7 @@ void set_xer_carry(CpuState& state, bool carry) noexcept
     case Opcode::move_to_count_register: return "mtctr";
     case Opcode::move_from_xer: return "mfxer";
     case Opcode::move_to_xer: return "mtxer";
+    case Opcode::move_from_msr: return "mfmsr";
     case Opcode::move_from_gqr: return "mfgqr";
     case Opcode::move_to_gqr: return "mtgqr";
     case Opcode::move_from_time_base_lower: return "mftb";
@@ -1724,6 +1726,7 @@ void add_history_source(
     case Opcode::move_from_link_register:
     case Opcode::move_from_count_register:
     case Opcode::move_from_xer:
+    case Opcode::move_from_msr:
     case Opcode::move_from_gqr:
     case Opcode::move_from_time_base_lower:
     case Opcode::move_from_time_base_upper:
@@ -2471,6 +2474,7 @@ StepResult EspressoCore::step()
 
     const std::uint32_t fallthrough = cia + 4U;
     std::uint32_t next_cia = fallthrough;
+    bool instruction_completed = true;
 
     switch (instruction.opcode)
     {
@@ -5330,6 +5334,19 @@ StepResult EspressoCore::step()
         state.gpr[instruction.destination] = state.xer;
         break;
 
+    case Opcode::move_from_msr:
+        if ((state.msr & msr::pr_mask) != 0U)
+        {
+            enter_program_exception(state, ProgramExceptionCause::privileged_instruction);
+            next_cia = state.cia;
+            instruction_completed = false;
+        }
+        else
+        {
+            state.gpr[instruction.destination] = state.msr;
+        }
+        break;
+
     case Opcode::move_from_gqr:
         state.gpr[instruction.destination] =
             state.gqr[instruction.quantized_register];
@@ -6651,7 +6668,7 @@ StepResult EspressoCore::step()
         return StepResult::unsupported_instruction;
     }
 
-    pending_history_entry_.completed = true;
+    pending_history_entry_.completed = instruction_completed;
     if (pending_history_entry_.has_string_transfer &&
         !pending_history_entry_.string_transfer_store)
     {
