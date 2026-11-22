@@ -20200,6 +20200,7 @@ void gx2_init_hle_tests()
     core.state.fpscr = 0x5A5AA55AU;
     core.state.gpr[3] = attributes_address;
     core.gx2.host_vsync_pacing_enabled = false;
+    core.gx2.capture_draw_vertex_data = true;
     const auto gprs_before = core.state.gpr;
     const auto fprs_before = core.state.fpr;
     const auto ps1_before = core.state.fpr_ps1;
@@ -20231,6 +20232,7 @@ void gx2_init_hle_tests()
     assert(core.gx2.hang_reset_swaps_outstanding == 3U);
     assert(core.gx2.swap_interval == 1U);
     assert(!core.gx2.host_vsync_pacing_enabled);
+    assert(core.gx2.capture_draw_vertex_data);
     assert(core.gx2.flip_request_count == 0U && core.gx2.flip_execute_count == 0U);
     assert(!core.gx2.db_stencilrefmask_valid && core.gx2.db_stencilrefmask == 0U);
     assert(!core.gx2.db_stencilrefmask_bf_valid && core.gx2.db_stencilrefmask_bf == 0U);

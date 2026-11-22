@@ -359,6 +359,13 @@ void VulkanRenderer::set_guest_diagnostic_vertices(
         0U, diagnostic_vertex_count_});
 }
 
+void VulkanRenderer::clear_guest_diagnostic_draws() noexcept
+{
+    diagnostic_vertex_count_ = 0U;
+    diagnostic_draw_ranges_.clear();
+    diagnostic_draw_policy_active_ = false;
+}
+
 bool VulkanRenderer::set_guest_scanout(Rgba8TextureStaging scanout)
 {
     constexpr std::uint64_t bytes_per_pixel = 4U;
@@ -391,6 +398,7 @@ void VulkanRenderer::consume_guest_commands(
     guest_register_state_.apply(commands);
     if (draw_policy == GuestDrawPolicy::capture_only)
     {
+        diagnostic_draw_policy_active_ = false;
         return;
     }
 
@@ -427,13 +435,13 @@ void VulkanRenderer::consume_guest_commands(
             diagnostic_vertices.end(), draw_vertices.begin(), draw_vertices.end());
         ++draw_index;
     }
-    if (diagnostic_vertices.empty())
+    if (diagnostic_draw_ranges.empty())
     {
-        throw std::runtime_error(
-            "Vulkan diagnostic draw policy received no guest draw commands");
+        return;
     }
     set_guest_diagnostic_vertices(diagnostic_vertices);
     diagnostic_draw_ranges_ = std::move(diagnostic_draw_ranges);
+    diagnostic_draw_policy_active_ = true;
 }
 
 std::uint32_t VulkanRenderer::find_memory_type(
@@ -1398,7 +1406,8 @@ void VulkanRenderer::render_frame()
     check(vkBeginCommandBuffer(command_buffer, &begin_info), "vkBeginCommandBuffer");
 
     const bool present_guest_scanout =
-        guest_scanout_.has_value() && supports_swapchain_transfer_dst_;
+        guest_scanout_.has_value() && supports_swapchain_transfer_dst_ &&
+        !diagnostic_draw_policy_active_;
     if (present_guest_scanout)
     {
         const bool swapchain_is_bgra =
@@ -1546,7 +1555,7 @@ void VulkanRenderer::render_frame()
         render_info.clearValueCount = 1U;
         render_info.pClearValues = &clear;
         vkCmdBeginRenderPass(command_buffer, &render_info, VK_SUBPASS_CONTENTS_INLINE);
-        if (diagnostic_vertex_count_ > 0U)
+        if (diagnostic_vertex_count_ > 0U && diagnostic_draw_policy_active_)
         {
             VkViewport viewport{};
             viewport.width = static_cast<float>(swapchain_extent_.width);

@@ -951,6 +951,7 @@ struct WorkerResult
 {
     std::mutex mutex;
     std::string message;
+    std::string graphics_message;
     std::optional<affogato::cpu::espresso::Gx2ClearColorRequest> latest_guest_clear;
     std::uint64_t guest_clear_sequence{};
     std::optional<affogato::gpu::Rgba8TextureStaging> latest_guest_scanout;
@@ -963,7 +964,8 @@ void launch_game(
     const fs::path& path,
     WorkerResult& worker,
     std::jthread& thread,
-    affogato::ExecutionMode execution_mode)
+    affogato::ExecutionMode execution_mode,
+    bool capture_guest_draw_vertex_data)
 {
     if (worker.running.exchange(true))
     {
@@ -976,10 +978,11 @@ void launch_game(
     {
         std::lock_guard lock(worker.mutex);
         worker.message = "Reading RPX " + path_utf8(path) + " ...";
+        worker.graphics_message.clear();
         worker.latest_guest_scanout.reset();
         ++worker.guest_scanout_sequence;
     }
-    thread = std::jthread([path, &worker, execution_mode]
+    thread = std::jthread([path, &worker, execution_mode, capture_guest_draw_vertex_data]
     {
         std::string message;
         try
@@ -1011,6 +1014,8 @@ void launch_game(
             affogato::Emulator emulator;
             static_cast<void>(emulator.load_rpx(
                 bytes, path.parent_path().parent_path() / "content"));
+            emulator.core().gx2.capture_draw_vertex_data =
+                capture_guest_draw_vertex_data;
             const auto rpx_load_end = std::chrono::steady_clock::now();
             const auto rpx_load_time = std::chrono::duration_cast<std::chrono::milliseconds>(
                 rpx_load_end - rpx_load_start);
@@ -1260,6 +1265,7 @@ int run_frontend()
     std::jthread launch_thread;
     bool grid_view = false;
     bool use_recompiler = false;
+    bool use_diagnostic_guest_draws = false;
     bool done = false;
     std::uint64_t shown_guest_clear_sequence = 0U;
     std::uint64_t shown_guest_scanout_sequence = 0U;
@@ -1414,7 +1420,8 @@ int run_frontend()
                     {
                         launch_game(games[i].rpx_path, worker, launch_thread,
                             use_recompiler ? affogato::ExecutionMode::recompiler
-                                           : affogato::ExecutionMode::interpreter);
+                                           : affogato::ExecutionMode::interpreter,
+                            use_diagnostic_guest_draws);
                     }
                 }
                 ImGui::SameLine(260);
@@ -1441,7 +1448,8 @@ int run_frontend()
                         {
                             launch_game(games[i].rpx_path, worker, launch_thread,
                                 use_recompiler ? affogato::ExecutionMode::recompiler
-                                               : affogato::ExecutionMode::interpreter);
+                                               : affogato::ExecutionMode::interpreter,
+                                use_diagnostic_guest_draws);
                         }
                     }
                     ImGui::TextWrapped("%s", path_utf8(games[i].rpx_path).c_str());
@@ -1463,12 +1471,19 @@ int run_frontend()
             {
                 launch_game(games[*selected_game].rpx_path, worker, launch_thread,
                     use_recompiler ? affogato::ExecutionMode::recompiler
-                                   : affogato::ExecutionMode::interpreter);
+                                   : affogato::ExecutionMode::interpreter,
+                    use_diagnostic_guest_draws);
             }
             ImGui::EndDisabled();
         }
         ImGui::BeginDisabled(worker.running.load());
         ImGui::Checkbox("Use experimental x86-64 recompiler", &use_recompiler);
+        if (ImGui::Checkbox(
+                "Diagnostic GX2 draws (host shader, host window)",
+                &use_diagnostic_guest_draws) && vulkan_output)
+        {
+            vulkan_output->clear_guest_diagnostic_draws();
+        }
         ImGui::EndDisabled();
         if (worker.running)
         {
@@ -1480,14 +1495,20 @@ int run_frontend()
         }
         ImGui::SeparatorText("Launch diagnostics");
         std::string message;
+        std::string graphics_message;
         {
             std::lock_guard lock(worker.mutex);
             message = worker.message;
+            graphics_message = worker.graphics_message;
         }
         ImGui::BeginChild("Diagnostics", ImVec2(0, 0), ImGuiChildFlags_Borders);
         std::string diagnostic_text = message.empty()
             ? "Select and launch an RPX to see its result."
             : std::move(message);
+        if (!graphics_message.empty())
+        {
+            diagnostic_text += "\n\nGraphics diagnostics: " + graphics_message;
+        }
         ImGui::InputTextMultiline(
             "##launch-diagnostics",
             diagnostic_text.data(),
@@ -1529,9 +1550,21 @@ int run_frontend()
                     guest_scanout = std::move(worker.latest_guest_scanout);
                 }
             }
-            if (!guest_commands.empty())
+            const auto draw_policy =
+                use_diagnostic_guest_draws
+                ? affogato::gpu::vulkan::GuestDrawPolicy::diagnostic_float2_position
+                : affogato::gpu::vulkan::GuestDrawPolicy::capture_only;
+            try
             {
-                vulkan_output->consume_guest_commands(guest_commands);
+                vulkan_output->consume_guest_commands(guest_commands, draw_policy);
+            }
+            catch (const std::exception& error)
+            {
+                std::lock_guard lock(worker.mutex);
+                if (worker.graphics_message.empty())
+                {
+                    worker.graphics_message = error.what();
+                }
             }
             if (guest_clear && guest_clear_sequence != shown_guest_clear_sequence)
             {

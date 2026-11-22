@@ -43,6 +43,7 @@ public:
     void set_guest_clear_color(const std::array<float, 4U>& rgba) noexcept;
     void set_guest_diagnostic_vertices(
         std::span<const DiagnosticVertex> vertices);
+    void clear_guest_diagnostic_draws() noexcept;
     [[nodiscard]] bool set_guest_scanout(Rgba8TextureStaging scanout);
     void consume_guest_commands(
         std::span<const cpu::espresso::Gx2Command> commands,
@@ -151,6 +152,7 @@ private:
     bool diagnostic_vertex_memory_coherent_{};
     std::uint32_t diagnostic_vertex_count_{};
     std::vector<DiagnosticDrawRange> diagnostic_draw_ranges_;
+    bool diagnostic_draw_policy_active_{};
     std::vector<std::uint8_t> scaled_scanout_pixels_;
     bool supports_swapchain_transfer_dst_{};
     bool guest_scanout_dirty_{};

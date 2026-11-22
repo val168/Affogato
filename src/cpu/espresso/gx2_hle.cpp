@@ -3040,11 +3040,14 @@ void register_gx2_hle(HleDispatcher& dispatcher)
             const std::uint32_t attributes = core.state.gpr[3];
             const bool host_vsync_pacing_enabled =
                 core.gx2.host_vsync_pacing_enabled;
+            const bool capture_draw_vertex_data =
+                core.gx2.capture_draw_vertex_data;
             Gx2RuntimeState initialized = initialize_gx2(core, attributes);
-            // This host execution policy is configured by the launch path,
-            // not by guest GX2 initialization; preserve it across state setup.
+            // These host execution policies are configured by the launch path,
+            // not by guest GX2 initialization; preserve them across state setup.
             initialized.host_vsync_pacing_enabled =
                 host_vsync_pacing_enabled;
+            initialized.capture_draw_vertex_data = capture_draw_vertex_data;
             core.gx2 = initialized;
             // GX2Init is void: preserve all guest GPRs including r3.
         });
