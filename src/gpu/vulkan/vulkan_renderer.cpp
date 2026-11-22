@@ -1,6 +1,7 @@
 #include "gpu/vulkan/vulkan_renderer.hpp"
 
 #include "gpu/vulkan/diagnostic_shader_spirv.hpp"
+#include "gpu/latte_vertex_fetch.hpp"
 
 #include <algorithm>
 #include <array>
@@ -118,10 +119,13 @@ VkDebugUtilsMessengerCreateInfoEXT debug_messenger_info()
 }
 
 std::vector<DiagnosticVertex> decode_diagnostic_float2_draw(
-    const cpu::espresso::Gx2Command& command)
+    const cpu::espresso::Gx2Command& command,
+    const cpu::espresso::Gx2FetchShaderBinding& fetch_shader)
 {
     constexpr std::uint32_t gx2_primitive_mode_triangles = 4U;
-    constexpr std::uint32_t diagnostic_vertex_stride = 2U * sizeof(float);
+    constexpr std::uint32_t diagnostic_position_location = 0U;
+    constexpr std::uint32_t diagnostic_position_components = 2U;
+    constexpr std::uint32_t bytes_per_float = sizeof(float);
 
     if (!command.draw_call)
     {
@@ -136,21 +140,50 @@ std::vector<DiagnosticVertex> decode_diagnostic_float2_draw(
         throw std::runtime_error(
             "Vulkan float2 diagnostic supports only non-indexed, single-instance triangle lists");
     }
-    if (command.draw_vertex_data.size() != 1U)
+    const std::vector<LatteVertexAttribute> attributes =
+        decode_latte_vertex_fetch_shader(fetch_shader);
+    const auto position_attribute = std::ranges::find_if(
+        attributes,
+        [](const LatteVertexAttribute& attribute)
+        {
+            return attribute.location == diagnostic_position_location;
+        });
+    if (position_attribute == attributes.end() ||
+        position_attribute->component_count < diagnostic_position_components ||
+        position_attribute->selectors[0U] != 0U ||
+        position_attribute->selectors[1U] != 1U)
     {
         throw std::runtime_error(
-            "Vulkan float2 diagnostic requires exactly one captured vertex buffer");
+            "Vulkan float2 diagnostic requires location 0 to select the first two float components");
     }
 
-    const cpu::espresso::Gx2VertexBufferSnapshot& snapshot =
-        command.draw_vertex_data.front();
+    const auto vertex_buffer = std::ranges::find_if(
+        command.draw_vertex_data,
+        [&position_attribute](
+            const cpu::espresso::Gx2VertexBufferSnapshot& snapshot)
+        {
+            return snapshot.binding.index == position_attribute->buffer_index;
+        });
+    if (vertex_buffer == command.draw_vertex_data.end())
+    {
+        throw std::runtime_error(
+            "Vulkan float2 diagnostic is missing the fetch shader's vertex buffer slot");
+    }
+
+    const cpu::espresso::Gx2VertexBufferSnapshot& snapshot = *vertex_buffer;
+    const std::uint32_t position_byte_size =
+        diagnostic_position_components * bytes_per_float;
     const std::uint64_t expected_offset =
         static_cast<std::uint64_t>(draw.element_offset) *
-        diagnostic_vertex_stride;
+        snapshot.binding.stride;
     const std::uint64_t expected_size =
         static_cast<std::uint64_t>(draw.element_count) *
-        diagnostic_vertex_stride;
-    if (!snapshot.is_valid || snapshot.binding.stride != diagnostic_vertex_stride ||
+        snapshot.binding.stride;
+    if (!snapshot.is_valid || snapshot.binding.stride == 0U ||
+        position_attribute->endian_swap != 2U ||
+        position_attribute->byte_offset > snapshot.binding.stride ||
+        position_byte_size > snapshot.binding.stride -
+            position_attribute->byte_offset ||
         snapshot.byte_offset != expected_offset ||
         snapshot.bytes.size() != expected_size)
     {
@@ -168,7 +201,8 @@ std::vector<DiagnosticVertex> decode_diagnostic_float2_draw(
     std::vector<DiagnosticVertex> vertices(draw.element_count);
     for (std::size_t index = 0U; index < vertices.size(); ++index)
     {
-        const std::size_t vertex_offset = index * diagnostic_vertex_stride;
+        const std::size_t vertex_offset =
+            index * snapshot.binding.stride + position_attribute->byte_offset;
         vertices[index].x = std::bit_cast<float>(read_be32(vertex_offset));
         vertices[index].y = std::bit_cast<float>(
             read_be32(vertex_offset + sizeof(float)));
@@ -350,6 +384,7 @@ void VulkanRenderer::consume_guest_commands(
     std::span<const cpu::espresso::Gx2Command> commands,
     GuestDrawPolicy draw_policy)
 {
+    const std::size_t first_draw_index = guest_register_state_.draw_calls().size();
     guest_register_state_.apply(commands);
     if (draw_policy == GuestDrawPolicy::capture_only)
     {
@@ -358,6 +393,8 @@ void VulkanRenderer::consume_guest_commands(
 
     std::vector<DiagnosticVertex> diagnostic_vertices;
     std::size_t draw_count = 0U;
+    std::size_t draw_index = first_draw_index;
+    const auto draw_fetch_shaders = guest_register_state_.draw_fetch_shaders();
     for (const cpu::espresso::Gx2Command& command : commands)
     {
         if (command.type != cpu::espresso::Gx2CommandType::draw)
@@ -370,7 +407,15 @@ void VulkanRenderer::consume_guest_commands(
             throw std::runtime_error(
                 "Vulkan float2 diagnostic currently accepts one draw per command batch");
         }
-        diagnostic_vertices = decode_diagnostic_float2_draw(command);
+        if (draw_index >= draw_fetch_shaders.size() ||
+            !draw_fetch_shaders[draw_index])
+        {
+            throw std::runtime_error(
+                "Vulkan diagnostic draw has no captured GX2 fetch shader");
+        }
+        diagnostic_vertices = decode_diagnostic_float2_draw(
+            command, *draw_fetch_shaders[draw_index]);
+        ++draw_index;
     }
     if (diagnostic_vertices.empty())
     {

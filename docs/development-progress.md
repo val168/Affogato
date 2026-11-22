@@ -599,5 +599,13 @@ mode. The format IDs match WUT's `GX2AttribFormat` values and its helper's
 selector mappings ([GX2 enums](https://buildbot.libretro.com/doxygen/a07082_source.html),
 [WUT attribute helper](https://github.com/devkitPro/wut/blob/master/libraries/libwhb/src/gfx_shader.c)).
 Unit coverage exercises all four Float32 widths and rejects unsupported data
-formats. This decoder is not yet connected to Vulkan draw submission; the
-diagnostic renderer still uses its explicit float2 policy.
+formats.
+
+The diagnostic Vulkan path now uses the decoded fetch descriptor. The
+controlled PPC test issues `GX2InitFetchShaderEx` with a Float32x2 location-0
+attribute, binds it through `GX2SetFetchShader`, and then submits `GX2DrawEx`.
+The renderer selects location 0's captured buffer slot and byte offset from
+the draw-time VTX program and decodes its position from the immutable buffer
+snapshot. The visible test displays the triangle. This remains the explicit
+diagnostic-shader policy; ordinary title execution is not routed to draws and
+guest Latte vertex/pixel programs are not executed.

@@ -1775,6 +1775,9 @@ int run_gx2_guest_triangle_test(bool visible_window = false)
 {
     constexpr std::uint32_t vertex_buffer_address = 0x10000U;
     constexpr std::uint32_t call_stub_address = 0x2000U;
+    constexpr std::uint32_t fetch_shader_descriptor_address = 0x3000U;
+    constexpr std::uint32_t fetch_shader_program_address = 0x3100U;
+    constexpr std::uint32_t attribute_stream_address = 0x3200U;
     constexpr std::uint32_t guest_bctrl_instruction = 0x4E800421U;
     constexpr std::uint32_t gx2_primitive_mode_triangles = 4U;
     constexpr std::array<affogato::gpu::vulkan::DiagnosticVertex, 3U> vertices{{
@@ -1825,6 +1828,24 @@ int run_gx2_guest_triangle_test(bool visible_window = false)
     invoke("GX2SetAttribBuffer", std::array<std::uint32_t, 4U>{
         0U, static_cast<std::uint32_t>(sizeof(vertices)),
         static_cast<std::uint32_t>(sizeof(vertices[0U])), vertex_buffer_address});
+    constexpr std::array<std::uint32_t, 8U> attribute_stream{
+        0U, 0U, 0U, 0x80DU, 0U, 0U, 0x00010405U, 3U};
+    for (std::size_t index = 0U; index < attribute_stream.size(); ++index)
+    {
+        core.memory.write32_be(
+            attribute_stream_address +
+                static_cast<std::uint32_t>(index * sizeof(std::uint32_t)),
+            attribute_stream[index]);
+    }
+    invoke("GX2InitFetchShaderEx", std::array<std::uint32_t, 6U>{
+        fetch_shader_descriptor_address,
+        fetch_shader_program_address,
+        1U,
+        attribute_stream_address,
+        0U,
+        0U});
+    invoke("GX2SetFetchShader", std::array<std::uint32_t, 1U>{
+        fetch_shader_descriptor_address});
     invoke("GX2DrawEx", std::array<std::uint32_t, 4U>{
         gx2_primitive_mode_triangles, 3U, 0U, 1U});
 
@@ -1834,6 +1855,8 @@ int run_gx2_guest_triangle_test(bool visible_window = false)
     if (captured_state.draw_calls().size() != 1U ||
         captured_state.draw_vertex_buffers().size() != 1U ||
         !captured_state.draw_vertex_buffers()[0U][0U] ||
+        captured_state.draw_fetch_shaders().size() != 1U ||
+        !captured_state.draw_fetch_shaders()[0U] ||
         captured_state.draw_calls()[0U].draw_vertex_data.size() != 1U ||
         !captured_state.draw_calls()[0U].draw_vertex_data[0U].is_valid ||
         captured_state.draw_calls()[0U].draw_call !=
