@@ -1808,6 +1808,7 @@ int run_gx2_guest_triangle_test(bool visible_window = false)
 {
     constexpr std::uint32_t vertex_buffer_address = 0x10000U;
     constexpr std::uint32_t index_buffer_address = 0x4000U;
+    constexpr std::uint32_t big_endian_index_buffer_address = 0x5000U;
     constexpr std::uint32_t call_stub_address = 0x2000U;
     constexpr std::uint32_t fetch_shader_descriptor_address = 0x3000U;
     constexpr std::uint32_t fetch_shader_program_address = 0x3100U;
@@ -1905,39 +1906,85 @@ int run_gx2_guest_triangle_test(bool visible_window = false)
             std::bit_cast<std::uint32_t>(second_vertices[index].y));
     }
     constexpr std::array<std::uint8_t, 6U> indices{2U, 0U, 0U, 0U, 1U, 0U};
+    core.memory.write16_be(index_buffer_address, 0xEEEEU);
     for (std::size_t byte = 0U; byte < indices.size(); ++byte)
     {
         core.memory.write8(
-            index_buffer_address + static_cast<std::uint32_t>(byte), indices[byte]);
+            index_buffer_address + 2U + static_cast<std::uint32_t>(byte),
+            indices[byte]);
     }
     invoke("GX2DrawIndexedEx", std::array<std::uint32_t, 6U>{
         gx2_primitive_mode_triangles,
         3U,
         0U,
         index_buffer_address,
-        0U,
+        2U,
+        1U});
+
+    constexpr std::array<affogato::gpu::vulkan::DiagnosticVertex, 3U>
+        third_vertices{{
+            {-0.98F, -0.35F}, {-0.72F, -0.35F}, {-0.85F, 0.20F}}};
+    for (std::size_t index = 0U; index < third_vertices.size(); ++index)
+    {
+        core.memory.write32_be(
+            vertex_buffer_address + static_cast<std::uint32_t>(
+                index * vertex_buffer_stride + position_attribute_offset),
+            std::bit_cast<std::uint32_t>(third_vertices[index].x));
+        core.memory.write32_be(
+            vertex_buffer_address + static_cast<std::uint32_t>(
+                index * vertex_buffer_stride + position_attribute_offset + 4U),
+            std::bit_cast<std::uint32_t>(third_vertices[index].y));
+    }
+    constexpr std::array<std::uint8_t, 12U> big_endian_indices{
+        0U, 0U, 0U, 2U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 1U};
+    core.memory.write32_be(big_endian_index_buffer_address, 0xEEEEEEEEU);
+    for (std::size_t byte = 0U; byte < big_endian_indices.size(); ++byte)
+    {
+        core.memory.write8(
+            big_endian_index_buffer_address + 4U + static_cast<std::uint32_t>(byte),
+            big_endian_indices[byte]);
+    }
+    invoke("GX2DrawIndexedEx", std::array<std::uint32_t, 6U>{
+        gx2_primitive_mode_triangles,
+        3U,
+        9U,
+        big_endian_index_buffer_address,
+        4U,
         1U});
 
     const auto commands = affogato::cpu::espresso::take_gx2_commands(core.gx2);
     affogato::gpu::Gx2RegisterState captured_state;
     captured_state.apply(commands);
-    if (captured_state.draw_calls().size() != 2U ||
-        captured_state.draw_vertex_buffers().size() != 2U ||
+    if (captured_state.draw_calls().size() != 3U ||
+        captured_state.draw_vertex_buffers().size() != 3U ||
         !captured_state.draw_vertex_buffers()[0U][vertex_buffer_index] ||
         !captured_state.draw_vertex_buffers()[1U][vertex_buffer_index] ||
-        captured_state.draw_fetch_shaders().size() != 2U ||
+        !captured_state.draw_vertex_buffers()[2U][vertex_buffer_index] ||
+        captured_state.draw_fetch_shaders().size() != 3U ||
         !captured_state.draw_fetch_shaders()[0U] ||
         !captured_state.draw_fetch_shaders()[1U] ||
+        !captured_state.draw_fetch_shaders()[2U] ||
         captured_state.draw_calls()[0U].draw_vertex_data.size() != 1U ||
         captured_state.draw_calls()[1U].draw_vertex_data.size() != 1U ||
+        captured_state.draw_calls()[2U].draw_vertex_data.size() != 1U ||
         !captured_state.draw_calls()[0U].draw_vertex_data[0U].is_valid ||
         !captured_state.draw_calls()[1U].draw_vertex_data[0U].is_valid ||
+        !captured_state.draw_calls()[2U].draw_vertex_data[0U].is_valid ||
         captured_state.draw_calls()[0U].draw_vertex_data[0U].bytes ==
             captured_state.draw_calls()[1U].draw_vertex_data[0U].bytes ||
+        captured_state.draw_calls()[1U].draw_vertex_data[0U].bytes ==
+            captured_state.draw_calls()[2U].draw_vertex_data[0U].bytes ||
         !captured_state.draw_calls()[1U].draw_index_data ||
         !captured_state.draw_calls()[1U].draw_index_data->is_valid ||
         captured_state.draw_calls()[1U].draw_index_data->bytes !=
             std::vector<std::uint8_t>{2U, 0U, 0U, 0U, 1U, 0U} ||
+        captured_state.draw_calls()[1U].draw_index_data->byte_offset != 2U ||
+        !captured_state.draw_calls()[2U].draw_index_data ||
+        !captured_state.draw_calls()[2U].draw_index_data->is_valid ||
+        captured_state.draw_calls()[2U].draw_index_data->bytes !=
+            std::vector<std::uint8_t>{
+                0U, 0U, 0U, 2U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 1U} ||
+        captured_state.draw_calls()[2U].draw_index_data->byte_offset != 4U ||
         captured_state.draw_calls()[0U].draw_call !=
             std::optional<affogato::cpu::espresso::Gx2DrawCall>{
                 affogato::cpu::espresso::Gx2DrawCall{
@@ -1950,7 +1997,18 @@ int run_gx2_guest_triangle_test(bool visible_window = false)
                     true,
                     0U,
                     index_buffer_address,
-                    0U,
+                    2U,
+                    1U,
+                    0U}} ||
+        captured_state.draw_calls()[2U].draw_call !=
+            std::optional<affogato::cpu::espresso::Gx2DrawCall>{
+                affogato::cpu::espresso::Gx2DrawCall{
+                    gx2_primitive_mode_triangles,
+                    3U,
+                    true,
+                    9U,
+                    big_endian_index_buffer_address,
+                    4U,
                     1U,
                     0U}})
     {
@@ -1969,7 +2027,8 @@ int run_gx2_guest_triangle_test(bool visible_window = false)
         renderer.poll_events();
         renderer.render_frame();
     }
-    std::cout << "A GX2DrawEx and GX2DrawIndexedEx triangle using guest memory were submitted "
+    std::cout << "Non-indexed, U16_LE-indexed, and U32-indexed GX2 triangles "
+              << "using guest memory were submitted "
               << "with the diagnostic Vulkan shader on " << renderer.device_name()
               << ". Guest Latte shaders are not translated.\n";
     return 0;

@@ -629,12 +629,12 @@ post-submit guest-memory mutation, and an out-of-range vertex index. The
 diagnostic consumer expands supported U16/U32 indices in little- or big-endian
 order into sequential float2 vertices and submits the resulting triangle list
 through Vulkan. It rejects primitive restart because GX2 restart state is not
-captured. The visible controlled test routed one `GX2DrawEx` and one
-`GX2DrawIndexedEx` through PPC/HLE capture and displayed both using the fixed
-diagnostic host shader; their fixture geometry is spatially separated, so the
-visible result confirms that captured indices select the intended guest
-vertices. It does not verify a
-guest render-target write or Latte shader execution. Debug/Release builds and
+captured. The visible controlled test routed one `GX2DrawEx` and two
+`GX2DrawIndexedEx` calls through PPC/HLE capture. It displayed separate
+triangles selected by U16_LE indices at byte offset 2 and U32 big-endian
+indices at byte offset 4, confirming both decoding paths select the intended
+guest vertices using the fixed diagnostic host shader. It does not verify guest
+render-target writes or Latte shader execution. Debug/Release builds and
 CTest (2/2 in each) pass; the hidden tests also pass. Index enum values follow WUT's
 [`GX2IndexType`](https://raw.githubusercontent.com/devkitPro/wut/master/include/gx2/enum.h)
 and indexed draw ABI follows WUT's
