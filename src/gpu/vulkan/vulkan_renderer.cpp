@@ -1,7 +1,11 @@
 #include "gpu/vulkan/vulkan_renderer.hpp"
 
+#include "gpu/vulkan/diagnostic_shader_spirv.hpp"
+
 #include <algorithm>
 #include <array>
+#include <cmath>
+#include <cstddef>
 #include <cstdio>
 #include <cstring>
 #include <limits>
@@ -141,6 +145,7 @@ VulkanRenderer::VulkanRenderer(bool visible)
         create_swapchain();
         create_image_views();
         create_render_pass();
+        create_diagnostic_pipeline();
         create_framebuffers();
         create_command_resources();
         create_synchronization();
@@ -171,6 +176,90 @@ void VulkanRenderer::set_guest_clear_color(
     const std::array<float, 4U>& rgba) noexcept
 {
     guest_clear_color_ = rgba;
+}
+
+void VulkanRenderer::set_guest_diagnostic_vertices(
+    std::span<const DiagnosticVertex> vertices)
+{
+    if (vertices.empty() || vertices.size() % 3U != 0U ||
+        vertices.size() > std::numeric_limits<std::uint32_t>::max())
+    {
+        throw std::invalid_argument(
+            "Guest diagnostic geometry must contain complete triangles");
+    }
+    for (const DiagnosticVertex& vertex : vertices)
+    {
+        if (!std::isfinite(vertex.x) || !std::isfinite(vertex.y) ||
+            vertex.x < -1.0F || vertex.x > 1.0F ||
+            vertex.y < -1.0F || vertex.y > 1.0F)
+        {
+            throw std::invalid_argument(
+                "Guest diagnostic vertex is outside finite clip-space bounds");
+        }
+    }
+
+    check(vkDeviceWaitIdle(device_), "vkDeviceWaitIdle(diagnostic geometry update)");
+    if (diagnostic_vertex_buffer_ != VK_NULL_HANDLE)
+    {
+        vkDestroyBuffer(device_, diagnostic_vertex_buffer_, nullptr);
+        diagnostic_vertex_buffer_ = VK_NULL_HANDLE;
+    }
+    if (diagnostic_vertex_memory_ != VK_NULL_HANDLE)
+    {
+        vkFreeMemory(device_, diagnostic_vertex_memory_, nullptr);
+        diagnostic_vertex_memory_ = VK_NULL_HANDLE;
+    }
+
+    const VkDeviceSize buffer_size =
+        static_cast<VkDeviceSize>(vertices.size_bytes());
+    VkBufferCreateInfo buffer_info = make_info<VkBufferCreateInfo>(
+        VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO);
+    buffer_info.size = buffer_size;
+    buffer_info.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
+    buffer_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    check(vkCreateBuffer(
+        device_, &buffer_info, nullptr, &diagnostic_vertex_buffer_),
+        "vkCreateBuffer(guest diagnostic vertices)");
+
+    VkMemoryRequirements requirements{};
+    vkGetBufferMemoryRequirements(device_, diagnostic_vertex_buffer_, &requirements);
+    const std::uint32_t memory_type_index = find_memory_type(
+        requirements.memoryTypeBits,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT,
+        VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    VkPhysicalDeviceMemoryProperties memory_properties{};
+    vkGetPhysicalDeviceMemoryProperties(physical_device_, &memory_properties);
+    diagnostic_vertex_memory_coherent_ =
+        (memory_properties.memoryTypes[memory_type_index].propertyFlags &
+         VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) != 0U;
+    VkMemoryAllocateInfo allocation_info = make_info<VkMemoryAllocateInfo>(
+        VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO);
+    allocation_info.allocationSize = requirements.size;
+    allocation_info.memoryTypeIndex = memory_type_index;
+    check(vkAllocateMemory(
+        device_, &allocation_info, nullptr, &diagnostic_vertex_memory_),
+        "vkAllocateMemory(guest diagnostic vertices)");
+    check(vkBindBufferMemory(
+        device_, diagnostic_vertex_buffer_, diagnostic_vertex_memory_, 0U),
+        "vkBindBufferMemory(guest diagnostic vertices)");
+
+    void* mapped_memory = nullptr;
+    check(vkMapMemory(
+        device_, diagnostic_vertex_memory_, 0U, VK_WHOLE_SIZE, 0U, &mapped_memory),
+        "vkMapMemory(guest diagnostic vertices)");
+    std::memcpy(mapped_memory, vertices.data(), vertices.size_bytes());
+    if (!diagnostic_vertex_memory_coherent_)
+    {
+        VkMappedMemoryRange flush_range = make_info<VkMappedMemoryRange>(
+            VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE);
+        flush_range.memory = diagnostic_vertex_memory_;
+        flush_range.offset = 0U;
+        flush_range.size = VK_WHOLE_SIZE;
+        check(vkFlushMappedMemoryRanges(device_, 1U, &flush_range),
+            "vkFlushMappedMemoryRanges(guest diagnostic vertices)");
+    }
+    vkUnmapMemory(device_, diagnostic_vertex_memory_);
+    diagnostic_vertex_count_ = static_cast<std::uint32_t>(vertices.size());
 }
 
 bool VulkanRenderer::set_guest_scanout(Rgba8TextureStaging scanout)
@@ -934,6 +1023,140 @@ void VulkanRenderer::create_render_pass()
     check(vkCreateRenderPass(device_, &create_info, nullptr, &render_pass_), "vkCreateRenderPass");
 }
 
+void VulkanRenderer::create_diagnostic_pipeline()
+{
+    const auto create_shader_module = [this](const auto& code, const char* operation) {
+        VkShaderModuleCreateInfo create_info = make_info<VkShaderModuleCreateInfo>(
+            VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO);
+        create_info.codeSize = code.size() * sizeof(code.front());
+        create_info.pCode = code.data();
+        VkShaderModule module = VK_NULL_HANDLE;
+        check(vkCreateShaderModule(device_, &create_info, nullptr, &module), operation);
+        return module;
+    };
+
+    const VkShaderModule vertex_module = create_shader_module(
+        detail::diagnostic_vertex_shader_spirv,
+        "vkCreateShaderModule(guest diagnostic vertex)");
+    VkShaderModule fragment_module = VK_NULL_HANDLE;
+    try
+    {
+        fragment_module = create_shader_module(
+            detail::diagnostic_fragment_shader_spirv,
+            "vkCreateShaderModule(guest diagnostic fragment)");
+
+        const VkPipelineShaderStageCreateInfo shader_stages[] = {
+            [&] {
+                auto info = make_info<VkPipelineShaderStageCreateInfo>(
+                    VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO);
+                info.stage = VK_SHADER_STAGE_VERTEX_BIT;
+                info.module = vertex_module;
+                info.pName = "main";
+                return info;
+            }(),
+            [&] {
+                auto info = make_info<VkPipelineShaderStageCreateInfo>(
+                    VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO);
+                info.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+                info.module = fragment_module;
+                info.pName = "main";
+                return info;
+            }()};
+
+        const VkVertexInputBindingDescription binding{
+            0U, sizeof(DiagnosticVertex), VK_VERTEX_INPUT_RATE_VERTEX};
+        const VkVertexInputAttributeDescription attribute{
+            0U, 0U, VK_FORMAT_R32G32_SFLOAT,
+            static_cast<std::uint32_t>(offsetof(DiagnosticVertex, x))};
+        VkPipelineVertexInputStateCreateInfo vertex_input =
+            make_info<VkPipelineVertexInputStateCreateInfo>(
+                VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO);
+        vertex_input.vertexBindingDescriptionCount = 1U;
+        vertex_input.pVertexBindingDescriptions = &binding;
+        vertex_input.vertexAttributeDescriptionCount = 1U;
+        vertex_input.pVertexAttributeDescriptions = &attribute;
+
+        VkPipelineInputAssemblyStateCreateInfo input_assembly =
+            make_info<VkPipelineInputAssemblyStateCreateInfo>(
+                VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO);
+        input_assembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+
+        VkPipelineViewportStateCreateInfo viewport =
+            make_info<VkPipelineViewportStateCreateInfo>(
+                VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO);
+        viewport.viewportCount = 1U;
+        viewport.scissorCount = 1U;
+
+        VkPipelineRasterizationStateCreateInfo rasterization =
+            make_info<VkPipelineRasterizationStateCreateInfo>(
+                VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO);
+        rasterization.polygonMode = VK_POLYGON_MODE_FILL;
+        rasterization.cullMode = VK_CULL_MODE_NONE;
+        rasterization.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+        rasterization.lineWidth = 1.0F;
+
+        VkPipelineMultisampleStateCreateInfo multisample =
+            make_info<VkPipelineMultisampleStateCreateInfo>(
+                VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO);
+        multisample.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+        VkPipelineColorBlendAttachmentState color_attachment{};
+        color_attachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT |
+            VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT |
+            VK_COLOR_COMPONENT_A_BIT;
+        VkPipelineColorBlendStateCreateInfo color_blend =
+            make_info<VkPipelineColorBlendStateCreateInfo>(
+                VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO);
+        color_blend.attachmentCount = 1U;
+        color_blend.pAttachments = &color_attachment;
+
+        const VkDynamicState dynamic_states[]{
+            VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+        VkPipelineDynamicStateCreateInfo dynamic_state =
+            make_info<VkPipelineDynamicStateCreateInfo>(
+                VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO);
+        dynamic_state.dynamicStateCount = 2U;
+        dynamic_state.pDynamicStates = dynamic_states;
+
+        VkPipelineLayoutCreateInfo layout_info = make_info<VkPipelineLayoutCreateInfo>(
+            VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO);
+        check(vkCreatePipelineLayout(
+            device_, &layout_info, nullptr, &diagnostic_pipeline_layout_),
+            "vkCreatePipelineLayout(guest diagnostic)");
+
+        VkGraphicsPipelineCreateInfo pipeline_info =
+            make_info<VkGraphicsPipelineCreateInfo>(
+                VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO);
+        pipeline_info.stageCount = 2U;
+        pipeline_info.pStages = shader_stages;
+        pipeline_info.pVertexInputState = &vertex_input;
+        pipeline_info.pInputAssemblyState = &input_assembly;
+        pipeline_info.pViewportState = &viewport;
+        pipeline_info.pRasterizationState = &rasterization;
+        pipeline_info.pMultisampleState = &multisample;
+        pipeline_info.pColorBlendState = &color_blend;
+        pipeline_info.pDynamicState = &dynamic_state;
+        pipeline_info.layout = diagnostic_pipeline_layout_;
+        pipeline_info.renderPass = render_pass_;
+        pipeline_info.subpass = 0U;
+        check(vkCreateGraphicsPipelines(
+            device_, VK_NULL_HANDLE, 1U, &pipeline_info, nullptr,
+            &diagnostic_pipeline_),
+            "vkCreateGraphicsPipelines(guest diagnostic)");
+    }
+    catch (...)
+    {
+        vkDestroyShaderModule(device_, vertex_module, nullptr);
+        if (fragment_module != VK_NULL_HANDLE)
+        {
+            vkDestroyShaderModule(device_, fragment_module, nullptr);
+        }
+        throw;
+    }
+    vkDestroyShaderModule(device_, vertex_module, nullptr);
+    vkDestroyShaderModule(device_, fragment_module, nullptr);
+}
+
 void VulkanRenderer::create_framebuffers()
 {
     framebuffers_.resize(image_views_.size());
@@ -1179,6 +1402,24 @@ void VulkanRenderer::render_frame()
         render_info.clearValueCount = 1U;
         render_info.pClearValues = &clear;
         vkCmdBeginRenderPass(command_buffer, &render_info, VK_SUBPASS_CONTENTS_INLINE);
+        if (diagnostic_vertex_count_ > 0U)
+        {
+            VkViewport viewport{};
+            viewport.width = static_cast<float>(swapchain_extent_.width);
+            viewport.height = static_cast<float>(swapchain_extent_.height);
+            viewport.maxDepth = 1.0F;
+            VkRect2D scissor{};
+            scissor.extent = swapchain_extent_;
+            const VkDeviceSize vertex_offset = 0U;
+            vkCmdBindPipeline(
+                command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                diagnostic_pipeline_);
+            vkCmdBindVertexBuffers(
+                command_buffer, 0U, 1U, &diagnostic_vertex_buffer_, &vertex_offset);
+            vkCmdSetViewport(command_buffer, 0U, 1U, &viewport);
+            vkCmdSetScissor(command_buffer, 0U, 1U, &scissor);
+            vkCmdDraw(command_buffer, diagnostic_vertex_count_, 1U, 0U, 0U);
+        }
         vkCmdEndRenderPass(command_buffer);
     }
     check(vkEndCommandBuffer(command_buffer), "vkEndCommandBuffer");
@@ -1237,6 +1478,7 @@ void VulkanRenderer::recreate_swapchain()
     guest_scanout_dirty_ = guest_scanout_.has_value();
     create_image_views();
     create_render_pass();
+    create_diagnostic_pipeline();
     create_framebuffers();
 }
 
@@ -1254,6 +1496,16 @@ void VulkanRenderer::destroy_swapchain() noexcept
         }
     }
     framebuffers_.clear();
+    if (diagnostic_pipeline_ != VK_NULL_HANDLE)
+    {
+        vkDestroyPipeline(device_, diagnostic_pipeline_, nullptr);
+        diagnostic_pipeline_ = VK_NULL_HANDLE;
+    }
+    if (diagnostic_pipeline_layout_ != VK_NULL_HANDLE)
+    {
+        vkDestroyPipelineLayout(device_, diagnostic_pipeline_layout_, nullptr);
+        diagnostic_pipeline_layout_ = VK_NULL_HANDLE;
+    }
     if (render_pass_ != VK_NULL_HANDLE)
     {
         vkDestroyRenderPass(device_, render_pass_, nullptr);
@@ -1317,6 +1569,16 @@ void VulkanRenderer::cleanup() noexcept
         static_cast<void>(vkDeviceWaitIdle(device_));
         destroy_uploaded_textures();
         destroy_swapchain();
+        if (diagnostic_vertex_buffer_ != VK_NULL_HANDLE)
+        {
+            vkDestroyBuffer(device_, diagnostic_vertex_buffer_, nullptr);
+            diagnostic_vertex_buffer_ = VK_NULL_HANDLE;
+        }
+        if (diagnostic_vertex_memory_ != VK_NULL_HANDLE)
+        {
+            vkFreeMemory(device_, diagnostic_vertex_memory_, nullptr);
+            diagnostic_vertex_memory_ = VK_NULL_HANDLE;
+        }
         for (std::size_t index = 0U; index < frames_in_flight; ++index)
         {
             if (in_flight_[index] != VK_NULL_HANDLE)

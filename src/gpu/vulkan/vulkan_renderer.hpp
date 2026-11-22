@@ -17,6 +17,12 @@
 namespace affogato::gpu::vulkan
 {
 
+struct DiagnosticVertex
+{
+    float x{};
+    float y{};
+};
+
 class VulkanRenderer
 {
 public:
@@ -29,6 +35,8 @@ public:
     void poll_events();
     void render_frame();
     void set_guest_clear_color(const std::array<float, 4U>& rgba) noexcept;
+    void set_guest_diagnostic_vertices(
+        std::span<const DiagnosticVertex> vertices);
     [[nodiscard]] bool set_guest_scanout(Rgba8TextureStaging scanout);
     void consume_guest_commands(
         std::span<const cpu::espresso::Gx2Command> commands);
@@ -80,6 +88,7 @@ private:
     void create_swapchain();
     void create_image_views();
     void create_render_pass();
+    void create_diagnostic_pipeline();
     void create_framebuffers();
     void create_command_resources();
     void create_synchronization();
@@ -112,6 +121,8 @@ private:
     std::vector<VkImage> swapchain_images_;
     std::vector<VkImageView> image_views_;
     VkRenderPass render_pass_{};
+    VkPipelineLayout diagnostic_pipeline_layout_{};
+    VkPipeline diagnostic_pipeline_{};
     std::vector<VkFramebuffer> framebuffers_;
     VkCommandPool command_pool_{};
     std::array<VkCommandBuffer, frames_in_flight> command_buffers_{};
@@ -122,6 +133,10 @@ private:
     std::vector<bool> swapchain_images_initialized_;
     std::array<ScanoutUploadBuffer, frames_in_flight> scanout_upload_buffers_{};
     VkDeviceSize scanout_upload_buffer_size_{};
+    VkBuffer diagnostic_vertex_buffer_{};
+    VkDeviceMemory diagnostic_vertex_memory_{};
+    bool diagnostic_vertex_memory_coherent_{};
+    std::uint32_t diagnostic_vertex_count_{};
     std::vector<std::uint8_t> scaled_scanout_pixels_;
     bool supports_swapchain_transfer_dst_{};
     bool guest_scanout_dirty_{};

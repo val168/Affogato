@@ -30,6 +30,8 @@ The frontend now snapshots a configured TV scan buffer at `GX2SwapScanBuffers` a
 - `affogato_recompiler_benchmark`: standalone benchmarking; no current-session benchmark was run.
 - `AffogatoFrontend.exe --gx2-guest-scanout-smoke-test`: a controlled PPC `bctrl` → GX2 HLE → guest color-buffer clear → TV scanout copy/swap → Vulkan presentation diagnostic. It checks pixel bytes for two distinct guest clear colors and submits both scanouts, but it does not load a WUT RPX or execute guest draw commands.
 - `AffogatoFrontend.exe --gx2-guest-scanout-display-test`: the same controlled operations in a visible window, held open until closed for visual inspection.
+- `AffogatoFrontend.exe --gx2-guest-triangle-smoke-test`: captures a guest `GX2DrawEx` and vertex-buffer binding, reads the controlled float2 guest vertices, and submits them with a diagnostic Vulkan shader. It does not translate or execute Latte shaders or support general guest vertex layouts.
+- `AffogatoFrontend.exe --gx2-guest-triangle-display-test`: visible variant of the diagnostic triangle test.
 - No current-session performance comparison was made. Existing timing observations and discarded optimization experiments remain in `development-progress.md`; they should not be treated as controlled benchmark claims.
 
 ## Development priorities
@@ -115,7 +117,18 @@ frame in the Vulkan window; that confirms the controlled color-buffer clear,
 copy, and scanout route, not game rendering. It is not a WUT-built guest
 program, WWHD rendering, or guest draw test.
 
-The next step is a WUT-backed guest fixture when devkitPro/WUT is available,
-followed by wiring GX2 clear state into the renderer's render-target path and
-capturing a visible guest-generated frame. Current clear/copy support still
-applies only to the documented linear RGBA8 subset.
+The next step is to visually inspect the triangle display variant, then extend
+the diagnostic path from its known float2 vertex layout to verified guest
+fetch formats and shader execution. Add a WUT-built RPX fixture when
+devkitPro/WUT is installed. Current clear/copy support still applies only to
+the documented linear RGBA8 subset.
+
+## Diagnostic guest triangle (2026-11-22)
+
+Added a controlled PPC `bctrl` test that calls GX2 initialization,
+`GX2SetAttribBuffer`, and `GX2DrawEx` through HLE. It verifies the captured
+triangle parameters and vertex-buffer state, reads three float2 positions from
+guest memory, and submits those positions to a Vulkan triangle-list pipeline
+with a fixed diagnostic fragment shader. The hidden-window smoke test passed
+on the NVIDIA GeForce RTX 5070 Laptop GPU. This validates guest geometry
+submission only; it is not Latte fetch/shader emulation or game draw execution.

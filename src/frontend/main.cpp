@@ -1771,6 +1771,102 @@ int run_vulkan_texture_upload_smoke_test()
     return 0;
 }
 
+int run_gx2_guest_triangle_test(bool visible_window = false)
+{
+    constexpr std::uint32_t vertex_buffer_address = 0x10000U;
+    constexpr std::uint32_t call_stub_address = 0x2000U;
+    constexpr std::uint32_t guest_bctrl_instruction = 0x4E800421U;
+    constexpr std::uint32_t gx2_primitive_mode_triangles = 4U;
+    constexpr std::array<affogato::gpu::vulkan::DiagnosticVertex, 3U> vertices{{
+        {-0.65F, -0.60F}, {0.65F, -0.60F}, {0.0F, 0.70F}}};
+
+    affogato::Emulator emulator;
+    auto& core = emulator.core();
+    core.configure_guest_heap(
+        0x02000000U, static_cast<std::uint32_t>(core.memory.size()));
+    core.memory.write32_be(call_stub_address, guest_bctrl_instruction);
+    for (std::size_t index = 0U; index < vertices.size(); ++index)
+    {
+        core.memory.write32_be(
+            vertex_buffer_address + static_cast<std::uint32_t>(index * 8U),
+            std::bit_cast<std::uint32_t>(vertices[index].x));
+        core.memory.write32_be(
+            vertex_buffer_address + static_cast<std::uint32_t>(index * 8U + 4U),
+            std::bit_cast<std::uint32_t>(vertices[index].y));
+    }
+
+    const auto invoke = [&](const char* symbol,
+                            std::span<const std::uint32_t> arguments) {
+        const std::uint32_t import = core.hle.bind_import("gx2", symbol);
+        for (std::size_t index = 0U; index < arguments.size(); ++index)
+        {
+            core.state.gpr[index + 3U] = arguments[index];
+        }
+        core.state.cia = call_stub_address;
+        core.state.ctr = import;
+        if (core.run(1U).reason !=
+                affogato::cpu::espresso::StopReason::instruction_limit ||
+            core.state.cia != import)
+        {
+            throw std::runtime_error(
+                std::string("Guest bctrl did not reach GX2 HLE: ") + symbol);
+        }
+        if (core.run(1U).reason !=
+                affogato::cpu::espresso::StopReason::instruction_limit ||
+            core.state.cia != call_stub_address + 4U)
+        {
+            throw std::runtime_error(
+                std::string("GX2 guest triangle HLE failed: ") + symbol);
+        }
+    };
+
+    invoke("GX2Init", std::array<std::uint32_t, 1U>{0U});
+    invoke("GX2SetAttribBuffer", std::array<std::uint32_t, 4U>{
+        0U, static_cast<std::uint32_t>(sizeof(vertices)),
+        static_cast<std::uint32_t>(sizeof(vertices[0U])), vertex_buffer_address});
+    invoke("GX2DrawEx", std::array<std::uint32_t, 4U>{
+        gx2_primitive_mode_triangles, 3U, 0U, 1U});
+
+    const auto commands = affogato::cpu::espresso::take_gx2_commands(core.gx2);
+    affogato::gpu::Gx2RegisterState captured_state;
+    captured_state.apply(commands);
+    if (captured_state.draw_calls().size() != 1U ||
+        captured_state.draw_vertex_buffers().size() != 1U ||
+        !captured_state.draw_vertex_buffers()[0U][0U] ||
+        captured_state.draw_calls()[0U].draw_call !=
+            std::optional<affogato::cpu::espresso::Gx2DrawCall>{
+                affogato::cpu::espresso::Gx2DrawCall{
+                    gx2_primitive_mode_triangles, 3U, false, 0U, 0U, 0U, 1U, 0U}})
+    {
+        throw std::runtime_error(
+            "GX2 triangle call or vertex-buffer binding was not captured correctly");
+    }
+
+    std::array<affogato::gpu::vulkan::DiagnosticVertex, 3U> guest_vertices{};
+    for (std::size_t index = 0U; index < guest_vertices.size(); ++index)
+    {
+        guest_vertices[index].x = std::bit_cast<float>(core.memory.read32_be(
+            vertex_buffer_address + static_cast<std::uint32_t>(index * 8U)));
+        guest_vertices[index].y = std::bit_cast<float>(core.memory.read32_be(
+            vertex_buffer_address + static_cast<std::uint32_t>(index * 8U + 4U)));
+    }
+
+    affogato::gpu::vulkan::VulkanRenderer renderer(visible_window);
+    renderer.consume_guest_commands(commands);
+    renderer.set_guest_clear_color({0.08F, 0.75F, 0.2F, 1.0F});
+    renderer.set_guest_diagnostic_vertices(guest_vertices);
+    renderer.render_frame();
+    while (visible_window && !renderer.should_close())
+    {
+        renderer.poll_events();
+        renderer.render_frame();
+    }
+    std::cout << "GX2DrawEx triangle geometry from guest memory was submitted "
+              << "with the diagnostic Vulkan shader on " << renderer.device_name()
+              << ". Guest Latte shaders are not translated.\n";
+    return 0;
+}
+
 int main(int argc, char* argv[])
 {
     const bool command_line_mode = argc > 1;
@@ -1797,12 +1893,24 @@ int main(int argc, char* argv[])
             {
                 return run_gx2_guest_scanout_smoke_test(true);
             }
+            if (std::string_view(argv[1]) == "--gx2-guest-triangle-smoke-test" &&
+                argc == 2)
+            {
+                return run_gx2_guest_triangle_test();
+            }
+            if (std::string_view(argv[1]) == "--gx2-guest-triangle-display-test" &&
+                argc == 2)
+            {
+                return run_gx2_guest_triangle_test(true);
+            }
             std::cerr << "Unknown option: " << argv[1] << '\n'
                       << "Usage: AffogatoFrontend.exe [--run-rpx <file.rpx> "
                          "[--recompiler] [--limit <instructions>]]\n"
                          "       AffogatoFrontend.exe --vulkan-texture-upload-smoke-test\n"
                          "       AffogatoFrontend.exe --gx2-guest-scanout-smoke-test\n"
-                         "       AffogatoFrontend.exe --gx2-guest-scanout-display-test\n";
+                         "       AffogatoFrontend.exe --gx2-guest-scanout-display-test\n"
+                         "       AffogatoFrontend.exe --gx2-guest-triangle-smoke-test\n"
+                         "       AffogatoFrontend.exe --gx2-guest-triangle-display-test\n";
             return 2;
         }
         return run_frontend();
