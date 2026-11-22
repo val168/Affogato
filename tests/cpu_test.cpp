@@ -29262,6 +29262,64 @@ void gx2_draw_ex_hle_tests()
     assert(core.gx2.program_shaders[static_cast<std::size_t>(
                Gx2ProgramStage::vertex)]->descriptor_address ==
            replacement_vertex_shader_descriptor_address);
+
+    EspressoCore snapshot_core(0x1000U);
+    register_gx2_hle(snapshot_core.hle);
+    snapshot_core.gx2.capture_draw_vertex_data = true;
+    constexpr std::uint32_t snapshot_address = 0x800U;
+    for (std::uint32_t byte = 0U; byte < 32U; ++byte)
+    {
+        snapshot_core.memory.write8(
+            snapshot_address + byte, static_cast<std::uint8_t>(byte + 1U));
+    }
+    snapshot_core.state.gpr[3] = 0U;
+    snapshot_core.state.gpr[4] = 32U;
+    snapshot_core.state.gpr[5] = 8U;
+    snapshot_core.state.gpr[6] = snapshot_address;
+    snapshot_core.state.lr = return_address;
+    snapshot_core.state.cia = snapshot_core.hle.bind_import(
+        "gx2", "GX2SetAttribBuffer");
+    assert(snapshot_core.run(1U).reason == StopReason::instruction_limit);
+    static_cast<void>(take_gx2_commands(snapshot_core.gx2));
+
+    snapshot_core.state.gpr[3] = 4U;
+    snapshot_core.state.gpr[4] = 2U;
+    snapshot_core.state.gpr[5] = 1U;
+    snapshot_core.state.gpr[6] = 1U;
+    snapshot_core.state.lr = return_address;
+    snapshot_core.state.cia = snapshot_core.hle.bind_import("gx2", "GX2DrawEx");
+    assert(snapshot_core.run(1U).reason == StopReason::instruction_limit);
+    const auto snapshot_commands = take_gx2_commands(snapshot_core.gx2);
+    assert(snapshot_commands.size() == 1U);
+    assert(snapshot_commands.front().draw_vertex_data.size() == 1U);
+    const Gx2VertexBufferSnapshot& vertex_snapshot =
+        snapshot_commands.front().draw_vertex_data.front();
+    assert(vertex_snapshot.is_valid);
+    assert(vertex_snapshot.byte_offset == 8U);
+    assert(vertex_snapshot.bytes.size() == 16U);
+    assert(vertex_snapshot.bytes.front() == 9U);
+    assert(vertex_snapshot.bytes.back() == 24U);
+    affogato::gpu::Gx2RegisterState snapshot_state;
+    snapshot_state.apply(snapshot_commands);
+    assert(snapshot_state.draw_calls().size() == 1U);
+    assert(snapshot_state.draw_calls().front().draw_vertex_data.front() ==
+           vertex_snapshot);
+
+    snapshot_core.memory.write8(snapshot_address + 8U, 0xFFU);
+    assert(vertex_snapshot.bytes.front() == 9U);
+
+    snapshot_core.state.gpr[3] = 4U;
+    snapshot_core.state.gpr[4] = 5U;
+    snapshot_core.state.gpr[5] = 1U;
+    snapshot_core.state.gpr[6] = 1U;
+    snapshot_core.state.lr = return_address;
+    snapshot_core.state.cia = snapshot_core.hle.bind_import("gx2", "GX2DrawEx");
+    assert(snapshot_core.run(1U).reason == StopReason::instruction_limit);
+    const auto invalid_snapshot_commands = take_gx2_commands(snapshot_core.gx2);
+    assert(invalid_snapshot_commands.size() == 1U);
+    assert(invalid_snapshot_commands.front().draw_vertex_data.size() == 1U);
+    assert(!invalid_snapshot_commands.front().draw_vertex_data.front().is_valid);
+    assert(invalid_snapshot_commands.front().draw_vertex_data.front().bytes.empty());
 }
 
 void gx2_gpu_time_to_cpu_time_hle_tests()

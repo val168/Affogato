@@ -6,6 +6,12 @@ This snapshot is based on the source and repository notes at `f0fbfef` (`main`, 
 
 The frontend now snapshots a configured TV scan buffer at `GX2SwapScanBuffers` and can present its CPU-visible RGBA8 pixels through the Vulkan swapchain. This requires the guest to have written pixels into the registered memory; Affogato still does not execute Latte draw commands or translate guest shaders, so games whose frames are produced by GX2 draws will not render correctly through this path alone. A failed/unmapped scan-buffer read leaves the previous Vulkan output in place. Debug and Release builds succeeded; Debug CTest passed 2/2, including padded scanout-row staging coverage. The Vulkan RGBA8 upload and scanout presentation smoke test passed on an NVIDIA GeForce RTX 5070 Laptop GPU. No game launch was verified in this update.
 
+## Verified rendering update (2026-11-22)
+
+The controlled diagnostic triangle is now visually verified in the Vulkan window on an NVIDIA GeForce RTX 5070 Laptop GPU. Its guest float2 vertices were displayed with the fixed diagnostic shader; the window remained responsive through maximize/restore and exited cleanly. The Khronos validation layer was installed and enabled by the renderer; no validation warning/error was emitted during the display run. This verifies milestone 1 only, not translated guest shaders or WWHD graphics.
+
+With the explicit `capture_draw_vertex_data` runtime option enabled, non-indexed GX2 draw HLE records carry immutable snapshots of each bound vertex buffer's requested range. The snapshot is taken during `GX2DrawEx`/`GX2DrawEx2`, with binding-size and guest-memory checks, so queued commands do not later depend on mutable worker-owned guest memory. Capture is disabled by default to avoid draw-path allocation overhead. The triangle diagnostic now derives its float2 vertices from that snapshot. Indexed draws still have metadata only; general fetch-shader layout decoding and ordinary draw submission remain unimplemented. Debug and Release builds and CTest pass 2/2 in both configurations. Debug/Release CMake builds emit existing `-Wpedantic` warnings from vendored AsmJit `__int128` and anonymous structs.
+
 ## Current implementation
 
 - A single-core Espresso interpreter with a broad but incomplete PowerPC subset, explicit CR/XER/LR/CTR/FPSCR and paired-single state, checked guest memory, bounded instruction history, and stop diagnostics.
@@ -30,8 +36,8 @@ The frontend now snapshots a configured TV scan buffer at `GX2SwapScanBuffers` a
 - `affogato_recompiler_benchmark`: standalone benchmarking; no current-session benchmark was run.
 - `AffogatoFrontend.exe --gx2-guest-scanout-smoke-test`: a controlled PPC `bctrl` → GX2 HLE → guest color-buffer clear → TV scanout copy/swap → Vulkan presentation diagnostic. It checks pixel bytes for two distinct guest clear colors and submits both scanouts, but it does not load a WUT RPX or execute guest draw commands.
 - `AffogatoFrontend.exe --gx2-guest-scanout-display-test`: the same controlled operations in a visible window, held open until closed for visual inspection.
-- `AffogatoFrontend.exe --gx2-guest-triangle-smoke-test`: captures a guest `GX2DrawEx` and vertex-buffer binding, reads the controlled float2 guest vertices, and submits them with a diagnostic Vulkan shader. It does not translate or execute Latte shaders or support general guest vertex layouts.
-- `AffogatoFrontend.exe --gx2-guest-triangle-display-test`: visible variant of the diagnostic triangle test.
+- `AffogatoFrontend.exe --gx2-guest-triangle-smoke-test`: captures a guest `GX2DrawEx`, snapshots its non-indexed guest vertex-buffer bytes during HLE execution, and submits the controlled float2 vertices with a diagnostic Vulkan shader. It does not translate Latte shaders or support general guest vertex layouts.
+- `AffogatoFrontend.exe --gx2-guest-triangle-display-test`: the same diagnostic path in a visible window; visually verified on 2026-11-22, including maximize/restore and clean close.
 - No current-session performance comparison was made. Existing timing observations and discarded optimization experiments remain in `development-progress.md`; they should not be treated as controlled benchmark claims.
 
 ## Development priorities

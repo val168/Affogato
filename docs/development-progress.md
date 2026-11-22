@@ -559,3 +559,24 @@
 8. Measure native compare/branch sequences more directly; `cmpwi` now emits native CR updates, but fused host compare-to-branch is still a separate optimization and must preserve CR consumers and flags.
 9. Native `slw` and `srw` prototypes were discarded: `slw` regressed full WWHD timing, and an `srw` lowering using physical ECX/CL crashed in generated code. Revisit shifts only after isolating/fixing the host allocator constraint and demonstrating non-regressing end-to-end time.
 10. Rebenchmark the direct-mapped lookup against the same build/configuration under stable host load; if repeatable runtime does not improve, remove it. The safe direct-fallthrough branch case is now covered; next dispatch candidate is direct linking for non-fallthrough known targets, with correct invalidation.
+
+## Guest draw rendering checkpoint (2026-11-22)
+
+The visible `--gx2-guest-triangle-display-test` was observed drawing the
+controlled guest-memory triangle in the Vulkan window on the NVIDIA GeForce
+RTX 5070 Laptop GPU. It remained visible after maximize/restore and the process
+exited successfully after the window closed. The Khronos validation layer was
+available; no validation warnings or errors appeared in the run. This remains
+diagnostic-shader output, not translated Latte shaders or game graphics.
+
+With `capture_draw_vertex_data` explicitly enabled, `GX2DrawEx` and
+`GX2DrawEx2` snapshot non-indexed bound vertex-buffer ranges during HLE
+execution. Capture is disabled by default to avoid allocations during normal
+guest execution. Each snapshot contains its source binding, byte offset,
+validity, and owned bytes; guest memory is checked before copying. The
+diagnostic triangle now derives float2 coordinates from this snapshot instead
+of rereading guest memory later. A regression test mutates the original guest
+bytes after submission and confirms the queued snapshot is unchanged. Indexed
+draws and fetch-format decoding are not covered yet. Debug/Release builds and
+CTest passed (2/2 in each configuration); the standalone diagnostic triangle
+smoke test also passed.

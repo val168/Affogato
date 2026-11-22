@@ -4,6 +4,7 @@
 #include <chrono>
 #include <cstdint>
 #include <optional>
+#include <utility>
 #include <vector>
 
 namespace affogato::cpu::espresso
@@ -59,6 +60,16 @@ struct Gx2VertexBufferBinding
     std::uint32_t guest_address{};
 
     constexpr bool operator==(const Gx2VertexBufferBinding&) const = default;
+};
+
+struct Gx2VertexBufferSnapshot
+{
+    Gx2VertexBufferBinding binding;
+    std::uint32_t byte_offset{};
+    bool is_valid{};
+    std::vector<std::uint8_t> bytes;
+
+    bool operator==(const Gx2VertexBufferSnapshot&) const = default;
 };
 
 struct Gx2FetchShaderBinding
@@ -208,6 +219,7 @@ struct Gx2Command
     std::optional<Gx2DepthBufferBinding> depth_buffer;
     std::optional<Gx2ColorBufferScanCopy> scan_buffer_copy;
     std::optional<Gx2ClearColorRequest> clear_color;
+    std::vector<Gx2VertexBufferSnapshot> draw_vertex_data;
 
     constexpr Gx2Command() = default;
     constexpr Gx2Command(
@@ -224,7 +236,8 @@ struct Gx2Command
         std::optional<Gx2ColorBufferBinding> command_color_buffer = std::nullopt,
         std::optional<Gx2DepthBufferBinding> command_depth_buffer = std::nullopt,
         std::optional<Gx2ColorBufferScanCopy> command_scan_buffer_copy = std::nullopt,
-        std::optional<Gx2ClearColorRequest> command_clear_color = std::nullopt)
+        std::optional<Gx2ClearColorRequest> command_clear_color = std::nullopt,
+        std::vector<Gx2VertexBufferSnapshot> command_draw_vertex_data = {})
         : type(command_type),
           register_address(command_register_address),
           value(command_value),
@@ -238,7 +251,8 @@ struct Gx2Command
           color_buffer(command_color_buffer),
           depth_buffer(command_depth_buffer),
           scan_buffer_copy(command_scan_buffer_copy),
-          clear_color(command_clear_color)
+          clear_color(command_clear_color),
+          draw_vertex_data(std::move(command_draw_vertex_data))
     {
     }
 
@@ -272,6 +286,9 @@ struct Gx2SamplerBinding
 struct Gx2RuntimeState
 {
     bool initialized{};
+    // Copy draw-referenced vertex bytes at HLE time only when a consumer needs
+    // immutable data. Disabled by default to avoid allocations in hot paths.
+    bool capture_draw_vertex_data{};
     bool gx2r_uses_default_allocator{};
     std::uint32_t gx2r_allocate_function{};
     std::uint32_t gx2r_free_function{};

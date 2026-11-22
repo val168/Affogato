@@ -1821,6 +1821,7 @@ int run_gx2_guest_triangle_test(bool visible_window = false)
     };
 
     invoke("GX2Init", std::array<std::uint32_t, 1U>{0U});
+    core.gx2.capture_draw_vertex_data = true;
     invoke("GX2SetAttribBuffer", std::array<std::uint32_t, 4U>{
         0U, static_cast<std::uint32_t>(sizeof(vertices)),
         static_cast<std::uint32_t>(sizeof(vertices[0U])), vertex_buffer_address});
@@ -1833,6 +1834,8 @@ int run_gx2_guest_triangle_test(bool visible_window = false)
     if (captured_state.draw_calls().size() != 1U ||
         captured_state.draw_vertex_buffers().size() != 1U ||
         !captured_state.draw_vertex_buffers()[0U][0U] ||
+        captured_state.draw_calls()[0U].draw_vertex_data.size() != 1U ||
+        !captured_state.draw_calls()[0U].draw_vertex_data[0U].is_valid ||
         captured_state.draw_calls()[0U].draw_call !=
             std::optional<affogato::cpu::espresso::Gx2DrawCall>{
                 affogato::cpu::espresso::Gx2DrawCall{
@@ -1843,12 +1846,20 @@ int run_gx2_guest_triangle_test(bool visible_window = false)
     }
 
     std::array<affogato::gpu::vulkan::DiagnosticVertex, 3U> guest_vertices{};
+    const auto& vertex_bytes =
+        captured_state.draw_calls()[0U].draw_vertex_data[0U].bytes;
+    const auto read_be32 = [&vertex_bytes](std::size_t offset) {
+        return (static_cast<std::uint32_t>(vertex_bytes[offset]) << 24U) |
+            (static_cast<std::uint32_t>(vertex_bytes[offset + 1U]) << 16U) |
+            (static_cast<std::uint32_t>(vertex_bytes[offset + 2U]) << 8U) |
+            static_cast<std::uint32_t>(vertex_bytes[offset + 3U]);
+    };
     for (std::size_t index = 0U; index < guest_vertices.size(); ++index)
     {
-        guest_vertices[index].x = std::bit_cast<float>(core.memory.read32_be(
-            vertex_buffer_address + static_cast<std::uint32_t>(index * 8U)));
-        guest_vertices[index].y = std::bit_cast<float>(core.memory.read32_be(
-            vertex_buffer_address + static_cast<std::uint32_t>(index * 8U + 4U)));
+        guest_vertices[index].x =
+            std::bit_cast<float>(read_be32(index * 8U));
+        guest_vertices[index].y =
+            std::bit_cast<float>(read_be32(index * 8U + 4U));
     }
 
     affogato::gpu::vulkan::VulkanRenderer renderer(visible_window);
