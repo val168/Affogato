@@ -25,6 +25,9 @@ inline void cpu_state_tests()
     assert(cpu.lr == 0);
     assert(cpu.ctr == 0);
     assert(cpu.cia == 0);
+    assert(cpu.msr == 0U);
+    assert(cpu.srr0 == 0U);
+    assert(cpu.srr1 == 0U);
 
     cpu.gpr[3] = 42;
     cpu.fpr[3] = 0x1111222233334444ULL;
@@ -32,6 +35,9 @@ inline void cpu_state_tests()
     cpu.cr = 1;
     cpu.fpscr = 0xFFFFFFFFU;
     cpu.lr = 0x1000;
+    cpu.msr = affogato::cpu::espresso::msr::pr_mask | affogato::cpu::espresso::msr::fp_mask;
+    cpu.srr0 = 0x2000U;
+    cpu.srr1 = 0x9032U;
 
     assert(cpu.gpr[3] == 42);
     assert(cpu.fpr[3] == 0x1111222233334444ULL);
@@ -39,6 +45,9 @@ inline void cpu_state_tests()
     assert(cpu.cr == 1);
     assert(cpu.fpscr == 0xFFFFFFFFU);
     assert(cpu.lr == 0x1000);
+    assert(cpu.msr == (affogato::cpu::espresso::msr::pr_mask | affogato::cpu::espresso::msr::fp_mask));
+    assert(cpu.srr0 == 0x2000U);
+    assert(cpu.srr1 == 0x9032U);
 
     cpu.reset();
 
@@ -54,6 +63,9 @@ inline void cpu_state_tests()
     assert(cpu.cr == 0);
     assert(cpu.fpscr == 0U);
     assert(cpu.lr == 0);
+    assert(cpu.msr == 0U);
+    assert(cpu.srr0 == 0U);
+    assert(cpu.srr1 == 0U);
 
 }
 

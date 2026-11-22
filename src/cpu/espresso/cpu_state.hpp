@@ -6,6 +6,17 @@
 namespace affogato::cpu::espresso
 {
 
+namespace msr
+{
+inline constexpr std::uint32_t ee_mask = 0x00008000U;
+inline constexpr std::uint32_t pr_mask = 0x00004000U;
+inline constexpr std::uint32_t fp_mask = 0x00002000U;
+inline constexpr std::uint32_t me_mask = 0x00001000U;
+inline constexpr std::uint32_t ir_mask = 0x00000020U;
+inline constexpr std::uint32_t dr_mask = 0x00000010U;
+inline constexpr std::uint32_t ip_mask = 0x00000040U;
+}
+
 namespace fpscr
 {
 inline constexpr std::uint32_t rn_mask = 0x00000003U;
@@ -49,6 +60,9 @@ struct CpuState
     std::uint32_t lr{};
     std::uint32_t ctr{};
     std::uint32_t cia{};
+    std::uint32_t msr{};
+    std::uint32_t srr0{};
+    std::uint32_t srr1{};
 
     // Per-core reservation used by lwarx/stwcx. Affogato currently executes a
     // single guest lane and has no asynchronous memory agents.
