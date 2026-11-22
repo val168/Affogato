@@ -8,13 +8,19 @@ namespace affogato::cpu::espresso
 
 namespace msr
 {
+inline constexpr std::uint32_t pow_mask = 0x00040000U;
+inline constexpr std::uint32_t ile_mask = 0x00010000U;
 inline constexpr std::uint32_t ee_mask = 0x00008000U;
 inline constexpr std::uint32_t pr_mask = 0x00004000U;
 inline constexpr std::uint32_t fp_mask = 0x00002000U;
 inline constexpr std::uint32_t me_mask = 0x00001000U;
+inline constexpr std::uint32_t se_mask = 0x00000400U;
+inline constexpr std::uint32_t be_mask = 0x00000200U;
 inline constexpr std::uint32_t ir_mask = 0x00000020U;
 inline constexpr std::uint32_t dr_mask = 0x00000010U;
 inline constexpr std::uint32_t ip_mask = 0x00000040U;
+inline constexpr std::uint32_t ri_mask = 0x00000002U;
+inline constexpr std::uint32_t le_mask = 0x00000001U;
 }
 
 namespace fpscr

@@ -1,5 +1,6 @@
 #include "cpu/espresso/decoder.hpp"
 #include "cpu/espresso/cafe_os_hle.hpp"
+#include "cpu_exception_test.hpp"
 #include "cpu/espresso/elf_loader.hpp"
 #include "cpu/espresso/guest_memory.hpp"
 #include "cpu/espresso/guest_mutex.hpp"
@@ -39944,6 +39945,7 @@ void function_call_and_stack_tests()
 
 int main(int argc, char* argv[])
 {
+    affogato::tests::cpu_program_exception_tests();
     bool recompiler_requested = false;
     const char* rpx_path = nullptr;
     std::size_t rpx_instruction_limit = 5'000'000'000ULL;
