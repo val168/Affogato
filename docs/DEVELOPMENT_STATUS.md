@@ -43,3 +43,26 @@ The detailed queue in `development-progress.md` is the project-specific source f
 ## Next implementation area
 
 Guest color-buffer writes are not emulated yet, and `GX2CopyColorBufferToScanBuffer` is not registered in the current source. The immediate rendering work is to trace the copy API's guest calling convention and surface layout, add focused HLE/state tests, and only then connect a supported color-buffer implementation to the scanout path. Full game rendering additionally requires Latte command execution and guest shader translation.
+
+## Verified update (2026-11-22)
+
+The CPU privilege foundation is now implemented in focused changes: `CpuState`
+contains MSR/SRR0/SRR1; supported program-exception entry handles privileged
+instruction violations; `mfmsr`, bounded `mtmsr`, SRR0/SRR1 `mfspr`/`mtspr`, and
+bounded `rfi` execute through the interpreter path. Translation-enabled MSR
+states stop explicitly because the flat `GuestMemory` model has no MMU. Cafe OS
+thread-context `srr1` restoration remains deferred for the same reason. CPU
+and recompiler fallback tests cover reset, privilege violations, supported
+state changes, exception saves, and return behavior. Debug and Release builds
+and Debug CTest passed 2/2 after the code changes. No live WWHD compatibility
+or performance claim was verified.
+
+A source audit confirms the immediate renderer gap: the frontend can present
+CPU-visible RGBA8 TV scan-buffer memory on swap requests, but the GX2 HLE does
+not register `GX2CopyColorBufferToScanBuffer`, and captured draw/clear commands
+do not produce guest framebuffer pixels. The Vulkan window therefore has a
+presentation path without an end-to-end guest rendering path. The next graphics
+work needs to establish the guest color-buffer source format/layout and copy
+semantics, then connect actual pixel production to scanout. Full game rendering
+also requires Latte command execution and guest shader translation. No live
+title run was performed as part of this audit.

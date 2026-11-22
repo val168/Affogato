@@ -20,11 +20,11 @@ The frontend runs a selected RPX on a worker thread and transfers result/state s
 
 ## Espresso state, decoder, and interpreter
 
-`CpuState` explicitly stores 32 32-bit GPRs, 32 64-bit FPR values, separate paired-single PS1 lanes, eight GQRs, CR, XER, FPSCR, LR, CTR, CIA, and the current single-core reservation. The state is not a complete model of every Espresso privilege, exception, or multicore feature.
+`CpuState` explicitly stores 32 32-bit GPRs, 32 64-bit FPR values, separate paired-single PS1 lanes, eight GQRs, CR, XER, FPSCR, LR, CTR, CIA, MSR, SRR0, SRR1, and the current single-core reservation. Loader entry uses MSR zero: supervisor-mode, big-endian, real-address execution. This is an emulator bootstrap context, not a Cafe OS boot state. The decoder supports `mfmsr`, bounded `mtmsr`, SRR0/SRR1 SPR access, and bounded `rfi`; privileged violations enter the modeled program exception path. Other exception classes and illegal-instruction exception entry remain incomplete.
 
 `decoder.cpp` maps PowerPC instruction words to the shared `Opcode` enum and a `DecodedInstruction` containing extracted register, immediate, branch, CR, and floating-point fields. The decoder covers a growing subset; unrecognized encodings remain unsupported.
 
-`EspressoCore::step` is the architectural execution path and calls the decoder, manipulates explicit guest state, uses `GuestMemory` for guest accesses, and dispatches HLE imports. `run` repeats steps up to its bound and reports unsupported instructions, unimplemented HLE calls, HLE errors, and memory faults. A bounded instruction-history buffer carries recent decoded operations and selected operand/effect details for diagnostics. Floating-point and paired-single support is partial; this is not a complete PowerPC FPU.
+`EspressoCore::step` is the architectural execution path and calls the decoder, manipulates explicit guest state, uses `GuestMemory` for guest accesses, and dispatches HLE imports. `run` repeats steps up to its bound and reports unsupported instructions, unimplemented HLE calls, HLE errors, and memory faults. A bounded instruction-history buffer carries recent decoded operations and selected operand/effect details for diagnostics. `GuestMemory` is flat and has no MMU translation, so `mtmsr` and `rfi` stop explicitly when asked to enable IR/DR rather than continuing with incorrect address semantics. Floating-point and paired-single support is partial; this is not a complete PowerPC FPU.
 
 ## Guest memory and loading
 
