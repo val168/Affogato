@@ -731,6 +731,7 @@ void set_xer_carry(CpuState& state, bool carry) noexcept
     case Opcode::move_from_xer: return "mfxer";
     case Opcode::move_to_xer: return "mtxer";
     case Opcode::move_from_msr: return "mfmsr";
+    case Opcode::move_to_msr: return "mtmsr";
     case Opcode::move_from_gqr: return "mfgqr";
     case Opcode::move_to_gqr: return "mtgqr";
     case Opcode::move_from_time_base_lower: return "mftb";
@@ -1632,6 +1633,7 @@ void add_history_source(
     case Opcode::move_to_link_register:
     case Opcode::move_to_count_register:
     case Opcode::move_to_xer:
+    case Opcode::move_to_msr:
     case Opcode::move_to_gqr:
         add_history_source(entry, state, instruction.destination);
         break;
@@ -5347,6 +5349,37 @@ StepResult EspressoCore::step()
         }
         break;
 
+    case Opcode::move_to_msr:
+    {
+        if ((state.msr & msr::pr_mask) != 0U)
+        {
+            enter_program_exception(state, ProgramExceptionCause::privileged_instruction);
+            next_cia = state.cia;
+            instruction_completed = false;
+            break;
+        }
+
+        constexpr std::uint32_t supported_write_mask =
+            msr::ee_mask | msr::pr_mask | msr::fp_mask | msr::me_mask |
+            msr::ip_mask | msr::ir_mask | msr::dr_mask | msr::ri_mask;
+        constexpr std::uint32_t unsupported_mode_mask =
+            msr::pow_mask | msr::ile_mask | msr::fe0_mask | msr::se_mask |
+            msr::be_mask | msr::fe1_mask | msr::le_mask | msr::pm_mask;
+        const std::uint32_t requested_msr = state.gpr[instruction.destination];
+
+        if ((requested_msr & (msr::ir_mask | msr::dr_mask)) != 0U ||
+            (requested_msr & unsupported_mode_mask) != 0U)
+        {
+            pending_history_entry_.completed = false;
+            append_instruction_history(std::move(pending_history_entry_));
+            has_pending_history_entry_ = false;
+            return StepResult::unsupported_architectural_state;
+        }
+
+        state.msr = requested_msr & supported_write_mask;
+        break;
+    }
+
     case Opcode::move_from_gqr:
         state.gpr[instruction.destination] =
             state.gqr[instruction.quantized_register];
@@ -6782,6 +6815,15 @@ RunResult EspressoCore::run(std::size_t max_steps)
             result.cia = state.cia;
             result.instruction_word = memory.read32_be(state.cia);
             result.has_instruction_word = true;
+            include_history();
+            return result;
+        }
+        if (step_result == StepResult::unsupported_architectural_state)
+        {
+            result.reason = StopReason::unsupported_architectural_state;
+            result.cia = state.cia;
+            result.detail =
+                "guest requested an MSR mode requiring unimplemented CPU or memory support";
             include_history();
             return result;
         }

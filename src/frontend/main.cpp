@@ -381,6 +381,13 @@ std::string format_result(const affogato::EmulatorRunResult& result)
         text << "\nStopped: unsupported PowerPC instruction 0x" << std::hex
              << std::uppercase << result.execution.instruction_word;
         break;
+    case StopReason::unsupported_architectural_state:
+        text << "\nStopped: unsupported guest CPU mode";
+        if (!result.execution.detail.empty())
+        {
+            text << "\nDetail: " << result.execution.detail;
+        }
+        break;
     case StopReason::unimplemented_hle_call:
         text << "\nStopped: unimplemented HLE call " << result.execution.hle_call;
         break;

@@ -14,11 +14,14 @@ inline constexpr std::uint32_t ee_mask = 0x00008000U;
 inline constexpr std::uint32_t pr_mask = 0x00004000U;
 inline constexpr std::uint32_t fp_mask = 0x00002000U;
 inline constexpr std::uint32_t me_mask = 0x00001000U;
+inline constexpr std::uint32_t fe0_mask = 0x00000800U;
 inline constexpr std::uint32_t se_mask = 0x00000400U;
 inline constexpr std::uint32_t be_mask = 0x00000200U;
+inline constexpr std::uint32_t fe1_mask = 0x00000100U;
 inline constexpr std::uint32_t ir_mask = 0x00000020U;
 inline constexpr std::uint32_t dr_mask = 0x00000010U;
 inline constexpr std::uint32_t ip_mask = 0x00000040U;
+inline constexpr std::uint32_t pm_mask = 0x00000004U;
 inline constexpr std::uint32_t ri_mask = 0x00000002U;
 inline constexpr std::uint32_t le_mask = 0x00000001U;
 }

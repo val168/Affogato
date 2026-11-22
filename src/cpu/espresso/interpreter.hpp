@@ -20,6 +20,7 @@ enum class StepResult
 {
     executed,
     unsupported_instruction,
+    unsupported_architectural_state,
     unimplemented_hle_call,
 };
 
@@ -27,6 +28,7 @@ enum class StopReason
 {
     instruction_limit,
     unsupported_instruction,
+    unsupported_architectural_state,
     unimplemented_hle_call,
     hle_error,
     memory_fault,

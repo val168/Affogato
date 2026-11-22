@@ -11306,6 +11306,15 @@ RunResult Recompiler::run(EspressoCore& core, std::size_t max_steps)
                 include_history();
                 return result;
             }
+            if (step_result == StepResult::unsupported_architectural_state)
+            {
+                result.reason = StopReason::unsupported_architectural_state;
+                result.cia = core.state.cia;
+                result.detail =
+                    "guest requested an MSR mode requiring unimplemented CPU or memory support";
+                include_history();
+                return result;
+            }
             ++result.steps;
             continue;
         }
@@ -11561,6 +11570,15 @@ RunResult Recompiler::run(EspressoCore& core, std::size_t max_steps)
                 result.cia = core.state.cia;
                 result.instruction_word = core.memory.read32_be(core.state.cia);
                 result.has_instruction_word = true;
+                include_history();
+                return result;
+            }
+            if (step_result == StepResult::unsupported_architectural_state)
+            {
+                result.reason = StopReason::unsupported_architectural_state;
+                result.cia = core.state.cia;
+                result.detail =
+                    "guest requested an MSR mode requiring unimplemented CPU or memory support";
                 include_history();
                 return result;
             }
