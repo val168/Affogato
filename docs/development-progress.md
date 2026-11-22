@@ -590,3 +590,14 @@ longer used by this test. The updated visible test again displayed the
 triangle, and the Debug/Release smoke tests and CTest suites passed. This
 policy is opt-in; normal frontend guest commands still only update captured
 GX2 state and are not yet submitted as game draws.
+
+Added `latte_vertex_fetch.hpp` to decode the HLE-generated VTX instruction
+layout into typed attribute descriptors. It recognizes only GX2 Float32,
+Float32x2, Float32x3, and Float32x4 formats, validates the encoded fetch byte
+count, and retains slot, location, offset, component selectors, and endian
+mode. The format IDs match WUT's `GX2AttribFormat` values and its helper's
+selector mappings ([GX2 enums](https://buildbot.libretro.com/doxygen/a07082_source.html),
+[WUT attribute helper](https://github.com/devkitPro/wut/blob/master/libraries/libwhb/src/gfx_shader.c)).
+Unit coverage exercises all four Float32 widths and rejects unsupported data
+formats. This decoder is not yet connected to Vulkan draw submission; the
+diagnostic renderer still uses its explicit float2 policy.

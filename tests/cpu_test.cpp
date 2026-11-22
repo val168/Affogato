@@ -14,6 +14,7 @@
 #include "cpu_state_test.hpp"
 #include "emulator.hpp"
 #include "gpu/gx2_register_state.hpp"
+#include "gpu/latte_vertex_fetch.hpp"
 #include "gpu/latte_texture_staging.hpp"
 
 #include <algorithm>
@@ -30726,6 +30727,67 @@ void gx2_set_sampler_border_color_hle_tests()
     assert(uninitialized.run(1U).reason == StopReason::hle_error);
 }
 
+void latte_vertex_fetch_decoder_tests()
+{
+    using affogato::gpu::decode_latte_vertex_fetch_shader;
+
+    constexpr std::array<std::pair<std::uint32_t, std::uint32_t>, 4U> formats{{
+        {0x06U, 1U},
+        {0x0DU, 2U},
+        {0x11U, 3U},
+        {0x13U, 4U},
+    }};
+    for (const auto& [data_format, component_count] : formats)
+    {
+        affogato::cpu::espresso::Gx2FetchShaderBinding fetch_shader{};
+        fetch_shader.program_size = 16U;
+        fetch_shader.attribute_count = 1U;
+        const std::uint32_t byte_size = component_count * sizeof(float);
+        const std::uint32_t selector_x = 0U;
+        const std::uint32_t selector_y = 1U;
+        const std::uint32_t selector_z = 4U;
+        const std::uint32_t selector_w = 5U;
+        fetch_shader.program_words = {
+            1U | (2U << 8U) | ((byte_size - 1U) << 26U),
+            selector_x << 9U | selector_y << 12U | selector_z << 15U |
+                selector_w << 18U | data_format << 22U | 2U << 28U,
+            12U | (2U << 16U),
+            0U};
+
+        const auto decoded = decode_latte_vertex_fetch_shader(fetch_shader);
+        assert(decoded.size() == 1U);
+        assert(decoded.front().location == 0U);
+        assert(decoded.front().buffer_index == 2U);
+        assert(decoded.front().byte_offset == 12U);
+        assert(decoded.front().byte_size == byte_size);
+        assert(decoded.front().component_count == component_count);
+        assert(decoded.front().number_format == 2U);
+        assert(decoded.front().endian_swap == 2U);
+        assert(decoded.front().selectors[0U] == 0U);
+        assert(decoded.front().selectors[1U] == 1U);
+    }
+
+    affogato::cpu::espresso::Gx2FetchShaderBinding unsupported_fetch_shader{};
+    unsupported_fetch_shader.program_size = 16U;
+    unsupported_fetch_shader.attribute_count = 1U;
+    unsupported_fetch_shader.program_words = {
+        1U | (3U << 26U),
+        0x0AU << 22U | 2U << 28U,
+        2U << 16U,
+        0U};
+    bool rejected_unsupported_format = false;
+    try
+    {
+        static_cast<void>(
+            decode_latte_vertex_fetch_shader(unsupported_fetch_shader));
+    }
+    catch (const std::runtime_error&)
+    {
+        rejected_unsupported_format = true;
+    }
+    assert(rejected_unsupported_format);
+}
+
 void gx2_register_state_tests()
 {
     using affogato::gpu::Gx2DrawShaderResources;
@@ -40793,6 +40855,7 @@ int main(int argc, char* argv[])
     gx2_flush_hle_tests();
     gx2_draw_done_hle_tests();
     gx2_draw_ex_hle_tests();
+    latte_vertex_fetch_decoder_tests();
     gx2_gpu_time_to_cpu_time_hle_tests();
     gx2_set_gpu_fence_hle_tests();
     gx2_wait_for_vsync_hle_tests();
