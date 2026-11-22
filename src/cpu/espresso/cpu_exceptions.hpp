@@ -15,6 +15,17 @@ enum class ProgramExceptionCause
 };
 
 inline constexpr std::uint32_t program_exception_vector = 0x00000700U;
+inline constexpr std::uint32_t restorable_msr_mask =
+    msr::ee_mask | msr::pr_mask | msr::fp_mask | msr::me_mask |
+    msr::ip_mask | msr::ir_mask | msr::dr_mask | msr::ri_mask;
+inline constexpr std::uint32_t unsupported_msr_mode_mask =
+    msr::pow_mask | msr::ile_mask | msr::fe0_mask | msr::se_mask |
+    msr::be_mask | msr::fe1_mask | msr::le_mask | msr::pm_mask;
+
+[[nodiscard]] constexpr bool is_supported_msr_mode(std::uint32_t value) noexcept
+{
+    return (value & (unsupported_msr_mode_mask | msr::ir_mask | msr::dr_mask)) == 0U;
+}
 
 [[nodiscard]] inline std::uint32_t program_exception_syndrome(
     ProgramExceptionCause cause) noexcept

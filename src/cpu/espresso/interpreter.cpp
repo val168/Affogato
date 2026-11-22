@@ -734,6 +734,7 @@ void set_xer_carry(CpuState& state, bool carry) noexcept
     case Opcode::move_to_msr: return "mtmsr";
     case Opcode::move_from_spr: return "mfspr";
     case Opcode::move_to_spr: return "mtspr";
+    case Opcode::return_from_interrupt: return "rfi";
     case Opcode::move_from_gqr: return "mfgqr";
     case Opcode::move_to_gqr: return "mtgqr";
     case Opcode::move_from_time_base_lower: return "mftb";
@@ -5378,16 +5379,9 @@ StepResult EspressoCore::step()
             break;
         }
 
-        constexpr std::uint32_t supported_write_mask =
-            msr::ee_mask | msr::pr_mask | msr::fp_mask | msr::me_mask |
-            msr::ip_mask | msr::ir_mask | msr::dr_mask | msr::ri_mask;
-        constexpr std::uint32_t unsupported_mode_mask =
-            msr::pow_mask | msr::ile_mask | msr::fe0_mask | msr::se_mask |
-            msr::be_mask | msr::fe1_mask | msr::le_mask | msr::pm_mask;
         const std::uint32_t requested_msr = state.gpr[instruction.destination];
 
-        if ((requested_msr & (msr::ir_mask | msr::dr_mask)) != 0U ||
-            (requested_msr & unsupported_mode_mask) != 0U)
+        if (!is_supported_msr_mode(requested_msr))
         {
             pending_history_entry_.completed = false;
             append_instruction_history(std::move(pending_history_entry_));
@@ -5395,9 +5389,30 @@ StepResult EspressoCore::step()
             return StepResult::unsupported_architectural_state;
         }
 
-        state.msr = requested_msr & supported_write_mask;
+        state.msr = requested_msr & restorable_msr_mask;
         break;
     }
+
+    case Opcode::return_from_interrupt:
+        if ((state.msr & msr::pr_mask) != 0U)
+        {
+            enter_program_exception(state, ProgramExceptionCause::privileged_instruction);
+            next_cia = state.cia;
+            instruction_completed = false;
+        }
+        else if (!is_supported_msr_mode(state.srr1))
+        {
+            pending_history_entry_.completed = false;
+            append_instruction_history(std::move(pending_history_entry_));
+            has_pending_history_entry_ = false;
+            return StepResult::unsupported_architectural_state;
+        }
+        else
+        {
+            state.msr = state.srr1 & restorable_msr_mask;
+            next_cia = state.srr0;
+        }
+        break;
 
     case Opcode::move_to_spr:
         if ((state.msr & msr::pr_mask) != 0U)

@@ -391,6 +391,10 @@ DecodedInstruction decode(std::uint32_t raw) noexcept
         {
             instruction.opcode = Opcode::instruction_sync;
         }
+        else if (raw == 0x4C000064U) // rfi; all operand/reserved bits are fixed zero
+        {
+            instruction.opcode = Opcode::return_from_interrupt;
+        }
         else if (extended_opcode == 257U && (raw & 1U) == 0U) // crand
         {
             instruction.opcode = Opcode::condition_bit_and;

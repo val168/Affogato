@@ -165,6 +165,7 @@ enum class Opcode
     move_to_msr,
     move_from_spr,
     move_to_spr,
+    return_from_interrupt,
     move_from_gqr,
     move_to_gqr,
     move_from_time_base_lower,
