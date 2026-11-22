@@ -28,6 +28,8 @@ The frontend now snapshots a configured TV scan buffer at `GX2SwapScanBuffers` a
 - `affogato_cpu_tests`: CPU state, decoder, guest memory, loaders, and HLE coverage.
 - `affogato_recompiler_tests`: recompiler execution, fallback, invalidation, and selected interpreter/JIT state/memory comparisons.
 - `affogato_recompiler_benchmark`: standalone benchmarking; no current-session benchmark was run.
+- `AffogatoFrontend.exe --gx2-guest-scanout-smoke-test`: a controlled PPC `bctrl` → GX2 HLE → guest color-buffer clear → TV scanout copy/swap → Vulkan presentation diagnostic. It checks pixel bytes for two distinct guest clear colors and submits both scanouts, but it does not load a WUT RPX or execute guest draw commands.
+- `AffogatoFrontend.exe --gx2-guest-scanout-display-test`: the same controlled operations in a visible window, held open until closed for visual inspection.
 - No current-session performance comparison was made. Existing timing observations and discarded optimization experiments remain in `development-progress.md`; they should not be treated as controlled benchmark claims.
 
 ## Development priorities
@@ -97,6 +99,23 @@ layout and NaN rejection, and clear → copy → swap order. Debug and Release
 builds succeeded, Debug CTest passed 2/2, and the existing Vulkan texture-upload
 smoke test passed on an NVIDIA GeForce RTX 5070 Laptop GPU. That smoke test
 uses host-provided texture data and does not verify guest-generated output.
-The next priority is a controlled test that invokes these HLE operations via
-the emulator and validates the resulting scanout; a WUT RPX build remains
-unavailable because `C:\devkitPro` is not installed.
+The controlled emulator HLE integration diagnostic is recorded below. A WUT
+RPX build remains unavailable because `C:\devkitPro` is not installed.
+
+## GX2 scanout integration diagnostic (2026-11-22)
+
+Added `AffogatoFrontend.exe --gx2-guest-scanout-smoke-test`. The diagnostic
+executes PPC `bctrl` call stubs through the interpreter into GX2 HLE for
+initialization, TV scan-buffer setup, output enable, two differently colored
+clears, copies, and swaps. It verifies the first RGBA8 pixel in both captured
+scanouts and that the frames differ, then uploads and presents both scanouts
+through the Vulkan swapchain. It passed on the NVIDIA GeForce RTX 5070 Laptop
+GPU. The visible display variant showed the second guest clear as a solid green
+frame in the Vulkan window; that confirms the controlled color-buffer clear,
+copy, and scanout route, not game rendering. It is not a WUT-built guest
+program, WWHD rendering, or guest draw test.
+
+The next step is a WUT-backed guest fixture when devkitPro/WUT is available,
+followed by wiring GX2 clear state into the renderer's render-target path and
+capturing a visible guest-generated frame. Current clear/copy support still
+applies only to the documented linear RGBA8 subset.

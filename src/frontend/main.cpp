@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <bit>
 #include <chrono>
 #include <cctype>
 #include <cfloat>
@@ -1570,6 +1571,154 @@ int run_frontend()
     return 0;
 }
 
+int run_gx2_guest_scanout_smoke_test(bool visible_window = false)
+{
+    constexpr std::uint32_t color_buffer_address = 0x4000U;
+    constexpr std::uint32_t source_image_address = 0x100000U;
+    constexpr std::uint32_t scan_buffer_address = 0x600000U;
+    constexpr std::uint32_t width = 1280U;
+    constexpr std::uint32_t height = 720U;
+    constexpr std::uint32_t pitch = width;
+    constexpr std::uint32_t bytes_per_pixel = 4U;
+    constexpr std::uint32_t frame_size = width * height * bytes_per_pixel;
+    constexpr std::uint32_t buffer_count = 3U;
+    constexpr std::uint32_t scan_buffer_size = frame_size * buffer_count;
+    constexpr std::uint32_t guest_call_stub_address = 0x2000U;
+    constexpr std::uint32_t guest_bctrl_instruction = 0x4E800421U;
+
+    affogato::Emulator emulator;
+    auto& core = emulator.core();
+    core.configure_guest_heap(
+        0x02000000U, static_cast<std::uint32_t>(core.memory.size()));
+    constexpr std::array<std::uint32_t, 39U> descriptor_template{
+        1U, width, height, 1U, 1U, 0x1AU, 0U, 0x0AU, frame_size,
+        source_image_address, 0U, 0U, 1U, 0U, 256U, pitch};
+    std::array<std::uint32_t, 39U> descriptor{};
+    std::copy(
+        descriptor_template.begin(), descriptor_template.end(),
+        descriptor.begin());
+    descriptor[31U] = 1U;
+    for (std::size_t index = 0U; index < descriptor.size(); ++index)
+    {
+        core.memory.write32_be(
+            color_buffer_address + static_cast<std::uint32_t>(index * 4U),
+            descriptor[index]);
+    }
+    core.memory.zero_fill(source_image_address, frame_size);
+    core.memory.zero_fill(scan_buffer_address, scan_buffer_size);
+    core.memory.write32_be(guest_call_stub_address, guest_bctrl_instruction);
+
+    const auto invoke = [&](
+        const char* symbol,
+        std::span<const std::uint32_t> arguments,
+        const std::array<double, 4U>& floating_arguments = {}) {
+        const std::uint32_t import = core.hle.bind_import("gx2", symbol);
+        for (std::size_t index = 0U; index < arguments.size(); ++index)
+        {
+            core.state.gpr[index + 3U] = arguments[index];
+        }
+        for (std::size_t index = 0U; index < floating_arguments.size(); ++index)
+        {
+            core.state.fpr[index + 1U] =
+                std::bit_cast<std::uint64_t>(floating_arguments[index]);
+        }
+        core.state.cia = guest_call_stub_address;
+        core.state.ctr = import;
+        const auto branch_result = core.run(1U);
+        if (branch_result.reason !=
+                affogato::cpu::espresso::StopReason::instruction_limit ||
+            core.state.cia != import)
+        {
+            throw std::runtime_error(
+                std::string("Guest bctrl did not reach GX2 HLE: ") + symbol);
+        }
+
+        const auto hle_result = core.run(1U);
+        if (hle_result.reason !=
+                affogato::cpu::espresso::StopReason::instruction_limit ||
+            core.state.cia != guest_call_stub_address + 4U)
+        {
+            throw std::runtime_error(
+                std::string("GX2 integration HLE failed: ") + symbol);
+        }
+    };
+
+    invoke("GX2Init", std::array<std::uint32_t, 1U>{0U});
+    invoke("GX2SetTVBuffer", std::array<std::uint32_t, 5U>{
+        scan_buffer_address, scan_buffer_size, 3U, 0x1AU, buffer_count});
+    invoke("GX2SetTVEnable", std::array<std::uint32_t, 1U>{1U});
+
+    const auto execute_frame = [&](const std::array<double, 4U>& rgba) {
+        invoke(
+            "GX2ClearColor",
+            std::array<std::uint32_t, 1U>{color_buffer_address},
+            rgba);
+        invoke(
+            "GX2CopyColorBufferToScanBuffer",
+            std::array<std::uint32_t, 2U>{color_buffer_address, 1U});
+        invoke("GX2SwapScanBuffers", {});
+
+        const auto commands = affogato::cpu::espresso::take_gx2_commands(core.gx2);
+        const auto scanout = capture_tv_scanout(emulator, commands);
+        if (!scanout || scanout->width != width || scanout->height != height)
+        {
+            throw std::runtime_error(
+                "GX2 integration did not produce a configured TV scanout");
+        }
+        return *scanout;
+    };
+
+    auto first_frame = execute_frame({0.9, 0.1, 0.2, 1.0});
+    constexpr std::array<std::uint8_t, 4U> first_expected{229U, 26U, 51U, 255U};
+    if (!std::equal(
+            first_expected.begin(), first_expected.end(),
+            first_frame.pixels.begin()))
+    {
+        std::ostringstream message;
+        message << "GX2 first-frame pixel was "
+                << static_cast<unsigned int>(first_frame.pixels[0U]) << ','
+                << static_cast<unsigned int>(first_frame.pixels[1U]) << ','
+                << static_cast<unsigned int>(first_frame.pixels[2U]) << ','
+                << static_cast<unsigned int>(first_frame.pixels[3U]);
+        throw std::runtime_error(message.str());
+    }
+
+    auto second_frame = execute_frame({0.1, 0.8, 0.3, 1.0});
+    constexpr std::array<std::uint8_t, 4U> second_expected{26U, 204U, 77U, 255U};
+    if (!std::equal(
+            second_expected.begin(), second_expected.end(),
+            second_frame.pixels.begin()) ||
+        first_frame.pixels == second_frame.pixels)
+    {
+        throw std::runtime_error(
+            "GX2 guest clear changes did not change scanout pixels");
+    }
+
+    affogato::gpu::vulkan::VulkanRenderer renderer(visible_window);
+    if (!renderer.set_guest_scanout(std::move(first_frame)))
+    {
+        throw std::runtime_error(
+            "Vulkan renderer rejected the first GX2 integration scanout");
+    }
+    renderer.render_frame();
+    if (!renderer.set_guest_scanout(std::move(second_frame)))
+    {
+        throw std::runtime_error(
+            "Vulkan renderer rejected the changed GX2 integration scanout");
+    }
+    renderer.render_frame();
+    while (visible_window && !renderer.should_close())
+    {
+        renderer.poll_events();
+        renderer.render_frame();
+    }
+    std::cout << "Guest GX2 HLE clear/copy/swap produced changing TV scanout "
+              << "pixels and presented them through Vulkan on "
+              << renderer.device_name() << ". This diagnostic does not execute "
+              << "a WUT RPX or guest draw call.\n";
+    return 0;
+}
+
 int run_vulkan_texture_upload_smoke_test()
 {
     affogato::gpu::vulkan::VulkanRenderer renderer(false);
@@ -1638,10 +1787,22 @@ int main(int argc, char* argv[])
             {
                 return run_vulkan_texture_upload_smoke_test();
             }
+            if (std::string_view(argv[1]) == "--gx2-guest-scanout-smoke-test" &&
+                argc == 2)
+            {
+                return run_gx2_guest_scanout_smoke_test();
+            }
+            if (std::string_view(argv[1]) == "--gx2-guest-scanout-display-test" &&
+                argc == 2)
+            {
+                return run_gx2_guest_scanout_smoke_test(true);
+            }
             std::cerr << "Unknown option: " << argv[1] << '\n'
                       << "Usage: AffogatoFrontend.exe [--run-rpx <file.rpx> "
                          "[--recompiler] [--limit <instructions>]]\n"
-                         "       AffogatoFrontend.exe --vulkan-texture-upload-smoke-test\n";
+                         "       AffogatoFrontend.exe --vulkan-texture-upload-smoke-test\n"
+                         "       AffogatoFrontend.exe --gx2-guest-scanout-smoke-test\n"
+                         "       AffogatoFrontend.exe --gx2-guest-scanout-display-test\n";
             return 2;
         }
         return run_frontend();
