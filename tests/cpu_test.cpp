@@ -30838,6 +30838,17 @@ void latte_vertex_fetch_decoder_tests()
 {
     using affogato::gpu::decode_latte_vertex_fetch_shader;
 
+    assert(affogato::gpu::decode_ieee754_binary16(0x3C00U) == 1.0F);
+    assert(affogato::gpu::decode_ieee754_binary16(0xBC00U) == -1.0F);
+    assert(std::bit_cast<std::uint32_t>(
+               affogato::gpu::decode_ieee754_binary16(0x8000U)) ==
+           0x80000000U);
+    assert(std::bit_cast<std::uint32_t>(
+               affogato::gpu::decode_ieee754_binary16(0x0001U)) ==
+           0x33800000U);
+    assert(std::isinf(affogato::gpu::decode_ieee754_binary16(0x7C00U)));
+    assert(std::isnan(affogato::gpu::decode_ieee754_binary16(0x7E00U)));
+
     constexpr std::array<std::pair<std::uint32_t, std::uint32_t>, 4U> formats{{
         {0x06U, 1U},
         {0x0DU, 2U},
@@ -30873,6 +30884,24 @@ void latte_vertex_fetch_decoder_tests()
         assert(decoded.front().selectors[0U] == 0U);
         assert(decoded.front().selectors[1U] == 1U);
     }
+
+    affogato::cpu::espresso::Gx2FetchShaderBinding float16_fetch_shader{};
+    float16_fetch_shader.program_size = 16U;
+    float16_fetch_shader.attribute_count = 1U;
+    float16_fetch_shader.program_words = {
+        1U | (2U << 8U) | (3U << 26U),
+        (1U << 12U) | (0x08U << 22U),
+        12U | (1U << 16U),
+        0U};
+    const auto float16_attribute =
+        decode_latte_vertex_fetch_shader(float16_fetch_shader);
+    assert(float16_attribute.size() == 1U);
+    assert(float16_attribute.front().component_count == 2U);
+    assert(float16_attribute.front().component_size_bytes == sizeof(std::uint16_t));
+    assert(float16_attribute.front().byte_size == 4U);
+    assert(float16_attribute.front().data_format == 0x08U);
+    assert(float16_attribute.front().number_format == 0U);
+    assert(float16_attribute.front().endian_swap == 1U);
 
     affogato::cpu::espresso::Gx2FetchShaderBinding unsupported_fetch_shader{};
     unsupported_fetch_shader.program_size = 16U;

@@ -644,6 +644,20 @@ and indexed draw ABI follows WUT's
 Primitive-mode values follow WUT's
 [`GX2PrimitiveMode`](https://raw.githubusercontent.com/devkitPro/wut/master/include/gx2/enum.h).
 
+The diagnostic vertex path also decodes `GX2_ATTRIB_TYPE_16_16_FLOAT`
+(Latte VTX data format `0x08`) with the verified 8-in-16 guest endian mode,
+then converts each big-endian IEEE 754 binary16 position component to host
+Float32. The conversion covers signed zero, subnormals, infinities, and NaN
+payload bits; deterministic unit checks cover representative values. The
+controlled PPC/HLE test changes its fetch shader and displays a separate
+Float16x2 triangle alongside Float32, indexed, strip, and fan geometry. This
+extends only the explicitly selected diagnostic position path; other guest
+attribute formats and all Latte shader execution remain unsupported. Format
+and endian identifiers follow WUT's
+[`GX2AttribFormat` and `GX2EndianSwapMode`](https://raw.githubusercontent.com/devkitPro/wut/master/include/gx2/enum.h);
+the four-word VTX fetch layout is described in AMD's
+[R600 ISA manual](https://www.x.org/docs/AMD/old/r600isa.pdf).
+
 The desktop frontend now has an explicit `Diagnostic GX2 draws (host shader,
 host window)` option. For that run, it enables HLE-time vertex and index snapshots, preserves the host option across guest `GX2Init`, and forwards each
 draw batch through the renderer's diagnostic policy. Accepted diagnostic draws

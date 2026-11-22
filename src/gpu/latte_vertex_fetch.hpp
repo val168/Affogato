@@ -3,6 +3,7 @@
 #include "cpu/espresso/gx2_hle.hpp"
 
 #include <array>
+#include <bit>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -20,6 +21,7 @@ struct LatteVertexAttribute
     std::uint32_t byte_offset{};
     std::uint32_t byte_size{};
     std::uint32_t component_count{};
+    std::uint32_t component_size_bytes{};
     std::uint32_t data_format{};
     std::uint32_t number_format{};
     std::uint32_t endian_swap{};
@@ -28,6 +30,45 @@ struct LatteVertexAttribute
     bool operator==(const LatteVertexAttribute&) const = default;
 };
 
+[[nodiscard]] inline float decode_ieee754_binary16(std::uint16_t value) noexcept
+{
+    const std::uint32_t sign =
+        static_cast<std::uint32_t>(value & 0x8000U) << 16U;
+    std::uint32_t exponent = (value >> 10U) & 0x1FU;
+    std::uint32_t significand = value & 0x03FFU;
+    std::uint32_t float_bits = sign;
+
+    if (exponent == 0U)
+    {
+        if (significand != 0U)
+        {
+            std::int32_t adjusted_exponent = -14;
+            while ((significand & 0x0400U) == 0U)
+            {
+                significand <<= 1U;
+                --adjusted_exponent;
+            }
+            significand &= 0x03FFU;
+            const auto float_exponent = static_cast<std::uint32_t>(
+                adjusted_exponent + 127);
+            float_bits |= float_exponent << 23U;
+            float_bits |= significand << 13U;
+        }
+    }
+    else if (exponent == 0x1FU)
+    {
+        float_bits |= 0x7F800000U | (significand << 13U);
+    }
+    else
+    {
+        exponent += 112U;
+        float_bits |= exponent << 23U;
+        float_bits |= significand << 13U;
+    }
+
+    return std::bit_cast<float>(float_bits);
+}
+
 // Decode the VTX words emitted by Affogato's GX2InitFetchShaderEx HLE.
 // Arbitrary guest Latte fetch programs are intentionally rejected.
 [[nodiscard]] inline std::vector<LatteVertexAttribute>
@@ -35,7 +76,6 @@ decode_latte_vertex_fetch_shader(
     const cpu::espresso::Gx2FetchShaderBinding& fetch_shader)
 {
     constexpr std::uint32_t words_per_vtx_instruction = 4U;
-    constexpr std::uint32_t bytes_per_component = sizeof(float);
     if (fetch_shader.type != 0U || fetch_shader.divisor_count != 0U ||
         fetch_shader.attribute_count > std::numeric_limits<std::uint32_t>::max() /
             (words_per_vtx_instruction * sizeof(std::uint32_t)) ||
@@ -82,21 +122,30 @@ decode_latte_vertex_fetch_shader(
             (word1 >> 15U) & 0x7U,
             (word1 >> 18U) & 0x7U};
 
-        // GX2AttribFormat FLOAT_32 through FLOAT_32_32_32_32 use these
-        // Latte data-format IDs after GX2InitFetchShaderEx encodes format&0x3F.
+        // These are the Latte VTX data-format IDs written by
+        // GX2InitFetchShaderEx for the explicitly supported host diagnostic
+        // position formats.
         switch (attribute.data_format)
         {
         case 0x06U:
             attribute.component_count = 1U;
+            attribute.component_size_bytes = sizeof(float);
+            break;
+        case 0x08U: // GX2_ATTRIB_TYPE_16_16_FLOAT
+            attribute.component_count = 2U;
+            attribute.component_size_bytes = sizeof(std::uint16_t);
             break;
         case 0x0DU:
             attribute.component_count = 2U;
+            attribute.component_size_bytes = sizeof(float);
             break;
         case 0x11U:
             attribute.component_count = 3U;
+            attribute.component_size_bytes = sizeof(float);
             break;
         case 0x13U:
             attribute.component_count = 4U;
+            attribute.component_size_bytes = sizeof(float);
             break;
         default:
             throw std::runtime_error(
@@ -104,12 +153,17 @@ decode_latte_vertex_fetch_shader(
                 std::to_string(attribute.data_format));
         }
 
-        if (attribute.number_format != 2U || attribute.endian_swap != 2U)
+        const bool is_float16x2 = attribute.data_format == 0x08U;
+        if ((is_float16x2 &&
+             (attribute.number_format != 0U || attribute.endian_swap != 1U)) ||
+            (!is_float16x2 &&
+             (attribute.number_format != 2U || attribute.endian_swap != 2U)))
         {
             throw std::runtime_error(
-                "Latte vertex fetch decoder currently supports 32-bit float attributes with 8-in-32 endian swap");
+                "Latte vertex fetch decoder received an unsupported float format or endian mode");
         }
-        attribute.byte_size = attribute.component_count * bytes_per_component;
+        attribute.byte_size =
+            attribute.component_count * attribute.component_size_bytes;
         const std::uint32_t encoded_fetch_size = ((word0 >> 26U) & 0x3FU) + 1U;
         if (encoded_fetch_size != attribute.byte_size)
         {

@@ -9,8 +9,10 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdio>
+#include <cstdint>
 #include <cstring>
 #include <limits>
+#include <optional>
 #include <ranges>
 #include <set>
 #include <stdexcept>
@@ -127,7 +129,6 @@ std::vector<DiagnosticVertex> decode_diagnostic_float2_draw(
     constexpr std::uint32_t gx2_primitive_mode_triangle_strip = 6U;
     constexpr std::uint32_t diagnostic_position_location = 0U;
     constexpr std::uint32_t diagnostic_position_components = 2U;
-    constexpr std::uint32_t bytes_per_float = sizeof(float);
 
     if (!command.draw_call)
     {
@@ -182,9 +183,10 @@ std::vector<DiagnosticVertex> decode_diagnostic_float2_draw(
 
     const cpu::espresso::Gx2VertexBufferSnapshot& snapshot = *vertex_buffer;
     const std::uint32_t position_byte_size =
-        diagnostic_position_components * bytes_per_float;
+        diagnostic_position_components * position_attribute->component_size_bytes;
     if (!snapshot.is_valid || snapshot.binding.stride == 0U ||
-        position_attribute->endian_swap != 2U ||
+        (position_attribute->component_size_bytes != sizeof(float) &&
+         position_attribute->component_size_bytes != sizeof(std::uint16_t)) ||
         position_attribute->byte_offset > snapshot.binding.stride ||
         position_byte_size > snapshot.binding.stride -
             position_attribute->byte_offset)
@@ -243,6 +245,17 @@ std::vector<DiagnosticVertex> decode_diagnostic_float2_draw(
             (static_cast<std::uint32_t>(snapshot.bytes[offset + 2U]) << 8U) |
             static_cast<std::uint32_t>(snapshot.bytes[offset + 3U]);
     };
+    const auto read_position_component =
+        [&snapshot, &read_be32, &position_attribute](std::size_t offset) {
+            if (position_attribute->component_size_bytes == sizeof(std::uint16_t))
+            {
+                const std::uint16_t value = static_cast<std::uint16_t>(
+                    (static_cast<std::uint16_t>(snapshot.bytes[offset]) << 8U) |
+                    static_cast<std::uint16_t>(snapshot.bytes[offset + 1U]));
+                return affogato::gpu::decode_ieee754_binary16(value);
+            }
+            return std::bit_cast<float>(read_be32(offset));
+        };
 
     const auto read_index = [&command, &draw, &index_size_bytes](
         std::size_t index_number) {
@@ -305,9 +318,9 @@ std::vector<DiagnosticVertex> decode_diagnostic_float2_draw(
         }
         const std::size_t vertex_offset = static_cast<std::size_t>(
             captured_vertex_offset + position_attribute->byte_offset);
-        source_vertices[index].x = std::bit_cast<float>(read_be32(vertex_offset));
-        source_vertices[index].y = std::bit_cast<float>(
-            read_be32(vertex_offset + sizeof(float)));
+        source_vertices[index].x = read_position_component(vertex_offset);
+        source_vertices[index].y = read_position_component(
+            vertex_offset + position_attribute->component_size_bytes);
     }
 
     if (triangle_list)
