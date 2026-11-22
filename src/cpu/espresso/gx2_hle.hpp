@@ -19,6 +19,7 @@ enum class Gx2CommandType
     flush,
     draw_done,
     gpu_fence,
+    copy_color_buffer_to_scan_buffer,
     scan_buffer_swap,
     set_vertex_buffer,
     set_fetch_shader,
@@ -168,6 +169,20 @@ struct Gx2DepthBufferBinding
     bool operator==(const Gx2DepthBufferBinding&) const = default;
 };
 
+struct Gx2ColorBufferScanCopy
+{
+    std::uint32_t color_buffer_address{};
+    std::uint32_t source_image_address{};
+    std::uint32_t destination_scan_buffer_address{};
+    std::uint32_t scan_target{};
+    std::uint32_t buffer_index{};
+    std::uint32_t width{};
+    std::uint32_t height{};
+    std::uint32_t source_pitch{};
+
+    bool operator==(const Gx2ColorBufferScanCopy&) const = default;
+};
+
 struct Gx2Command
 {
     Gx2CommandType type{};
@@ -182,6 +197,7 @@ struct Gx2Command
     std::optional<Gx2ProgramShaderBinding> program_shader;
     std::optional<Gx2ColorBufferBinding> color_buffer;
     std::optional<Gx2DepthBufferBinding> depth_buffer;
+    std::optional<Gx2ColorBufferScanCopy> scan_buffer_copy;
 
     constexpr Gx2Command() = default;
     constexpr Gx2Command(
@@ -196,7 +212,8 @@ struct Gx2Command
         std::optional<Gx2FetchShaderBinding> command_fetch_shader = std::nullopt,
         std::optional<Gx2ProgramShaderBinding> command_program_shader = std::nullopt,
         std::optional<Gx2ColorBufferBinding> command_color_buffer = std::nullopt,
-        std::optional<Gx2DepthBufferBinding> command_depth_buffer = std::nullopt)
+        std::optional<Gx2DepthBufferBinding> command_depth_buffer = std::nullopt,
+        std::optional<Gx2ColorBufferScanCopy> command_scan_buffer_copy = std::nullopt)
         : type(command_type),
           register_address(command_register_address),
           value(command_value),
@@ -208,7 +225,8 @@ struct Gx2Command
           fetch_shader(command_fetch_shader),
           program_shader(command_program_shader),
           color_buffer(command_color_buffer),
-          depth_buffer(command_depth_buffer)
+          depth_buffer(command_depth_buffer),
+          scan_buffer_copy(command_scan_buffer_copy)
     {
     }
 

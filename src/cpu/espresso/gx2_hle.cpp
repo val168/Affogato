@@ -4,6 +4,7 @@
 #include "cpu/espresso/guest_memory.hpp"
 #include "cpu/espresso/hle_dispatcher.hpp"
 #include "cpu/espresso/interpreter.hpp"
+#include "gpu/latte_texture_staging.hpp"
 
 #include <algorithm>
 #include <bit>
@@ -149,6 +150,7 @@ constexpr std::uint32_t gx2_tv_render_mode_wide_1080p = 5U;
 constexpr std::uint32_t gx2_drc_render_mode_single = 1U;
 constexpr std::uint32_t gx2_drc_render_mode_double = 2U;
 constexpr std::uint32_t gx2_surface_format_unorm_r8_g8_b8_a8 = 0x1AU;
+constexpr std::uint32_t gx2_scan_target_tv = 1U;
 constexpr std::uint32_t gx2_buffering_mode_single = 1U;
 constexpr std::uint32_t gx2_buffering_mode_double = 2U;
 constexpr std::uint32_t gx2_buffering_mode_triple = 3U;
@@ -184,6 +186,7 @@ constexpr std::uint32_t gx2_texture_size = 0x9CU;
 constexpr std::uint32_t gx2_surface_use_color_buffer = 0x02U;
 constexpr std::uint32_t gx2_surface_use_depth_buffer = 0x04U;
 constexpr std::uint32_t gx2_surface_dim_1d = 0U;
+constexpr std::uint32_t gx2_surface_dim_2d = 1U;
 constexpr std::uint32_t gx2_surface_dim_3d = 2U;
 constexpr std::uint32_t gx2_tile_mode_default = 0U;
 constexpr std::uint32_t gx2_tile_mode_linear_aligned = 1U;
@@ -550,6 +553,147 @@ std::uint32_t get_scan_buffer_count(
             std::string("gx2::") + api_name + ": invalid buffering mode " +
             std::to_string(buffering_mode));
     }
+}
+
+void copy_color_buffer_to_tv_scan_buffer(
+    EspressoCore& core,
+    std::uint32_t color_buffer_address,
+    std::uint32_t scan_target)
+{
+    constexpr const char* api_name = "gx2::GX2CopyColorBufferToScanBuffer";
+
+    if (scan_target != gx2_scan_target_tv)
+    {
+        throw HleExecutionError(
+            std::string(api_name) + ": only the TV scan target is supported");
+    }
+    if (!core.gx2.tv_scan_buffer_configured)
+    {
+        throw HleExecutionError(
+            std::string(api_name) + ": TV scan buffer has not been configured");
+    }
+    if (core.gx2.tv_scan_buffer_address == 0U)
+    {
+        throw HleExecutionError(
+            std::string(api_name) + ": TV scan buffer address is null");
+    }
+    if (core.gx2.tv_surface_format !=
+        gx2_surface_format_unorm_r8_g8_b8_a8)
+    {
+        throw HleExecutionError(
+            std::string(api_name) +
+            ": configured TV scan buffer is not RGBA8");
+    }
+
+    const Gx2ColorBufferState color_buffer =
+        read_color_buffer(core, color_buffer_address);
+    if (color_buffer.dimension != gx2_surface_dim_2d ||
+        color_buffer.depth != 1U || color_buffer.mip_levels != 1U ||
+        color_buffer.format != gx2_surface_format_unorm_r8_g8_b8_a8 ||
+        color_buffer.aa_mode != 0U ||
+        (color_buffer.use & gx2_surface_use_color_buffer) == 0U ||
+        color_buffer.tile_mode != gx2_tile_mode_linear_aligned ||
+        color_buffer.swizzle != 0U || color_buffer.view_mip != 0U ||
+        color_buffer.view_first_slice != 0U ||
+        color_buffer.view_num_slices != 1U ||
+        color_buffer.aa_buffer_address != 0U || color_buffer.aa_size != 0U)
+    {
+        throw HleExecutionError(
+            std::string(api_name) +
+            ": source must be a linear, single-sample 2D RGBA8 color buffer "
+            "with a base-level, single-slice view and no swizzle");
+    }
+
+    if (color_buffer.width != core.gx2.tv_scan_width ||
+        color_buffer.height != core.gx2.tv_scan_height)
+    {
+        throw HleExecutionError(
+            std::string(api_name) +
+            ": source dimensions must match the configured TV scan mode");
+    }
+    if (color_buffer.image_address == 0U || color_buffer.pitch < color_buffer.width ||
+        color_buffer.alignment == 0U ||
+        color_buffer.image_address % color_buffer.alignment != 0U)
+    {
+        throw HleExecutionError(
+            std::string(api_name) +
+            ": source image address or pitch is invalid");
+    }
+
+    constexpr std::uint64_t bytes_per_pixel = 4U;
+    const std::uint64_t source_row_size =
+        static_cast<std::uint64_t>(color_buffer.pitch) * bytes_per_pixel;
+    const std::uint64_t source_size =
+        source_row_size * static_cast<std::uint64_t>(color_buffer.height);
+    const std::uint64_t guest_address_space_end = std::uint64_t{1} << 32U;
+    if (source_size > color_buffer.image_size ||
+        source_size > std::numeric_limits<std::size_t>::max() ||
+        static_cast<std::uint64_t>(color_buffer.image_address) + source_size >
+            guest_address_space_end)
+    {
+        throw HleExecutionError(
+            std::string(api_name) +
+            ": source image size or guest address range is invalid");
+    }
+
+    const std::uint32_t scan_buffer_count = get_scan_buffer_count(
+        core.gx2.tv_buffering_mode, api_name);
+    const std::uint64_t frame_size =
+        static_cast<std::uint64_t>(core.gx2.tv_scan_width) *
+        core.gx2.tv_scan_height * bytes_per_pixel;
+    const std::uint32_t buffer_index =
+        core.gx2.flip_request_count % scan_buffer_count;
+    const std::uint64_t frame_offset = frame_size * buffer_index;
+    if (frame_size == 0U || frame_offset + frame_size >
+            core.gx2.tv_scan_buffer_size ||
+        static_cast<std::uint64_t>(core.gx2.tv_scan_buffer_address) +
+                frame_offset + frame_size >
+            guest_address_space_end)
+    {
+        throw HleExecutionError(
+            std::string(api_name) +
+            ": configured TV scan-buffer range cannot hold the next frame");
+    }
+
+    const std::uint32_t destination_address = static_cast<std::uint32_t>(
+        static_cast<std::uint64_t>(core.gx2.tv_scan_buffer_address) +
+        frame_offset);
+    core.memory.validate_write_range(
+        destination_address, static_cast<std::size_t>(frame_size));
+    core.memory.validate_read_range(
+        color_buffer.image_address, static_cast<std::size_t>(source_size));
+
+    std::vector<std::uint8_t> source_bytes(
+        static_cast<std::size_t>(source_size));
+    core.memory.read_bytes(color_buffer.image_address, source_bytes);
+    const auto scanout = gpu::stage_rgba8_scanout(
+        color_buffer.width,
+        color_buffer.height,
+        color_buffer.pitch,
+        source_bytes);
+    if (!scanout)
+    {
+        throw HleExecutionError(
+            std::string(api_name) +
+            ": source rows could not be converted to tightly packed RGBA8");
+    }
+
+    core.memory.write_bytes(destination_address, scanout->pixels);
+
+    Gx2Command command{};
+    command.type = Gx2CommandType::copy_color_buffer_to_scan_buffer;
+    command.register_address = color_buffer_address;
+    command.value = scan_target;
+    command.scan_buffer_copy = Gx2ColorBufferScanCopy{
+        color_buffer_address,
+        color_buffer.image_address,
+        destination_address,
+        scan_target,
+        buffer_index,
+        color_buffer.width,
+        color_buffer.height,
+        color_buffer.pitch};
+    core.gx2.pending_commands.push_back(std::move(command));
 }
 
 DrcScanGeometry get_drc_scan_geometry(
@@ -5662,6 +5806,20 @@ void register_gx2_hle(HleDispatcher& dispatcher)
                     core.state.gpr[3], core.state.gpr[4], true,
                     core.state.gpr[5], core.state.gpr[6], core.state.gpr[7],
                     core.state.gpr[8], 0U}});
+        });
+
+    dispatcher.register_function(
+        "gx2",
+        "GX2CopyColorBufferToScanBuffer",
+        [](EspressoCore& core) {
+            if (!core.gx2.initialized)
+            {
+                throw HleExecutionError(
+                    "gx2::GX2CopyColorBufferToScanBuffer: GX2 has not been initialized");
+            }
+
+            copy_color_buffer_to_tv_scan_buffer(
+                core, core.state.gpr[3], core.state.gpr[4]);
         });
 
     dispatcher.register_function(

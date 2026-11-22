@@ -35,14 +35,14 @@ The frontend now snapshots a configured TV scan buffer at `GX2SwapScanBuffers` a
 The detailed queue in `development-progress.md` is the project-specific source for next implementation priorities. The current high-level priorities are:
 
 1. Continue investigating the recorded WWHD/BOTW startup stops through guest initialization and existing HLE behavior; do not fabricate successful callbacks or results.
-2. Implement `GX2CopyColorBufferToScanBuffer` and trace the title's actual color-buffer and shader paths. The new scanout upload only displays memory that is already populated; common GX2 flows explicitly copy their color buffer into the scan buffer (for example, [devkitPro's Wii U graphics setup](https://github.com/devkitPro/wut/blob/master/libraries/libwhb/src/gfx.c)).
+2. Implement actual guest color-buffer writes for a verified supported surface, beginning with `GX2ClearColor`, then test the copy-to-scanout path through normal guest execution. Trace the title's actual color-buffer and shader paths before extending format or tiling support.
 3. Keep interpreter/recompiler semantics aligned and add native lowerings only with differential tests and repeatable Release measurements where performance is the objective.
 4. Extend loaders and HLE only for observed guest requirements, preserving transactional guest-memory effects and explicit unsupported behavior.
 5. Keep validating changes with both configured builds and the registered CTest suite; add Vulkan presentation checks that remain usable without a display where practical.
 
 ## Next implementation area
 
-Guest color-buffer writes are not emulated yet, and `GX2CopyColorBufferToScanBuffer` is not registered in the current source. The immediate rendering work is to trace the copy API's guest calling convention and surface layout, add focused HLE/state tests, and only then connect a supported color-buffer implementation to the scanout path. Full game rendering additionally requires Latte command execution and guest shader translation.
+Guest color-buffer writes and Latte draw execution are not emulated yet. `GX2CopyColorBufferToScanBuffer` supports only the verified linear-aligned, single-sample 2D UNORM RGBA8 to matching TV0 scanout subset documented in the source update below. Full game rendering additionally requires tiled color-buffer handling, Latte command execution, and guest shader translation.
 
 ## Verified update (2026-11-22)
 
@@ -57,12 +57,30 @@ state changes, exception saves, and return behavior. Debug and Release builds
 and Debug CTest passed 2/2 after the code changes. No live WWHD compatibility
 or performance claim was verified.
 
-A source audit confirms the immediate renderer gap: the frontend can present
-CPU-visible RGBA8 TV scan-buffer memory on swap requests, but the GX2 HLE does
-not register `GX2CopyColorBufferToScanBuffer`, and captured draw/clear commands
-do not produce guest framebuffer pixels. The Vulkan window therefore has a
-presentation path without an end-to-end guest rendering path. The next graphics
-work needs to establish the guest color-buffer source format/layout and copy
-semantics, then connect actual pixel production to scanout. Full game rendering
-also requires Latte command execution and guest shader translation. No live
-title run was performed as part of this audit.
+The initial rendering audit found that the frontend could present
+CPU-visible RGBA8 TV scan-buffer memory but the GX2 HLE did not register
+`GX2CopyColorBufferToScanBuffer`. Captured draw/clear commands also did not
+produce guest framebuffer pixels. The Vulkan window therefore had a
+presentation path without an end-to-end guest rendering path. No live title
+run was performed during that audit.
+
+## Rendering update (2026-11-22)
+
+Registered `GX2CopyColorBufferToScanBuffer` using the WUT ABI: a color-buffer
+descriptor pointer and a scan-target bitmask. The first supported case is TV0,
+matching 720p or 1080p RGBA8 dimensions, and a single-sample 2D RGBA8 source in
+linear-aligned tile mode with zero swizzle and a base-level single-slice view.
+The HLE validates descriptor sizes, pitch, alignment, source/destination guest
+ranges, scan-buffer capacity, and the target before changing destination
+memory. It strips source row padding and writes the next scan-buffer ring slot;
+the following swap request selects that same slot for frontend snapshot and
+Vulkan presentation. Copy and swap events remain ordered in GX2 command state.
+
+CPU HLE tests cover padded pitch, destination bytes, ring-slot selection,
+unsupported tiled input and DRC targets, undersized output memory, unmapped
+source memory, and copy/swap ordering. Debug and Release builds succeeded, and
+Debug CTest passed 2/2. `C:\devkitPro` is absent in this environment, so the
+WUT RPX fixture could not be compiled and no live guest or Vulkan-window output
+was verified. The next step is guest-visible `GX2ClearColor` writes for this
+same supported source layout, followed by a WUT graphics fixture when the WUT
+toolchain is available.

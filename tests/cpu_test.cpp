@@ -23274,6 +23274,190 @@ void gx2_clear_color_hle_tests()
     assert(core.gx2.clear_color_sequence == 2U);
 }
 
+void gx2_copy_color_buffer_to_scan_buffer_hle_tests()
+{
+    constexpr std::uint32_t return_address = 0x02750608U;
+    constexpr std::uint32_t color_buffer_address = 0x2000U;
+    constexpr std::uint32_t source_image_address = 0x00C00000U;
+    constexpr std::uint32_t scan_buffer_address = 0x00010000U;
+    constexpr std::uint32_t width = 1280U;
+    constexpr std::uint32_t height = 720U;
+    constexpr std::uint32_t pitch = 1288U;
+    constexpr std::uint32_t bytes_per_pixel = 4U;
+    constexpr std::uint32_t buffering_mode = 3U;
+    constexpr std::uint32_t scan_buffer_count = 3U;
+    constexpr std::uint32_t scan_target_tv = 1U;
+    constexpr std::uint32_t frame_size = width * height * bytes_per_pixel;
+    constexpr std::uint32_t source_size = pitch * height * bytes_per_pixel;
+    constexpr std::uint32_t scan_buffer_size = frame_size * scan_buffer_count;
+    constexpr std::array<std::uint8_t, 4U> first_color{
+        0x12U, 0x34U, 0x56U, 0x78U};
+    constexpr std::array<std::uint8_t, 4U> second_color{
+        0xA1U, 0xB2U, 0xC3U, 0xD4U};
+
+    EspressoCore core(0x01000000U);
+    register_gx2_hle(core.hle);
+    core.gx2.initialized = true;
+    core.gx2.main_core_id = 1U;
+
+    std::array<std::uint32_t, 39U> descriptor{};
+    descriptor[0U] = 1U; // GX2_SURFACE_DIM_2D
+    descriptor[1U] = width;
+    descriptor[2U] = height;
+    descriptor[3U] = 1U;
+    descriptor[4U] = 1U;
+    descriptor[5U] = 0x1AU; // UNORM RGBA8
+    descriptor[7U] = 0x0AU; // Texture and color-buffer usage.
+    descriptor[8U] = source_size;
+    descriptor[9U] = source_image_address;
+    descriptor[12U] = 1U; // Linear-aligned.
+    descriptor[14U] = 256U;
+    descriptor[15U] = pitch;
+    descriptor[31U] = 1U;
+    for (std::size_t index = 0U; index < descriptor.size(); ++index)
+    {
+        core.memory.write32_be(
+            color_buffer_address + static_cast<std::uint32_t>(index * 4U),
+            descriptor[index]);
+    }
+
+    std::vector<std::uint8_t> source(source_size, 0xEEU);
+    for (std::uint32_t row = 0U; row < height; ++row)
+    {
+        for (std::uint32_t column = 0U; column < width; ++column)
+        {
+            const std::size_t offset =
+                (static_cast<std::size_t>(row) * pitch + column) *
+                bytes_per_pixel;
+            std::copy(first_color.begin(), first_color.end(), source.begin() +
+                static_cast<std::ptrdiff_t>(offset));
+        }
+    }
+    core.memory.write_bytes(source_image_address, source);
+
+    std::vector<std::uint8_t> destination(
+        scan_buffer_size, 0xCDU);
+    core.memory.write_bytes(scan_buffer_address, destination);
+
+    const std::uint32_t set_tv_buffer = core.hle.bind_import(
+        "gx2", "GX2SetTVBuffer");
+    core.state.gpr[3] = scan_buffer_address;
+    core.state.gpr[4] = scan_buffer_size;
+    core.state.gpr[5] = 3U; // 720p.
+    core.state.gpr[6] = 0x1AU;
+    core.state.gpr[7] = buffering_mode;
+    core.state.cia = set_tv_buffer;
+    core.state.lr = return_address;
+    assert(core.run(1U).reason == StopReason::instruction_limit);
+
+    const std::uint32_t copy_color_buffer = core.hle.bind_import(
+        "gx2", "GX2CopyColorBufferToScanBuffer");
+    const auto invoke_copy = [&](std::uint32_t scan_target = 1U) {
+        core.state.gpr[3] = color_buffer_address;
+        core.state.gpr[4] = scan_target;
+        core.state.cia = copy_color_buffer;
+        core.state.lr = return_address;
+        return core.run(1U);
+    };
+
+    core.memory.write32_be(color_buffer_address + 0x30U, 4U);
+    const RunResult tiled_source = invoke_copy();
+    assert(tiled_source.reason == StopReason::hle_error);
+    assert(tiled_source.detail.find("linear") != std::string::npos);
+    assert(core.gx2.pending_commands.empty());
+    std::array<std::uint8_t, 4U> unchanged{};
+    core.memory.read_bytes(scan_buffer_address, unchanged);
+    assert((unchanged == std::array<std::uint8_t, 4U>{0xCDU, 0xCDU, 0xCDU, 0xCDU}));
+
+    core.memory.write32_be(color_buffer_address + 0x30U, 1U);
+    const RunResult unsupported_target = invoke_copy(4U);
+    assert(unsupported_target.reason == StopReason::hle_error);
+    assert(unsupported_target.detail.find("TV scan target") != std::string::npos);
+    assert(core.gx2.pending_commands.empty());
+
+    core.gx2.tv_scan_buffer_size = frame_size - 1U;
+    const RunResult undersized_scan_buffer = invoke_copy();
+    assert(undersized_scan_buffer.reason == StopReason::hle_error);
+    assert(undersized_scan_buffer.detail.find("cannot hold") != std::string::npos);
+    assert(core.gx2.pending_commands.empty());
+    core.gx2.tv_scan_buffer_size = scan_buffer_size;
+
+    core.memory.write32_be(color_buffer_address + 0x24U, 0x01000000U);
+    const RunResult unmapped_source = invoke_copy();
+    assert(unmapped_source.reason == StopReason::memory_fault);
+    assert(core.gx2.pending_commands.empty());
+    core.memory.write32_be(color_buffer_address + 0x24U, source_image_address);
+
+    const RunResult first_copy = invoke_copy();
+    assert(first_copy.reason == StopReason::instruction_limit);
+    const std::vector<Gx2Command> first_copy_commands =
+        take_gx2_commands(core.gx2);
+    assert(first_copy_commands.size() == 1U);
+    assert(first_copy_commands.front().type ==
+        Gx2CommandType::copy_color_buffer_to_scan_buffer);
+    assert(first_copy_commands.front().scan_buffer_copy ==
+        (Gx2ColorBufferScanCopy{
+            color_buffer_address,
+            source_image_address,
+            scan_buffer_address,
+            scan_target_tv,
+            0U,
+            width,
+            height,
+            pitch}));
+    core.memory.read_bytes(scan_buffer_address, unchanged);
+    assert(unchanged == first_color);
+    core.memory.read_bytes(
+        scan_buffer_address + frame_size - bytes_per_pixel, unchanged);
+    assert(unchanged == first_color);
+    core.memory.read_bytes(
+        scan_buffer_address + frame_size, unchanged);
+    assert((unchanged == std::array<std::uint8_t, 4U>{0xCDU, 0xCDU, 0xCDU, 0xCDU}));
+
+    const std::uint32_t swap_scan_buffers = core.hle.bind_import(
+        "gx2", "GX2SwapScanBuffers");
+    core.state.cia = swap_scan_buffers;
+    core.state.lr = return_address;
+    const RunResult swap = core.run(1U);
+    assert(swap.reason == StopReason::instruction_limit);
+    const std::vector<Gx2Command> swap_commands = take_gx2_commands(core.gx2);
+    assert(swap_commands.size() == 1U);
+    assert(swap_commands.front().type == Gx2CommandType::scan_buffer_swap);
+    assert(swap_commands.front().value == 1U);
+
+    const std::size_t last_pixel_offset = source.size() -
+        static_cast<std::size_t>(pitch - width) * bytes_per_pixel -
+        bytes_per_pixel;
+    std::copy(second_color.begin(), second_color.end(),
+        source.begin() + static_cast<std::ptrdiff_t>(last_pixel_offset));
+    core.memory.write_bytes(source_image_address, source);
+    const RunResult second_copy = invoke_copy();
+    assert(second_copy.reason == StopReason::instruction_limit);
+    const std::vector<Gx2Command> second_copy_commands =
+        take_gx2_commands(core.gx2);
+    assert(second_copy_commands.size() == 1U);
+    assert(second_copy_commands.front().scan_buffer_copy->buffer_index == 1U);
+    core.memory.read_bytes(
+        scan_buffer_address + frame_size + frame_size - bytes_per_pixel,
+        unchanged);
+    assert(unchanged == second_color);
+
+    std::vector<Gx2Command> ordered_commands;
+    ordered_commands.insert(
+        ordered_commands.end(), first_copy_commands.begin(),
+        first_copy_commands.end());
+    ordered_commands.insert(
+        ordered_commands.end(), swap_commands.begin(), swap_commands.end());
+    ordered_commands.insert(
+        ordered_commands.end(), second_copy_commands.begin(),
+        second_copy_commands.end());
+    affogato::gpu::Gx2RegisterState register_state;
+    register_state.apply(ordered_commands);
+    assert(register_state.scan_buffer_copies().size() == 2U);
+    assert(register_state.scan_buffer_copies()[0U].buffer_index == 0U);
+    assert(register_state.scan_buffer_swaps().size() == 1U);
+}
+
 void gx2_set_color_buffer_hle_tests()
 {
     constexpr std::uint32_t return_address = 0x02750610U;
@@ -40427,6 +40611,7 @@ int main(int argc, char* argv[])
     gx2_set_viewport_hle_tests();
     gx2_set_viewport_reg_hle_tests();
     gx2_clear_color_hle_tests();
+    gx2_copy_color_buffer_to_scan_buffer_hle_tests();
     gx2_set_color_buffer_hle_tests();
     gx2_set_depth_buffer_hle_tests();
     gx2_set_depth_stencil_control_hle_tests();

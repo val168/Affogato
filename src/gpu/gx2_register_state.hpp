@@ -66,6 +66,15 @@ public:
                 scan_buffer_swaps_.push_back(command);
                 continue;
             }
+            if (command.type ==
+                cpu::espresso::Gx2CommandType::copy_color_buffer_to_scan_buffer)
+            {
+                if (command.scan_buffer_copy)
+                {
+                    scan_buffer_copies_.push_back(*command.scan_buffer_copy);
+                }
+                continue;
+            }
             if (command.type == cpu::espresso::Gx2CommandType::draw)
             {
                 // Preserve draw-call order and arguments for the future Latte
@@ -281,6 +290,12 @@ public:
         return scan_buffer_swaps_;
     }
 
+    [[nodiscard]] std::span<const cpu::espresso::Gx2ColorBufferScanCopy>
+    scan_buffer_copies() const noexcept
+    {
+        return scan_buffer_copies_;
+    }
+
     [[nodiscard]] std::span<const cpu::espresso::Gx2Command>
     draw_calls() const noexcept
     {
@@ -410,6 +425,7 @@ private:
     std::unordered_map<std::uint32_t, RegisterValue> registers_;
     std::vector<cpu::espresso::Gx2Command> gpu_fences_;
     std::vector<cpu::espresso::Gx2Command> scan_buffer_swaps_;
+    std::vector<cpu::espresso::Gx2ColorBufferScanCopy> scan_buffer_copies_;
     std::vector<cpu::espresso::Gx2Command> draw_calls_;
     std::array<std::optional<cpu::espresso::Gx2VertexBufferBinding>, 16U>
         vertex_buffers_{};
