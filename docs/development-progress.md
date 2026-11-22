@@ -610,3 +610,12 @@ snapshot. The test uses vertex-buffer slot 2, a 16-byte stride, and a 4-byte
 attribute offset; the visible output remains correct. This remains the explicit
 diagnostic-shader policy; ordinary title execution is not routed to draws and
 guest Latte vertex/pixel programs are not executed.
+
+The diagnostic consumer now retains one vertex range per draw and records each
+range with its own ordered `vkCmdDraw`, rather than rejecting command batches
+with multiple draws or merging them into one draw. The controlled harness
+submits two `GX2DrawEx` calls in one batch with different vertex bytes. The
+second draw updates guest memory after the first submission, and its separate
+snapshot is verified before both ranges are decoded. The visible test shows
+two distinct diagnostic triangles; this validates ordered routing and draw
+payload snapshots, not guest render-target writes.

@@ -88,6 +88,12 @@ private:
         bool memory_coherent{};
     };
 
+    struct DiagnosticDrawRange
+    {
+        std::uint32_t first_vertex{};
+        std::uint32_t vertex_count{};
+    };
+
     void create_instance();
     void create_surface();
     void select_physical_device();
@@ -144,6 +150,7 @@ private:
     VkDeviceMemory diagnostic_vertex_memory_{};
     bool diagnostic_vertex_memory_coherent_{};
     std::uint32_t diagnostic_vertex_count_{};
+    std::vector<DiagnosticDrawRange> diagnostic_draw_ranges_;
     std::vector<std::uint8_t> scaled_scanout_pixels_;
     bool supports_swapchain_transfer_dst_{};
     bool guest_scanout_dirty_{};

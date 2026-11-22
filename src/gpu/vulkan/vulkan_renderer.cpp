@@ -354,6 +354,9 @@ void VulkanRenderer::set_guest_diagnostic_vertices(
     }
     vkUnmapMemory(device_, diagnostic_vertex_memory_);
     diagnostic_vertex_count_ = static_cast<std::uint32_t>(vertices.size());
+    diagnostic_draw_ranges_.clear();
+    diagnostic_draw_ranges_.push_back(DiagnosticDrawRange{
+        0U, diagnostic_vertex_count_});
 }
 
 bool VulkanRenderer::set_guest_scanout(Rgba8TextureStaging scanout)
@@ -392,7 +395,7 @@ void VulkanRenderer::consume_guest_commands(
     }
 
     std::vector<DiagnosticVertex> diagnostic_vertices;
-    std::size_t draw_count = 0U;
+    std::vector<DiagnosticDrawRange> diagnostic_draw_ranges;
     std::size_t draw_index = first_draw_index;
     const auto draw_fetch_shaders = guest_register_state_.draw_fetch_shaders();
     for (const cpu::espresso::Gx2Command& command : commands)
@@ -401,20 +404,27 @@ void VulkanRenderer::consume_guest_commands(
         {
             continue;
         }
-        ++draw_count;
-        if (draw_count > 1U)
-        {
-            throw std::runtime_error(
-                "Vulkan float2 diagnostic currently accepts one draw per command batch");
-        }
         if (draw_index >= draw_fetch_shaders.size() ||
             !draw_fetch_shaders[draw_index])
         {
             throw std::runtime_error(
                 "Vulkan diagnostic draw has no captured GX2 fetch shader");
         }
-        diagnostic_vertices = decode_diagnostic_float2_draw(
+        std::vector<DiagnosticVertex> draw_vertices = decode_diagnostic_float2_draw(
             command, *draw_fetch_shaders[draw_index]);
+        const std::size_t maximum_vertex_count =
+            std::numeric_limits<std::uint32_t>::max();
+        if (diagnostic_vertices.size() > maximum_vertex_count ||
+            draw_vertices.size() > maximum_vertex_count - diagnostic_vertices.size())
+        {
+            throw std::runtime_error(
+                "Vulkan diagnostic draw batch exceeds the supported vertex count");
+        }
+        diagnostic_draw_ranges.push_back(DiagnosticDrawRange{
+            static_cast<std::uint32_t>(diagnostic_vertices.size()),
+            static_cast<std::uint32_t>(draw_vertices.size())});
+        diagnostic_vertices.insert(
+            diagnostic_vertices.end(), draw_vertices.begin(), draw_vertices.end());
         ++draw_index;
     }
     if (diagnostic_vertices.empty())
@@ -423,6 +433,7 @@ void VulkanRenderer::consume_guest_commands(
             "Vulkan diagnostic draw policy received no guest draw commands");
     }
     set_guest_diagnostic_vertices(diagnostic_vertices);
+    diagnostic_draw_ranges_ = std::move(diagnostic_draw_ranges);
 }
 
 std::uint32_t VulkanRenderer::find_memory_type(
@@ -1551,7 +1562,15 @@ void VulkanRenderer::render_frame()
                 command_buffer, 0U, 1U, &diagnostic_vertex_buffer_, &vertex_offset);
             vkCmdSetViewport(command_buffer, 0U, 1U, &viewport);
             vkCmdSetScissor(command_buffer, 0U, 1U, &scissor);
-            vkCmdDraw(command_buffer, diagnostic_vertex_count_, 1U, 0U, 0U);
+            for (const DiagnosticDrawRange& draw_range : diagnostic_draw_ranges_)
+            {
+                vkCmdDraw(
+                    command_buffer,
+                    draw_range.vertex_count,
+                    1U,
+                    draw_range.first_vertex,
+                    0U);
+            }
         }
         vkCmdEndRenderPass(command_buffer);
     }

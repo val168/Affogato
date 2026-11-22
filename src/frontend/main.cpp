@@ -1856,21 +1856,45 @@ int run_gx2_guest_triangle_test(bool visible_window = false)
         fetch_shader_descriptor_address});
     invoke("GX2DrawEx", std::array<std::uint32_t, 4U>{
         gx2_primitive_mode_triangles, 3U, 0U, 1U});
+    constexpr std::array<affogato::gpu::vulkan::DiagnosticVertex, 3U>
+        second_vertices{{
+            {-0.05F, -0.30F}, {0.60F, -0.30F}, {0.275F, 0.35F}}};
+    for (std::size_t index = 0U; index < second_vertices.size(); ++index)
+    {
+        core.memory.write32_be(
+            vertex_buffer_address + static_cast<std::uint32_t>(
+                index * vertex_buffer_stride + position_attribute_offset),
+            std::bit_cast<std::uint32_t>(second_vertices[index].x));
+        core.memory.write32_be(
+            vertex_buffer_address + static_cast<std::uint32_t>(
+                index * vertex_buffer_stride + position_attribute_offset + 4U),
+            std::bit_cast<std::uint32_t>(second_vertices[index].y));
+    }
+    invoke("GX2DrawEx", std::array<std::uint32_t, 4U>{
+        gx2_primitive_mode_triangles, 3U, 0U, 1U});
 
     const auto commands = affogato::cpu::espresso::take_gx2_commands(core.gx2);
     affogato::gpu::Gx2RegisterState captured_state;
     captured_state.apply(commands);
-    if (captured_state.draw_calls().size() != 1U ||
-        captured_state.draw_vertex_buffers().size() != 1U ||
+    if (captured_state.draw_calls().size() != 2U ||
+        captured_state.draw_vertex_buffers().size() != 2U ||
         !captured_state.draw_vertex_buffers()[0U][vertex_buffer_index] ||
-        captured_state.draw_fetch_shaders().size() != 1U ||
+        !captured_state.draw_vertex_buffers()[1U][vertex_buffer_index] ||
+        captured_state.draw_fetch_shaders().size() != 2U ||
         !captured_state.draw_fetch_shaders()[0U] ||
+        !captured_state.draw_fetch_shaders()[1U] ||
         captured_state.draw_calls()[0U].draw_vertex_data.size() != 1U ||
+        captured_state.draw_calls()[1U].draw_vertex_data.size() != 1U ||
         !captured_state.draw_calls()[0U].draw_vertex_data[0U].is_valid ||
+        !captured_state.draw_calls()[1U].draw_vertex_data[0U].is_valid ||
+        captured_state.draw_calls()[0U].draw_vertex_data[0U].bytes ==
+            captured_state.draw_calls()[1U].draw_vertex_data[0U].bytes ||
         captured_state.draw_calls()[0U].draw_call !=
             std::optional<affogato::cpu::espresso::Gx2DrawCall>{
                 affogato::cpu::espresso::Gx2DrawCall{
-                    gx2_primitive_mode_triangles, 3U, false, 0U, 0U, 0U, 1U, 0U}})
+                    gx2_primitive_mode_triangles, 3U, false, 0U, 0U, 0U, 1U, 0U}} ||
+        captured_state.draw_calls()[1U].draw_call !=
+            captured_state.draw_calls()[0U].draw_call)
     {
         throw std::runtime_error(
             "GX2 triangle call or vertex-buffer binding was not captured correctly");
@@ -1887,7 +1911,7 @@ int run_gx2_guest_triangle_test(bool visible_window = false)
         renderer.poll_events();
         renderer.render_frame();
     }
-    std::cout << "GX2DrawEx triangle geometry from guest memory was submitted "
+    std::cout << "Two GX2DrawEx triangle calls using guest memory were submitted "
               << "with the diagnostic Vulkan shader on " << renderer.device_name()
               << ". Guest Latte shaders are not translated.\n";
     return 0;
