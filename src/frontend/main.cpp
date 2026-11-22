@@ -1780,6 +1780,9 @@ int run_gx2_guest_triangle_test(bool visible_window = false)
     constexpr std::uint32_t attribute_stream_address = 0x3200U;
     constexpr std::uint32_t guest_bctrl_instruction = 0x4E800421U;
     constexpr std::uint32_t gx2_primitive_mode_triangles = 4U;
+    constexpr std::uint32_t vertex_buffer_index = 2U;
+    constexpr std::uint32_t vertex_buffer_stride = 16U;
+    constexpr std::uint32_t position_attribute_offset = 4U;
     constexpr std::array<affogato::gpu::vulkan::DiagnosticVertex, 3U> vertices{{
         {-0.65F, -0.60F}, {0.65F, -0.60F}, {0.0F, 0.70F}}};
 
@@ -1791,10 +1794,12 @@ int run_gx2_guest_triangle_test(bool visible_window = false)
     for (std::size_t index = 0U; index < vertices.size(); ++index)
     {
         core.memory.write32_be(
-            vertex_buffer_address + static_cast<std::uint32_t>(index * 8U),
+            vertex_buffer_address + static_cast<std::uint32_t>(
+                index * vertex_buffer_stride + position_attribute_offset),
             std::bit_cast<std::uint32_t>(vertices[index].x));
         core.memory.write32_be(
-            vertex_buffer_address + static_cast<std::uint32_t>(index * 8U + 4U),
+            vertex_buffer_address + static_cast<std::uint32_t>(
+                index * vertex_buffer_stride + position_attribute_offset + 4U),
             std::bit_cast<std::uint32_t>(vertices[index].y));
     }
 
@@ -1826,10 +1831,13 @@ int run_gx2_guest_triangle_test(bool visible_window = false)
     invoke("GX2Init", std::array<std::uint32_t, 1U>{0U});
     core.gx2.capture_draw_vertex_data = true;
     invoke("GX2SetAttribBuffer", std::array<std::uint32_t, 4U>{
-        0U, static_cast<std::uint32_t>(sizeof(vertices)),
-        static_cast<std::uint32_t>(sizeof(vertices[0U])), vertex_buffer_address});
+        vertex_buffer_index,
+        static_cast<std::uint32_t>(vertices.size() * vertex_buffer_stride),
+        vertex_buffer_stride,
+        vertex_buffer_address});
     constexpr std::array<std::uint32_t, 8U> attribute_stream{
-        0U, 0U, 0U, 0x80DU, 0U, 0U, 0x00010405U, 3U};
+        0U, vertex_buffer_index, position_attribute_offset, 0x80DU,
+        0U, 0U, 0x00010405U, 3U};
     for (std::size_t index = 0U; index < attribute_stream.size(); ++index)
     {
         core.memory.write32_be(
@@ -1854,7 +1862,7 @@ int run_gx2_guest_triangle_test(bool visible_window = false)
     captured_state.apply(commands);
     if (captured_state.draw_calls().size() != 1U ||
         captured_state.draw_vertex_buffers().size() != 1U ||
-        !captured_state.draw_vertex_buffers()[0U][0U] ||
+        !captured_state.draw_vertex_buffers()[0U][vertex_buffer_index] ||
         captured_state.draw_fetch_shaders().size() != 1U ||
         !captured_state.draw_fetch_shaders()[0U] ||
         captured_state.draw_calls()[0U].draw_vertex_data.size() != 1U ||

@@ -606,6 +606,7 @@ controlled PPC test issues `GX2InitFetchShaderEx` with a Float32x2 location-0
 attribute, binds it through `GX2SetFetchShader`, and then submits `GX2DrawEx`.
 The renderer selects location 0's captured buffer slot and byte offset from
 the draw-time VTX program and decodes its position from the immutable buffer
-snapshot. The visible test displays the triangle. This remains the explicit
+snapshot. The test uses vertex-buffer slot 2, a 16-byte stride, and a 4-byte
+attribute offset; the visible output remains correct. This remains the explicit
 diagnostic-shader policy; ordinary title execution is not routed to draws and
 guest Latte vertex/pixel programs are not executed.
