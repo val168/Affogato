@@ -63,6 +63,16 @@ all packet behavior or register side effects match Latte.
 - `tests/cpu_test.cpp` covers command-pool attributes, context-state setup,
   zero-length display-list results, shadow restoration, big-endian packet
   playback, ordered register writes, and malformed/unsupported-list rejection.
+- `Gx2RegisterState::apply` models writes to `SQ_VTX_SEMANTIC_CLEAR` at
+  `0x288E0`: each set bit clears the matching entry in the 32-word semantic
+  table beginning at `0x28380`, storing `0xFFFFFFFF` in the shadow. The clear
+  register itself is write-only and is not retained as readable shadow state.
+  The AMD [R6xx 3D register reference](https://www.x.org/docs/AMD/old/R6xx_3D_Registers.pdf)
+  identifies the register as a per-entry clear mask; Decaf's
+  `src/libgpu/src/pm4_processor.cpp::setRegisters` maps mask bit `i` to
+  semantic entry `i`. This is cross-generation reference evidence, not a
+  Latte-specific specification. Tests cover selective clearing and write
+  ordering; other special register side effects remain unsupported.
 
 Consequently, the current `pending_commands` queue is an HLE-produced command
 model, not a representation of PM4 dwords. A renderer can execute supported

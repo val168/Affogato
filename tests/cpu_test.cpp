@@ -31172,6 +31172,41 @@ void gx2_register_state_tests()
     assert(!state.read(0U).has_value());
     assert(!state.read(0x0003C004U).has_value());
 
+    constexpr std::uint32_t vertex_semantic_base = 0x00028380U;
+    constexpr std::uint32_t vertex_semantic_clear = 0x000288E0U;
+    constexpr std::uint32_t register_stride = sizeof(std::uint32_t);
+    constexpr std::array<Gx2Command, 4U> semantic_commands{{
+        {Gx2CommandType::set_context_register, vertex_semantic_base, 0x11U},
+        {Gx2CommandType::set_context_register,
+            vertex_semantic_base + register_stride,
+            0x22U},
+        {Gx2CommandType::set_context_register,
+            vertex_semantic_base + 31U * register_stride,
+            0x33U},
+        {Gx2CommandType::set_context_register,
+            vertex_semantic_clear,
+            0x80000001U},
+    }};
+
+    Gx2RegisterState semantic_state;
+    semantic_state.apply(semantic_commands);
+    assert(semantic_state.read(vertex_semantic_base) == 0xFFFFFFFFU);
+    assert(semantic_state.read(vertex_semantic_base + register_stride) == 0x22U);
+    assert(semantic_state.read(vertex_semantic_base + 31U * register_stride) ==
+           0xFFFFFFFFU);
+    assert(!semantic_state.read(vertex_semantic_clear).has_value());
+
+    constexpr std::array<Gx2Command, 2U> semantic_order_commands{{
+        {Gx2CommandType::set_context_register,
+            vertex_semantic_clear,
+            0x1U},
+        {Gx2CommandType::set_context_register,
+            vertex_semantic_base,
+            0x44U},
+    }};
+    semantic_state.apply(semantic_order_commands);
+    assert(semantic_state.read(vertex_semantic_base) == 0x44U);
+
     using affogato::gpu::Gx2ShaderStage;
     constexpr std::array<std::uint32_t, 7U> texture_words{
         0x00000101U, 0x00000202U, 0x00000303U, 0x00000404U,

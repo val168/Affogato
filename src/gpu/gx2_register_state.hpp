@@ -181,6 +181,15 @@ public:
                 // ordering but do not themselves write a Latte register.
                 continue;
             }
+
+            if (command.type ==
+                    cpu::espresso::Gx2CommandType::set_context_register &&
+                command.register_address == vertex_semantic_clear_address)
+            {
+                apply_vertex_semantic_clear(command.value);
+                continue;
+            }
+
             registers_[command.register_address] = {command.type, command.value};
         }
     }
@@ -441,6 +450,37 @@ public:
     }
 
 private:
+    // AMD's R6xx register reference documents this clear mask; Decaf's Latte
+    // register map and PM4 path confirm the corresponding table addresses and
+    // per-bit effect. This is related-generation reference evidence.
+    static constexpr std::uint32_t vertex_semantic_base_address = 0x00028380U;
+    static constexpr std::uint32_t vertex_semantic_clear_address = 0x000288E0U;
+    static constexpr std::uint32_t vertex_semantic_count = 32U;
+
+    void apply_vertex_semantic_clear(std::uint32_t clear_mask)
+    {
+        constexpr std::uint32_t cleared_semantic_value = 0xFFFFFFFFU;
+        constexpr std::uint32_t register_stride = sizeof(std::uint32_t);
+
+        for (std::uint32_t semantic_index = 0U;
+             semantic_index < vertex_semantic_count;
+             ++semantic_index)
+        {
+            const std::uint32_t semantic_mask = 1U << semantic_index;
+            if ((clear_mask & semantic_mask) == 0U)
+            {
+                continue;
+            }
+
+            const std::uint32_t semantic_address =
+                vertex_semantic_base_address +
+                semantic_index * register_stride;
+            registers_[semantic_address] = {
+                cpu::espresso::Gx2CommandType::set_context_register,
+                cleared_semantic_value};
+        }
+    }
+
     [[nodiscard]] std::vector<Gx2RegisterSnapshotEntry>
     snapshot_registers() const
     {

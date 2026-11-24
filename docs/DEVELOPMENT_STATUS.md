@@ -188,3 +188,19 @@ guest memory, and submits those positions to a Vulkan triangle-list pipeline
 with a fixed diagnostic fragment shader. The hidden-window smoke test passed
 on the NVIDIA GeForce RTX 5070 Laptop GPU. This validates guest geometry
 submission only; it is not Latte fetch/shader emulation or game draw execution.
+
+## Latte context display-list register side effect (2026-11-25)
+
+`Gx2RegisterState` now applies the `SQ_VTX_SEMANTIC_CLEAR` write mask: each set
+bit clears its corresponding vertex semantic shadow entry to `0xFFFFFFFF`,
+and the write-only clear register is not exposed as readable shadow state.
+Tests verify selective clearing, preservation of unselected entries, and that
+later writes in the same ordered command stream take effect after the clear.
+The behavior is based on AMD's R6xx register reference and cross-checked
+against Decaf's PM4 register-write path; the R6xx reference is related-family
+evidence rather than a Latte-specific specification. Other special register
+side effects remain unmodeled.
+
+Debug and Release builds and CTest must be rerun for this change before it is
+considered validated. It does not add raw command-ring execution or guest draw
+submission.
