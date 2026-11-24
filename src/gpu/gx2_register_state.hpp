@@ -42,6 +42,23 @@ struct Gx2RegisterSnapshotEntry
     bool operator==(const Gx2RegisterSnapshotEntry&) const = default;
 };
 
+struct Gx2DrawSnapshotView
+{
+    // This view borrows one draw's immutable-by-contract captured state. A
+    // subsequent apply() can grow the owning vectors and invalidate it.
+    const cpu::espresso::Gx2Command& command;
+    const std::array<std::optional<
+        cpu::espresso::Gx2VertexBufferBinding>, 16U>& vertex_buffers;
+    const std::optional<cpu::espresso::Gx2FetchShaderBinding>& fetch_shader;
+    const std::array<std::optional<
+        cpu::espresso::Gx2ProgramShaderBinding>, 3U>& program_shaders;
+    const Gx2DrawShaderResources& shader_resources;
+    const std::array<std::optional<
+        cpu::espresso::Gx2ColorBufferBinding>, 8U>& color_buffers;
+    const std::optional<cpu::espresso::Gx2DepthBufferBinding>& depth_buffer;
+    std::span<const Gx2RegisterSnapshotEntry> registers;
+};
+
 // CPU-side shadow of Latte register writes consumed by the GPU backend.
 // It intentionally stores raw register words; decoding into Vulkan objects
 // belongs to later rendering stages.
@@ -314,6 +331,32 @@ public:
     draw_calls() const noexcept
     {
         return draw_calls_;
+    }
+
+    [[nodiscard]] std::optional<Gx2DrawSnapshotView> draw_snapshot(
+        std::size_t draw_index) const noexcept
+    {
+        if (draw_index >= draw_calls_.size() ||
+            draw_vertex_buffers_.size() != draw_calls_.size() ||
+            draw_fetch_shaders_.size() != draw_calls_.size() ||
+            draw_program_shaders_.size() != draw_calls_.size() ||
+            draw_shader_resources_.size() != draw_calls_.size() ||
+            draw_color_buffers_.size() != draw_calls_.size() ||
+            draw_depth_buffer_.size() != draw_calls_.size() ||
+            draw_registers_.size() != draw_calls_.size())
+        {
+            return std::nullopt;
+        }
+
+        return Gx2DrawSnapshotView{
+            draw_calls_[draw_index],
+            draw_vertex_buffers_[draw_index],
+            draw_fetch_shaders_[draw_index],
+            draw_program_shaders_[draw_index],
+            draw_shader_resources_[draw_index],
+            draw_color_buffers_[draw_index],
+            draw_depth_buffer_[draw_index],
+            draw_registers_[draw_index]};
     }
 
     [[nodiscard]] const std::array<

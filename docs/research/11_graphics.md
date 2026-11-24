@@ -159,8 +159,10 @@ attributes or shaders and do not modify the guest render target.
 
 1. Keep GX2 HLE responsible for ABI validation and immutable draw-time guest
    inputs. Keep the renderer independent from guest pointer dereferences.
-2. Represent each draw as one ordered, self-contained state snapshot instead
-   of relying on frontend-time live state or unrelated defaults.
+2. Give each draw one typed, immutable-by-contract view that binds the captured
+   command to its draw-time state, instead of relying on frontend-time live
+   state or unrelated defaults. Keep current storage allocation behavior
+   bounded; consider changing its representation only when consumers need it.
 3. Add typed Latte register decoding and a bounded command executor before
    treating raw register state as executable pipeline state.
 4. Implement a verified surface-address layer shared by clear, texture staging,

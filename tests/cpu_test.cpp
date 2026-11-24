@@ -31066,6 +31066,40 @@ void gx2_register_state_tests()
             Gx2DrawCall{4U, 3U, false, 0U, 0U, 0U, 1U, 0U}}};
     bindings.apply(overwritten_draw);
     assert(!bindings.texture_resource(Gx2ShaderStage::vertex, 0U));
+    const auto first_draw_snapshot = bindings.draw_snapshot(0U);
+    const auto overwritten_draw_snapshot = bindings.draw_snapshot(1U);
+    assert(first_draw_snapshot.has_value());
+    assert(overwritten_draw_snapshot.has_value());
+    assert(!bindings.draw_snapshot(2U));
+    constexpr Gx2DrawCall expected_snapshot_draw{
+        4U, 3U, false, 0U, 0U, 0U, 1U, 0U};
+    assert(first_draw_snapshot->command.draw_call ==
+           std::optional<Gx2DrawCall>{expected_snapshot_draw});
+    assert(first_draw_snapshot->vertex_buffers ==
+           bindings.draw_vertex_buffers()[0U]);
+    assert(first_draw_snapshot->fetch_shader ==
+           bindings.draw_fetch_shaders()[0U]);
+    assert(first_draw_snapshot->program_shaders ==
+           bindings.draw_program_shaders()[0U]);
+    assert(first_draw_snapshot->shader_resources == first_draw_resources);
+    assert(first_draw_snapshot->color_buffers ==
+           bindings.draw_color_buffers()[0U]);
+    assert(first_draw_snapshot->depth_buffer ==
+           bindings.draw_depth_buffers()[0U]);
+    assert(first_draw_snapshot->registers.size() ==
+           bindings.draw_registers()[0U].size());
+    assert(overwritten_draw_snapshot->shader_resources.textures[1U][0U] ==
+           std::nullopt);
+    assert(overwritten_draw_snapshot->shader_resources.samplers[2U][0U] ==
+           sampler_words);
+    assert(find_snapshot_entry(
+               first_draw_snapshot->registers,
+               vertex_resource_base + 6U * 4U)->type ==
+           Gx2CommandType::set_shader_resource);
+    assert(find_snapshot_entry(
+               overwritten_draw_snapshot->registers,
+               vertex_resource_base + 6U * 4U)->type ==
+           Gx2CommandType::set_context_register);
     assert(bindings.draw_shader_resources().size() == 2U);
     assert(bindings.draw_shader_resources()[0U] == first_draw_resources);
     assert(!bindings.draw_shader_resources()[1U].textures[1U][0U]);

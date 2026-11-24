@@ -548,21 +548,21 @@ void VulkanRenderer::consume_guest_commands(
     std::vector<DiagnosticVertex> diagnostic_vertices;
     std::vector<DiagnosticDrawRange> diagnostic_draw_ranges;
     std::size_t draw_index = first_draw_index;
-    const auto draw_fetch_shaders = guest_register_state_.draw_fetch_shaders();
     for (const cpu::espresso::Gx2Command& command : commands)
     {
         if (command.type != cpu::espresso::Gx2CommandType::draw)
         {
             continue;
         }
-        if (draw_index >= draw_fetch_shaders.size() ||
-            !draw_fetch_shaders[draw_index])
+        const std::optional<Gx2DrawSnapshotView> draw_snapshot =
+            guest_register_state_.draw_snapshot(draw_index);
+        if (!draw_snapshot || !draw_snapshot->fetch_shader)
         {
             throw std::runtime_error(
                 "Vulkan diagnostic draw has no captured GX2 fetch shader");
         }
         std::vector<DiagnosticVertex> draw_vertices = decode_diagnostic_float2_draw(
-            command, *draw_fetch_shaders[draw_index]);
+            draw_snapshot->command, *draw_snapshot->fetch_shader);
         const std::size_t maximum_vertex_count =
             std::numeric_limits<std::uint32_t>::max();
         if (diagnostic_vertices.size() > maximum_vertex_count ||

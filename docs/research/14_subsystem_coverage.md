@@ -90,8 +90,11 @@ mean the guest behavior is implemented.
 
 ## High-value next dependency chain
 
-1. Define a typed, immutable per-draw snapshot contract and test that later
-   register changes cannot alter earlier draws.
+1. The diagnostic backend now consumes a typed borrowed `Gx2DrawSnapshotView`
+   for a draw index. Tests verify the view's captured fields line up and later
+   register writes do not alter earlier draw snapshots. The view is invalidated
+   by a later `Gx2RegisterState::apply`; it is not a cross-thread ownership
+   primitive.
 2. Audit frontend worker/UI synchronization and give command execution, guest
    memory visibility, renderer submission, and readback explicit ownership.
 3. Build a documented Latte register/packet model (or prove which typed HLE
