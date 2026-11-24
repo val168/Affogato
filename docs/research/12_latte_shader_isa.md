@@ -67,6 +67,18 @@ references and real shader fixtures before implementation.
   previous-scalar reads must preserve the correct unit's result. This is a
   reference implementation bug report, not an ISA specification, but it
   demonstrates why flattened per-op arithmetic can be incorrect.
+- GaryOderNichts' [Wii U shader introduction](https://github.com/GaryOderNichts/wiiu-shaders/blob/master/shaders.md)
+  shows a minimal position/color pass-through vertex/pixel shader pair in
+  Latte assembly and the `latte-assembler assemble` workflow. The author labels
+  the guide incomplete; use it to construct a controlled workload, not as the
+  authority for instruction encodings or full GX2 ABI semantics.
+- The [Decaf Wii U tests](https://github.com/decaf-emu/wiiu-tests) include
+  shader-oriented guest tests, but their README requires `latte-assembler`,
+  AMD GPU ShaderAnalyzer, and devkitPro with WUT. The repository is GPL-3.0.
+  This environment currently has neither `DEVKITPRO` nor a discoverable
+  `latte-assembler`/`devkitPPC` command, so those RPX tests cannot presently be
+  built here. Keep it as a later independent conformance source; do not copy
+  its implementation into Affogato without license review.
 - `decaf-emu/addrlib` is licensed GPL-3.0-or-later and addresses surface
   layout, not shader translation. Shader code reuse requires separate license
   review. No external implementation code has been copied into Affogato.
@@ -135,8 +147,12 @@ snapshot/coherence requirements.
   guest workloads.
 - Which shader families an available WUT test actually emits and whether the
   current toolchain can build and run that test in this environment.
+- Whether a reproducible standalone Latte assembler is available through a
+  compatible license and usable without the Wii U RPX build toolchain.
 
 Next implementation work should begin with a source-backed decoder
 specification and fixtures for a small, fully understood instruction family.
-Do not start SPIR-V emission until decoding, slot grouping, and expected
-architectural outputs have deterministic tests.
+The introductory pass-through shader is a candidate for end-to-end fixtures
+once a suitable assembler is available; it alone does not establish a decoder
+specification. Do not start SPIR-V emission until decoding, slot grouping, and
+expected architectural outputs have deterministic tests.
