@@ -17,6 +17,14 @@ microtile, copies it through GX2 scanout HLE, and checks first/last scanout
 pixels. This does not add macro-tiling, other formats, Vulkan render targets,
 or guest draw writes.
 
+The texture staging helper also uses the researched 1D thin1 address mapping
+for its existing 8-, 16-, and 32-bit UNORM format decoders (R8, RG8, packed
+16-bit color formats, and RGBA8). It applies the element-size pitch alignment
+and rejects depth tiling and unsupported layouts. Debug and Release builds and
+CTest passed 2/2 in both configurations. This produces CPU staging pixels only;
+the path is not yet connected to translated guest shaders or normal Vulkan
+draw submission.
+
 This snapshot is based on the source and repository notes at `f0fbfef` (`main`, 2026-10-25), with verified updates below through 2026-11-22. It distinguishes implemented paths from complete console behavior.
 
 ## Current source update (2026-11-03)
@@ -37,7 +45,7 @@ The diagnostic consumer now also requires the captured `GX2SetFetchShader` state
 - An experimental AsmJit x86-64 recompiler with native lowering for a growing subset, interpreter/HLE fallbacks, code-page write-generation checks, a direct-mapped block lookup, and statistics.
 - Big-endian ELF and RPX loading with compressed sections, implemented relocations/trampolines, imported HLE function/data binding, and TLS relocation support.
 - A small per-session Cafe OS model and selected coreinit, GX2, nn_act, nn_olv, and nn_save handlers. Unsupported imports remain explicit stops/errors.
-- GX2/Latte state and command capture, typed texture/sampler descriptor decoding, CPU staging for selected linear 2D UNORM textures and configured TV scan buffers, and a Vulkan swapchain with guest scan-buffer presentation plus an opt-in RGBA8 upload primitive.
+- GX2/Latte state and command capture, typed texture/sampler descriptor decoding, CPU staging for selected linear-aligned and 1D thin1 2D UNORM textures and configured TV scan buffers, and a Vulkan swapchain with guest scan-buffer presentation plus an opt-in RGBA8 upload primitive. Texture staging is not yet wired to guest shader sampling/draw execution.
 - An SDL3/ImGui RPX library frontend and command-line diagnostic mode.
 
 ## Verified boundaries and limitations

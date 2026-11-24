@@ -43,14 +43,14 @@ mean the guest behavior is implemented.
 | GX2 command ordering | Partial, tested | HLE pending command vector and frontend batch handoff preserve selected operation order; not equivalent to asynchronous Latte FIFO/fence execution. |
 | Register shadow | Partial | `Gx2RegisterState` retains selected raw context/resource/sampler state and draw-time snapshots. Not all Latte registers have typed semantics. |
 | Color/depth render-target descriptors | Partial | HLE reads and records descriptors, binding and selected registers; broad hardware surface semantics are not provided. |
-| Surface format/layout/addressing | Partial | CPU staging and GX2 clear/copy support linear-aligned RGBA8 plus 1D thin1 RGBA8 microtiles. Macro-tiled R600/Latte addressing and general texture/render-target layouts are absent. |
+| Surface format/layout/addressing | Partial | CPU staging and GX2 clear/copy support linear-aligned RGBA8 plus 1D thin1 RGBA8 microtiles; texture staging also supports selected 8/16/32-bit UNORM formats in 1D thin1. Macro-tiled R600/Latte addressing and general texture/render-target layouts are absent. |
 | Clear/copy/scanout | Implemented and verified subset | Linear-aligned RGBA8 clear/copy/scanout was visibly presented; 1D thin1 RGBA8 clear/copy through HLE is covered by CPU tests. Macro-tiled, scaled, multisample, DRC, and general format behavior are unsupported. |
 | Vertex/index capture | Implemented and verified subset | Draw-time immutable guest snapshots support bounded non-indexed and U16/U32 indexed ranges when opt-in capture is enabled. |
 | Vertex fetch | Partial | HLE-generated VTX subset, Float32 scalar/vector and Float16x2 position formats. General fetch ISA, normalized formats, instancing/divisors, and arbitrary attributes are unsupported. |
 | Primitive assembly | Diagnostic partial | Diagnostic route supports triangle lists, strips, fans plus selected index endian forms; not normal guest rasterization. |
 | Guest draw dispatch | Diagnostic only | Ordered captured commands can reach the fixed diagnostic host pipeline when explicitly opted in. Normal guest shader/render-target semantics are not executed. |
 | Vertex/pixel/geometry shader decode | Missing | GX2 program descriptors/words are snapshotted; Latte instruction decode/execution/translation is absent. |
-| Texture/sampler decode | Partial | Selected register descriptors are decoded and bounded linear 2D staging exists; general tiled/mip/array/compressed sampling is absent. |
+| Texture/sampler decode | Partial | Selected register descriptors are decoded; bounded linear-aligned and 1D thin1 CPU staging exists for selected UNORM formats. Guest shader sampling, macro-tiling, mip/array/compressed staging remain absent. |
 | Depth/stencil/blend/raster state | Partial capture | Some HLE register state is recorded; Vulkan state mapping and guest draw behavior are absent. |
 | GPU memory coherence | Blocked | Requires an explicit ownership/ordering model between emulator worker, renderer thread, host Vulkan resources, guest reads and scanout. |
 | GPU synchronization/fences | Partial capture | Flush/draw-done/fence events are represented; actual completion, wait, and memory visibility semantics are not implemented. |

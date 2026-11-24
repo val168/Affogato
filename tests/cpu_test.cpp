@@ -31471,6 +31471,122 @@ void latte_texture_staging_tests()
         255U, 0U, 0U, 255U, 0U, 255U, 0U, 255U,
         170U, 85U, 0U, 255U, 85U, 170U, 0U, 255U}));
 
+    descriptor.tile_mode = gx2_tile_mode_1d_tiled_thin1;
+    descriptor.width = 8U;
+    descriptor.height = 8U;
+    descriptor.depth_tile = false;
+    descriptor.format = 0x01U; // GX2 UNORM R8, 8-bit microtile ordering.
+    descriptor.endian_swap = 0U;
+    descriptor.pitch_pixels = 32U;
+    descriptor.component_selectors = {0U, 4U, 4U, 5U};
+    assert(affogato::gpu::gx2_1d_thin1_element_offset(
+        0U, 1U, 32U, 8U) == 16U);
+    assert(affogato::gpu::gx2_1d_thin1_element_offset(
+        0U, 2U, 32U, 8U) == 8U);
+    assert(affogato::gpu::gx2_1d_thin1_element_offset(
+        8U, 0U, 32U, 8U) == 64U);
+    assert(affogato::gpu::gx2_1d_thin1_element_offset(
+        0U, 8U, 32U, 8U) == 256U);
+    std::vector<std::uint8_t> tiled_r8(256U);
+    std::vector<std::uint8_t> expected_tiled_r8(8U * 8U * 4U);
+    for (std::uint32_t y = 0U; y < 8U; ++y)
+    {
+        for (std::uint32_t x = 0U; x < 8U; ++x)
+        {
+            const std::uint8_t value = static_cast<std::uint8_t>(y * 8U + x);
+            const auto source_offset = affogato::gpu::gx2_1d_thin1_element_offset(
+                x, y, descriptor.pitch_pixels, 8U);
+            assert(source_offset.has_value());
+            tiled_r8[*source_offset] = value;
+            const std::size_t output_offset =
+                (static_cast<std::size_t>(y) * 8U + x) * 4U;
+            expected_tiled_r8[output_offset] = value;
+            expected_tiled_r8[output_offset + 3U] = 0xFFU;
+        }
+    }
+    const auto staged_tiled_r8 = affogato::gpu::stage_rgba8_texture(
+        descriptor, tiled_r8);
+    assert(staged_tiled_r8.has_value());
+    assert(staged_tiled_r8->pixels == expected_tiled_r8);
+    auto invalid_tiled_texture = descriptor;
+    invalid_tiled_texture.pitch_pixels = 24U;
+    assert(!affogato::gpu::stage_rgba8_texture(
+        invalid_tiled_texture, tiled_r8));
+    invalid_tiled_texture = descriptor;
+    invalid_tiled_texture.depth_tile = true;
+    assert(!affogato::gpu::stage_rgba8_texture(
+        invalid_tiled_texture, tiled_r8));
+
+    descriptor.format = 0x07U; // GX2 UNORM R8_G8, 16-bit microtile ordering.
+    descriptor.endian_swap = 1U;
+    descriptor.pitch_pixels = 16U;
+    descriptor.component_selectors = {0U, 1U, 4U, 5U};
+    assert(affogato::gpu::gx2_1d_thin1_element_offset(
+        0U, 1U, 16U, 16U) == 16U);
+    assert(affogato::gpu::gx2_1d_thin1_element_offset(
+        0U, 2U, 16U, 16U) == 32U);
+    assert(affogato::gpu::gx2_1d_thin1_element_offset(
+        8U, 0U, 16U, 16U) == 128U);
+    std::vector<std::uint8_t> tiled_rg8(256U);
+    std::vector<std::uint8_t> expected_tiled_rg8(8U * 8U * 4U);
+    for (std::uint32_t y = 0U; y < 8U; ++y)
+    {
+        for (std::uint32_t x = 0U; x < 8U; ++x)
+        {
+            const auto source_offset = affogato::gpu::gx2_1d_thin1_element_offset(
+                x, y, descriptor.pitch_pixels, 16U);
+            assert(source_offset.has_value());
+            tiled_rg8[*source_offset] = static_cast<std::uint8_t>(x);
+            tiled_rg8[*source_offset + 1U] = static_cast<std::uint8_t>(y);
+            const std::size_t output_offset =
+                (static_cast<std::size_t>(y) * 8U + x) * 4U;
+            expected_tiled_rg8[output_offset] = static_cast<std::uint8_t>(x);
+            expected_tiled_rg8[output_offset + 1U] =
+                static_cast<std::uint8_t>(y);
+            expected_tiled_rg8[output_offset + 3U] = 0xFFU;
+        }
+    }
+    const auto staged_tiled_rg8 = affogato::gpu::stage_rgba8_texture(
+        descriptor, tiled_rg8);
+    assert(staged_tiled_rg8.has_value());
+    assert(staged_tiled_rg8->pixels == expected_tiled_rg8);
+
+    descriptor.format = 0x1AU; // GX2 UNORM RGBA8, 32-bit microtile ordering.
+    descriptor.endian_swap = 2U;
+    descriptor.pitch_pixels = 8U;
+    descriptor.component_selectors = {0U, 1U, 2U, 3U};
+    std::vector<std::uint8_t> tiled_rgba8(256U);
+    std::vector<std::uint8_t> expected_tiled_rgba8(8U * 8U * 4U);
+    for (std::uint32_t y = 0U; y < 8U; ++y)
+    {
+        for (std::uint32_t x = 0U; x < 8U; ++x)
+        {
+            const auto source_offset = affogato::gpu::gx2_1d_thin1_element_offset(
+                x, y, descriptor.pitch_pixels, 32U);
+            assert(source_offset.has_value());
+            const std::size_t output_offset =
+                (static_cast<std::size_t>(y) * 8U + x) * 4U;
+            const std::array<std::uint8_t, 4U> rgba{
+                static_cast<std::uint8_t>(x),
+                static_cast<std::uint8_t>(y),
+                static_cast<std::uint8_t>(x + y),
+                0xFFU};
+            std::copy(rgba.begin(), rgba.end(),
+                tiled_rgba8.begin() + static_cast<std::ptrdiff_t>(*source_offset));
+            std::copy(rgba.begin(), rgba.end(),
+                expected_tiled_rgba8.begin() +
+                    static_cast<std::ptrdiff_t>(output_offset));
+        }
+    }
+    const auto staged_tiled_rgba8 = affogato::gpu::stage_rgba8_texture(
+        descriptor, tiled_rgba8);
+    assert(staged_tiled_rgba8.has_value());
+    assert(staged_tiled_rgba8->pixels == expected_tiled_rgba8);
+
+    descriptor.tile_mode = gx2_tile_mode_linear_aligned;
+    descriptor.width = 2U;
+    descriptor.height = 2U;
+    descriptor.pitch_pixels = 3U;
     descriptor.format = 0x1AU;
     descriptor.endian_swap = 2U;
     descriptor.component_selectors = {0U, 1U, 2U, 3U};

@@ -121,8 +121,10 @@ attributes or shaders and do not modify the guest render target.
   little- and big-endian forms. Primitive restart, instancing, and non-triangle
   diagnostic topology are rejected.
 - `latte_texture_resource.hpp`, `latte_sampler.hpp`, and
-  `latte_texture_staging.hpp` decode selected register words and a constrained
-  linear 2D texture subset. This is not general tiled texture sampling.
+  `latte_texture_staging.hpp` decode selected register words and stage selected
+  linear-aligned or 1D thin1 2D UNORM formats. The 1D path supports existing
+  8/16/32-bit element decoders with pitch alignment checked by bit depth. It is
+  not guest shader sampling or general macro-tiled/mipmapped texture handling.
 - GPU fences, flushes, and draw-done calls are represented in command history;
   this is not proof of a hardware-equivalent queue/fence implementation.
 
@@ -222,6 +224,7 @@ render-target writes.
   the README, and cross-checks mappings generated from RenderDoc. Its
   `src/addrlib.rs` functions `compute_pixel_index_within_micro_tile` and
   `compute_surface_addr_from_coord_micro_tiled` identify the 8x8 microtile
-  mapping used for the supported RGBA8 1D thin1 path. Affogato implements the
-  narrow address calculation independently; no source code or fixture data
+  mapping. The pixel-index bit order depends on element size; Affogato
+  implements the displayable 8/16/32-bit cases needed by its current texture
+  and RGBA8 color-buffer subsets independently. No source code or fixture data
   from that crate was copied.

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "gpu/latte_surface_staging.hpp"
 #include "gpu/latte_texture_resource.hpp"
 
 #include <algorithm>
@@ -74,17 +75,17 @@ struct Rgba8TextureStaging
     return result;
 }
 
-// Converts explicitly supported linear GX2 formats to tightly packed RGBA8
-// bytes suitable for a Vulkan staging buffer. GuestMemory range
-// validation and snapshotting are the caller's responsibility; guest_bytes
-// starts at descriptor.image_address.
-[[nodiscard]] inline std::optional<Rgba8TextureStaging>
-stage_linear_rgba8_texture(
+// Converts explicitly supported linear-aligned or 1D thin1 GX2 formats to
+// tightly packed RGBA8 bytes suitable for a Vulkan staging buffer.
+// GuestMemory range validation and snapshotting are the caller's
+// responsibility; guest_bytes starts at descriptor.image_address.
+[[nodiscard]] inline std::optional<Rgba8TextureStaging> stage_rgba8_texture(
     const LatteTextureResourceDescriptor& descriptor,
     std::span<const std::uint8_t> guest_bytes)
 {
     constexpr std::uint32_t gx2_2d_dimension = 1U;
     constexpr std::uint32_t gx2_linear_aligned_tile_mode = 1U;
+    constexpr std::uint32_t gx2_1d_tiled_thin1_tile_mode = 2U;
     constexpr std::uint32_t gx2_unorm_r8_format = 0x01U;
     constexpr std::uint32_t gx2_unorm_rg44_format = 0x02U;
     constexpr std::uint32_t gx2_unorm_rg8_format = 0x07U;
@@ -157,7 +158,10 @@ stage_linear_rgba8_texture(
         break;
     }
     if (descriptor.dimension != gx2_2d_dimension ||
-        descriptor.tile_mode != gx2_linear_aligned_tile_mode ||
+        (descriptor.tile_mode != gx2_linear_aligned_tile_mode &&
+         descriptor.tile_mode != gx2_1d_tiled_thin1_tile_mode) ||
+        (descriptor.tile_mode == gx2_1d_tiled_thin1_tile_mode &&
+         descriptor.depth_tile) ||
         descriptor.depth_or_layers != 1U || source_bytes_per_pixel == 0U ||
         descriptor.numeric_format != gx2_unorm_numeric_format ||
         descriptor.endian_swap != expected_endian_swap || descriptor.force_degamma ||
@@ -171,12 +175,25 @@ stage_linear_rgba8_texture(
 
     const std::uint64_t source_row_bytes =
         static_cast<std::uint64_t>(descriptor.pitch_pixels) * source_bytes_per_pixel;
-    const std::uint64_t required_source_bytes = source_row_bytes * descriptor.height;
+    const std::uint32_t bits_per_element = source_bytes_per_pixel * 8U;
+    const auto required_source_bytes = gx2_surface_storage_size(
+        descriptor.width,
+        descriptor.height,
+        descriptor.pitch_pixels,
+        bits_per_element,
+        descriptor.tile_mode);
+    const std::uint64_t output_pixel_count =
+        static_cast<std::uint64_t>(descriptor.width) * descriptor.height;
+    if (output_pixel_count >
+        std::numeric_limits<std::uint64_t>::max() / rgba8_bytes_per_pixel)
+    {
+        return std::nullopt;
+    }
     const std::uint64_t output_bytes =
-        static_cast<std::uint64_t>(descriptor.width) * descriptor.height *
-        rgba8_bytes_per_pixel;
-    if (source_row_bytes > std::numeric_limits<std::size_t>::max() ||
-        required_source_bytes > guest_bytes.size() ||
+        output_pixel_count * rgba8_bytes_per_pixel;
+    if (!required_source_bytes ||
+        source_row_bytes > std::numeric_limits<std::size_t>::max() ||
+        *required_source_bytes > guest_bytes.size() ||
         output_bytes > std::numeric_limits<std::size_t>::max())
     {
         return std::nullopt;
@@ -201,14 +218,31 @@ stage_linear_rgba8_texture(
     const std::array<std::uint8_t, 6U> constants{0U, 0U, 0U, 0U, 0U, 0xFFU};
     for (std::uint32_t y = 0U; y < descriptor.height; ++y)
     {
-        const std::size_t source_row = static_cast<std::size_t>(
-            static_cast<std::uint64_t>(y) * source_row_bytes);
+        const std::size_t source_row =
+            descriptor.tile_mode == gx2_linear_aligned_tile_mode
+                ? static_cast<std::size_t>(
+                    static_cast<std::uint64_t>(y) * source_row_bytes)
+                : 0U;
         const std::size_t destination_row = static_cast<std::size_t>(
             static_cast<std::uint64_t>(y) * descriptor.width * rgba8_bytes_per_pixel);
         for (std::uint32_t x = 0U; x < descriptor.width; ++x)
         {
-            const std::size_t source_offset = source_row +
+            std::size_t source_offset = source_row +
                 static_cast<std::size_t>(x) * source_bytes_per_pixel;
+            if (descriptor.tile_mode == gx2_1d_tiled_thin1_tile_mode)
+            {
+                const auto tiled_offset = gx2_1d_thin1_element_offset(
+                    x,
+                    y,
+                    descriptor.pitch_pixels,
+                    bits_per_element);
+                if (!tiled_offset ||
+                    *tiled_offset > guest_bytes.size() - source_bytes_per_pixel)
+                {
+                    return std::nullopt;
+                }
+                source_offset = *tiled_offset;
+            }
             const std::size_t destination_offset = destination_row +
                 static_cast<std::size_t>(x) * rgba8_bytes_per_pixel;
             const std::uint8_t* source = guest_bytes.data() + source_offset;
@@ -287,6 +321,19 @@ stage_linear_rgba8_texture(
         }
     }
     return result;
+}
+
+[[nodiscard]] inline std::optional<Rgba8TextureStaging>
+stage_linear_rgba8_texture(
+    const LatteTextureResourceDescriptor& descriptor,
+    std::span<const std::uint8_t> guest_bytes)
+{
+    if (descriptor.tile_mode != gx2_tile_mode_linear_aligned)
+    {
+        return std::nullopt;
+    }
+
+    return stage_rgba8_texture(descriptor, guest_bytes);
 }
 
 }

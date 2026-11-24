@@ -15,6 +15,86 @@ namespace affogato::gpu
 inline constexpr std::uint32_t gx2_tile_mode_linear_aligned = 1U;
 inline constexpr std::uint32_t gx2_tile_mode_1d_tiled_thin1 = 2U;
 
+[[nodiscard]] inline std::optional<std::size_t> gx2_1d_thin1_element_offset(
+    std::uint32_t x,
+    std::uint32_t y,
+    std::uint32_t pitch_elements,
+    std::uint32_t bits_per_element)
+{
+    constexpr std::uint32_t micro_tile_width = 8U;
+    constexpr std::uint64_t micro_tile_height = 8U;
+    if ((bits_per_element != 8U && bits_per_element != 16U &&
+         bits_per_element != 32U) ||
+        (pitch_elements % std::max(
+            micro_tile_width, 256U / bits_per_element)) != 0U)
+    {
+        return std::nullopt;
+    }
+
+    const std::uint64_t x_in_tile = x % micro_tile_width;
+    const std::uint64_t y_in_tile = y % micro_tile_height;
+    std::uint64_t micro_tile_element = 0U;
+    if (bits_per_element == 8U)
+    {
+        micro_tile_element =
+            ((x_in_tile >> 0U) & 1U) |
+            (((x_in_tile >> 1U) & 1U) << 1U) |
+            (((x_in_tile >> 2U) & 1U) << 2U) |
+            (((y_in_tile >> 1U) & 1U) << 3U) |
+            (((y_in_tile >> 0U) & 1U) << 4U) |
+            (((y_in_tile >> 2U) & 1U) << 5U);
+    }
+    else if (bits_per_element == 16U)
+    {
+        micro_tile_element =
+            ((x_in_tile >> 0U) & 1U) |
+            (((x_in_tile >> 1U) & 1U) << 1U) |
+            (((x_in_tile >> 2U) & 1U) << 2U) |
+            (((y_in_tile >> 0U) & 1U) << 3U) |
+            (((y_in_tile >> 1U) & 1U) << 4U) |
+            (((y_in_tile >> 2U) & 1U) << 5U);
+    }
+    else
+    {
+        micro_tile_element =
+            ((x_in_tile >> 0U) & 1U) |
+            (((x_in_tile >> 1U) & 1U) << 1U) |
+            (((y_in_tile >> 0U) & 1U) << 2U) |
+            (((x_in_tile >> 2U) & 1U) << 3U) |
+            (((y_in_tile >> 1U) & 1U) << 4U) |
+            (((y_in_tile >> 2U) & 1U) << 5U);
+    }
+
+    const std::uint64_t bytes_per_element = bits_per_element / 8U;
+    const std::uint64_t micro_tile_bytes = 64U * bytes_per_element;
+    const std::uint64_t micro_tiles_per_row = pitch_elements / micro_tile_width;
+    const std::uint64_t micro_tile_index =
+        static_cast<std::uint64_t>(x / micro_tile_width) +
+        static_cast<std::uint64_t>(y / micro_tile_height) *
+            micro_tiles_per_row;
+    if (micro_tile_index >
+        std::numeric_limits<std::uint64_t>::max() / micro_tile_bytes)
+    {
+        return std::nullopt;
+    }
+
+    const std::uint64_t micro_tile_offset =
+        micro_tile_index * micro_tile_bytes;
+    const std::uint64_t element_offset =
+        micro_tile_element * bytes_per_element;
+    if (micro_tile_offset >
+        std::numeric_limits<std::uint64_t>::max() - element_offset)
+    {
+        return std::nullopt;
+    }
+    const std::uint64_t byte_offset = micro_tile_offset + element_offset;
+    if (byte_offset > std::numeric_limits<std::size_t>::max())
+    {
+        return std::nullopt;
+    }
+    return static_cast<std::size_t>(byte_offset);
+}
+
 struct Rgba8SurfaceStaging
 {
     std::uint32_t width{};
@@ -24,25 +104,31 @@ struct Rgba8SurfaceStaging
     bool operator==(const Rgba8SurfaceStaging&) const = default;
 };
 
-// For 1D thin1, 32-bit displayable microtiles are 8x8 pixels (256 bytes).
-// R600 addrlib orders the six in-tile pixel-index bits as X0, X1, Y0, X2,
-// Y1, Y2. Pitch and height must already include the format's tile padding.
-[[nodiscard]] inline std::optional<std::uint64_t> rgba8_surface_storage_size(
+// 1D thin1 uses 8x8 displayable microtiles. In-tile element bit order depends
+// on element size; for 32-bit elements R600 addrlib orders X0, X1, Y0, X2,
+// Y1, Y2. Surface pitches are aligned to the 256-byte pipe interleave.
+[[nodiscard]] inline std::optional<std::uint64_t> gx2_surface_storage_size(
     std::uint32_t width,
     std::uint32_t height,
     std::uint32_t pitch_pixels,
+    std::uint32_t bits_per_pixel,
     std::uint32_t tile_mode)
 {
-    constexpr std::uint64_t bytes_per_pixel = 4U;
-    if (width == 0U || height == 0U || pitch_pixels < width)
+    if (width == 0U || height == 0U || pitch_pixels < width ||
+        (bits_per_pixel != 8U && bits_per_pixel != 16U &&
+         bits_per_pixel != 32U))
     {
         return std::nullopt;
     }
 
-    if (tile_mode == gx2_tile_mode_1d_tiled_thin1 &&
-        (pitch_pixels % 8U != 0U || height % 8U != 0U))
+    if (tile_mode == gx2_tile_mode_1d_tiled_thin1)
     {
-        return std::nullopt;
+        const std::uint32_t pitch_alignment =
+            std::max(8U, 256U / bits_per_pixel);
+        if (pitch_pixels % pitch_alignment != 0U || height % 8U != 0U)
+        {
+            return std::nullopt;
+        }
     }
     if (tile_mode != gx2_tile_mode_linear_aligned &&
         tile_mode != gx2_tile_mode_1d_tiled_thin1)
@@ -51,13 +137,23 @@ struct Rgba8SurfaceStaging
     }
 
     const std::uint64_t row_size =
-        static_cast<std::uint64_t>(pitch_pixels) * bytes_per_pixel;
+        static_cast<std::uint64_t>(pitch_pixels) * (bits_per_pixel / 8U);
     if (height > std::numeric_limits<std::uint64_t>::max() / row_size)
     {
         return std::nullopt;
     }
 
     return row_size * height;
+}
+
+[[nodiscard]] inline std::optional<std::uint64_t> rgba8_surface_storage_size(
+    std::uint32_t width,
+    std::uint32_t height,
+    std::uint32_t pitch_pixels,
+    std::uint32_t tile_mode)
+{
+    return gx2_surface_storage_size(
+        width, height, pitch_pixels, 32U, tile_mode);
 }
 
 [[nodiscard]] inline std::optional<std::size_t> rgba8_surface_pixel_offset(
@@ -75,40 +171,13 @@ struct Rgba8SurfaceStaging
     }
     else if (tile_mode == gx2_tile_mode_1d_tiled_thin1)
     {
-        constexpr std::uint64_t micro_tile_width = 8U;
-        constexpr std::uint64_t micro_tile_height = 8U;
-        constexpr std::uint64_t micro_tile_bytes = 8U * 8U * bytes_per_pixel;
-
-        if (pitch_pixels % micro_tile_width != 0U)
+        const auto byte_offset =
+            gx2_1d_thin1_element_offset(x, y, pitch_pixels, 32U);
+        if (!byte_offset)
         {
             return std::nullopt;
         }
-
-        // R600 displayable 32-bit microtiles interleave X0, X1, Y0,
-        // X2, Y1, Y2 as pixel-index bits (Decaf addrlib's
-        // compute_pixel_index_within_micro_tile).
-        const std::uint64_t x_in_tile = x % micro_tile_width;
-        const std::uint64_t y_in_tile = y % micro_tile_height;
-        const std::uint64_t micro_tile_pixel =
-            ((x_in_tile >> 0U) & 1U) |
-            (((x_in_tile >> 1U) & 1U) << 1U) |
-            (((y_in_tile >> 0U) & 1U) << 2U) |
-            (((x_in_tile >> 2U) & 1U) << 3U) |
-            (((y_in_tile >> 1U) & 1U) << 4U) |
-            (((y_in_tile >> 2U) & 1U) << 5U);
-        const std::uint64_t micro_tiles_per_row = pitch_pixels / micro_tile_width;
-        const std::uint64_t micro_tile_index =
-            static_cast<std::uint64_t>(x / micro_tile_width) +
-            static_cast<std::uint64_t>(y / micro_tile_height) *
-                micro_tiles_per_row;
-        if (micro_tile_index >
-            std::numeric_limits<std::uint64_t>::max() / micro_tile_bytes)
-        {
-            return std::nullopt;
-        }
-        const std::uint64_t micro_tile_offset =
-            micro_tile_index * micro_tile_bytes;
-        pixel_index = micro_tile_offset / bytes_per_pixel + micro_tile_pixel;
+        return byte_offset;
     }
     else
     {
