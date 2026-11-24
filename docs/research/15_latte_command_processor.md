@@ -71,8 +71,9 @@ all packet behavior or register side effects match Latte.
   identifies the register as a per-entry clear mask; Decaf's
   `src/libgpu/src/pm4_processor.cpp::setRegisters` maps mask bit `i` to
   semantic entry `i`. This is cross-generation reference evidence, not a
-  Latte-specific specification. Tests cover selective clearing and write
-  ordering; other special register side effects remain unsupported.
+  Latte-specific specification. Tests cover selective clearing, write
+  ordering, and the `GX2SetContextState` packet-to-register-shadow path; other
+  special register side effects remain unsupported.
 
 Consequently, the current `pending_commands` queue is an HLE-produced command
 model, not a representation of PM4 dwords. A renderer can execute supported

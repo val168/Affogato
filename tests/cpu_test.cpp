@@ -28706,6 +28706,41 @@ void gx2_set_context_state_hle_tests()
                 0x28104U,
                 0xE5F60718U}));
 
+    // The PM4 restore path feeds the same register shadow that models
+    // SQ_VTX_SEMANTIC_CLEAR's per-entry side effect.
+    core.state.cia = core.hle.bind_import("gx2", "GX2SetContextState");
+    core.state.lr = return_address;
+    core.state.gpr[3] = context_state;
+    core.memory.write32_be(
+        context_state + display_list_offset, 0xC0016900U);
+    core.memory.write32_be(
+        context_state + display_list_offset + 4U, 0x238U);
+    core.memory.write32_be(
+        context_state + display_list_offset + 8U, 0x2U);
+    core.memory.write32_be(context_state + display_list_size_offset, 12U);
+    const std::size_t commands_before_semantic_clear =
+        core.gx2.pending_commands.size();
+    const RunResult semantic_clear_result = core.run(1U);
+    assert(semantic_clear_result.reason == StopReason::instruction_limit);
+    assert(core.gx2.pending_commands.size() ==
+           commands_before_semantic_clear + 1U);
+    assert((core.gx2.pending_commands.back() == Gx2Command{
+        Gx2CommandType::set_context_register,
+        0x288E0U,
+        0x2U}));
+
+    constexpr std::array<Gx2Command, 2U> semantic_seed_commands{{
+        {Gx2CommandType::set_context_register, 0x28380U, 0x11U},
+        {Gx2CommandType::set_context_register, 0x28384U, 0x22U},
+    }};
+    affogato::gpu::Gx2RegisterState restored_register_state;
+    restored_register_state.apply(semantic_seed_commands);
+    restored_register_state.apply(std::span<const Gx2Command>(
+        core.gx2.pending_commands).subspan(
+            commands_before_semantic_clear));
+    assert(restored_register_state.read(0x28380U) == 0x11U);
+    assert(restored_register_state.read(0x28384U) == 0xFFFFFFFFU);
+
     // A truncated list fails atomically: no earlier packet writes or active
     // context changes escape before the malformed packet is reported.
     core.state.cia = core.hle.bind_import("gx2", "GX2SetContextState");
