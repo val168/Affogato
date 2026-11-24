@@ -49,7 +49,7 @@ mean the guest behavior is implemented.
 | Vertex fetch | Partial | HLE-generated VTX subset, Float32 scalar/vector and Float16x2 position formats. General fetch ISA, normalized formats, instancing/divisors, and arbitrary attributes are unsupported. |
 | Primitive assembly | Diagnostic partial | Diagnostic route supports triangle lists, strips, fans plus selected index endian forms; not normal guest rasterization. |
 | Guest draw dispatch | Diagnostic only | Ordered captured commands can reach the fixed diagnostic host pipeline when explicitly opted in. Normal guest shader/render-target semantics are not executed. |
-| Vertex/pixel/geometry shader decode | Missing | GX2 program descriptors/words are snapshotted; Latte instruction decode/execution/translation is absent. |
+| Vertex/pixel/geometry shader decode | Missing | GX2 program descriptors/words are snapshotted; [`12_latte_shader_isa.md`](12_latte_shader_isa.md) records current capture boundaries, reference sources, and decoder acceptance requirements. Latte instruction decode/execution/translation is absent. |
 | Texture/sampler decode | Partial | Selected register descriptors are decoded; bounded linear-aligned, 1D thin1, and zero-swizzle 2D thin1 CPU staging exists for selected 8/16/32-bit UNORM formats. Guest shader sampling, depth tiling, mip/array/compressed staging, and other layouts remain absent. |
 | Depth/stencil/blend/raster state | Partial capture | Some HLE register state is recorded; Vulkan state mapping and guest draw behavior are absent. |
 | GPU memory coherence | Blocked | Requires an explicit ownership/ordering model between emulator worker, renderer thread, host Vulkan resources, guest reads and scanout. |
