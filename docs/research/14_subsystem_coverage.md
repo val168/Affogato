@@ -39,7 +39,7 @@ mean the guest behavior is implemented.
 
 | Feature | Status | Evidence / limitation |
 | --- | --- | --- |
-| Raw GPU command ring/PM4 decoder | Missing | GX2 HLE emits typed `Gx2Command` records; no guest ring-buffer packet processor/retirement path. [`15_latte_command_processor.md`](15_latte_command_processor.md) documents packet references and the HLE/display-list boundary. |
+| Raw GPU command ring/PM4 decoder | Missing as a full subsystem | GX2 HLE emits typed `Gx2Command` records; no guest ring-buffer packet processor/retirement path. A bounded Type-2/Type-3 `SET_CONTEXT_REG` subset serves `GX2SetContextState`; see [`15_latte_command_processor.md`](15_latte_command_processor.md). |
 | GX2 command ordering | Partial, tested | HLE pending command vector and frontend batch handoff preserve selected operation order; not equivalent to asynchronous Latte FIFO/fence execution. |
 | Register shadow | Partial | `Gx2RegisterState` retains selected raw context/resource/sampler state and draw-time snapshots. Not all Latte registers have typed semantics. |
 | Color/depth render-target descriptors | Partial | HLE reads and records descriptors, binding and selected registers; broad hardware surface semantics are not provided. |

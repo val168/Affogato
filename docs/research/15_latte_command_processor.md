@@ -56,10 +56,13 @@ all packet behavior or register side effects match Latte.
   PM4 display-list size at zero because Affogato does not generate authentic
   restore packets. `GX2GetContextStateDisplayList` returns that embedded
   buffer and size. `GX2SetContextState` restores Affogato's captured register
-  shadow when the size is zero and explicitly rejects a nonempty display list.
+  shadow when the size is zero. A bounded nonempty subset decodes Type-2 filler
+  and Type-3 `SET_CONTEXT_REG` packets into typed register commands; other
+  packet types/opcodes, predication, truncation, and out-of-window writes fail
+  explicitly. Queuing these values does not execute GPU work or retire a fence.
 - `tests/cpu_test.cpp` covers command-pool attributes, context-state setup,
-  zero-length display-list results, shadow restoration, and the current
-  nonempty-list rejection. It does not test packet parsing.
+  zero-length display-list results, shadow restoration, big-endian packet
+  playback, ordered register writes, and malformed/unsupported-list rejection.
 
 Consequently, the current `pending_commands` queue is an HLE-produced command
 model, not a representation of PM4 dwords. A renderer can execute supported
@@ -72,11 +75,11 @@ lists and guest-written command streams remain unsupported.
 | --- | --- | --- |
 | GX2 command-pool registration | Partial and tested | Bounds/alignment/ownership checks in `initialize_gx2` |
 | Typed GX2 HLE event ordering | Partial and tested | `pending_commands`, register shadow and frontend drain |
-| PM4 packet framing | Missing | Endian-aware headers, length bounds, reserved packet types |
-| PM4 register writes | Missing | Register-space mapping, limits, special write side effects |
-| Type-3 operations | Missing | Opcode semantics and explicit support/error policy |
+| PM4 packet framing | Partial and tested | Type-2 filler and Type-3 lengths; Type-0/Type-1 remain unsupported |
+| PM4 register writes | Partial and tested | Type-3 `SET_CONTEXT_REG` maps bounded dword offsets to the context register byte range |
+| Type-3 operations | Partial | `SET_CONTEXT_REG` only; all other opcodes are rejected |
 | Indirect buffers / nested lists | Missing | Guest bounds, alignment, recursion limit, lifetime and ordering |
-| Context display-list generation/playback | Partial | zero-sized list generation and shadow restore; nonempty playback rejected |
+| Context display-list generation/decoding | Partial | generation leaves size zero; empty lists restore the register shadow; bounded Type-2/`SET_CONTEXT_REG` lists decode into typed writes; GPU packet execution is not implemented |
 | GPU completion and waits | Partial / not renderer-backed | Must follow actual submission, fence, and memory-visibility semantics |
 
 ## Design constraints for a first implementation
@@ -96,16 +99,16 @@ lists and guest-written command streams remain unsupported.
 5. Do not make `GX2DrawDone` report retirement before actual queued GPU work
    completes. Display-list support must preserve the current asynchronous
    frontend ownership boundary.
-6. Do not add a parser that is not used by a guest-facing operation. A first
-   useful slice is a verified subset of context display-list playback with
-   deterministic packet fixtures; it must not be presented as the complete
-   Latte command processor.
+6. Keep the current parser attached to `GX2SetContextState`; do not present
+   this context-list subset as the complete Latte command processor. Expand
+   support only when packet fixtures and register side-effect tests verify the
+   additional behavior.
 
 ## Acceptance tests
 
-- Header and packet-body fixtures for each supported type/opcode, including
-  Type-0 count/base index and Type-3 count/opcode fields cross-checked against
-  AMD's guide and a known Latte assembler or reference-generated stream.
+- Current fixtures cover Type-2 filler and Type-3 count/opcode/register-offset
+  behavior. Before Type-0 support is added, add count/base-index fixtures
+  cross-checked against AMD's guide and a known Latte stream.
 - Big-endian dword decoding, empty/truncated streams, count overflow, unknown
   type/opcode, invalid register range, and exact cursor advancement.
 - Tests proving malformed packets do not partially mutate the register shadow

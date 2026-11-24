@@ -28670,21 +28670,120 @@ void gx2_set_context_state_hle_tests()
     }
     assert(core.gx2.pending_commands.front() == prior_commands.front());
 
-    // A serialized PM4 list cannot be silently treated as an empty shadow
-    // restore. Failure leaves the selected context and pending stream intact.
+    // Type-2 filler and Type-3 SET_CONTEXT_REG packets are decoded from guest
+    // big-endian words and appended in packet order.
     core.state.cia = core.hle.bind_import("gx2", "GX2SetContextState");
     core.state.lr = return_address;
     core.state.gpr[3] = context_state;
-    core.memory.write32_be(context_state + display_list_size_offset, 4U);
+    constexpr std::uint32_t display_list_offset = 0x9E00U;
+    constexpr std::uint32_t display_list_size = 20U;
+    core.memory.write32_be(
+        context_state + display_list_offset, 0x80000000U);
+    core.memory.write32_be(
+        context_state + display_list_offset + 4U, 0xC0026900U);
+    core.memory.write32_be(
+        context_state + display_list_offset + 8U, 0x40U);
+    core.memory.write32_be(
+        context_state + display_list_offset + 12U, 0xA1B2C3D4U);
+    core.memory.write32_be(
+        context_state + display_list_offset + 16U, 0xE5F60718U);
+    core.memory.write32_be(
+        context_state + display_list_size_offset, display_list_size);
+    const std::size_t commands_before_display_list =
+        core.gx2.pending_commands.size();
+    const RunResult display_list_result = core.run(1U);
+    assert(display_list_result.reason == StopReason::instruction_limit);
+    assert(core.gx2.pending_commands.size() ==
+           commands_before_display_list + 2U);
+    assert((core.gx2.pending_commands[commands_before_display_list] ==
+            Gx2Command{
+                Gx2CommandType::set_context_register,
+                0x28100U,
+                0xA1B2C3D4U}));
+    assert((core.gx2.pending_commands[commands_before_display_list + 1U] ==
+            Gx2Command{
+                Gx2CommandType::set_context_register,
+                0x28104U,
+                0xE5F60718U}));
+
+    // A truncated list fails atomically: no earlier packet writes or active
+    // context changes escape before the malformed packet is reported.
+    core.state.cia = core.hle.bind_import("gx2", "GX2SetContextState");
+    core.state.lr = return_address;
+    core.state.gpr[3] = context_state;
+    core.memory.write32_be(
+        context_state + display_list_offset, 0xC0026900U);
+    core.memory.write32_be(
+        context_state + display_list_offset + 4U, 0x40U);
+    core.memory.write32_be(context_state + display_list_size_offset, 8U);
     const auto commands_before_list_error = core.gx2.pending_commands;
     const std::uint32_t active_context_before_list_error =
         core.gx2.current_context_state;
     const RunResult list_error = core.run(1U);
     assert(list_error.reason == StopReason::hle_error);
-    assert(list_error.detail.find("PM4 context display-list playback") !=
+    assert(list_error.detail.find("PM4 context display-list contains a truncated") !=
            std::string::npos);
     assert(core.gx2.pending_commands == commands_before_list_error);
     assert(core.gx2.current_context_state == active_context_before_list_error);
+
+    // Type-3 opcodes outside the bounded restore subset are explicit errors.
+    core.state.cia = core.hle.bind_import("gx2", "GX2SetContextState");
+    core.state.lr = return_address;
+    core.state.gpr[3] = context_state;
+    core.memory.write32_be(
+        context_state + display_list_offset, 0xC0001000U);
+    core.memory.write32_be(context_state + display_list_offset + 4U, 0U);
+    core.memory.write32_be(context_state + display_list_size_offset, 8U);
+    const auto commands_before_unsupported_packet = core.gx2.pending_commands;
+    const RunResult unsupported_packet = core.run(1U);
+    assert(unsupported_packet.reason == StopReason::hle_error);
+    assert(unsupported_packet.detail.find(
+               "PM4 context display-list contains an unsupported Type-3 opcode") !=
+           std::string::npos);
+    assert(core.gx2.pending_commands == commands_before_unsupported_packet);
+    assert(core.gx2.current_context_state == active_context_before_list_error);
+
+    // Register offsets are dword offsets within the documented context
+    // register window; a packet crossing its end is rejected as a unit.
+    core.state.cia = core.hle.bind_import("gx2", "GX2SetContextState");
+    core.state.lr = return_address;
+    core.state.gpr[3] = context_state;
+    core.memory.write32_be(
+        context_state + display_list_offset, 0xC0026900U);
+    core.memory.write32_be(
+        context_state + display_list_offset + 4U, 0x3FFU);
+    core.memory.write32_be(
+        context_state + display_list_offset + 8U, 0x12345678U);
+    core.memory.write32_be(
+        context_state + display_list_offset + 12U, 0x87654321U);
+    core.memory.write32_be(context_state + display_list_size_offset, 16U);
+    const auto commands_before_register_overrun = core.gx2.pending_commands;
+    const RunResult register_overrun = core.run(1U);
+    assert(register_overrun.reason == StopReason::hle_error);
+    assert(register_overrun.detail.find(
+               "PM4 context display-list writes outside the context-register range") !=
+           std::string::npos);
+    assert(core.gx2.pending_commands == commands_before_register_overrun);
+    assert(core.gx2.current_context_state == active_context_before_list_error);
+
+    // Predicated context writes are rejected because the emulated context
+    // display-list path has no PM4 predication state.
+    core.state.cia = core.hle.bind_import("gx2", "GX2SetContextState");
+    core.state.lr = return_address;
+    core.state.gpr[3] = context_state;
+    core.memory.write32_be(
+        context_state + display_list_offset, 0xC0006901U);
+    core.memory.write32_be(context_state + display_list_offset + 4U, 0U);
+    core.memory.write32_be(context_state + display_list_size_offset, 8U);
+    const auto commands_before_predicated_packet = core.gx2.pending_commands;
+    const RunResult predicated_packet = core.run(1U);
+    assert(predicated_packet.reason == StopReason::hle_error);
+    assert(predicated_packet.detail.find(
+               "PM4 context display-list contains a predicated or invalid Type-3 header") !=
+           std::string::npos);
+    assert(core.gx2.pending_commands == commands_before_predicated_packet);
+    assert(core.gx2.current_context_state == active_context_before_list_error);
+
     core.memory.write32_be(context_state + display_list_size_offset, 0U);
 
     // A null pointer disables shadow tracking without discarding already queued

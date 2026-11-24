@@ -4,6 +4,7 @@
 #include "cpu/espresso/guest_memory.hpp"
 #include "cpu/espresso/hle_dispatcher.hpp"
 #include "cpu/espresso/interpreter.hpp"
+#include "gpu/latte_context_display_list.hpp"
 #include "gpu/latte_surface_staging.hpp"
 #include "gpu/latte_texture_staging.hpp"
 
@@ -921,6 +922,81 @@ std::vector<Gx2Command> read_gx2_context_restore_commands(
         context_bytes, sampler_area, 0xF000U,
         gx2_context_sampler_load_ranges,
         Gx2CommandType::set_shader_sampler, commands);
+    return commands;
+}
+
+std::vector<Gx2Command> decode_gx2_context_display_list(
+    std::span<const std::uint8_t> context_bytes,
+    std::uint32_t display_list_size)
+{
+    if ((display_list_size % sizeof(std::uint32_t)) != 0U)
+    {
+        throw HleExecutionError(
+            "gx2::GX2SetContextState: PM4 context display-list size is not "
+            "dword-aligned");
+    }
+
+    const auto display_list_bytes = context_bytes.subspan(
+        gx2_context_display_list_offset, display_list_size);
+    std::vector<std::uint32_t> words(
+        display_list_size / sizeof(std::uint32_t));
+    for (std::size_t index = 0U; index < words.size(); ++index)
+    {
+        const std::size_t byte_offset = index * sizeof(std::uint32_t);
+        words[index] =
+            (static_cast<std::uint32_t>(display_list_bytes[byte_offset]) << 24U) |
+            (static_cast<std::uint32_t>(display_list_bytes[byte_offset + 1U]) << 16U) |
+            (static_cast<std::uint32_t>(display_list_bytes[byte_offset + 2U]) << 8U) |
+            static_cast<std::uint32_t>(display_list_bytes[byte_offset + 3U]);
+    }
+
+    const auto decoded = affogato::gpu::decode_latte_context_display_list(words);
+    if (!decoded.succeeded())
+    {
+        const char* reason = "contains an unsupported packet";
+        switch (decoded.error)
+        {
+        case affogato::gpu::LatteContextDisplayListError::none:
+            break;
+        case affogato::gpu::LatteContextDisplayListError::unsupported_packet_type:
+            reason = "contains an unsupported packet type";
+            break;
+        case affogato::gpu::LatteContextDisplayListError::invalid_type2_header:
+            reason = "contains an invalid Type-2 header";
+            break;
+        case affogato::gpu::LatteContextDisplayListError::invalid_type3_header:
+            reason = "contains a predicated or invalid Type-3 header";
+            break;
+        case affogato::gpu::LatteContextDisplayListError::truncated_packet:
+            reason = "contains a truncated packet";
+            break;
+        case affogato::gpu::LatteContextDisplayListError::unsupported_opcode:
+            reason = "contains an unsupported Type-3 opcode";
+            break;
+        case affogato::gpu::LatteContextDisplayListError::missing_register_data:
+            reason = "contains a register packet without register data";
+            break;
+        case affogato::gpu::LatteContextDisplayListError::register_range_out_of_bounds:
+            reason = "writes outside the context-register range";
+            break;
+        }
+
+        throw HleExecutionError(
+            std::string("gx2::GX2SetContextState: PM4 context display-list ") +
+            reason + " at word offset " +
+            std::to_string(decoded.error_word_offset));
+    }
+
+    std::vector<Gx2Command> commands;
+    commands.reserve(decoded.register_writes.size());
+    for (const affogato::gpu::LatteContextRegisterWrite& write :
+         decoded.register_writes)
+    {
+        commands.push_back({
+            Gx2CommandType::set_context_register,
+            write.address,
+            write.value});
+    }
     return commands;
 }
 
@@ -5328,9 +5404,8 @@ void register_gx2_hle(HleDispatcher& dispatcher)
                 context_state + gx2_context_profiling_offset,
                 profiling_enabled ? 1U : 0U);
             // Real Cafe creates a restore display list unless suppressed.
-            // Affogato has no authentic PM4/display-list generator yet, so a
-            // zero size intentionally selects the future direct-shadow restore
-            // path instead of exposing fabricated command bytes.
+            // Affogato has no PM4/display-list generator yet, so zero size
+            // selects its verified direct-shadow restore path.
             core.memory.write32_be(
                 context_state + gx2_context_display_list_size_offset, 0U);
             // Context setup is modeled logically for now. The full Cafe
@@ -5434,19 +5509,24 @@ void register_gx2_hle(HleDispatcher& dispatcher)
                     std::string("gx2::") + api_name +
                     ": embedded display-list size exceeds its context buffer");
             }
-            if (display_list_size != 0U)
+            std::vector<Gx2Command> restore_commands;
+            if (display_list_size == 0U)
             {
-                throw HleExecutionError(
-                    std::string("gx2::") + api_name +
-                    ": PM4 context display-list playback is not implemented");
+                restore_commands =
+                    read_gx2_context_restore_commands(context_bytes);
+            }
+            else
+            {
+                restore_commands = decode_gx2_context_display_list(
+                    context_bytes, display_list_size);
             }
 
-            const std::vector<Gx2Command> restore_commands =
-                read_gx2_context_restore_commands(context_bytes);
-
-            core.gx2.pending_commands.insert(
-                core.gx2.pending_commands.end(),
-                restore_commands.begin(), restore_commands.end());
+            core.gx2.pending_commands.reserve(
+                core.gx2.pending_commands.size() + restore_commands.size());
+            for (Gx2Command& command : restore_commands)
+            {
+                core.gx2.pending_commands.push_back(std::move(command));
+            }
             core.gx2.current_context_state = context_state;
             core.gx2.context_state_shadowing_enabled = true;
         });

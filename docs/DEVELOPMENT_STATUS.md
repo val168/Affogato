@@ -1,5 +1,19 @@
 # Affogato Development Status
 
+## Current implementation checkpoint (2026-11-25)
+
+`GX2SetContextState` now decodes and queues a bounded PM4 context-display-list
+subset: Type-2 filler and Type-3 `SET_CONTEXT_REG` packets. Guest big-endian
+words, packet sizes, predication/reserved bits, and context-register bounds are
+checked before typed register commands are appended. Unsupported packet
+types/opcodes and malformed lists fail without partially changing the pending
+command stream or active context. This is not a raw ring-buffer command
+processor: Type-0, other Type-3 operations, indirect buffers, display-list
+generation, and GPU retirement remain unsupported. Debug/Release builds and
+CTest passed 2/2 in each configuration. The detailed interface and packet
+research is in
+[`research/15_latte_command_processor.md`](research/15_latte_command_processor.md).
+
 ## Documentation-driven subsystem audit (2026-11-24)
 
 The first coverage pass is recorded in [`research/14_subsystem_coverage.md`](research/14_subsystem_coverage.md), with the detailed graphics source audit in [`research/11_graphics.md`](research/11_graphics.md). The audit distinguishes verified behavior from partial capture and missing execution. In particular, GX2 draw state and input bytes are captured for the opt-in diagnostic route, but there is no raw Latte command processor, Latte shader decoder/translator, guest draw render-target write, general tiled surface addressing, or GPU/guest-memory coherence model.
