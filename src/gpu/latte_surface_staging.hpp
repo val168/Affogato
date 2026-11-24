@@ -97,10 +97,11 @@ inline constexpr std::uint32_t gx2_tile_mode_2d_tiled_thin1 = 4U;
 }
 
 [[nodiscard]] inline std::optional<std::size_t>
-gx2_2d_thin1_rgba8_element_offset(
+gx2_2d_thin1_element_offset(
     std::uint32_t x,
     std::uint32_t y,
     std::uint32_t pitch_pixels,
+    std::uint32_t bits_per_element,
     std::uint32_t pipe_swizzle,
     std::uint32_t bank_swizzle)
 {
@@ -116,23 +117,56 @@ gx2_2d_thin1_rgba8_element_offset(
     constexpr std::uint32_t pipe_interleave_bytes = 256U;
     constexpr std::uint32_t group_bits = 8U;
 
-    if (pitch_pixels % macro_tile_width != 0U || pipe_swizzle >= pipe_count ||
+    if ((bits_per_element != 8U && bits_per_element != 16U &&
+         bits_per_element != 32U) || pipe_swizzle >= pipe_count ||
         bank_swizzle >= bank_count)
+    {
+        return std::nullopt;
+    }
+
+    const std::uint32_t pitch_alignment = macro_tile_width *
+        std::max(1U, 256U / bits_per_element / 8U);
+    if (pitch_pixels % pitch_alignment != 0U)
     {
         return std::nullopt;
     }
 
     const std::uint32_t x_in_micro_tile = x % micro_tile_width;
     const std::uint32_t y_in_micro_tile = y % micro_tile_width;
-    const std::uint32_t micro_tile_element =
-        ((x_in_micro_tile >> 0U) & 1U) |
-        (((x_in_micro_tile >> 1U) & 1U) << 1U) |
-        (((y_in_micro_tile >> 0U) & 1U) << 2U) |
-        (((x_in_micro_tile >> 2U) & 1U) << 3U) |
-        (((y_in_micro_tile >> 1U) & 1U) << 4U) |
-        (((y_in_micro_tile >> 2U) & 1U) << 5U);
+    std::uint32_t micro_tile_element = 0U;
+    if (bits_per_element == 8U)
+    {
+        micro_tile_element =
+            ((x_in_micro_tile >> 0U) & 1U) |
+            (((x_in_micro_tile >> 1U) & 1U) << 1U) |
+            (((x_in_micro_tile >> 2U) & 1U) << 2U) |
+            (((y_in_micro_tile >> 1U) & 1U) << 3U) |
+            (((y_in_micro_tile >> 0U) & 1U) << 4U) |
+            (((y_in_micro_tile >> 2U) & 1U) << 5U);
+    }
+    else if (bits_per_element == 16U)
+    {
+        micro_tile_element =
+            ((x_in_micro_tile >> 0U) & 1U) |
+            (((x_in_micro_tile >> 1U) & 1U) << 1U) |
+            (((x_in_micro_tile >> 2U) & 1U) << 2U) |
+            (((y_in_micro_tile >> 0U) & 1U) << 3U) |
+            (((y_in_micro_tile >> 1U) & 1U) << 4U) |
+            (((y_in_micro_tile >> 2U) & 1U) << 5U);
+    }
+    else
+    {
+        micro_tile_element =
+            ((x_in_micro_tile >> 0U) & 1U) |
+            (((x_in_micro_tile >> 1U) & 1U) << 1U) |
+            (((y_in_micro_tile >> 0U) & 1U) << 2U) |
+            (((x_in_micro_tile >> 2U) & 1U) << 3U) |
+            (((y_in_micro_tile >> 1U) & 1U) << 4U) |
+            (((y_in_micro_tile >> 2U) & 1U) << 5U);
+    }
     const std::uint64_t element_offset =
-        static_cast<std::uint64_t>(micro_tile_element) * 4U;
+        static_cast<std::uint64_t>(micro_tile_element) *
+        (bits_per_element / 8U);
 
     const std::uint32_t x3 = (x >> 3U) & 1U;
     const std::uint32_t x4 = (x >> 4U) & 1U;
@@ -148,7 +182,9 @@ gx2_2d_thin1_rgba8_element_offset(
     const std::uint32_t resolved_pipe = bank_pipe % pipe_count;
     const std::uint32_t resolved_bank = bank_pipe / pipe_count;
 
-    constexpr std::uint64_t macro_tile_bytes = 32U * 16U * 4U;
+    const std::uint64_t macro_tile_bytes =
+        static_cast<std::uint64_t>(macro_tile_width) * macro_tile_height *
+        (bits_per_element / 8U);
     const std::uint64_t macro_tiles_per_row = pitch_pixels / macro_tile_width;
     const std::uint64_t macro_tile_index =
         static_cast<std::uint64_t>(x / macro_tile_width) +
@@ -191,6 +227,18 @@ gx2_2d_thin1_rgba8_element_offset(
         return std::nullopt;
     }
     return static_cast<std::size_t>(byte_offset);
+}
+
+[[nodiscard]] inline std::optional<std::size_t>
+gx2_2d_thin1_rgba8_element_offset(
+    std::uint32_t x,
+    std::uint32_t y,
+    std::uint32_t pitch_pixels,
+    std::uint32_t pipe_swizzle,
+    std::uint32_t bank_swizzle)
+{
+    return gx2_2d_thin1_element_offset(
+        x, y, pitch_pixels, 32U, pipe_swizzle, bank_swizzle);
 }
 
 struct Rgba8SurfaceStaging

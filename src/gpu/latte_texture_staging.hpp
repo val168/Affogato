@@ -75,8 +75,8 @@ struct Rgba8TextureStaging
     return result;
 }
 
-// Converts explicitly supported linear-aligned or 1D thin1 GX2 formats to
-// tightly packed RGBA8 bytes suitable for a Vulkan staging buffer.
+// Converts explicitly supported linear-aligned, 1D thin1, or zero-swizzle
+// 2D thin1 GX2 formats to tightly packed RGBA8 bytes suitable for Vulkan.
 // GuestMemory range validation and snapshotting are the caller's
 // responsibility; guest_bytes starts at descriptor.image_address.
 [[nodiscard]] inline std::optional<Rgba8TextureStaging> stage_rgba8_texture(
@@ -86,6 +86,7 @@ struct Rgba8TextureStaging
     constexpr std::uint32_t gx2_2d_dimension = 1U;
     constexpr std::uint32_t gx2_linear_aligned_tile_mode = 1U;
     constexpr std::uint32_t gx2_1d_tiled_thin1_tile_mode = 2U;
+    constexpr std::uint32_t gx2_2d_tiled_thin1_tile_mode = 4U;
     constexpr std::uint32_t gx2_unorm_r8_format = 0x01U;
     constexpr std::uint32_t gx2_unorm_rg44_format = 0x02U;
     constexpr std::uint32_t gx2_unorm_rg8_format = 0x07U;
@@ -159,8 +160,10 @@ struct Rgba8TextureStaging
     }
     if (descriptor.dimension != gx2_2d_dimension ||
         (descriptor.tile_mode != gx2_linear_aligned_tile_mode &&
-         descriptor.tile_mode != gx2_1d_tiled_thin1_tile_mode) ||
-        (descriptor.tile_mode == gx2_1d_tiled_thin1_tile_mode &&
+         descriptor.tile_mode != gx2_1d_tiled_thin1_tile_mode &&
+         descriptor.tile_mode != gx2_2d_tiled_thin1_tile_mode) ||
+        ((descriptor.tile_mode == gx2_1d_tiled_thin1_tile_mode ||
+          descriptor.tile_mode == gx2_2d_tiled_thin1_tile_mode) &&
          descriptor.depth_tile) ||
         descriptor.depth_or_layers != 1U || source_bytes_per_pixel == 0U ||
         descriptor.numeric_format != gx2_unorm_numeric_format ||
@@ -236,6 +239,22 @@ struct Rgba8TextureStaging
                     y,
                     descriptor.pitch_pixels,
                     bits_per_element);
+                if (!tiled_offset ||
+                    *tiled_offset > guest_bytes.size() - source_bytes_per_pixel)
+                {
+                    return std::nullopt;
+                }
+                source_offset = *tiled_offset;
+            }
+            else if (descriptor.tile_mode == gx2_2d_tiled_thin1_tile_mode)
+            {
+                const auto tiled_offset = gx2_2d_thin1_element_offset(
+                    x,
+                    y,
+                    descriptor.pitch_pixels,
+                    bits_per_element,
+                    0U,
+                    0U);
                 if (!tiled_offset ||
                     *tiled_offset > guest_bytes.size() - source_bytes_per_pixel)
                 {

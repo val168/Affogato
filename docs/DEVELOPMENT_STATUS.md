@@ -17,13 +17,13 @@ microtile, copies it through GX2 scanout HLE, and checks first/last scanout
 pixels. This does not add macro-tiling, other formats, Vulkan render targets,
 or guest draw writes.
 
-The texture staging helper also uses the researched 1D thin1 address mapping
-for its existing 8-, 16-, and 32-bit UNORM format decoders (R8, RG8, packed
-16-bit color formats, and RGBA8). It applies the element-size pitch alignment
-and rejects depth tiling and unsupported layouts. Debug and Release builds and
-CTest passed 2/2 in both configurations. This produces CPU staging pixels only;
-the path is not yet connected to translated guest shaders or normal Vulkan
-draw submission.
+The texture staging helper also uses the researched 1D and zero-swizzle 2D
+thin1 address mappings for its existing 8-, 16-, and 32-bit UNORM format
+decoders (R8, RG8, packed 16-bit color formats, and RGBA8). It applies the
+element-size pitch alignment and rejects depth tiling and unsupported layouts.
+Debug and Release builds and CTest passed 2/2 in both configurations. This
+produces CPU staging pixels only; the path is not yet connected to translated
+guest shaders or normal Vulkan draw submission.
 
 The bounded RGBA8 clear/copy HLE path now also accepts zero-swizzle 2D thin1
 surfaces with pitch padded to 32 pixels and height padded to 16 rows. The macro-tile address path
@@ -54,7 +54,7 @@ The diagnostic consumer now also requires the captured `GX2SetFetchShader` state
 - An experimental AsmJit x86-64 recompiler with native lowering for a growing subset, interpreter/HLE fallbacks, code-page write-generation checks, a direct-mapped block lookup, and statistics.
 - Big-endian ELF and RPX loading with compressed sections, implemented relocations/trampolines, imported HLE function/data binding, and TLS relocation support.
 - A small per-session Cafe OS model and selected coreinit, GX2, nn_act, nn_olv, and nn_save handlers. Unsupported imports remain explicit stops/errors.
-- GX2/Latte state and command capture, typed texture/sampler descriptor decoding, CPU staging for selected linear-aligned and 1D thin1 2D UNORM textures and configured TV scan buffers, and a Vulkan swapchain with guest scan-buffer presentation plus an opt-in RGBA8 upload primitive. Texture staging is not yet wired to guest shader sampling/draw execution.
+- GX2/Latte state and command capture, typed texture/sampler descriptor decoding, CPU staging for selected linear-aligned, 1D thin1, and zero-swizzle 2D thin1 UNORM textures and configured TV scan buffers, and a Vulkan swapchain with guest scan-buffer presentation plus an opt-in RGBA8 upload primitive. Texture staging is not yet wired to guest shader sampling/draw execution.
 - An SDL3/ImGui RPX library frontend and command-line diagnostic mode.
 
 ## Verified boundaries and limitations

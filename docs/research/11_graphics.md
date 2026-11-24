@@ -136,9 +136,12 @@ attributes or shaders and do not modify the guest render target.
   diagnostic topology are rejected.
 - `latte_texture_resource.hpp`, `latte_sampler.hpp`, and
   `latte_texture_staging.hpp` decode selected register words and stage selected
-  linear-aligned or 1D thin1 2D UNORM formats. The 1D path supports existing
-  8/16/32-bit element decoders with pitch alignment checked by bit depth. It is
-  not guest shader sampling or general macro-tiled/mipmapped texture handling.
+  linear-aligned, 1D thin1, or zero-swizzle 2D thin1 2D UNORM formats. The
+  tiled paths support existing 8/16/32-bit element decoders with pitch
+  alignment checked by bit depth. `GX2SetPixelTexture` applies the GX2
+  surface's captured swizzle to macro-tiled resource base addresses before
+  those register words are decoded. Staging still rejects depth tiling,
+  mipmaps, arrays, and unsupported layouts, and is not guest shader sampling.
 - GPU fences, flushes, and draw-done calls are represented in command history;
   this is not proof of a hardware-equivalent queue/fence implementation.
 

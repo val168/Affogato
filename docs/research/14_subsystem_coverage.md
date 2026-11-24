@@ -50,7 +50,7 @@ mean the guest behavior is implemented.
 | Primitive assembly | Diagnostic partial | Diagnostic route supports triangle lists, strips, fans plus selected index endian forms; not normal guest rasterization. |
 | Guest draw dispatch | Diagnostic only | Ordered captured commands can reach the fixed diagnostic host pipeline when explicitly opted in. Normal guest shader/render-target semantics are not executed. |
 | Vertex/pixel/geometry shader decode | Missing | GX2 program descriptors/words are snapshotted; Latte instruction decode/execution/translation is absent. |
-| Texture/sampler decode | Partial | Selected register descriptors are decoded; bounded linear-aligned and 1D thin1 CPU staging exists for selected UNORM formats. Guest shader sampling, macro-tiling, mip/array/compressed staging remain absent. |
+| Texture/sampler decode | Partial | Selected register descriptors are decoded; bounded linear-aligned, 1D thin1, and zero-swizzle 2D thin1 CPU staging exists for selected 8/16/32-bit UNORM formats. Guest shader sampling, depth tiling, mip/array/compressed staging, and other layouts remain absent. |
 | Depth/stencil/blend/raster state | Partial capture | Some HLE register state is recorded; Vulkan state mapping and guest draw behavior are absent. |
 | GPU memory coherence | Blocked | Requires an explicit ownership/ordering model between emulator worker, renderer thread, host Vulkan resources, guest reads and scanout. |
 | GPU synchronization/fences | Partial capture | Flush/draw-done/fence events are represented; actual completion, wait, and memory visibility semantics are not implemented. |

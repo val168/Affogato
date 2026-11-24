@@ -31733,6 +31733,88 @@ void latte_texture_staging_tests()
     assert(staged_tiled_rgba8.has_value());
     assert(staged_tiled_rgba8->pixels == expected_tiled_rgba8);
 
+    const auto verify_2d_tiled_texture = [&](std::uint32_t format,
+                                             std::uint32_t bits_per_pixel,
+                                             std::uint32_t pitch_pixels,
+                                             std::uint32_t endian_swap,
+                                             std::array<std::uint8_t, 4U> selectors) {
+        descriptor.tile_mode = gx2_tile_mode_2d_tiled_thin1;
+        descriptor.width = 32U;
+        descriptor.height = 16U;
+        descriptor.pitch_pixels = pitch_pixels;
+        descriptor.format = format;
+        descriptor.endian_swap = endian_swap;
+        descriptor.component_selectors = selectors;
+
+        const auto storage_size = affogato::gpu::gx2_surface_storage_size(
+            descriptor.width,
+            descriptor.height,
+            descriptor.pitch_pixels,
+            bits_per_pixel,
+            descriptor.tile_mode);
+        assert(storage_size.has_value());
+        std::vector<std::uint8_t> guest_texture(
+            static_cast<std::size_t>(*storage_size));
+        std::vector<std::uint8_t> expected_pixels(
+            descriptor.width * descriptor.height * 4U);
+
+        for (std::uint32_t y = 0U; y < descriptor.height; ++y)
+        {
+            for (std::uint32_t x = 0U; x < descriptor.width; ++x)
+            {
+                const auto source_offset =
+                    affogato::gpu::gx2_2d_thin1_element_offset(
+                        x, y, pitch_pixels, bits_per_pixel, 0U, 0U);
+                assert(source_offset.has_value());
+
+                std::array<std::uint8_t, 4U> rgba{
+                    static_cast<std::uint8_t>(x),
+                    static_cast<std::uint8_t>(y),
+                    static_cast<std::uint8_t>(x + y),
+                    0xFFU};
+                if (bits_per_pixel == 8U)
+                {
+                    guest_texture[*source_offset] = rgba[0U];
+                    rgba[1U] = 0U;
+                    rgba[2U] = 0U;
+                }
+                else if (bits_per_pixel == 16U)
+                {
+                    guest_texture[*source_offset] = rgba[0U];
+                    guest_texture[*source_offset + 1U] = rgba[1U];
+                    rgba[2U] = 0U;
+                }
+                else
+                {
+                    std::copy(
+                        rgba.begin(), rgba.end(),
+                        guest_texture.begin() +
+                            static_cast<std::ptrdiff_t>(*source_offset));
+                }
+
+                const std::size_t output_offset =
+                    (static_cast<std::size_t>(y) * descriptor.width + x) * 4U;
+                std::copy(
+                    rgba.begin(), rgba.end(),
+                    expected_pixels.begin() +
+                        static_cast<std::ptrdiff_t>(output_offset));
+            }
+        }
+
+        const auto staged_texture = affogato::gpu::stage_rgba8_texture(
+            descriptor, guest_texture);
+        assert(staged_texture.has_value());
+        assert(staged_texture->pixels == expected_pixels);
+    };
+
+    verify_2d_tiled_texture(0x01U, 8U, 128U, 0U, {0U, 4U, 4U, 5U});
+    verify_2d_tiled_texture(0x07U, 16U, 64U, 1U, {0U, 1U, 4U, 5U});
+    verify_2d_tiled_texture(0x1AU, 32U, 32U, 2U, {0U, 1U, 2U, 3U});
+    descriptor.depth_tile = true;
+    assert(!affogato::gpu::stage_rgba8_texture(
+        descriptor, std::vector<std::uint8_t>(2048U)));
+    descriptor.depth_tile = false;
+
     descriptor.tile_mode = gx2_tile_mode_linear_aligned;
     descriptor.width = 2U;
     descriptor.height = 2U;
@@ -31746,7 +31828,7 @@ void latte_texture_staging_tests()
     unsupported.dimension = 2U; // GX2 dimension 2 is 3D, not 2D.
     assert(!affogato::gpu::stage_linear_rgba8_texture(unsupported, guest_bytes));
     unsupported = descriptor;
-    unsupported.tile_mode = 4U; // Macro-tiled layout is not decoded here.
+    unsupported.tile_mode = 8U; // Unsupported macro-tiled layout.
     assert(!affogato::gpu::stage_linear_rgba8_texture(unsupported, guest_bytes));
     unsupported = descriptor;
     unsupported.endian_swap = 1U;
