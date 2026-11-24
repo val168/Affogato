@@ -1,7 +1,10 @@
 # GX2 and Latte graphics research
 
-**Audit basis:** Affogato commit `611238b` and the source tree at that commit.
-This note distinguishes guest/API state capture from execution on the host GPU.
+**Audit basis:** Affogato source tree at commit `cda49cc` and the current
+coverage audit. This note distinguishes guest/API state capture from execution
+on the host GPU. Later detailed command-packet findings are in
+[`15_latte_command_processor.md`](15_latte_command_processor.md); shader
+capture and ISA research is in [`12_latte_shader_isa.md`](12_latte_shader_isa.md).
 
 ## Purpose and architecture
 
@@ -149,7 +152,7 @@ attributes or shaders and do not modify the guest render target.
 
 | Capability | Current status | Main dependency |
 | --- | --- | --- |
-| Raw Latte PM4/ring command processor | Missing; HLE creates typed records | packet/ring ABI, retirement and wait semantics |
+| Raw Latte PM4/ring command processor | Missing; HLE creates typed records | [packet/ring ABI, context display-list boundary, retirement and wait semantics](15_latte_command_processor.md) |
 | Guest draw route to Vulkan | Diagnostic-only opt-in route exists | ordinary queue integration and unsupported-state policy |
 | Fetch shader | Narrow HLE-generated format decoder | verified VTX variants, component/normalization semantics |
 | General vertex/index/instance handling | Partial snapshots and diagnostic expansion | fetch semantics, offset/base-instance rules, state capture |

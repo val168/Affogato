@@ -39,11 +39,11 @@ mean the guest behavior is implemented.
 
 | Feature | Status | Evidence / limitation |
 | --- | --- | --- |
-| Raw GPU command ring/PM4 decoder | Missing | GX2 HLE emits typed `Gx2Command` records; no guest ring-buffer packet processor/retirement path. |
+| Raw GPU command ring/PM4 decoder | Missing | GX2 HLE emits typed `Gx2Command` records; no guest ring-buffer packet processor/retirement path. [`15_latte_command_processor.md`](15_latte_command_processor.md) documents packet references and the HLE/display-list boundary. |
 | GX2 command ordering | Partial, tested | HLE pending command vector and frontend batch handoff preserve selected operation order; not equivalent to asynchronous Latte FIFO/fence execution. |
 | Register shadow | Partial | `Gx2RegisterState` retains selected raw context/resource/sampler state and draw-time snapshots. Not all Latte registers have typed semantics. |
 | Color/depth render-target descriptors | Partial | HLE reads and records descriptors, binding and selected registers; broad hardware surface semantics are not provided. |
-| Surface format/layout/addressing | Partial | CPU staging and GX2 clear/copy support linear-aligned RGBA8, 1D thin1 RGBA8 microtiles, and zero-swizzle 2D thin1 RGBA8 macrotiles; texture staging also supports selected 8/16/32-bit UNORM formats in 1D thin1. Other macro-tiled R600/Latte addressing and general texture/render-target layouts are absent. |
+| Surface format/layout/addressing | Partial | CPU staging and GX2 clear/copy support linear-aligned RGBA8, 1D thin1 RGBA8 microtiles, and zero-swizzle 2D thin1 RGBA8 macrotiles; texture staging also supports selected 8/16/32-bit UNORM formats in 1D thin1 and zero-swizzle 2D thin1. Other macro-tiled R600/Latte addressing and general texture/render-target layouts are absent. |
 | Clear/copy/scanout | Implemented and verified subset | Linear-aligned RGBA8 clear/copy/scanout was visibly presented; 1D thin1 and zero-swizzle 2D thin1 RGBA8 clear/copy through HLE are covered by CPU tests. Tiled Vulkan presentation, bank-swizzled, other macro-tiled, scaled, multisample, DRC, and general format behavior are unsupported or unverified. |
 | Vertex/index capture | Implemented and verified subset | Draw-time immutable guest snapshots support bounded non-indexed and U16/U32 indexed ranges when opt-in capture is enabled. |
 | Vertex fetch | Partial | HLE-generated VTX subset, Float32 scalar/vector and Float16x2 position formats. General fetch ISA, normalized formats, instancing/divisors, and arbitrary attributes are unsupported. |
