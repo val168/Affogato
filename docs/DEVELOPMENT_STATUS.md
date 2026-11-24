@@ -8,6 +8,15 @@ The first coverage pass is recorded in [`research/14_subsystem_coverage.md`](res
 
 External references consulted for this pass include WiiUBrew's GX2/Latte pages, WUT GX2 declarations/helpers, Cemu's `LatteCommandProcessor.cpp`, `LatteShader.cpp`, `LatteAsyncCommands.cpp` and Vulkan backend, and Decaf's `src/libgpu/` plus its Wii U test repository. No external implementation code was copied. The next architectural dependency is an explicit render/guest-memory synchronization contract; the frontend currently runs guest execution on a worker and Vulkan consumption on the UI thread, so a renderer-thread guest-memory write would race guest execution.
 
+The RGBA8 CPU surface path now also supports 1D tiled thin1 surfaces. Clear and
+TV scanout copy share an address calculation for 8x8 displayable 32-bit
+microtiles, with padded pitch and height required to be multiples of eight.
+Debug and Release builds and CTest passed 2/2 in both configurations. A CPU
+HLE integration test clears a tiled guest surface, checks a pixel in the final
+microtile, copies it through GX2 scanout HLE, and checks first/last scanout
+pixels. This does not add macro-tiling, other formats, Vulkan render targets,
+or guest draw writes.
+
 This snapshot is based on the source and repository notes at `f0fbfef` (`main`, 2026-10-25), with verified updates below through 2026-11-22. It distinguishes implemented paths from complete console behavior.
 
 ## Current source update (2026-11-03)
@@ -34,7 +43,7 @@ The diagnostic consumer now also requires the captured `GX2SetFetchShader` state
 ## Verified boundaries and limitations
 
 - The frontend can load and execute RPX code to a bounded stop. That is not a game-compatibility claim.
-- GX2 HLE supports `GX2ClearColor` and `GX2CopyColorBufferToScanBuffer` for a bounded linear RGBA8 TV0 configuration, with guest-memory writes and ordered command capture. Guest draw execution, shader translation, tiled render targets, and full game frame production remain unimplemented.
+- GX2 HLE supports `GX2ClearColor` and `GX2CopyColorBufferToScanBuffer` for bounded linear-aligned or 1D thin1 RGBA8 TV0 surfaces, with guest-memory writes and ordered command capture. Macro-tiled/general surface handling, guest draw execution, shader translation, and full game frame production remain unimplemented.
 - CPU, loader, HLE, and graphics support is incremental. Full IOSU, multicore scheduling, complete CPU/FPU behavior, audio, complete input, encrypted-title loading, and broad game compatibility remain out of scope or unimplemented.
 - `docs/development-progress.md` records diagnostic runs and measured observations. Its latest notes report WWHD stopping at an unsupported null-target fetch (`0x46524D48`) after 6,081,749 instructions, and BOTW reaching a 50-million instruction cap at CIA `0x2F18DDC`. Neither run reaches a guest draw submission. These figures describe those recorded runs, not current environmental verification or compatibility.
 - The repository provides CPU and recompiler test executables plus a benchmark executable. In the current environment (GCC 16.2.0, CMake 4.4.4, Ninja 1.13.2), the Debug and Release presets build successfully and Debug CTest passes 2/2. The Vulkan path was not exercised in a live title during this update.
@@ -55,14 +64,14 @@ The diagnostic consumer now also requires the captured `GX2SetFetchShader` state
 The detailed queue in `development-progress.md` is the project-specific source for next implementation priorities. The current high-level priorities are:
 
 1. Continue investigating the recorded WWHD/BOTW startup stops through guest initialization and existing HLE behavior; do not fabricate successful callbacks or results.
-2. Add a controlled guest execution test that drives GX2 setup, clear, copy, and swap through normal HLE dispatch, then verifies the resulting scanout through the existing Vulkan presentation path. Trace title surface layouts before extending format or tiling support.
+2. Extend the verified surface-address layer from linear-aligned and 1D thin1 RGBA8 to additional formats/layouts using title captures and deterministic address vectors; keep macro-tiled cases unsupported until their pipe/bank/swizzle inputs are validated.
 3. Keep interpreter/recompiler semantics aligned and add native lowerings only with differential tests and repeatable Release measurements where performance is the objective.
 4. Extend loaders and HLE only for observed guest requirements, preserving transactional guest-memory effects and explicit unsupported behavior.
 5. Keep validating changes with both configured builds and the registered CTest suite; add Vulkan presentation checks that remain usable without a display where practical.
 
 ## Next implementation area
 
-The implemented color-buffer clear and copy path is limited to linear-aligned, single-sample 2D UNORM RGBA8 surfaces and matching TV0 scanout. Full game rendering additionally requires tiled color-buffer handling, Latte command execution, guest vertex/index processing, and guest shader translation.
+The implemented color-buffer clear and copy path supports single-sample 2D UNORM RGBA8 surfaces in linear-aligned or 1D thin1 layout and matching TV0 scanout. Full game rendering additionally requires macro-tiled color-buffer handling, Latte command execution, guest vertex/index processing, guest render-target writes, and guest shader translation.
 
 ## Verified update (2026-11-22)
 
@@ -136,8 +145,8 @@ program, WWHD rendering, or guest draw test.
 The next step is to visually inspect the triangle display variant, then extend
 the diagnostic path from its known float2 vertex layout to verified guest
 fetch formats and shader execution. Add a WUT-built RPX fixture when
-devkitPro/WUT is installed. Current clear/copy support still applies only to
-the documented linear RGBA8 subset.
+devkitPro/WUT is installed. At that checkpoint, clear/copy support still
+applied only to the documented linear RGBA8 subset.
 
 ## Diagnostic guest triangle (2026-11-22)
 

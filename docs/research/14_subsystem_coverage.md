@@ -43,8 +43,8 @@ mean the guest behavior is implemented.
 | GX2 command ordering | Partial, tested | HLE pending command vector and frontend batch handoff preserve selected operation order; not equivalent to asynchronous Latte FIFO/fence execution. |
 | Register shadow | Partial | `Gx2RegisterState` retains selected raw context/resource/sampler state and draw-time snapshots. Not all Latte registers have typed semantics. |
 | Color/depth render-target descriptors | Partial | HLE reads and records descriptors, binding and selected registers; broad hardware surface semantics are not provided. |
-| Surface format/layout/addressing | Partial | GX2 descriptor math is used for constrained cases; Vulkan/CPU staging and clear/copy support are restricted. General R600/Latte tiled address library is absent. |
-| Clear/copy/scanout | Implemented and verified subset | Controlled linear-aligned single-sample RGBA8 TV0 clear → copy → swap → Vulkan presentation was observed. Tiled, scaled, multisample, DRC, and general format behavior are unsupported. |
+| Surface format/layout/addressing | Partial | CPU staging and GX2 clear/copy support linear-aligned RGBA8 plus 1D thin1 RGBA8 microtiles. Macro-tiled R600/Latte addressing and general texture/render-target layouts are absent. |
+| Clear/copy/scanout | Implemented and verified subset | Linear-aligned RGBA8 clear/copy/scanout was visibly presented; 1D thin1 RGBA8 clear/copy through HLE is covered by CPU tests. Macro-tiled, scaled, multisample, DRC, and general format behavior are unsupported. |
 | Vertex/index capture | Implemented and verified subset | Draw-time immutable guest snapshots support bounded non-indexed and U16/U32 indexed ranges when opt-in capture is enabled. |
 | Vertex fetch | Partial | HLE-generated VTX subset, Float32 scalar/vector and Float16x2 position formats. General fetch ISA, normalized formats, instancing/divisors, and arbitrary attributes are unsupported. |
 | Primitive assembly | Diagnostic partial | Diagnostic route supports triangle lists, strips, fans plus selected index endian forms; not normal guest rasterization. |

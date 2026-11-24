@@ -4,6 +4,7 @@
 #include "cpu/espresso/guest_memory.hpp"
 #include "cpu/espresso/hle_dispatcher.hpp"
 #include "cpu/espresso/interpreter.hpp"
+#include "gpu/latte_surface_staging.hpp"
 #include "gpu/latte_texture_staging.hpp"
 
 #include <algorithm>
@@ -555,7 +556,7 @@ std::uint32_t get_scan_buffer_count(
     }
 }
 
-std::uint64_t validate_linear_rgba8_color_buffer(
+std::uint64_t validate_rgba8_color_buffer(
     const Gx2ColorBufferState& color_buffer,
     const char* api_name)
 {
@@ -564,7 +565,8 @@ std::uint64_t validate_linear_rgba8_color_buffer(
         color_buffer.format != gx2_surface_format_unorm_r8_g8_b8_a8 ||
         color_buffer.aa_mode != 0U ||
         (color_buffer.use & gx2_surface_use_color_buffer) == 0U ||
-        color_buffer.tile_mode != gx2_tile_mode_linear_aligned ||
+        (color_buffer.tile_mode != gpu::gx2_tile_mode_linear_aligned &&
+         color_buffer.tile_mode != gpu::gx2_tile_mode_1d_tiled_thin1) ||
         color_buffer.swizzle != 0U || color_buffer.view_mip != 0U ||
         color_buffer.view_first_slice != 0U ||
         color_buffer.view_num_slices != 1U ||
@@ -572,11 +574,11 @@ std::uint64_t validate_linear_rgba8_color_buffer(
     {
         throw HleExecutionError(
             std::string(api_name) +
-            ": source must be a linear, single-sample 2D RGBA8 color buffer "
-            "with a base-level, single-slice view and no swizzle");
+            ": source must be a single-sample 2D RGBA8 color buffer using "
+            "linear-aligned or 1D thin1 storage, with a base-level, "
+            "single-slice view and no swizzle");
     }
 
-    constexpr std::uint64_t bytes_per_pixel = 4U;
     if (color_buffer.width == 0U || color_buffer.height == 0U ||
         color_buffer.image_address == 0U ||
         color_buffer.pitch < color_buffer.width ||
@@ -588,17 +590,20 @@ std::uint64_t validate_linear_rgba8_color_buffer(
             ": source image address, dimensions, pitch, or alignment is invalid");
     }
 
-    const std::uint64_t source_row_size =
-        static_cast<std::uint64_t>(color_buffer.pitch) * bytes_per_pixel;
-    if (color_buffer.height >
-        std::numeric_limits<std::uint64_t>::max() / source_row_size)
+    const auto required_size = gpu::rgba8_surface_storage_size(
+        color_buffer.width,
+        color_buffer.height,
+        color_buffer.pitch,
+        color_buffer.tile_mode);
+    if (!required_size)
     {
         throw HleExecutionError(
-            std::string(api_name) + ": source image size overflows");
+            std::string(api_name) +
+            ": source pitch or dimensions do not satisfy the selected "
+            "RGBA8 surface layout");
     }
 
-    const std::uint64_t source_size =
-        source_row_size * static_cast<std::uint64_t>(color_buffer.height);
+    const std::uint64_t source_size = *required_size;
     const std::uint64_t guest_address_space_end = std::uint64_t{1} << 32U;
     if (source_size > color_buffer.image_size ||
         source_size > std::numeric_limits<std::size_t>::max() ||
@@ -634,7 +639,7 @@ std::uint64_t validate_linear_rgba8_color_buffer(
     return static_cast<std::uint8_t>(rounded);
 }
 
-void clear_linear_rgba8_color_buffer(
+void clear_rgba8_color_buffer(
     EspressoCore& core,
     const Gx2ClearColorRequest& request)
 {
@@ -642,7 +647,7 @@ void clear_linear_rgba8_color_buffer(
     const Gx2ColorBufferState color_buffer =
         read_color_buffer(core, request.color_buffer);
     const std::uint64_t image_size =
-        validate_linear_rgba8_color_buffer(color_buffer, api_name);
+        validate_rgba8_color_buffer(color_buffer, api_name);
 
     const std::array<std::uint8_t, 4U> rgba{
         quantize_unorm8(request.rgba[0U], api_name),
@@ -658,18 +663,16 @@ void clear_linear_rgba8_color_buffer(
         static_cast<std::size_t>(image_size));
     core.memory.read_bytes(color_buffer.image_address, image_bytes);
 
-    for (std::uint32_t row = 0U; row < color_buffer.height; ++row)
+    if (!gpu::clear_rgba8_surface(
+            color_buffer.width,
+            color_buffer.height,
+            color_buffer.pitch,
+            color_buffer.tile_mode,
+            image_bytes,
+            rgba))
     {
-        const std::size_t row_offset = static_cast<std::size_t>(
-            static_cast<std::uint64_t>(row) * color_buffer.pitch * rgba.size());
-        for (std::uint32_t column = 0U; column < color_buffer.width; ++column)
-        {
-            const std::size_t pixel_offset = row_offset +
-                static_cast<std::size_t>(column) * rgba.size();
-            std::copy(
-                rgba.begin(), rgba.end(),
-                image_bytes.begin() + static_cast<std::ptrdiff_t>(pixel_offset));
-        }
+        throw HleExecutionError(
+            std::string(api_name) + ": source surface could not be cleared");
     }
 
     core.memory.write_bytes(color_buffer.image_address, image_bytes);
@@ -708,7 +711,7 @@ void copy_color_buffer_to_tv_scan_buffer(
     const Gx2ColorBufferState color_buffer =
         read_color_buffer(core, color_buffer_address);
     const std::uint64_t source_size =
-        validate_linear_rgba8_color_buffer(color_buffer, api_name);
+        validate_rgba8_color_buffer(color_buffer, api_name);
 
     if (color_buffer.width != core.gx2.tv_scan_width ||
         color_buffer.height != core.gx2.tv_scan_height)
@@ -750,10 +753,11 @@ void copy_color_buffer_to_tv_scan_buffer(
     std::vector<std::uint8_t> source_bytes(
         static_cast<std::size_t>(source_size));
     core.memory.read_bytes(color_buffer.image_address, source_bytes);
-    const auto scanout = gpu::stage_rgba8_scanout(
+    const auto scanout = gpu::stage_rgba8_surface(
         color_buffer.width,
         color_buffer.height,
         color_buffer.pitch,
+        color_buffer.tile_mode,
         source_bytes);
     if (!scanout)
     {
@@ -6474,7 +6478,7 @@ void register_gx2_hle(HleDispatcher& dispatcher)
                 request.rgba[index] = static_cast<float>(value);
             }
 
-            clear_linear_rgba8_color_buffer(core, request);
+            clear_rgba8_color_buffer(core, request);
             core.gx2.latest_clear_color = request;
             ++core.gx2.clear_color_sequence;
 

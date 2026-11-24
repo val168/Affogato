@@ -14,6 +14,7 @@
 #include "cpu_state_test.hpp"
 #include "emulator.hpp"
 #include "gpu/gx2_register_state.hpp"
+#include "gpu/latte_surface_staging.hpp"
 #include "gpu/latte_vertex_fetch.hpp"
 #include "gpu/latte_texture_staging.hpp"
 
@@ -23542,6 +23543,55 @@ void gx2_copy_color_buffer_to_scan_buffer_hle_tests()
     assert(register_state.scan_buffer_copies().size() == 2U);
     assert(register_state.scan_buffer_copies()[0U].buffer_index == 0U);
     assert(register_state.scan_buffer_swaps().size() == 1U);
+
+    // Exercise the same GX2 clear/copy calls with a 1D thin1 surface. The
+    // final guest pixel crosses both the microtile row and column boundary.
+    core.memory.write32_be(color_buffer_address + 0x30U, 2U);
+    core.memory.write32_be(color_buffer_address + 0x3CU, width);
+    core.memory.write_bytes(
+        source_image_address, std::vector<std::uint8_t>(source_size, 0xEEU));
+    core.state.gpr[3] = color_buffer_address;
+    for (std::size_t index = 0U; index < clear_rgba.size(); ++index)
+    {
+        core.state.fpr[index + 1U] =
+            std::bit_cast<std::uint64_t>(clear_rgba[index]);
+    }
+    core.state.cia = clear_color;
+    core.state.lr = return_address;
+    assert(core.run(1U).reason == StopReason::instruction_limit);
+    const std::vector<Gx2Command> tiled_clear_commands =
+        take_gx2_commands(core.gx2);
+    assert(tiled_clear_commands.size() == 1U);
+    assert(tiled_clear_commands.front().type ==
+        Gx2CommandType::clear_color_buffer);
+
+    const auto tiled_last_pixel_offset =
+        affogato::gpu::rgba8_surface_pixel_offset(
+            width - 1U,
+            height - 1U,
+            width,
+            affogato::gpu::gx2_tile_mode_1d_tiled_thin1);
+    assert(tiled_last_pixel_offset.has_value());
+    core.memory.read_bytes(
+        source_image_address + static_cast<std::uint32_t>(*tiled_last_pixel_offset),
+        source_pixel);
+    assert(source_pixel == first_color);
+
+    const RunResult tiled_copy = invoke_copy();
+    assert(tiled_copy.reason == StopReason::instruction_limit);
+    const std::vector<Gx2Command> tiled_copy_commands =
+        take_gx2_commands(core.gx2);
+    assert(tiled_copy_commands.size() == 1U);
+    assert(tiled_copy_commands.front().type ==
+        Gx2CommandType::copy_color_buffer_to_scan_buffer);
+    const std::uint32_t tiled_scan_buffer_address = static_cast<std::uint32_t>(
+        scan_buffer_address +
+        tiled_copy_commands.front().scan_buffer_copy->buffer_index * frame_size);
+    core.memory.read_bytes(tiled_scan_buffer_address, unchanged);
+    assert(unchanged == first_color);
+    core.memory.read_bytes(
+        tiled_scan_buffer_address + frame_size - bytes_per_pixel, unchanged);
+    assert(unchanged == first_color);
 }
 
 void gx2_set_color_buffer_hle_tests()
@@ -31247,6 +31297,73 @@ void latte_texture_staging_tests()
         3U, 2U, 2U, padded_scanout_bytes));
     assert(!affogato::gpu::stage_rgba8_scanout(
         2U, 2U, 3U, std::span<const std::uint8_t>(padded_scanout_bytes).first(23U)));
+
+    using affogato::gpu::gx2_tile_mode_1d_tiled_thin1;
+    using affogato::gpu::gx2_tile_mode_linear_aligned;
+    assert(affogato::gpu::rgba8_surface_storage_size(
+        8U, 8U, 8U, gx2_tile_mode_1d_tiled_thin1) == 256U);
+    assert(affogato::gpu::rgba8_surface_pixel_offset(
+        0U, 0U, 8U, gx2_tile_mode_1d_tiled_thin1) == 0U);
+    assert(affogato::gpu::rgba8_surface_pixel_offset(
+        1U, 0U, 8U, gx2_tile_mode_1d_tiled_thin1) == 4U);
+    assert(affogato::gpu::rgba8_surface_pixel_offset(
+        0U, 1U, 8U, gx2_tile_mode_1d_tiled_thin1) == 16U);
+    assert(affogato::gpu::rgba8_surface_pixel_offset(
+        4U, 0U, 8U, gx2_tile_mode_1d_tiled_thin1) == 32U);
+    assert(affogato::gpu::rgba8_surface_pixel_offset(
+        0U, 2U, 8U, gx2_tile_mode_1d_tiled_thin1) == 64U);
+    assert(affogato::gpu::rgba8_surface_pixel_offset(
+        0U, 4U, 8U, gx2_tile_mode_1d_tiled_thin1) == 128U);
+    assert(affogato::gpu::rgba8_surface_pixel_offset(
+        7U, 7U, 8U, gx2_tile_mode_1d_tiled_thin1) == 252U);
+    assert(affogato::gpu::rgba8_surface_pixel_offset(
+        8U, 0U, 16U, gx2_tile_mode_1d_tiled_thin1) == 256U);
+    assert(affogato::gpu::rgba8_surface_pixel_offset(
+        0U, 8U, 16U, gx2_tile_mode_1d_tiled_thin1) == 512U);
+    assert(!affogato::gpu::rgba8_surface_pixel_offset(
+        std::numeric_limits<std::uint32_t>::max(),
+        std::numeric_limits<std::uint32_t>::max(),
+        0xFFFFFFF8U,
+        gx2_tile_mode_1d_tiled_thin1));
+    assert(!affogato::gpu::rgba8_surface_storage_size(
+        9U, 8U, 9U, gx2_tile_mode_1d_tiled_thin1));
+    assert(!affogato::gpu::rgba8_surface_storage_size(
+        8U, 9U, 8U, gx2_tile_mode_1d_tiled_thin1));
+    assert(!affogato::gpu::rgba8_surface_storage_size(
+        8U, 8U, 8U, 4U));
+
+    std::vector<std::uint8_t> tiled_surface(1024U, 0xCDU);
+    std::vector<std::uint8_t> linear_pixels(16U * 16U * 4U);
+    for (std::uint32_t y = 0U; y < 16U; ++y)
+    {
+        for (std::uint32_t x = 0U; x < 16U; ++x)
+        {
+            const std::size_t pixel_offset =
+                (static_cast<std::size_t>(y) * 16U + x) * 4U;
+            linear_pixels[pixel_offset] = static_cast<std::uint8_t>(x);
+            linear_pixels[pixel_offset + 1U] = static_cast<std::uint8_t>(y);
+            linear_pixels[pixel_offset + 2U] =
+                static_cast<std::uint8_t>(x + y);
+            linear_pixels[pixel_offset + 3U] = 0xFFU;
+        }
+    }
+    assert(affogato::gpu::write_rgba8_surface(
+        16U, 16U, 16U, gx2_tile_mode_1d_tiled_thin1,
+        tiled_surface, linear_pixels));
+    const auto staged_tiled = affogato::gpu::stage_rgba8_surface(
+        16U, 16U, 16U, gx2_tile_mode_1d_tiled_thin1, tiled_surface);
+    assert(staged_tiled.has_value());
+    assert(staged_tiled->pixels == linear_pixels);
+    assert(!affogato::gpu::stage_rgba8_surface(
+        16U, 16U, 16U, gx2_tile_mode_1d_tiled_thin1,
+        std::span<const std::uint8_t>(tiled_surface).first(1023U)));
+
+    const auto staged_linear = affogato::gpu::stage_rgba8_surface(
+        2U, 2U, 3U, gx2_tile_mode_linear_aligned, padded_scanout_bytes);
+    assert(staged_linear.has_value());
+    assert((staged_linear->pixels == std::vector<std::uint8_t>{
+        1U, 2U, 3U, 4U, 5U, 6U, 7U, 8U,
+        9U, 10U, 11U, 12U, 13U, 14U, 15U, 16U}));
 
     affogato::gpu::LatteTextureResourceDescriptor descriptor{};
     descriptor.dimension = 1U;

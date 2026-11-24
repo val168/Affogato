@@ -79,13 +79,17 @@ depth target bindings, and selected raw registers.
 ### Verified clear/copy/scanout subset
 
 The controlled clear/copy path is a synchronous CPU-memory path for a restricted
-linear-aligned, single-sample, 2D RGBA8, base-level/single-slice color buffer
-and matching TV0 scanout. `GX2ClearColor` writes guest color-buffer bytes;
-`GX2CopyColorBufferToScanBuffer` removes row pitch padding and writes a scanout
-ring slot; a later swap selects it for presentation. A controlled PPC-to-HLE
-display fixture previously showed guest-origin green pixels in the Vulkan
-window. This does not establish draw execution, tiled surfaces, DRC output, or
-WWHD rendering.
+linear-aligned or 1D tiled thin1, single-sample, 2D RGBA8, base-level/single-slice
+color buffer and matching TV0 scanout. `GX2ClearColor` writes guest color-buffer
+bytes; `GX2CopyColorBufferToScanBuffer` converts the supported surface layout to
+tightly packed scanout pixels and writes a ring slot; a later swap selects it
+for presentation. The 1D thin1 subset requires pitch and height padded to
+multiples of eight and uses displayable 8x8 microtiles for 32-bit elements.
+Tests verify the R600 microtile bit order and exercise clear/copy through GX2
+HLE, including pixels across tile boundaries. The previously displayed
+PPC-to-HLE fixture used the linear-aligned mode; Vulkan presentation of a 1D
+thin1 scanout has not been visually verified. Neither path establishes draw
+execution, macro-tiled surfaces, DRC output, or WWHD rendering.
 
 ### Diagnostic draws
 
@@ -132,7 +136,7 @@ attributes or shaders and do not modify the guest render target.
 | General vertex/index/instance handling | Partial snapshots and diagnostic expansion | fetch semantics, offset/base-instance rules, state capture |
 | Latte vertex/pixel shader execution | Missing; program words are captured | verified binary decoder, IR, translation and test corpus |
 | Guest render target for draws | Missing; draw diagnostic targets swapchain | surface addressing, Vulkan image cache, guest visibility/readback |
-| Color clear/copy | Verified restricted linear RGBA8 path | tiling, additional formats, resolve and sync semantics |
+| Color clear/copy | Verified linear-aligned and 1D thin1 RGBA8 CPU/HLE path | macro-tiling, additional formats, resolve and sync semantics |
 | Depth/stencil and blend pipeline | Registers/descriptors are partly captured | register interpretation and Vulkan state mapping |
 | General texture sampling | Resource/sampler word capture and constrained staging | tiled addressing, format coverage, cache coherence |
 | GPU ordering/coherence | Typed events and synchronous CPU HLE writes | worker/render ownership, flush/fence and alias rules |
@@ -210,3 +214,14 @@ render-target writes.
   locations and observations, not copied implementation.
 - AMD [R600 ISA manual](https://www.x.org/docs/AMD/old/r600isa.pdf): related
   GPU-family reference, not a complete Latte specification.
+- [Decaf R600/R700 addrlib](https://github.com/decaf-emu/addrlib) documents its
+  hardware-family adaptation in the README; its upstream address calculation
+  is in `src/r600/r600addrlib.cpp`. The independently maintained
+  [wiiu_swizzle crate](https://github.com/ScanMountGoat/wiiu_swizzle) is MIT
+  licensed, explains its Mesa/Decaf basis and Cemu-derived Wii U constants in
+  the README, and cross-checks mappings generated from RenderDoc. Its
+  `src/addrlib.rs` functions `compute_pixel_index_within_micro_tile` and
+  `compute_surface_addr_from_coord_micro_tiled` identify the 8x8 microtile
+  mapping used for the supported RGBA8 1D thin1 path. Affogato implements the
+  narrow address calculation independently; no source code or fixture data
+  from that crate was copied.
