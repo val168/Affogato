@@ -1,6 +1,6 @@
 # Affogato documentation
 
-These notes organize the Wii U research gathered for **Affogato**, an experimental Wii U emulator.
+These notes organize the Wii U research gathered for **Affogato**, an experimental Wii U emulator. Research claims distinguish documented behavior, cross-checked reference findings, local implementation, inference, and unresolved questions.
 
 The documentation is arranged around **development phases**. The goal is to learn only enough of each subsystem to unblock the next implementation milestone instead of trying to document the entire console before coding.
 
@@ -36,6 +36,7 @@ Current direction:
 11. [Graphics](research/11_graphics.md)
 12. [Multicore](research/12_multicore.md)
 13. [Other subsystems](research/13_other_subsystems.md)
+14. [Current subsystem coverage audit](research/14_subsystem_coverage.md)
 
 Also see:
 
@@ -43,17 +44,16 @@ Also see:
 - [Research questions](research/research_questions.md)
 - [References](research/references.md)
 
-## Current research cutoff
+## Current implementation focus
 
-The immediate implementation target is the **minimal architectural state for one Espresso core**.
+The CPU foundation and controlled clear/scanout path already exist. Graphics
+research now focuses on the gap between typed GX2 HLE command capture and
+actual Latte draw execution, including immutable draw-state capture, surface
+addressing, shader decoding, and GPU/guest-memory ordering. See
+[the graphics audit](research/11_graphics.md) and
+[the coverage matrix](research/14_subsystem_coverage.md) before starting
+subsystem work.
 
-Before writing substantial CPU code, the important knowledge is:
-
-- what Espresso is,
-- the relevant PowerPC programming model,
-- the guest-visible registers,
-- instruction size/alignment and byte order,
-- how CR/XER/LR/CTR work,
-- which state is needed immediately versus later.
-
-Later phase documents are intentionally more checklist-like. Expand them when Affogato reaches those milestones rather than filling them with speculative details now.
+Do not treat HLE registration, raw register capture, or diagnostic Vulkan
+output as complete guest behavior. Expand CPU coverage in documented families
+when it benefits guest correctness, but keep graphics as the primary path.
