@@ -61,6 +61,7 @@ mean the guest behavior is implemented.
 | Feature | Status | Evidence / limitation |
 | --- | --- | --- |
 | GX2 exports and ABI | Partial | `gx2_hle.cpp` registers numerous functions with argument/descriptor handling; callback presence does not establish full behavior for all modes. Compare each path to WUT declarations and tests. |
+| GX2 display-list lifecycle/submission | Missing | WUT's `displaylist.h` declares begin/end, queued/direct calls, and copy; Affogato has no registrations or guest dword capture/submission path. |
 | GX2 initialization/state | Partial | Selected runtime defaults, register shadows, surfaces, shaders and scanout state are modeled; no hardware command processor. |
 | Guest pointer/structure validation | Implemented in tested paths | HLE uses checked guest memory and big-endian field reads for implemented structures; audit must remain function-specific. |
 | Guest threads/synchronization | Partial | Selected coreinit thread/context/mutex/semaphore/event behavior supports a single-core HLE runtime; OS scheduler/interrupt behavior is incomplete. |

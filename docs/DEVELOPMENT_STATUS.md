@@ -206,3 +206,9 @@ side effects remain unmodeled.
 
 Debug and Release builds succeeded, and CTest passed 2/2 in both build trees.
 This does not add raw command-ring execution or guest draw submission.
+
+## GX2 display-list submission audit (2026-11-25)
+
+WUT's [`include/gx2/displaylist.h`](https://github.com/devkitPro/wut/blob/master/include/gx2/displaylist.h) declares the guest ABI for begin/end recording, queued `GX2CallDisplayList`, direct `GX2DirectCallDisplayList`, and `GX2CopyDisplayList`. Cemu's [`GX2_Command.cpp`](https://github.com/cemu-project/Cemu/blob/main/src/Cafe/OS/libs/gx2/GX2_Command.cpp) distinguishes queued indirect-buffer submission from direct TCL submission; Decaf's PM4 processor recursively processes nested indirect buffers with a depth bound. Affogato currently registers none of these exports and cannot observe raw PM4 dwords written or modified by a guest.
+
+The next command-processing milestone is an owned, bounded raw-stream submission path with direct and indirect semantics, guest-range validation, a total-dword/depth limit, and deterministic tests. Do not implement recording by mirroring host typed commands alone: guest code may patch dwords in recorded memory. Before wiring it to rendering, capture or construct an independently checked stream fixture and define how frontend handoff preserves submission-time contents and order. This audit does not establish WWHD's use of these APIs or guest draw execution.

@@ -36,6 +36,65 @@ Reference emulator architecture:
 These implementations establish useful subsystem boundaries, not proof that
 all packet behavior or register side effects match Latte.
 
+### GX2 display-list submission boundary
+
+The public WUT
+[`displaylist.h`](https://github.com/devkitPro/wut/blob/master/include/gx2/displaylist.h)
+declares `GX2BeginDisplayListEx(void*, uint32_t, BOOL)`,
+`GX2EndDisplayList(void*) -> uint32_t`, `GX2CallDisplayList(const void*,
+uint32_t)`, `GX2DirectCallDisplayList(const void*, uint32_t)`, and
+`GX2CopyDisplayList(const void*, uint32_t)`. These interfaces establish the
+ABI surface, but WUT declarations do not specify the underlying command
+processor behavior.
+
+Cemu's
+[`GX2_Command.cpp`](https://github.com/cemu-project/Cemu/blob/main/src/Cafe/OS/libs/gx2/GX2_Command.cpp)
+documents an implementation distinction:
+
+- `GX2CallDisplayList` emits `INDIRECT_BUFFER_PRIV` with a physical address,
+  zero high-address dword, and size in dwords into the current write-gather
+  stream.
+- `GX2DirectCallDisplayList` submits the provided dword buffer to the TCL
+  directly, bypassing write-gather; when not recording a display list, it
+  flushes preceding commands first.
+- Begin/end recording temporarily redirect per-core write-gather output into
+  caller storage; end pads the output and restores the main-core command-buffer
+  state.
+
+Decaf's GPL-3.0
+[`pm4_processor.cpp`](https://github.com/decaf-emu/decaf-emu/blob/master/src/libgpu/src/pm4_processor.cpp)
+recursively dispatches both indirect-buffer opcodes through a bounded nested
+command-buffer path. Its
+[`latte_pm4_commands.h`](https://github.com/decaf-emu/decaf-emu/blob/master/src/libgpu/latte/latte_pm4_commands.h)
+models each indirect-buffer packet with three payload dwords: low address,
+unused high address, and dword count. Decaf is architectural reference only;
+Affogato does not copy its implementation.
+
+These sources distinguish three behaviors that must not be collapsed into a
+single host callback: constructing a guest display list, queuing an indirect
+call into a command stream, and submitting a display-list buffer directly.
+Affogato currently registers none of the WUT display-list APIs. Its
+`GX2SetContextState` parser is a separate bounded restore-list path, not a
+general submission path. The pending typed HLE queue therefore cannot observe
+guest-authored or guest-mutated PM4 display-list contents.
+
+For Affogato, a submission implementation must define when raw guest dwords are
+captured and owned across the frontend-thread handoff, validate guest ranges
+and alignment before copying, distinguish direct submission from nested
+indirect calls, bound nesting and total decoded dwords, and preserve submission
+ordering. `GX2CallDisplayList` cannot be treated as successful by decoding only
+its indirect-buffer wrapper: the nested target must be processed. Display-list
+recording APIs also require a guest-memory write-gather model; recording only
+host-side typed commands would miss guest code that patches recorded packet
+payloads in place.
+
+**Evidence classification:** WUT prototypes are documented ABI declarations;
+Cemu and Decaf behavior is cross-verified implementation evidence; applying
+the same details to all Wii U SDK versions is an inference. Exact Cafe thread
+ownership, physical-address translation, cache visibility, display-list
+padding requirements, and packet alignment at each API boundary remain to be
+verified against a Latte fixture or Wii U behavior.
+
 ## Verified Affogato implementation
 
 - `src/cpu/espresso/gx2_hle.cpp::parse_attributes` and
@@ -85,6 +144,7 @@ lists and guest-written command streams remain unsupported.
 | Capability | Status | Evidence / dependency |
 | --- | --- | --- |
 | GX2 command-pool registration | Partial and tested | Bounds/alignment/ownership checks in `initialize_gx2` |
+| GX2 display-list API lifecycle and submission | Missing | WUT declares begin/end, queued/direct call, and copy APIs, but Affogato has no registrations or guest dword ownership model; see the reference comparison above. |
 | Typed GX2 HLE event ordering | Partial and tested | `pending_commands`, register shadow and frontend drain |
 | PM4 packet framing | Partial and tested | Type-2 filler and Type-3 lengths; Type-0/Type-1 remain unsupported |
 | PM4 register writes | Partial and tested | Type-3 `SET_CONTEXT_REG` maps bounded dword offsets to the context register byte range |
