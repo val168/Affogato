@@ -23437,7 +23437,7 @@ void gx2_copy_color_buffer_to_scan_buffer_hle_tests()
         return core.run(1U);
     };
 
-    core.memory.write32_be(color_buffer_address + 0x30U, 4U);
+    core.memory.write32_be(color_buffer_address + 0x30U, 8U);
     const RunResult tiled_source = invoke_copy();
     assert(tiled_source.reason == StopReason::hle_error);
     assert(tiled_source.detail.find("linear") != std::string::npos);
@@ -23591,6 +23591,63 @@ void gx2_copy_color_buffer_to_scan_buffer_hle_tests()
     assert(unchanged == first_color);
     core.memory.read_bytes(
         tiled_scan_buffer_address + frame_size - bytes_per_pixel, unchanged);
+    assert(unchanged == first_color);
+
+    // The zero-swizzle 2D thin1 subset uses 32x16 macro tiles. Its pitch and
+    // height are aligned to those macro-tile dimensions.
+    constexpr std::uint32_t macro_tiled_pitch = width;
+    constexpr std::uint32_t macro_tiled_size =
+        macro_tiled_pitch * height * bytes_per_pixel;
+    core.memory.write32_be(color_buffer_address + 0x24U, source_image_address);
+    core.memory.write32_be(color_buffer_address + 0x20U, macro_tiled_size);
+    core.memory.write32_be(color_buffer_address + 0x30U, 4U);
+    core.memory.write32_be(color_buffer_address + 0x38U, 8192U);
+    core.memory.write32_be(color_buffer_address + 0x3CU, macro_tiled_pitch);
+
+    core.state.gpr[3] = color_buffer_address;
+    for (std::size_t index = 0U; index < clear_rgba.size(); ++index)
+    {
+        core.state.fpr[index + 1U] =
+            std::bit_cast<std::uint64_t>(clear_rgba[index]);
+    }
+    core.state.cia = clear_color;
+    core.state.lr = return_address;
+    assert(core.run(1U).reason == StopReason::instruction_limit);
+    const std::vector<Gx2Command> macro_tiled_clear_commands =
+        take_gx2_commands(core.gx2);
+    assert(macro_tiled_clear_commands.size() == 1U);
+    assert(macro_tiled_clear_commands.front().type ==
+        Gx2CommandType::clear_color_buffer);
+
+    const auto macro_tiled_last_pixel_offset =
+        affogato::gpu::rgba8_surface_pixel_offset(
+            width - 1U,
+            height - 1U,
+            macro_tiled_pitch,
+            affogato::gpu::gx2_tile_mode_2d_tiled_thin1);
+    assert(macro_tiled_last_pixel_offset.has_value());
+    core.memory.read_bytes(
+        source_image_address +
+            static_cast<std::uint32_t>(*macro_tiled_last_pixel_offset),
+        source_pixel);
+    assert(source_pixel == first_color);
+
+    const RunResult macro_tiled_copy = invoke_copy();
+    assert(macro_tiled_copy.reason == StopReason::instruction_limit);
+    const std::vector<Gx2Command> macro_tiled_copy_commands =
+        take_gx2_commands(core.gx2);
+    assert(macro_tiled_copy_commands.size() == 1U);
+    assert(macro_tiled_copy_commands.front().type ==
+        Gx2CommandType::copy_color_buffer_to_scan_buffer);
+    const std::uint32_t macro_tiled_scan_buffer_address =
+        scan_buffer_address +
+        macro_tiled_copy_commands.front().scan_buffer_copy->buffer_index *
+            frame_size;
+    core.memory.read_bytes(macro_tiled_scan_buffer_address, unchanged);
+    assert(unchanged == first_color);
+    core.memory.read_bytes(
+        macro_tiled_scan_buffer_address + frame_size - bytes_per_pixel,
+        unchanged);
     assert(unchanged == first_color);
 }
 
@@ -31299,6 +31356,7 @@ void latte_texture_staging_tests()
         2U, 2U, 3U, std::span<const std::uint8_t>(padded_scanout_bytes).first(23U)));
 
     using affogato::gpu::gx2_tile_mode_1d_tiled_thin1;
+    using affogato::gpu::gx2_tile_mode_2d_tiled_thin1;
     using affogato::gpu::gx2_tile_mode_linear_aligned;
     assert(affogato::gpu::rgba8_surface_storage_size(
         8U, 8U, 8U, gx2_tile_mode_1d_tiled_thin1) == 256U);
@@ -31331,6 +31389,98 @@ void latte_texture_staging_tests()
         8U, 9U, 8U, gx2_tile_mode_1d_tiled_thin1));
     assert(!affogato::gpu::rgba8_surface_storage_size(
         8U, 8U, 8U, 4U));
+
+    assert(affogato::gpu::rgba8_surface_storage_size(
+        32U, 16U, 32U, gx2_tile_mode_2d_tiled_thin1) == 2048U);
+    assert(affogato::gpu::rgba8_surface_pixel_offset(
+        0U, 0U, 32U, gx2_tile_mode_2d_tiled_thin1) == 0U);
+    assert(affogato::gpu::rgba8_surface_pixel_offset(
+        1U, 0U, 32U, gx2_tile_mode_2d_tiled_thin1) == 4U);
+    assert(affogato::gpu::rgba8_surface_pixel_offset(
+        0U, 1U, 32U, gx2_tile_mode_2d_tiled_thin1) == 16U);
+    assert(affogato::gpu::rgba8_surface_pixel_offset(
+        8U, 0U, 32U, gx2_tile_mode_2d_tiled_thin1) == 768U);
+    assert(affogato::gpu::rgba8_surface_pixel_offset(
+        0U, 8U, 32U, gx2_tile_mode_2d_tiled_thin1) == 256U);
+    assert(affogato::gpu::rgba8_surface_pixel_offset(
+        16U, 0U, 32U, gx2_tile_mode_2d_tiled_thin1) == 1024U);
+    assert(!affogato::gpu::rgba8_surface_storage_size(
+        32U, 16U, 31U, gx2_tile_mode_2d_tiled_thin1));
+    assert(!affogato::gpu::rgba8_surface_storage_size(
+        32U, 15U, 32U, gx2_tile_mode_2d_tiled_thin1));
+    std::array<bool, 32U * 16U> macro_tile_offsets{};
+    for (std::uint32_t y = 0U; y < 16U; ++y)
+    {
+        for (std::uint32_t x = 0U; x < 32U; ++x)
+        {
+            const auto offset = affogato::gpu::rgba8_surface_pixel_offset(
+                x, y, 32U, gx2_tile_mode_2d_tiled_thin1);
+            assert(offset.has_value());
+            assert(*offset % 4U == 0U);
+            assert(*offset < macro_tile_offsets.size() * 4U);
+            const std::size_t pixel_index = *offset / 4U;
+            assert(!macro_tile_offsets[pixel_index]);
+            macro_tile_offsets[pixel_index] = true;
+        }
+    }
+    assert(std::ranges::all_of(
+        macro_tile_offsets, [](bool is_mapped) { return is_mapped; }));
+
+    constexpr std::uint32_t two_macro_tile_width = 64U;
+    constexpr std::uint32_t two_macro_tile_height = 32U;
+    constexpr std::size_t two_macro_tile_storage_size =
+        two_macro_tile_width * two_macro_tile_height * 4U;
+    std::vector<bool> mapped_macro_surface_pixels(
+        two_macro_tile_width * two_macro_tile_height, false);
+    for (std::uint32_t y = 0U; y < two_macro_tile_height; ++y)
+    {
+        for (std::uint32_t x = 0U; x < two_macro_tile_width; ++x)
+        {
+            const auto offset = affogato::gpu::rgba8_surface_pixel_offset(
+                x, y, two_macro_tile_width, gx2_tile_mode_2d_tiled_thin1);
+            assert(offset.has_value());
+            assert(*offset % 4U == 0U);
+            assert(*offset < two_macro_tile_storage_size);
+            const std::size_t pixel_index = *offset / 4U;
+            assert(!mapped_macro_surface_pixels[pixel_index]);
+            mapped_macro_surface_pixels[pixel_index] = true;
+        }
+    }
+    assert(std::ranges::all_of(
+        mapped_macro_surface_pixels, [](bool is_mapped) { return is_mapped; }));
+
+    std::vector<std::uint8_t> macro_tiled_surface(
+        two_macro_tile_storage_size, 0xCDU);
+    std::vector<std::uint8_t> macro_linear_pixels(
+        two_macro_tile_width * two_macro_tile_height * 4U);
+    for (std::uint32_t y = 0U; y < two_macro_tile_height; ++y)
+    {
+        for (std::uint32_t x = 0U; x < two_macro_tile_width; ++x)
+        {
+            const std::size_t pixel_offset =
+                (static_cast<std::size_t>(y) * two_macro_tile_width + x) * 4U;
+            macro_linear_pixels[pixel_offset] = static_cast<std::uint8_t>(x);
+            macro_linear_pixels[pixel_offset + 1U] = static_cast<std::uint8_t>(y);
+            macro_linear_pixels[pixel_offset + 2U] =
+                static_cast<std::uint8_t>(x ^ y);
+            macro_linear_pixels[pixel_offset + 3U] = 0xFFU;
+        }
+    }
+    assert(affogato::gpu::write_rgba8_surface(
+        two_macro_tile_width,
+        two_macro_tile_height,
+        two_macro_tile_width,
+        gx2_tile_mode_2d_tiled_thin1,
+        macro_tiled_surface,
+        macro_linear_pixels));
+    const auto staged_macro_surface = affogato::gpu::stage_rgba8_surface(
+        two_macro_tile_width,
+        two_macro_tile_height,
+        two_macro_tile_width,
+        gx2_tile_mode_2d_tiled_thin1,
+        macro_tiled_surface);
+    assert(staged_macro_surface.has_value());
+    assert(staged_macro_surface->pixels == macro_linear_pixels);
 
     std::vector<std::uint8_t> tiled_surface(1024U, 0xCDU);
     std::vector<std::uint8_t> linear_pixels(16U * 16U * 4U);

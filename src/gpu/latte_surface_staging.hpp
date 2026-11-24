@@ -14,6 +14,7 @@ namespace affogato::gpu
 
 inline constexpr std::uint32_t gx2_tile_mode_linear_aligned = 1U;
 inline constexpr std::uint32_t gx2_tile_mode_1d_tiled_thin1 = 2U;
+inline constexpr std::uint32_t gx2_tile_mode_2d_tiled_thin1 = 4U;
 
 [[nodiscard]] inline std::optional<std::size_t> gx2_1d_thin1_element_offset(
     std::uint32_t x,
@@ -95,6 +96,103 @@ inline constexpr std::uint32_t gx2_tile_mode_1d_tiled_thin1 = 2U;
     return static_cast<std::size_t>(byte_offset);
 }
 
+[[nodiscard]] inline std::optional<std::size_t>
+gx2_2d_thin1_rgba8_element_offset(
+    std::uint32_t x,
+    std::uint32_t y,
+    std::uint32_t pitch_pixels,
+    std::uint32_t pipe_swizzle,
+    std::uint32_t bank_swizzle)
+{
+    constexpr std::uint32_t micro_tile_width = 8U;
+    constexpr std::uint32_t macro_tile_width = 32U;
+    constexpr std::uint32_t macro_tile_height = 16U;
+    constexpr std::uint32_t pipe_count = 2U;
+    constexpr std::uint32_t bank_count = 4U;
+    constexpr std::uint32_t pipe_bits_count = 1U;
+    constexpr std::uint32_t bank_bits_count = 2U;
+    constexpr std::uint32_t pipe_bank_bits_count =
+        pipe_bits_count + bank_bits_count;
+    constexpr std::uint32_t pipe_interleave_bytes = 256U;
+    constexpr std::uint32_t group_bits = 8U;
+
+    if (pitch_pixels % macro_tile_width != 0U || pipe_swizzle >= pipe_count ||
+        bank_swizzle >= bank_count)
+    {
+        return std::nullopt;
+    }
+
+    const std::uint32_t x_in_micro_tile = x % micro_tile_width;
+    const std::uint32_t y_in_micro_tile = y % micro_tile_width;
+    const std::uint32_t micro_tile_element =
+        ((x_in_micro_tile >> 0U) & 1U) |
+        (((x_in_micro_tile >> 1U) & 1U) << 1U) |
+        (((y_in_micro_tile >> 0U) & 1U) << 2U) |
+        (((x_in_micro_tile >> 2U) & 1U) << 3U) |
+        (((y_in_micro_tile >> 1U) & 1U) << 4U) |
+        (((y_in_micro_tile >> 2U) & 1U) << 5U);
+    const std::uint64_t element_offset =
+        static_cast<std::uint64_t>(micro_tile_element) * 4U;
+
+    const std::uint32_t x3 = (x >> 3U) & 1U;
+    const std::uint32_t x4 = (x >> 4U) & 1U;
+    const std::uint32_t y3 = (y >> 3U) & 1U;
+    const std::uint32_t y4 = (y >> 4U) & 1U;
+    const std::uint32_t y5 = (y >> 5U) & 1U;
+    const std::uint32_t pipe = y3 ^ x3;
+    const std::uint32_t bank = (y5 ^ x3) | ((y4 ^ x4) << 1U);
+    const std::uint32_t bank_pipe_swizzle =
+        pipe_swizzle + pipe_count * bank_swizzle;
+    const std::uint32_t bank_pipe =
+        (pipe + pipe_count * bank) ^ bank_pipe_swizzle;
+    const std::uint32_t resolved_pipe = bank_pipe % pipe_count;
+    const std::uint32_t resolved_bank = bank_pipe / pipe_count;
+
+    constexpr std::uint64_t macro_tile_bytes = 32U * 16U * 4U;
+    const std::uint64_t macro_tiles_per_row = pitch_pixels / macro_tile_width;
+    const std::uint64_t macro_tile_index =
+        static_cast<std::uint64_t>(x / macro_tile_width) +
+        static_cast<std::uint64_t>(y / macro_tile_height) * macro_tiles_per_row;
+    if (macro_tile_index >
+        std::numeric_limits<std::uint64_t>::max() / macro_tile_bytes)
+    {
+        return std::nullopt;
+    }
+
+    const std::uint64_t macro_tile_offset = macro_tile_index * macro_tile_bytes;
+    const std::uint64_t interleaved_macro_tile_offset =
+        macro_tile_offset >> pipe_bank_bits_count;
+    if (interleaved_macro_tile_offset >
+        std::numeric_limits<std::uint64_t>::max() - element_offset)
+    {
+        return std::nullopt;
+    }
+    const std::uint64_t total_offset =
+        element_offset + interleaved_macro_tile_offset;
+    if (total_offset >
+        (std::numeric_limits<std::uint64_t>::max() >> pipe_bank_bits_count))
+    {
+        return std::nullopt;
+    }
+    const std::uint64_t offset_high =
+        (total_offset & ~std::uint64_t{pipe_interleave_bytes - 1U}) <<
+        pipe_bank_bits_count;
+    const std::uint64_t offset_low =
+        total_offset & (pipe_interleave_bytes - 1U);
+    const std::uint64_t bank_bits =
+        static_cast<std::uint64_t>(resolved_bank) <<
+        (pipe_bits_count + group_bits);
+    const std::uint64_t pipe_bits =
+        static_cast<std::uint64_t>(resolved_pipe) << group_bits;
+    const std::uint64_t byte_offset =
+        bank_bits | pipe_bits | offset_low | offset_high;
+    if (byte_offset > std::numeric_limits<std::size_t>::max())
+    {
+        return std::nullopt;
+    }
+    return static_cast<std::size_t>(byte_offset);
+}
+
 struct Rgba8SurfaceStaging
 {
     std::uint32_t width{};
@@ -104,9 +202,9 @@ struct Rgba8SurfaceStaging
     bool operator==(const Rgba8SurfaceStaging&) const = default;
 };
 
-// 1D thin1 uses 8x8 displayable microtiles. In-tile element bit order depends
-// on element size; for 32-bit elements R600 addrlib orders X0, X1, Y0, X2,
-// Y1, Y2. Surface pitches are aligned to the 256-byte pipe interleave.
+// Thin1 modes use 8x8 displayable microtiles. In-tile element bit order
+// depends on element size; for 32-bit elements R600 addrlib orders X0, X1,
+// Y0, X2, Y1, Y2. Surface pitches respect the mode's pipe-interleave layout.
 [[nodiscard]] inline std::optional<std::uint64_t> gx2_surface_storage_size(
     std::uint32_t width,
     std::uint32_t height,
@@ -130,8 +228,21 @@ struct Rgba8SurfaceStaging
             return std::nullopt;
         }
     }
+    else if (tile_mode == gx2_tile_mode_2d_tiled_thin1)
+    {
+        constexpr std::uint32_t macro_tile_width = 32U;
+        constexpr std::uint32_t macro_tile_height = 16U;
+        const std::uint32_t pitch_alignment = macro_tile_width *
+            std::max(1U, 256U / bits_per_pixel / 8U);
+        if (pitch_pixels % pitch_alignment != 0U ||
+            height % macro_tile_height != 0U)
+        {
+            return std::nullopt;
+        }
+    }
     if (tile_mode != gx2_tile_mode_linear_aligned &&
-        tile_mode != gx2_tile_mode_1d_tiled_thin1)
+        tile_mode != gx2_tile_mode_1d_tiled_thin1 &&
+        tile_mode != gx2_tile_mode_2d_tiled_thin1)
     {
         return std::nullopt;
     }
@@ -178,6 +289,11 @@ struct Rgba8SurfaceStaging
             return std::nullopt;
         }
         return byte_offset;
+    }
+    else if (tile_mode == gx2_tile_mode_2d_tiled_thin1)
+    {
+        return gx2_2d_thin1_rgba8_element_offset(
+            x, y, pitch_pixels, 0U, 0U);
     }
     else
     {

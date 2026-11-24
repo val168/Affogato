@@ -566,7 +566,8 @@ std::uint64_t validate_rgba8_color_buffer(
         color_buffer.aa_mode != 0U ||
         (color_buffer.use & gx2_surface_use_color_buffer) == 0U ||
         (color_buffer.tile_mode != gpu::gx2_tile_mode_linear_aligned &&
-         color_buffer.tile_mode != gpu::gx2_tile_mode_1d_tiled_thin1) ||
+         color_buffer.tile_mode != gpu::gx2_tile_mode_1d_tiled_thin1 &&
+         color_buffer.tile_mode != gpu::gx2_tile_mode_2d_tiled_thin1) ||
         color_buffer.swizzle != 0U || color_buffer.view_mip != 0U ||
         color_buffer.view_first_slice != 0U ||
         color_buffer.view_num_slices != 1U ||
@@ -575,8 +576,8 @@ std::uint64_t validate_rgba8_color_buffer(
         throw HleExecutionError(
             std::string(api_name) +
             ": source must be a single-sample 2D RGBA8 color buffer using "
-            "linear-aligned or 1D thin1 storage, with a base-level, "
-            "single-slice view and no swizzle");
+            "linear-aligned, 1D thin1, or zero-swizzle 2D thin1 storage, "
+            "with a base-level, single-slice view and no multisample buffer");
     }
 
     if (color_buffer.width == 0U || color_buffer.height == 0U ||

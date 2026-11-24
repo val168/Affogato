@@ -89,7 +89,21 @@ Tests verify the R600 microtile bit order and exercise clear/copy through GX2
 HLE, including pixels across tile boundaries. The previously displayed
 PPC-to-HLE fixture used the linear-aligned mode; Vulkan presentation of a 1D
 thin1 scanout has not been visually verified. Neither path establishes draw
-execution, macro-tiled surfaces, DRC output, or WWHD rendering.
+execution, other macro-tiled surfaces, DRC output, or WWHD rendering.
+
+The zero-swizzle 2D thin1 RGBA8 subset uses 32x16 macro tiles, a 32-pixel
+minimum pitch alignment, and height padded to 16. Its address path was
+cross-checked against Decaf R600 Addrlib's
+`compute_surface_addr_from_coord_macro_tiled` and WiiU-Swizzle's function of
+the same name. For Wii U's two pipes and four banks, the implementation uses
+`pipe = y3 XOR x3`, `bank0 = y5 XOR x3`, and `bank1 = y4 XOR x4`; 32-bit
+microtile ordering is X0, X1, Y0, X2, Y1, Y2. Only zero descriptor swizzle,
+single-sample slice zero, and RGBA8 color surfaces are accepted by this HLE
+path. Deterministic tests check known addresses, uniqueness for each element
+in a macro tile, and an end-to-end HLE clear/copy fixture across a 1280x720
+surface. This is CPU guest-memory verification; tiled Vulkan visual scanout,
+bank-swizzled surfaces, other macro-tiled modes, and draw render-target writes
+remain unverified or unsupported.
 
 ### Diagnostic draws
 
@@ -138,7 +152,7 @@ attributes or shaders and do not modify the guest render target.
 | General vertex/index/instance handling | Partial snapshots and diagnostic expansion | fetch semantics, offset/base-instance rules, state capture |
 | Latte vertex/pixel shader execution | Missing; program words are captured | verified binary decoder, IR, translation and test corpus |
 | Guest render target for draws | Missing; draw diagnostic targets swapchain | surface addressing, Vulkan image cache, guest visibility/readback |
-| Color clear/copy | Verified linear-aligned and 1D thin1 RGBA8 CPU/HLE path | macro-tiling, additional formats, resolve and sync semantics |
+| Color clear/copy | Verified linear-aligned, 1D thin1 and zero-swizzle 2D thin1 RGBA8 CPU/HLE path | bank-swizzled/other macro-tiling, additional formats, resolve and sync semantics |
 | Depth/stencil and blend pipeline | Registers/descriptors are partly captured | register interpretation and Vulkan state mapping |
 | General texture sampling | Resource/sampler word capture and constrained staging | tiled addressing, format coverage, cache coherence |
 | GPU ordering/coherence | Typed events and synchronous CPU HLE writes | worker/render ownership, flush/fence and alias rules |
