@@ -38,14 +38,24 @@ program size/address at `0xA4/0xA8`. Affogato uses these offsets in
 `gx2_hle.cpp`; its tests exercise descriptor capture. Interface layouts do
 not define the full Latte machine semantics.
 
-### Hardware-family reference
+### Hardware-family references
 
-The public [AMD R600 ISA reference](https://vgamuseum.info/index.php/help-identify/item/download/1271_26fc7dc298c3b244919f0afb1c5958bc)
-is a useful baseline for R600-era control-flow, ALU, fetch, and export
-instruction families. Wii U sources describe Latte as R7xx-derived, but the
-R600 document is not an Espresso/Latte specification. Any field, opcode, or
-behavior used by Affogato must be cross-checked against Latte-focused
-references and real shader fixtures before implementation.
+WiiUBrew's [GX2 hardware page](https://wiiubrew.org/wiki/Hardware/GX2)
+identifies the GX2 GPU as an R7xx-family device and notes that no perfectly
+matching public card documentation is known. AMD's official [R700 Family
+Instruction Set Architecture](https://docs.amd.com/v/u/en-US/R700-Family_Instruction_Set_Architecture)
+is therefore a closer primary family reference than the R600 manual. Its
+chapters 3–6 describe control flow, ALU, vertex-fetch, and texture-fetch; its
+chapters 9–10 provide mnemonics and microcode formats. The R700 manual still
+does not specify Latte's customizations, so its fields and semantics are
+candidate hypotheses until checked against Wii U shader fixtures and
+Latte-focused emulator evidence.
+
+The older public [AMD R600 ISA reference](https://www.amd.com/system/files/TechDocs/R600_Instruction_Set_Architecture.pdf)
+can help explain shared R6xx/R7xx lineage, but it is a less direct baseline
+and is not an Espresso/Latte specification. Any field, opcode, or behavior
+used by Affogato must be cross-checked against Latte-focused references and
+real shader fixtures before implementation.
 
 ### Reference emulator research
 
