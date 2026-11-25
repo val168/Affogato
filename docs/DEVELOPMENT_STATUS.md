@@ -400,3 +400,13 @@ source/destination overlap, and rejection without partial writes. The behavior
 is based on R700-family group semantics and the assembled fixture, not direct
 Latte hardware validation. The helper does not implement PS, constants, literal
 operands, or general shader execution.
+
+## Latte integer bitwise OP2 vector subset (2026-11-25)
+
+Expanded the four-lane OP2 group executor to support the R700-family AND_INT,
+OR_INT, and XOR_INT operations (`0x030`–`0x032`) with two absolute GPR
+component sources. The execution path reads every lane before writing any
+destination and returns the group's vector result. Tests cover the three
+bitwise truth tables and guest destination writes. Debug and Release builds and
+CTest passed 2/2 in both configurations, and `git diff --check` is clean. This
+is family-reference behavior, not direct Latte hardware verification.

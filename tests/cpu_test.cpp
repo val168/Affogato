@@ -31953,7 +31953,7 @@ void latte_control_flow_decoder_tests()
     using affogato::gpu::decode_latte_alu_op2_groups;
     using affogato::gpu::decode_latte_control_flow;
     using affogato::gpu::evaluate_latte_alu_move_value;
-    using affogato::gpu::execute_latte_alu_op2_move_vector_group;
+    using affogato::gpu::execute_latte_alu_op2_vector_group;
     using affogato::gpu::LatteShaderRegister;
 
     // Captured with read32_be() from the assembled GFD pass-through vertex
@@ -32070,7 +32070,7 @@ void latte_control_flow_decoder_tests()
         0x7F800000U};
     shader_registers[3U].fill(0xDEADBEEFU);
 
-    const auto previous_vector = execute_latte_alu_op2_move_vector_group(
+    const auto previous_vector = execute_latte_alu_op2_vector_group(
         alu_groups[0U], shader_registers);
     assert((previous_vector == shader_registers[1U]));
     assert((shader_registers[3U] == shader_registers[1U]));
@@ -32090,7 +32090,7 @@ void latte_control_flow_decoder_tests()
         0x80000000U,
         0x7F800000U,
         0x3FA00000U};
-    const auto rotated_vector = execute_latte_alu_op2_move_vector_group(
+    const auto rotated_vector = execute_latte_alu_op2_vector_group(
         parallel_move_group, shader_registers);
     assert((rotated_vector == expected_rotated_vector));
     assert((shader_registers[1U] == expected_rotated_vector));
@@ -32101,7 +32101,7 @@ void latte_control_flow_decoder_tests()
     bool rejected_unsupported_move_group = false;
     try
     {
-        static_cast<void>(execute_latte_alu_op2_move_vector_group(
+        static_cast<void>(execute_latte_alu_op2_vector_group(
             unsupported_move_group, shader_registers));
     }
     catch (const std::runtime_error&)
@@ -32110,6 +32110,66 @@ void latte_control_flow_decoder_tests()
     }
     assert(rejected_unsupported_move_group);
     assert(shader_registers == registers_before_unsupported_group);
+
+    using affogato::gpu::latte_alu_op2_and_integer_opcode;
+    using affogato::gpu::latte_alu_op2_or_integer_opcode;
+    using affogato::gpu::latte_alu_op2_xor_integer_opcode;
+
+    shader_registers[1U] = {
+        0xF0F0F0F0U,
+        0xAAAA5555U,
+        0x80000000U,
+        0x01234567U};
+    shader_registers[2U] = {
+        0x0FF00FF0U,
+        0x5555AAAAU,
+        0x0000FFFFU,
+        0xFEDCBA98U};
+
+    constexpr std::array<std::uint16_t, 4U> integer_logic_opcodes{
+        latte_alu_op2_and_integer_opcode,
+        latte_alu_op2_or_integer_opcode,
+        latte_alu_op2_xor_integer_opcode,
+        latte_alu_op2_and_integer_opcode};
+    auto integer_logic_slots = alu_slots;
+    for (std::size_t component = 0U;
+         component < integer_logic_slots.size();
+         ++component)
+    {
+        auto& slot = integer_logic_slots[component];
+        slot.word0 &= ~((0x1FFU << 13U) | (0x03U << 23U));
+        slot.word0 |=
+            (2U << 13U) |
+            (static_cast<std::uint32_t>(component) << 23U);
+        slot.word1 &= ~(0x7FFU << 7U);
+        slot.word1 |= static_cast<std::uint32_t>(
+            integer_logic_opcodes[component]) << 7U;
+    }
+    const auto integer_logic_groups =
+        decode_latte_alu_op2_groups(integer_logic_slots);
+    assert(integer_logic_groups.size() == 1U);
+    const auto& integer_logic_group = integer_logic_groups[0U];
+    for (std::size_t component = 0U;
+         component < integer_logic_group.instructions.size();
+         ++component)
+    {
+        assert(integer_logic_group.instructions[component].opcode ==
+               integer_logic_opcodes[component]);
+        assert(integer_logic_group.instructions[component].source1_selector ==
+               2U);
+        assert(integer_logic_group.instructions[component].source1_channel ==
+               component);
+    }
+
+    const LatteShaderRegister expected_integer_logic_vector{
+        0x00F000F0U,
+        0xFFFFFFFFU,
+        0x8000FFFFU,
+        0x00000000U};
+    const auto integer_logic_vector = execute_latte_alu_op2_vector_group(
+        integer_logic_group, shader_registers);
+    assert((integer_logic_vector == expected_integer_logic_vector));
+    assert((shader_registers[3U] == expected_integer_logic_vector));
 
     bool rejected_literal_alu_operand = false;
     try

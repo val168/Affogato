@@ -6,11 +6,12 @@ Latte shaders are guest programs associated with GX2 vertex, geometry, and
 pixel stages. Affogato currently captures the stage descriptors and bounded
 program words when `GX2SetVertexShader`, `GX2SetGeometryShader`, or
 `GX2SetPixelShader` runs. `Gx2RegisterState::apply()` snapshots those bindings
-at each draw. A small structural control-flow record decoder recognizes
-fixture-verified `CALL_FS`, `EXPORT`, `EXPORT_DONE`, and one ALU-clause header
-encoding. There is no ALU slot decoder, shader IR, guest shader executor, or
-SPIR-V generator. The diagnostic Vulkan triangle uses fixed host shaders and
-does not execute these captured guest programs.
+at each draw. Structural control-flow decoding recognizes fixture-verified
+`CALL_FS`, `EXPORT`, `EXPORT_DONE`, and one ALU-clause header encoding. Raw
+ALU slots, OP2 fields, no-literal OP2 groups, and a narrow four-lane shader
+execution subset are also implemented. There is no shader IR or SPIR-V
+generator, and the diagnostic Vulkan triangle uses fixed host shaders rather
+than these captured guest programs.
 
 Relevant local implementation:
 
@@ -28,11 +29,12 @@ Relevant local implementation:
   guest vertex/pixel shader ISA.
 - `src/gpu/latte_shader_decoder.hpp` converts the captured big-endian words
   to the little-endian Latte DWORD values represented in GFD shader code, then
-  decodes a narrow structural control-flow subset. It checks ALU clause header
-  ranges but does not decode or execute clause payloads.
-- `src/gpu/latte_shader_interpreter.hpp` contains an initial MOV source-value
-  helper for one absolute GPR form. It returns raw register bits; it does not
-  perform destination writeback, PV/PS updates, or instruction-group execution.
+  decodes a narrow control-flow subset, ALU clause ranges, OP2 fields, and
+  no-literal OP2 group boundaries.
+- `src/gpu/latte_shader_interpreter.hpp` evaluates absolute-GPR MOV and integer
+  AND/OR/XOR values and executes supported four-slot X/Y/Z/W groups. It returns
+  the vector-group result and applies guest-register writes; shader clauses,
+  PS state, constants, literals, and other opcodes remain unsupported.
 
 ## Evidence categories
 
@@ -184,7 +186,7 @@ real shader fixtures before implementation.
 | GX2 vertex/pixel/geometry descriptor capture | Implemented and tested as capture | HLE descriptor/program range checks and draw-time state snapshots |
 | Fetch-shader parsing | Narrow diagnostic subset | `latte_vertex_fetch.hpp`; generated VTX programs only |
 | Latte shader control-flow decoding | Partial | `latte_shader_decoder.hpp` decodes fixture-verified `CALL_FS`, `EXPORT`, `EXPORT_DONE`, and `ALU` clause headers, including EOP and bounded clause ranges. Unknown opcodes and malformed streams fail explicitly. No branch/loop decoding or clause execution. |
-| Latte ALU decoding/execution | Partial structural/value subset | OP2 fields and LAST-delimited groups are decoded for no-literal clauses; literal operands and OP3 slots fail explicitly. `evaluate_latte_alu_move_value()` returns source bits for one absolute GPR MOV form. No group execution, destination writeback, PV/PS update, predicate, or other opcode semantics. |
+| Latte ALU decoding/execution | Experimental subset | OP2 fields and LAST-delimited no-literal groups are decoded. Four-slot X/Y/Z/W groups support MOV and integer AND/OR/XOR with absolute GPR sources and no modifiers; destination lanes are written after parallel source reads and the vector result is returned. No PS, constants, literals, other opcodes, clause execution, or Latte-hardware validation. |
 | Vertex/pixel shader translation | Missing | Stage interfaces, exports, constants, textures, and SPIR-V backend |
 | Guest shader integration with Vulkan draws | Missing | Shader modules, pipeline cache, descriptor binding, render-target path |
 | WWHD shader requirements | Unknown in Affogato | Existing recorded WWHD runs stop before a guest draw is captured |
@@ -276,8 +278,9 @@ destination r3 components and the final-in-group marker against Cemu's
 `evaluate_latte_alu_move_value()` handles the fixture's absolute GPR source
 and returns its raw 32-bit component unchanged. The R700 reference describes
 MOV as `dst = src0` and also permits constants or previous results; Affogato
-currently supports only the GPR source. It does not apply destination writes
-or update previous-vector/previous-scalar state. The supporting R700 reference
+currently supports only the GPR source form. The vector-group executor applies
+the supported destination writes and returns the group result; other source
+modes and previous-scalar state remain unsupported. The supporting R700 reference
 is Chapter 9.2, “Copy To GPR” (page 9-92); its applicability to Latte remains a
 family-level reference cross-checked by the assembled fixture, not a complete
 Latte specification.
@@ -285,9 +288,9 @@ Latte specification.
 The R700 manual's Chapter 4.3 says the LAST bit delimits groups of ALU slots;
 Chapter 4.6.2 defines PV/PS as results from the previous group. Chapter 4.9.2
 also states that an OP2 write-mask suppresses the GPR write while PV/PS still
-update. Therefore a complete MOV executor cannot be modeled as only a
-destination-register copy. Any follow-up execution work must represent grouped
-ALU results and their state transitions before claiming instruction execution.
+update. The implemented executor therefore requires the write mask and applies
+destination writes only for that supported form; other write-mask behavior and
+PS state are not modeled.
 
 Chapter 4.3 also describes group instruction slots in X, Y, Z, W, Trans order;
 literal constants may occupy following 64-bit slots and do not carry LAST bits,
@@ -303,15 +306,21 @@ without literal operands. It rejects OP3 encodings, literal selectors, and an
 unterminated final group. This does not parse literal payload slots or execute
 groups. The pass-through fixture contains one four-slot group and no literals.
 
-`execute_latte_alu_op2_move_vector_group()` supports only a four-slot MOV group
-in X/Y/Z/W destination-component order, with the already supported absolute
-GPR sources and no unsupported modifiers. It gathers all sources before
-updating destination lanes and returns the resulting four-lane PV value. Tests
-cover bit-preserving values, same-group source/destination overlap, and
-rejection without partial register writes. This subset is based on R700-family
-group semantics and the assembled fixture; it is not independently verified
-against Latte hardware. It does not model PS, constants, literals, other
-groups, or any other opcode. The pass-through shader still does not establish
-complete shader decoding. Do not start SPIR-V emission until broader opcode
-semantics, slot grouping, and expected architectural outputs have deterministic
-tests.
+`execute_latte_alu_op2_vector_group()` supports four ordered X/Y/Z/W slots with
+MOV or integer AND/OR/XOR, absolute GPR sources, write masks enabled, and no
+other modifiers. It gathers all sources before updating destination lanes and
+returns the resulting vector value. Tests cover bit-preserving MOV values,
+same-group source/destination overlap, integer truth tables, and rejection
+without partial register writes. The group behavior follows the R700-family
+reference and the assembled fixture; it is not independently verified against
+Latte hardware. PS, constants, literals, other groups/opcodes, clause execution,
+shader IR, and translation remain absent. The pass-through shader does not
+establish complete shader decoding.
+
+For the integer logic subset, the R700 manual documents `AND_INT` as
+`src0 & src1` (Chapter 9, “AND Bitwise”), with corresponding OR/XOR operations
+in the integer instruction tables. Cemu's `LatteClauseInstruction_ALU` opcode
+definitions map `AND_INT`, `OR_INT`, and `XOR_INT` to `0x030`, `0x031`, and
+`0x032`. Affogato tests those raw opcode fields through its decoder and checks
+the bitwise results. These references are family/implementation evidence; no
+Latte hardware output has been captured for this subset.

@@ -12,14 +12,17 @@ namespace affogato::gpu
 {
 
 inline constexpr std::uint16_t latte_alu_op2_move_opcode = 0x019U; // OP2_INST_MOV
+inline constexpr std::uint16_t latte_alu_op2_and_integer_opcode = 0x030U;
+inline constexpr std::uint16_t latte_alu_op2_or_integer_opcode = 0x031U;
+inline constexpr std::uint16_t latte_alu_op2_xor_integer_opcode = 0x032U;
 inline constexpr std::size_t latte_shader_register_component_count = 4U;
 
 using LatteShaderRegister =
     std::array<std::uint32_t, latte_shader_register_component_count>;
 
 // Evaluate the fixture-verified absolute GPR component-copy form of MOV.
-// This returns the source value only; destination, PV, and PS updates belong
-// to the instruction-group executor and are not implemented here.
+// The group executor applies destination writes and returns the vector result;
+// previous-scalar state and MOV source modes other than GPR remain unsupported.
 // Shader registers hold raw 32-bit values so MOV preserves all source bits.
 [[nodiscard]] inline std::uint32_t evaluate_latte_alu_move_value(
     const LatteAluOp2Instruction& instruction,
@@ -67,39 +70,123 @@ using LatteShaderRegister =
                          [instruction.source0_channel];
 }
 
-// Execute the fixture-verified X/Y/Z/W MOV group. Source values are collected
-// before any destination lane is changed, matching parallel group execution.
+// Evaluate absolute-GPR operands for the supported integer bitwise OP2 family.
+[[nodiscard]] inline std::uint32_t evaluate_latte_alu_integer_logic_value(
+    const LatteAluOp2Instruction& instruction,
+    std::span<const LatteShaderRegister> guest_registers)
+{
+    if (instruction.opcode != latte_alu_op2_and_integer_opcode &&
+        instruction.opcode != latte_alu_op2_or_integer_opcode &&
+        instruction.opcode != latte_alu_op2_xor_integer_opcode)
+    {
+        throw std::runtime_error(
+            "Latte integer logic evaluation received an unsupported opcode");
+    }
+
+    if (instruction.source0_relative || instruction.source1_relative ||
+        instruction.source0_negate || instruction.source1_negate ||
+        instruction.destination_relative || instruction.destination_clamp ||
+        instruction.output_modifier != 0U || instruction.index_mode != 0U ||
+        !instruction.write_mask)
+    {
+        throw std::runtime_error(
+            "Latte integer logic evaluation received unsupported modifiers");
+    }
+
+    constexpr std::uint16_t maximum_gpr_selector = 127U;
+    if (instruction.source0_selector > maximum_gpr_selector ||
+        instruction.source1_selector > maximum_gpr_selector ||
+        instruction.source0_selector >= guest_registers.size() ||
+        instruction.source1_selector >= guest_registers.size())
+    {
+        throw std::runtime_error(
+            "Latte integer logic source selector is not a supported GPR");
+    }
+
+    if (instruction.destination_gpr >= guest_registers.size())
+    {
+        throw std::runtime_error(
+            "Latte integer logic destination is outside the register file");
+    }
+
+    if (instruction.source0_channel >= latte_shader_register_component_count ||
+        instruction.source1_channel >= latte_shader_register_component_count ||
+        instruction.destination_component >=
+            latte_shader_register_component_count)
+    {
+        throw std::runtime_error(
+            "Latte integer logic component is outside a four-component GPR");
+    }
+
+    const std::uint32_t source0 =
+        guest_registers[instruction.source0_selector]
+                       [instruction.source0_channel];
+    const std::uint32_t source1 =
+        guest_registers[instruction.source1_selector]
+                       [instruction.source1_channel];
+
+    switch (instruction.opcode)
+    {
+    case latte_alu_op2_and_integer_opcode:
+        return source0 & source1;
+    case latte_alu_op2_or_integer_opcode:
+        return source0 | source1;
+    case latte_alu_op2_xor_integer_opcode:
+        return source0 ^ source1;
+    default:
+        throw std::runtime_error(
+            "Latte integer logic evaluation received an unsupported opcode");
+    }
+}
+
+// Execute a supported four-slot X/Y/Z/W OP2 group. Source values are gathered
+// before destination writes, preserving same-group parallel read semantics.
 // The returned vector is the group's ALU.[X,Y,Z,W] result (PV).
 [[nodiscard]] inline LatteShaderRegister
-execute_latte_alu_op2_move_vector_group(
+execute_latte_alu_op2_vector_group(
     const LatteAluOp2InstructionGroup& group,
     std::span<LatteShaderRegister> guest_registers)
 {
     if (group.instructions.size() != latte_shader_register_component_count)
     {
         throw std::runtime_error(
-            "Latte MOV group must contain exactly four vector instructions");
+            "Latte OP2 group must contain exactly four vector instructions");
     }
 
     LatteShaderRegister previous_vector{};
+    const std::span<const LatteShaderRegister> read_only_registers(
+        guest_registers);
 
     for (std::size_t component = 0U;
          component < group.instructions.size();
          ++component)
     {
         const auto& instruction = group.instructions[component];
-        if (instruction.opcode != latte_alu_op2_move_opcode ||
-            instruction.destination_component != component ||
+        if (instruction.destination_component != component ||
             instruction.last_in_group !=
                 (component + 1U == group.instructions.size()))
         {
             throw std::runtime_error(
-                "Latte MOV group does not match the supported X/Y/Z/W layout");
+                "Latte OP2 group does not match the supported X/Y/Z/W layout");
         }
 
-        previous_vector[component] = evaluate_latte_alu_move_value(
-            instruction,
-            std::span<const LatteShaderRegister>(guest_registers));
+        switch (instruction.opcode)
+        {
+        case latte_alu_op2_move_opcode:
+            previous_vector[component] = evaluate_latte_alu_move_value(
+                instruction, read_only_registers);
+            break;
+        case latte_alu_op2_and_integer_opcode:
+        case latte_alu_op2_or_integer_opcode:
+        case latte_alu_op2_xor_integer_opcode:
+            previous_vector[component] =
+                evaluate_latte_alu_integer_logic_value(
+                    instruction, read_only_registers);
+            break;
+        default:
+            throw std::runtime_error(
+                "Latte OP2 group contains an unsupported instruction");
+        }
     }
 
     for (std::size_t component = 0U;
