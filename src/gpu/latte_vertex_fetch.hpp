@@ -1,7 +1,9 @@
 #pragma once
 
 #include "cpu/espresso/gx2_hle.hpp"
+#include "gpu/gx2_register_state.hpp"
 
+#include <algorithm>
 #include <array>
 #include <bit>
 #include <cstddef>
@@ -33,6 +35,59 @@ struct LatteVertexAttribute
 };
 
 inline constexpr std::size_t latte_vertex_semantic_entry_count = 32U;
+inline constexpr std::uint32_t latte_vertex_semantic_register_base =
+    0x00028380U;
+
+// Read the semantic table from one draw's register snapshot. Requiring all
+// entries to be explicitly captured avoids guessing reset values.
+[[nodiscard]] inline std::optional<std::array<std::uint32_t,
+    latte_vertex_semantic_entry_count>>
+capture_latte_vertex_semantic_table(
+    std::span<const Gx2RegisterSnapshotEntry> register_snapshot)
+{
+    constexpr std::uint32_t register_stride = sizeof(std::uint32_t);
+    constexpr std::uint32_t cleared_semantic_entry = 0xFFFFFFFFU;
+
+    std::array<std::uint32_t, latte_vertex_semantic_entry_count> semantic_table{};
+    semantic_table.fill(cleared_semantic_entry);
+    std::array<bool, latte_vertex_semantic_entry_count> has_entry{};
+
+    for (const Gx2RegisterSnapshotEntry& entry : register_snapshot)
+    {
+        if (entry.address < latte_vertex_semantic_register_base)
+        {
+            continue;
+        }
+
+        const std::uint32_t address_offset =
+            entry.address - latte_vertex_semantic_register_base;
+        if (address_offset >=
+                latte_vertex_semantic_entry_count * register_stride ||
+            address_offset % register_stride != 0U)
+        {
+            continue;
+        }
+
+        const std::size_t table_index = address_offset / register_stride;
+        if (entry.type != cpu::espresso::Gx2CommandType::set_context_register ||
+            has_entry[table_index])
+        {
+            return std::nullopt;
+        }
+
+        semantic_table[table_index] = entry.value;
+        has_entry[table_index] = true;
+    }
+
+    if (!std::all_of(has_entry.begin(), has_entry.end(), [](bool present) {
+            return present;
+        }))
+    {
+        return std::nullopt;
+    }
+
+    return semantic_table;
+}
 
 // Resolve a semantic fetched by the vertex fetch shader to its destination VS
 // GPR. The caller supplies VS_GPR_BASE because its value is shader state.

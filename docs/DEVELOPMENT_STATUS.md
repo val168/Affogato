@@ -501,22 +501,6 @@ and Release builds succeeded and CTest passed 2/2 in both configurations.
 Exports are not yet connected to Vulkan stage outputs or an end-to-end guest
 shader executor.
 
-## Latte vertex semantic linkage (2026-11-25)
-
-Added `resolve_latte_vertex_input_gpr()` in
-[`latte_vertex_fetch.hpp`](../src/gpu/latte_vertex_fetch.hpp). It resolves the
-8-bit fetch semantic ID against the low byte of up to 32 captured semantic
-table entries, ignores the all-ones clear marker, and maps a match at index
-`n` to `VS_GPR_BASE + 1 + n`. Duplicate matches, oversized tables, and
-destination overflow are rejected. Tests cover a match with unrelated high
-bits, absent and cleared entries, duplicate IDs, table bounds, and overflow.
-The mapping is based on Sections 2.5.1 and 2.5.3 of AMD's R6xx/R7xx 3D Engine
-Programming Guide; it remains a GPU-family reference rather than direct Wii U
-hardware validation. The resolver is not yet connected to draw snapshots or
-shader invocation, and system-generated vertex/instance inputs are not modeled.
-Debug and Release builds succeeded and CTest passed 2/2 in both
-configurations.
-
 ## Visible diagnostic triangle verification (2026-11-25)
 
 Ran `AffogatoFrontend.exe --gx2-guest-triangle-display-test` from the Debug
@@ -542,3 +526,31 @@ a position export from that register. `CALL_FS` is rejected explicitly, as
 are other unsupported CF operations; the subset does not generate stage inputs,
 translate shaders to SPIR-V, or participate in guest draw submission. Debug
 and Release builds succeeded and CTest passed 2/2 in both configurations.
+
+## Latte vertex semantic linkage (2026-11-25)
+
+Added `resolve_latte_vertex_input_gpr()` in
+[`latte_vertex_fetch.hpp`](../src/gpu/latte_vertex_fetch.hpp). It resolves the
+8-bit fetch semantic ID against the low byte of up to 32 captured semantic
+table entries, ignores the all-ones clear marker, and maps a match at index
+`n` to `VS_GPR_BASE + 1 + n`. Duplicate matches, oversized tables, and
+destination overflow are rejected. Tests cover a match with unrelated high
+bits, absent and cleared entries, duplicate IDs, table bounds, and overflow.
+The mapping is based on Sections 2.5.1 and 2.5.3 of AMD's R6xx/R7xx 3D Engine
+Programming Guide; it remains a GPU-family reference rather than direct Wii U
+hardware validation. The resolver is not yet used to populate shader inputs,
+and system-generated vertex/instance inputs are not modeled. Debug and Release
+builds succeeded and CTest passed 2/2 in both configurations.
+
+## Draw-time Latte semantic-table extraction (2026-11-25)
+
+Added `capture_latte_vertex_semantic_table()` in
+[`latte_vertex_fetch.hpp`](../src/gpu/latte_vertex_fetch.hpp). It extracts the
+32 `SQ_VTX_SEMANTIC` entries from a raw draw register snapshot using the
+existing register base address. It requires every entry to be present as a
+context-register write and rejects duplicate or wrongly typed entries instead
+of assuming reset values. Tests verify extraction and semantic resolution,
+and reject incomplete or wrongly typed snapshots. The table is now available
+from draw-time state, but it is not yet used to populate shader invocation
+inputs. Debug and Release builds succeeded and CTest passed 2/2 in both
+configurations.

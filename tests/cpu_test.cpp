@@ -31786,7 +31786,70 @@ void latte_vertex_fetch_decoder_tests()
 {
     using affogato::gpu::decode_latte_vertex_fetch_shader;
     using affogato::gpu::decode_latte_vertex_component;
+    using affogato::gpu::capture_latte_vertex_semantic_table;
     using affogato::gpu::resolve_latte_vertex_input_gpr;
+
+    constexpr std::uint32_t semantic_register_stride = sizeof(std::uint32_t);
+    std::array<affogato::gpu::Gx2RegisterSnapshotEntry, 32U>
+        semantic_registers{};
+    for (std::size_t index = 0U; index < semantic_registers.size(); ++index)
+    {
+        semantic_registers[index] = {
+            affogato::gpu::latte_vertex_semantic_register_base +
+                static_cast<std::uint32_t>(index) * semantic_register_stride,
+            affogato::cpu::espresso::Gx2CommandType::set_context_register,
+            static_cast<std::uint32_t>(index)};
+    }
+    semantic_registers[7U].value = 0xABCD0007U;
+    const auto captured_semantic_table = capture_latte_vertex_semantic_table(
+        semantic_registers);
+    assert(captured_semantic_table.has_value());
+    assert((*captured_semantic_table)[7U] == 0xABCD0007U);
+    assert(resolve_latte_vertex_input_gpr(
+        7U,
+        *captured_semantic_table,
+        5U) == 13U);
+    std::vector<affogato::cpu::espresso::Gx2Command>
+        semantic_capture_commands;
+    semantic_capture_commands.reserve(semantic_registers.size() + 1U);
+    for (const auto& entry : semantic_registers)
+    {
+        semantic_capture_commands.push_back({
+            entry.type,
+            entry.address,
+            entry.value});
+    }
+    semantic_capture_commands.push_back({
+        affogato::cpu::espresso::Gx2CommandType::draw,
+        0U,
+        0U,
+        0U,
+        0U,
+        0U,
+        affogato::cpu::espresso::Gx2DrawCall{
+            1U, 1U, false, 0U, 0U, 0U, 1U, 0U}});
+    affogato::gpu::Gx2RegisterState semantic_register_state;
+    semantic_register_state.apply(semantic_capture_commands);
+    const auto semantic_draw_snapshot =
+        semantic_register_state.draw_snapshot(0U);
+    assert(semantic_draw_snapshot.has_value());
+    const auto draw_semantic_table = capture_latte_vertex_semantic_table(
+        semantic_draw_snapshot->registers);
+    assert(draw_semantic_table == captured_semantic_table);
+
+    assert(!capture_latte_vertex_semantic_table(
+        std::span<const affogato::gpu::Gx2RegisterSnapshotEntry>(
+            semantic_registers).first(31U)).has_value());
+
+    auto duplicate_semantic_registers = semantic_registers;
+    duplicate_semantic_registers[8U].address =
+        duplicate_semantic_registers[7U].address;
+    assert(!capture_latte_vertex_semantic_table(
+        duplicate_semantic_registers).has_value());
+
+    semantic_registers[7U].type =
+        affogato::cpu::espresso::Gx2CommandType::set_shader_resource;
+    assert(!capture_latte_vertex_semantic_table(semantic_registers).has_value());
 
     std::array<std::uint32_t, 32U> semantic_table{};
     semantic_table.fill(0xFFFFFFFFU);
