@@ -120,11 +120,13 @@ fetch-to-shader helper therefore tests a straight-line ALU program without a
 binding is available. The base-register/address relationship and Latte call
 behavior remain to be verified before normal-draw integration.
 
-Cemu provides a useful architecture comparison: its
-[`LatteDecompiler_ParseCFInstruction`](https://github.com/cemu-project/Cemu/blob/main/src/Cafe/HW/Latte/LegacyShaderDecompiler/LatteDecompiler.cpp)
+Cemu at commit
+[`2f49c079da1d50b85cea0ed99aedda58846b3523`](https://github.com/cemu-project/Cemu/commit/2f49c079da1d50b85cea0ed99aedda58846b3523)
+provides a useful architecture comparison: its
+[`LatteDecompiler_ParseCFInstruction`](https://github.com/cemu-project/Cemu/blob/2f49c079da1d50b85cea0ed99aedda58846b3523/src/Cafe/HW/Latte/LegacyShaderDecompiler/LatteDecompiler.cpp)
 accepts `CALL_FS` as a no-op in the vertex-program lowering, while its shader
 context carries a separate parsed fetch-shader object. Its
-[`FetchShader.cpp`](https://github.com/cemu-project/Cemu/blob/main/src/Cafe/HW/Latte/Core/FetchShader.cpp)
+[`FetchShader.cpp`](https://github.com/cemu-project/Cemu/blob/2f49c079da1d50b85cea0ed99aedda58846b3523/src/Cafe/HW/Latte/Core/FetchShader.cpp)
 parses that fetch program independently. This is a translation boundary, not
 evidence that the hardware call has no effect. It supports a future design in
 which Affogato separately resolves the bound fetch program and only elides a
