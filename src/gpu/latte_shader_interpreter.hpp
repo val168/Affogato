@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -15,6 +16,12 @@ namespace affogato::gpu
 {
 
 inline constexpr std::uint16_t latte_alu_op2_move_opcode = 0x019U; // OP2_INST_MOV
+inline constexpr std::uint16_t latte_alu_op3_conditional_move_equal_opcode =
+    0x018U;
+inline constexpr std::uint16_t latte_alu_op3_conditional_move_greater_opcode =
+    0x019U;
+inline constexpr std::uint16_t
+    latte_alu_op3_conditional_move_greater_equal_opcode = 0x01AU;
 inline constexpr std::uint16_t latte_alu_op2_add_float_opcode = 0x000U;
 inline constexpr std::uint16_t latte_alu_op2_multiply_ieee_opcode = 0x002U;
 inline constexpr std::uint16_t latte_alu_op2_maximum_dx10_opcode = 0x005U;
@@ -231,6 +238,158 @@ evaluate_latte_normal_export(
     }
 
     return guest_registers[source_selector][source_channel];
+}
+
+// Evaluate the documented floating-point OP3 conditional-move family.
+// The selected source is returned as raw bits so NaN payloads and signed zero
+// are preserved. Predicate state and relative addressing are not modeled.
+[[nodiscard]] inline std::uint32_t evaluate_latte_alu_op3_conditional_move_value(
+    const LatteAluOp3Instruction& instruction,
+    std::span<const LatteShaderRegister> guest_registers,
+    const std::optional<LatteShaderRegister>& incoming_previous_vector =
+        std::nullopt,
+    const LatteShaderConstantFile* constant_file = nullptr)
+{
+    if (instruction.opcode !=
+            latte_alu_op3_conditional_move_equal_opcode &&
+        instruction.opcode !=
+            latte_alu_op3_conditional_move_greater_opcode &&
+        instruction.opcode !=
+            latte_alu_op3_conditional_move_greater_equal_opcode)
+    {
+        throw std::runtime_error(
+            "Latte OP3 conditional move received an unsupported opcode");
+    }
+
+    if (instruction.source0_relative || instruction.source1_relative ||
+        instruction.source2_relative || instruction.index_mode != 0U ||
+        instruction.bank_swizzle != 0U ||
+        instruction.predicate_selection != 0U ||
+        instruction.destination_relative || instruction.destination_clamp)
+    {
+        throw std::runtime_error(
+            "Latte OP3 conditional move received unsupported modifiers");
+    }
+
+    if (instruction.destination_gpr >= guest_registers.size())
+    {
+        throw std::runtime_error(
+            "Latte OP3 conditional move destination is outside the register file");
+    }
+
+    if (instruction.destination_component >=
+        latte_shader_register_component_count)
+    {
+        throw std::runtime_error(
+            "Latte OP3 conditional move destination is outside a four-component GPR");
+    }
+
+    const auto read_source = [&](std::uint16_t selector,
+                                 std::uint8_t channel,
+                                 bool negate)
+    {
+        std::uint32_t value = read_latte_alu_source(
+            selector,
+            channel,
+            guest_registers,
+            incoming_previous_vector,
+            constant_file);
+        if (negate)
+        {
+            value ^= latte_binary32_sign_mask;
+        }
+        return value;
+    };
+
+    const std::uint32_t condition_bits = read_source(
+        instruction.source0_selector,
+        instruction.source0_channel,
+        instruction.source0_negate);
+    const float condition = std::bit_cast<float>(condition_bits);
+    bool take_source1 = false;
+
+    switch (instruction.opcode)
+    {
+    case latte_alu_op3_conditional_move_equal_opcode:
+        take_source1 = condition == 0.0F;
+        break;
+    case latte_alu_op3_conditional_move_greater_opcode:
+        take_source1 = condition > 0.0F;
+        break;
+    case latte_alu_op3_conditional_move_greater_equal_opcode:
+        take_source1 = condition >= 0.0F;
+        break;
+    default:
+        throw std::runtime_error(
+            "Latte OP3 conditional move received an unsupported opcode");
+    }
+
+    if (take_source1)
+    {
+        return read_source(
+            instruction.source1_selector,
+            instruction.source1_channel,
+            instruction.source1_negate);
+    }
+
+    return read_source(
+        instruction.source2_selector,
+        instruction.source2_channel,
+        instruction.source2_negate);
+}
+
+// Execute four ordered OP3 vector slots. Values are read before any writes,
+// matching the group-level source snapshot used by the OP2 evaluator.
+[[nodiscard]] inline LatteShaderRegister execute_latte_alu_op3_vector_group(
+    const LatteAluOp3InstructionGroup& group,
+    std::span<LatteShaderRegister> guest_registers,
+    const std::optional<LatteShaderRegister>& incoming_previous_vector =
+        std::nullopt,
+    const LatteShaderConstantFile* constant_file = nullptr)
+{
+    if (group.instructions.size() != latte_shader_register_component_count)
+    {
+        throw std::runtime_error(
+            "Latte OP3 group must contain exactly four vector instructions");
+    }
+
+    LatteShaderRegister group_vector{};
+    const std::span<const LatteShaderRegister> read_only_registers(
+        guest_registers);
+
+    for (std::size_t component = 0U;
+         component < group.instructions.size();
+         ++component)
+    {
+        const LatteAluOp3Instruction& instruction =
+            group.instructions[component];
+        if (instruction.destination_component != component ||
+            instruction.last_in_group !=
+                (component + 1U == group.instructions.size()))
+        {
+            throw std::runtime_error(
+                "Latte OP3 group does not match the supported X/Y/Z/W layout");
+        }
+
+        group_vector[component] =
+            evaluate_latte_alu_op3_conditional_move_value(
+                instruction,
+                read_only_registers,
+                incoming_previous_vector,
+                constant_file);
+    }
+
+    for (std::size_t component = 0U;
+         component < group.instructions.size();
+         ++component)
+    {
+        const LatteAluOp3Instruction& instruction =
+            group.instructions[component];
+        guest_registers[instruction.destination_gpr][component] =
+            group_vector[component];
+    }
+
+    return group_vector;
 }
 
 // Evaluate supported GPR, inline-constant, constant-file, and prior-PV MOVs.

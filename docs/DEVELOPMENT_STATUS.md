@@ -1,5 +1,20 @@
 # Affogato Development Status
 
+## Bounded Latte OP3 conditional moves (2026-11-25)
+
+Added CPU-reference evaluation for floating-point OP3 `CMOVE` (`0x18`),
+`CMOVGT` (`0x19`), and `CMOVGE` (`0x1A`), plus four-lane X/Y/Z/W groups.
+The condition uses ordered binary32 comparisons against zero; the chosen
+source is returned with its raw bits preserved. Source negate is applied as a
+sign-bit toggle. Relative addressing, predicate selection, bank swizzle,
+clamping, and other OP3 opcodes are rejected. Group sources are read before
+writeback, and failures leave guest registers unchanged. Tests cover signed
+zero, NaN, source negation, selected-bit preservation, and unsupported state.
+Debug and Release builds and CTest each passed 18/18. This CPU interpreter
+subset is not yet integrated into the shader program IR, SPIR-V backend, or
+normal guest rendering path; Latte hardware output has not been captured. See
+[`research/12_latte_shader_isa.md`](research/12_latte_shader_isa.md).
+
 ## Structural OP3 group segmentation (2026-11-25)
 
 Added a bounded OP3-only group parser that segments decoded slots by `LAST`,

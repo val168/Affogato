@@ -34327,6 +34327,136 @@ void gx2_set_uniform_register_hle_tests()
     assert(core.gx2.pending_commands.size() == command_count_before_invalid_request);
 }
 
+void latte_alu_op3_execution_tests()
+{
+    using affogato::gpu::LatteAluOp3Instruction;
+    using affogato::gpu::LatteAluOp3InstructionGroup;
+    using affogato::gpu::LatteShaderRegister;
+    using affogato::gpu::evaluate_latte_alu_op3_conditional_move_value;
+    using affogato::gpu::execute_latte_alu_op3_vector_group;
+    using affogato::gpu::latte_alu_op3_conditional_move_equal_opcode;
+    using affogato::gpu::latte_alu_op3_conditional_move_greater_opcode;
+    using affogato::gpu::latte_alu_op3_conditional_move_greater_equal_opcode;
+
+    const auto make_instruction = [](
+        std::uint16_t opcode,
+        std::uint8_t destination_component,
+        std::uint8_t condition_channel,
+        bool last_in_group = false)
+    {
+        LatteAluOp3Instruction instruction{};
+        instruction.opcode = opcode;
+        instruction.source0_selector = 0U;
+        instruction.source1_selector = 1U;
+        instruction.source2_selector = 2U;
+        instruction.source0_channel = condition_channel;
+        instruction.source1_channel = destination_component;
+        instruction.source2_channel = destination_component;
+        instruction.destination_gpr = 3U;
+        instruction.destination_component = destination_component;
+        instruction.last_in_group = last_in_group;
+        return instruction;
+    };
+
+    std::array<LatteShaderRegister, 4U> guest_registers{};
+    guest_registers[0U] = {
+        0x00000000U,
+        0x80000000U,
+        0x3F800000U,
+        0x7FC00000U};
+    guest_registers[1U] = {
+        0x3F000001U,
+        0x80000000U,
+        0x7FC12345U,
+        0x00000000U};
+    guest_registers[2U] = {
+        0xBF000001U,
+        0x00000000U,
+        0xFFC54321U,
+        0x3F800000U};
+    guest_registers[3U].fill(0xDEADBEEFU);
+
+    LatteAluOp3InstructionGroup group{};
+    group.instructions = {
+        make_instruction(
+            latte_alu_op3_conditional_move_equal_opcode,
+            0U,
+            0U),
+        make_instruction(
+            latte_alu_op3_conditional_move_equal_opcode,
+            1U,
+            1U),
+        make_instruction(
+            latte_alu_op3_conditional_move_greater_opcode,
+            2U,
+            2U),
+        make_instruction(
+            latte_alu_op3_conditional_move_greater_equal_opcode,
+            3U,
+            3U,
+            true)};
+
+    const LatteShaderRegister result = execute_latte_alu_op3_vector_group(
+        group,
+        guest_registers);
+    assert((result == LatteShaderRegister{
+        0x3F000001U,
+        0x80000000U,
+        0x7FC12345U,
+        0x3F800000U}));
+    assert(guest_registers[3U] == result);
+
+    auto negated_condition = make_instruction(
+        latte_alu_op3_conditional_move_greater_opcode,
+        0U,
+        2U);
+    negated_condition.source0_negate = true;
+    assert(evaluate_latte_alu_op3_conditional_move_value(
+        negated_condition,
+        guest_registers) == 0xBF000001U);
+
+    auto unsupported_predicate = group;
+    unsupported_predicate.instructions[3U].predicate_selection = 1U;
+    guest_registers[3U].fill(0xDEADBEEFU);
+    bool rejected_predicate = false;
+    try
+    {
+        static_cast<void>(execute_latte_alu_op3_vector_group(
+            unsupported_predicate,
+            guest_registers));
+    }
+    catch (const std::runtime_error&)
+    {
+        rejected_predicate = true;
+    }
+    assert(rejected_predicate);
+    assert((guest_registers[3U] == LatteShaderRegister{
+        0xDEADBEEFU,
+        0xDEADBEEFU,
+        0xDEADBEEFU,
+        0xDEADBEEFU}));
+
+    auto unsupported_opcode = group;
+    unsupported_opcode.instructions[0U].opcode = 0x014U;
+    bool rejected_unsupported_opcode = false;
+    try
+    {
+        static_cast<void>(execute_latte_alu_op3_vector_group(
+            unsupported_opcode,
+            guest_registers));
+    }
+    catch (const std::runtime_error&)
+    {
+        rejected_unsupported_opcode = true;
+    }
+    assert(rejected_unsupported_opcode);
+    assert((guest_registers[3U] == LatteShaderRegister{
+        0xDEADBEEFU,
+        0xDEADBEEFU,
+        0xDEADBEEFU,
+        0xDEADBEEFU}));
+}
+
 void gx2_set_shader_mode_ex_hle_tests()
 {
     using affogato::gpu::Gx2RegisterState;
@@ -45015,6 +45145,7 @@ int main(int argc, char* argv[])
     latte_vertex_fetch_decoder_tests();
     latte_draw_vertex_index_tests();
     latte_control_flow_decoder_tests();
+    latte_alu_op3_execution_tests();
     gx2_gpu_time_to_cpu_time_hle_tests();
     gx2_set_gpu_fence_hle_tests();
     gx2_wait_for_vsync_hle_tests();

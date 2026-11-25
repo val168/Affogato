@@ -8,10 +8,10 @@ program words when `GX2SetVertexShader`, `GX2SetGeometryShader`, or
 `GX2SetPixelShader` runs. `Gx2RegisterState::apply()` snapshots those bindings
 at each draw. Structural control-flow decoding recognizes fixture-verified
 `CALL_FS`, `EXPORT`, `EXPORT_DONE`, and one ALU-clause header encoding. Raw
-ALU slots, OP2 fields, no-literal OP2 groups, and a narrow four-lane shader
-execution subset are also implemented. A typed IR represents the bounded CPU
-subset; an experimental SPIR-V vertex emitter lowers MOV, binary32 ADD, IEEE
-multiply, and DX10 min/max groups. The diagnostic Vulkan triangle still uses
+ALU slots, OP2/OP3 fields, no-literal OP2/OP3 groups, and narrow four-lane
+shader execution subsets are also implemented. A typed IR represents the
+bounded OP2 CPU subset; an experimental SPIR-V vertex emitter lowers MOV,
+binary32 ADD, IEEE multiply, and DX10 min/max groups. The diagnostic Vulkan triangle still uses
 an explicit bounded shader test path rather than normal guest programs.
 
 Relevant local implementation:
@@ -533,11 +533,23 @@ recorded in the development status.
 `decode_latte_alu_op3_groups()` now segments OP3-only slot spans at LAST and
 rejects literal source selectors and unterminated groups. It preserves each
 decoded raw instruction and the first slot's word offset; it does not enforce
-four vector lanes, handle ALU.Trans or literals, mix OP2 and OP3 in a single
-group, or execute instructions. Tests cover four ordered destination lanes,
-LAST handling, literal rejection, and missing final LAST. Debug and Release
-CTest each passed 18/18. This parser is groundwork only and is not connected to
-the shader IR or renderer yet.
+four vector lanes, handle ALU.Trans or literals, or mix OP2 and OP3 in a single
+group. Tests cover four ordered destination lanes, LAST handling, literal
+rejection, and missing final LAST. Debug and Release CTest each passed 18/18.
+
+The CPU reference subset now executes OP3 floating-point `CMOVE` (`0x18`),
+`CMOVGT` (`0x19`), and `CMOVGE` (`0x1A`) in four ordered X/Y/Z/W slots. The
+R700-family manual, Chapter 9, pages 9-50, 9-52, and 9-54, specifies the
+zero comparisons and source1/source2 selection. Ordered C++ float comparisons
+make NaN select source2 for all three forms; both signs of zero compare equal
+to zero. Source negation toggles the binary32 sign bit, and the selected value
+is copied as raw bits. Relative sources, nonzero index mode or bank swizzle,
+predication, destination-relative addressing, clamping, and other OP3 opcodes
+are rejected. A four-lane group gathers all results before updating guest
+registers, so rejected groups do not partially write state. Debug and Release
+CTest each passed 18/18. This is based on the R700-family manual, not direct
+Latte hardware output; it is not integrated into the typed shader IR or SPIR-V
+emitter. See the [AMD R700 ISA manual](https://docs.amd.com/v/u/en-US/R700-Family_Instruction_Set_Architecture).
 
 The R700 manual's Chapter 4.3 says the LAST bit delimits groups of ALU slots;
 Chapter 4.6.2 defines PV/PS as results from the previous group. Chapter 4.9.2
