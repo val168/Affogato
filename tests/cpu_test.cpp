@@ -35532,6 +35532,40 @@ void gx2_register_state_tests()
     invalid_sampler_words = sampler_descriptor_words;
     invalid_sampler_words[0] = (invalid_sampler_words[0] & ~(3U << 15U)) | (3U << 15U);
     assert(!affogato::gpu::decode_latte_sampler(invalid_sampler_words));
+
+    Gx2RegisterState batch_state;
+    const Gx2VertexBufferBinding persistent_vertex_binding{
+        2U, 64U, 16U, 0x1000U};
+    Gx2Command set_vertex_buffer{
+        Gx2CommandType::set_vertex_buffer, 0U, 0U};
+    set_vertex_buffer.vertex_buffer = persistent_vertex_binding;
+    const Gx2Command draw_command{
+        Gx2CommandType::draw,
+        0U,
+        0U,
+        0U,
+        0U,
+        0U,
+        Gx2DrawCall{0U, 3U, false, 0U, 0U, 0U, 1U, 0U}};
+    const std::array<Gx2Command, 2U> first_draw_batch{
+        set_vertex_buffer,
+        draw_command};
+    batch_state.apply(first_draw_batch);
+    assert(batch_state.draw_calls().size() == 1U);
+    const auto first_batch_snapshot = batch_state.draw_snapshot(0U);
+    assert(first_batch_snapshot.has_value());
+    assert(first_batch_snapshot->vertex_buffers[2U] == persistent_vertex_binding);
+
+    batch_state.clear_draw_snapshots();
+    assert(batch_state.draw_calls().empty());
+    assert(!batch_state.draw_snapshot(0U));
+    assert(batch_state.vertex_buffers()[2U] == persistent_vertex_binding);
+
+    batch_state.apply(std::span<const Gx2Command>(&draw_command, 1U));
+    assert(batch_state.draw_calls().size() == 1U);
+    const auto next_batch_snapshot = batch_state.draw_snapshot(0U);
+    assert(next_batch_snapshot.has_value());
+    assert(next_batch_snapshot->vertex_buffers[2U] == persistent_vertex_binding);
 }
 
 void latte_texture_staging_tests()

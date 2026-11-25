@@ -363,6 +363,21 @@ public:
         return draw_calls_;
     }
 
+    // Draw snapshots belong to one consumed command batch. Clearing them
+    // invalidates borrowed Gx2DrawSnapshotView objects but preserves the
+    // current GPU register and binding shadow for the next batch.
+    void clear_draw_snapshots() noexcept
+    {
+        draw_calls_.clear();
+        draw_vertex_buffers_.clear();
+        draw_fetch_shaders_.clear();
+        draw_program_shaders_.clear();
+        draw_shader_resources_.clear();
+        draw_color_buffers_.clear();
+        draw_depth_buffer_.clear();
+        draw_registers_.clear();
+    }
+
     [[nodiscard]] std::optional<Gx2DrawSnapshotView> draw_snapshot(
         std::size_t draw_index) const noexcept
     {

@@ -833,6 +833,7 @@ void VulkanRenderer::consume_guest_commands(
     GuestDrawPolicy draw_policy)
 {
     guest_color_buffer_updates_.clear();
+    guest_register_state_.clear_draw_snapshots();
     const std::size_t first_draw_index = guest_register_state_.draw_calls().size();
     guest_register_state_.apply(commands);
     if (draw_policy == GuestDrawPolicy::capture_only)

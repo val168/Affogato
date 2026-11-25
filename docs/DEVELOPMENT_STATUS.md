@@ -1,5 +1,18 @@
 # Affogato Development Status
 
+## GX2 renderer draw-snapshot batch lifetime (2026-11-25)
+
+`VulkanRenderer::consume_guest_commands()` clears its prior draw snapshots
+before applying the next frontend command batch. The register shadow and
+current bindings remain intact, while copied draw commands and per-draw state
+snapshots are released after their consuming batch is superseded. This avoids
+retaining every historical draw's vertex/index/color-buffer payload for the
+entire game session. A deterministic register-state test verifies that
+snapshot indices restart at zero and previously set vertex-buffer state still
+appears in the next batch. This bounds retained snapshot contents to the
+current batch; it does not change which draw policies execute or make Latte
+draw execution general-purpose.
+
 ## Matched varying and guest OP2 arithmetic through Vulkan readback (2026-11-25)
 
 The new `--gx2-guest-triangle-matched-varying-move-smoke-test` runs a controlled
