@@ -279,7 +279,14 @@ std::vector<DiagnosticVertex> decode_diagnostic_float2_draw(
             value |= static_cast<std::uint32_t>(
                 index_snapshot.bytes[byte_offset + byte_number]) << shift;
         }
-        return value;
+        const std::uint64_t vertex_index =
+            static_cast<std::uint64_t>(value) + draw.base_vertex;
+        if (vertex_index > std::numeric_limits<std::uint32_t>::max())
+        {
+            throw std::runtime_error(
+                "Vulkan float2 diagnostic index plus base vertex exceeds 32-bit range");
+        }
+        return static_cast<std::uint32_t>(vertex_index);
     };
 
     std::vector<DiagnosticVertex> source_vertices(draw.element_count);

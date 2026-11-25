@@ -1033,12 +1033,6 @@ std::vector<Gx2Command> decode_gx2_pm4_display_list_commands(
                     std::string("gx2::") + api_name +
                     ": DRAW_INDEX_2 is missing INDEX_TYPE state in this list");
             }
-            if (is_indexed_draw && *base_vertex != 0U)
-            {
-                throw HleExecutionError(
-                    std::string("gx2::") + api_name +
-                    ": DRAW_INDEX_2 with nonzero base vertex is unsupported");
-            }
             if (*instance_count == 0U)
             {
                 throw HleExecutionError(
@@ -1077,10 +1071,11 @@ std::vector<Gx2Command> decode_gx2_pm4_display_list_commands(
                 is_indexed_draw
                     ? static_cast<std::uint32_t>(decoded_command.index_address)
                     : 0U,
-                *base_vertex,
+                is_indexed_draw ? 0U : *base_vertex,
                 *instance_count,
                 base_instance,
-                decoded_command.draw_initiator};
+                decoded_command.draw_initiator,
+                is_indexed_draw ? *base_vertex : 0U};
             Gx2Command command{
                 Gx2CommandType::draw,
                 0U,
@@ -2775,13 +2770,16 @@ void register_gx2_hle(HleDispatcher& dispatcher)
             return value;
         };
 
-        std::uint32_t minimum_index = read_index(0U);
-        std::uint32_t maximum_index = minimum_index;
+        std::uint64_t minimum_index =
+            static_cast<std::uint64_t>(read_index(0U)) + draw_call.base_vertex;
+        std::uint64_t maximum_index = minimum_index;
         for (std::size_t index_number = 1U;
              index_number < draw_call.element_count;
              ++index_number)
         {
-            const std::uint32_t index = read_index(index_number);
+            const std::uint64_t index =
+                static_cast<std::uint64_t>(read_index(index_number)) +
+                draw_call.base_vertex;
             minimum_index = std::min(minimum_index, index);
             maximum_index = std::max(maximum_index, index);
         }
@@ -6410,8 +6408,8 @@ void register_gx2_hle(HleDispatcher& dispatcher)
         [capture_indexed_draw_data, capture_indexed_vertex_data](EspressoCore& core) {
             const Gx2DrawCall draw_call{
                 core.state.gpr[3], core.state.gpr[4], true,
-                core.state.gpr[5], core.state.gpr[6], core.state.gpr[7],
-                core.state.gpr[8], 0U};
+                core.state.gpr[5], core.state.gpr[6], 0U,
+                core.state.gpr[8], 0U, 0U, core.state.gpr[7]};
             Gx2Command command{
                 Gx2CommandType::draw,
                 0U,
@@ -6457,8 +6455,9 @@ void register_gx2_hle(HleDispatcher& dispatcher)
         [capture_indexed_draw_data, capture_indexed_vertex_data](EspressoCore& core) {
             const Gx2DrawCall draw_call{
                 core.state.gpr[3], core.state.gpr[4], true,
-                core.state.gpr[5], core.state.gpr[6], core.state.gpr[7],
-                core.state.gpr[8], core.state.gpr[9]};
+                core.state.gpr[5], core.state.gpr[6], 0U,
+                core.state.gpr[8], core.state.gpr[9], 0U,
+                core.state.gpr[7]};
             Gx2Command command{
                 Gx2CommandType::draw,
                 0U,
@@ -6484,8 +6483,8 @@ void register_gx2_hle(HleDispatcher& dispatcher)
             // the asynchronous frontend can observe later guest writes.
             const Gx2DrawCall draw_call{
                 core.state.gpr[3], core.state.gpr[4], true,
-                core.state.gpr[5], core.state.gpr[6], core.state.gpr[7],
-                core.state.gpr[8], 0U};
+                core.state.gpr[5], core.state.gpr[6], 0U,
+                core.state.gpr[8], 0U, 0U, core.state.gpr[7]};
             Gx2Command command{
                 Gx2CommandType::draw,
                 0U,

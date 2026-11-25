@@ -88,10 +88,10 @@ preceding `INDEX_TYPE`. Both draw kinds currently require a zero draw-initiator
 word. Indexed packets must satisfy `count <= MAX_SIZE`, use an index type
 already understood by the existing draw snapshot path, and specify a
 low-32-bit physical address inside Affogato's flat guest-memory backing. The
-indexed diagnostic path supports only a zero base vertex because the current
-draw record does not yet distinguish base vertex from index byte offset. The
-address is read as a physical backing offset; no GPU virtual-memory translation
-is claimed. With diagnostic capture enabled, index and referenced vertex bytes
+draw record carries indexed base vertex separately from index-buffer byte
+offset, matching Cemu's `SQ_VTX_BASE_VTX_LOC` use. The address is read as a
+physical backing offset; no GPU virtual-memory translation is claimed. With
+diagnostic capture enabled, index and referenced vertex bytes
 are copied at the HLE call before the frontend-thread handoff. These records can
 reach the explicit diagnostic renderer path, but do not establish guest shader
 execution or normal Latte render-target behavior.
@@ -224,13 +224,14 @@ verified against a Latte fixture or Wii U behavior.
   Type-3 NOP, config/context/control Type-0 writes, Type-3 register sets, and
   one-word `INDEX_TYPE` / `NUM_INSTANCES` packets into typed register commands;
   `GX2SetContextState` rejects draw packets. `GX2DirectCallDisplayList` also
-captures unpredicated `DRAW_INDEX_AUTO` and `DRAW_INDEX_2` packets when their
-required setup state occurs earlier in the same list. The indexed form accepts
-low-32-bit addresses within flat guest memory, checks `MAX_SIZE`, and snapshots
-U16/U32 indices plus referenced vertex bytes at HLE time when diagnostic
-capture is enabled. The diagnostic form currently requires base vertex zero.
-It rejects predicated headers, unsupported index/address forms, zero instance
-counts, truncation, and unsupported operations.
+  captures unpredicated `DRAW_INDEX_AUTO` and `DRAW_INDEX_2` packets when their
+  required setup state occurs earlier in the same list. The indexed form
+  accepts low-32-bit addresses within flat guest memory, checks `MAX_SIZE`, and
+  snapshots U16/U32 indices plus referenced vertex bytes at HLE time when
+  diagnostic capture is enabled. Base vertex is carried separately and
+  applied when resolving indexed vertex ranges. It rejects predicated headers,
+  unsupported index/address forms, zero instance counts, truncation, and
+  unsupported operations.
   Queuing/capturing these values does not execute guest Latte shaders or
   retire a fence.
 - `tests/cpu_test.cpp` covers command-pool attributes, context-state setup,

@@ -12,9 +12,9 @@ and base vertex earlier in the same list; indexed packets also require
 before decoding; malformed or unsupported streams do not append partial
 command batches. Indexed draws currently accept only zero-high-byte addresses
 that resolve to a bounded range in flat guest physical backing memory, and
-reject counts greater than `MAX_SIZE`. Indexed PM4 diagnostic draws currently
-require base vertex zero because the draw record does not separately represent
-base vertex and index byte offset. When draw-byte capture is enabled, the HLE
+reject counts greater than `MAX_SIZE`. Indexed draw records carry base vertex
+independently from index-buffer byte offset, matching the
+register setup used by Cemu. When draw-byte capture is enabled, the HLE
 snapshots index bytes and referenced vertex data at call time. This queues
 draw records; it does not establish Latte shader or guest render-target
 execution. Predicated draws, GPU address translation, other state operations,

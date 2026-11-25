@@ -29148,8 +29148,8 @@ void gx2_direct_call_display_list_hle_tests()
     }
     core.gx2.capture_draw_vertex_data = true;
     core.gx2.vertex_buffers[0U] =
-        Gx2VertexBufferBinding{0U, 24U, 8U, 0x400U};
-    for (std::uint32_t vertex_index = 0U; vertex_index < 6U; ++vertex_index)
+        Gx2VertexBufferBinding{0U, 32U, 8U, 0x400U};
+    for (std::uint32_t vertex_index = 0U; vertex_index < 8U; ++vertex_index)
     {
         core.memory.write32_be(0x400U + vertex_index * 4U, vertex_index);
     }
@@ -29182,7 +29182,7 @@ void gx2_direct_call_display_list_hle_tests()
     // DRAW_INDEX_2 uses a physical index-buffer address and a bounded count.
     // The supported low 32-bit physical subset maps to flat guest RAM.
     constexpr std::array<std::uint32_t, 16U> indexed_draw_packet_words{
-        0xC0016F00U, 0U, 0U,
+        0xC0016F00U, 0U, 1U,
         0xC0016800U, 0x256U, 4U,
         0xC0002A00U, 4U,
         0xC0002F00U, 1U,
@@ -29214,14 +29214,14 @@ void gx2_direct_call_display_list_hle_tests()
     assert(indexed_draw_command.type == Gx2CommandType::draw);
     assert((indexed_draw_command.draw_call ==
             std::optional<Gx2DrawCall>{Gx2DrawCall{
-                4U, 3U, true, 4U, 0x500U, 0U, 1U, 0U, 0U}}));
+                4U, 3U, true, 4U, 0x500U, 0U, 1U, 0U, 0U, 1U}}));
     assert(indexed_draw_command.draw_index_data.has_value());
     assert(indexed_draw_command.draw_index_data->is_valid);
     assert(indexed_draw_command.draw_index_data->bytes ==
            std::vector<std::uint8_t>(pm4_indices.begin(), pm4_indices.end()));
     assert(indexed_draw_command.draw_vertex_data.size() == 1U);
     assert(indexed_draw_command.draw_vertex_data.front().is_valid);
-    assert(indexed_draw_command.draw_vertex_data.front().byte_offset == 0U);
+    assert(indexed_draw_command.draw_vertex_data.front().byte_offset == 8U);
     assert(indexed_draw_command.draw_vertex_data.front().bytes.size() == 24U);
 
     const auto commands_before_invalid_indexed_draw =
@@ -29241,24 +29241,6 @@ void gx2_direct_call_display_list_hle_tests()
                                    sizeof(std::uint32_t)));
     assert(oversized_indexed_draw.reason == StopReason::hle_error);
     assert(oversized_indexed_draw.detail.find("declared maximum") !=
-           std::string::npos);
-    assert(core.gx2.pending_commands == commands_before_invalid_indexed_draw);
-
-    auto nonzero_base_vertex_draw_words = indexed_draw_packet_words;
-    nonzero_base_vertex_draw_words[2U] = 1U;
-    for (std::size_t index = 0U; index < nonzero_base_vertex_draw_words.size(); ++index)
-    {
-        core.memory.write32_be(
-            display_list_address + static_cast<std::uint32_t>(
-                index * sizeof(std::uint32_t)),
-            nonzero_base_vertex_draw_words[index]);
-    }
-    const RunResult nonzero_base_vertex_draw = invoke(
-        display_list_address,
-        static_cast<std::uint32_t>(nonzero_base_vertex_draw_words.size() *
-                                   sizeof(std::uint32_t)));
-    assert(nonzero_base_vertex_draw.reason == StopReason::hle_error);
-    assert(nonzero_base_vertex_draw.detail.find("nonzero base vertex") !=
            std::string::npos);
     assert(core.gx2.pending_commands == commands_before_invalid_indexed_draw);
 
@@ -29416,7 +29398,7 @@ void gx2_draw_ex_hle_tests()
     constexpr Gx2Command expected_indexed_draw{
         Gx2CommandType::draw, 0U, 0U, 0U, 0U, 0U,
         Gx2DrawCall{
-            4U, 96U, true, 9U, 0x10203040U, 8U, 3U, 0U}};
+            4U, 96U, true, 9U, 0x10203040U, 0U, 3U, 0U, 0U, 8U}};
     core.state.gpr[3] = 4U;
     core.state.gpr[4] = 96U;
     core.state.gpr[5] = 9U;
@@ -29462,22 +29444,22 @@ void gx2_draw_ex_hle_tests()
     run_draw_variant(
         "GX2DrawIndexedEx2",
         {4U, 12U, 4U, 0x12345678U, 16U, 2U, 19U},
-        Gx2DrawCall{4U, 12U, true, 4U, 0x12345678U, 16U, 2U, 19U});
+        Gx2DrawCall{4U, 12U, true, 4U, 0x12345678U, 0U, 2U, 19U, 0U, 16U});
     assert(register_state.size() == 0U);
     assert(register_state.draw_calls().size() == 4U);
     constexpr Gx2DrawCall expected_draw_ex2{
         6U, 3U, false, 0U, 0U, 5U, 1U, 7U};
     constexpr Gx2DrawCall expected_indexed_draw_ex2{
-        4U, 12U, true, 4U, 0x12345678U, 16U, 2U, 19U};
+        4U, 12U, true, 4U, 0x12345678U, 0U, 2U, 19U, 0U, 16U};
     assert(register_state.draw_calls()[2].draw_call == expected_draw_ex2);
     assert(register_state.draw_calls()[3].draw_call == expected_indexed_draw_ex2);
     run_draw_variant(
         "GX2DrawIndexedImmediateEx",
         {3U, 15U, 0U, 0x200U, 4U, 1U, 0xDEADBEEFU},
-        Gx2DrawCall{3U, 15U, true, 0U, 0x200U, 4U, 1U, 0U});
+        Gx2DrawCall{3U, 15U, true, 0U, 0x200U, 0U, 1U, 0U, 0U, 4U});
     assert(register_state.draw_calls().size() == 5U);
     constexpr Gx2DrawCall expected_immediate_draw{
-        3U, 15U, true, 0U, 0x200U, 4U, 1U, 0U};
+        3U, 15U, true, 0U, 0x200U, 0U, 1U, 0U, 0U, 4U};
     assert(register_state.draw_calls().back().draw_call ==
            expected_immediate_draw);
 
@@ -30000,7 +29982,7 @@ void gx2_draw_ex_hle_tests()
     snapshot_core.memory.write8(snapshot_address + 8U, 9U);
     constexpr std::uint32_t index_buffer_address = 0x900U;
     constexpr std::array<std::uint8_t, 8U> little_endian_indices{
-        0xFFU, 0xFFU, 1U, 0U, 3U, 0U, 2U, 0U};
+        0U, 0U, 1U, 0U, 2U, 0U, 3U, 0U};
     for (std::size_t byte = 0U; byte < little_endian_indices.size(); ++byte)
     {
         snapshot_core.memory.write8(
@@ -30011,7 +29993,7 @@ void gx2_draw_ex_hle_tests()
     snapshot_core.state.gpr[4] = 3U;
     snapshot_core.state.gpr[5] = 0U;
     snapshot_core.state.gpr[6] = index_buffer_address;
-    snapshot_core.state.gpr[7] = 2U;
+    snapshot_core.state.gpr[7] = 1U;
     snapshot_core.state.gpr[8] = 1U;
     snapshot_core.state.lr = return_address;
     snapshot_core.state.cia = snapshot_core.hle.bind_import(
@@ -30024,9 +30006,10 @@ void gx2_draw_ex_hle_tests()
     assert(indexed_snapshot_command.draw_index_data.has_value());
     assert(indexed_snapshot_command.draw_index_data->is_valid);
     assert(indexed_snapshot_command.draw_index_data->index_type == 0U);
-    assert(indexed_snapshot_command.draw_index_data->byte_offset == 2U);
+    assert(indexed_snapshot_command.draw_index_data->byte_offset == 0U);
     assert((indexed_snapshot_command.draw_index_data->bytes ==
-            std::vector<std::uint8_t>{1U, 0U, 3U, 0U, 2U, 0U}));
+            std::vector<std::uint8_t>{0U, 0U, 1U, 0U, 2U, 0U}));
+    assert(indexed_snapshot_command.draw_call->base_vertex == 1U);
     assert(indexed_snapshot_command.draw_vertex_data.size() == 1U);
     const Gx2VertexBufferSnapshot& indexed_vertex_snapshot =
         indexed_snapshot_command.draw_vertex_data.front();
@@ -30036,9 +30019,9 @@ void gx2_draw_ex_hle_tests()
     assert(indexed_vertex_snapshot.bytes.front() == 9U);
     assert(indexed_vertex_snapshot.bytes.back() == 32U);
 
-    snapshot_core.memory.write8(index_buffer_address + 2U, 0U);
+    snapshot_core.memory.write8(index_buffer_address, 0xFFU);
     snapshot_core.memory.write8(snapshot_address + 8U, 0xFFU);
-    assert(indexed_snapshot_command.draw_index_data->bytes.front() == 1U);
+    assert(indexed_snapshot_command.draw_index_data->bytes.front() == 0U);
     assert(indexed_vertex_snapshot.bytes.front() == 9U);
 
     const auto verify_index_format = [&snapshot_core, return_address,

@@ -1916,8 +1916,8 @@ int run_gx2_guest_triangle_test(bool visible_window = false)
         gx2_primitive_mode_triangles,
         3U,
         0U,
-        index_buffer_address,
-        2U,
+        index_buffer_address + 2U,
+        0U,
         1U});
 
     constexpr std::array<affogato::gpu::vulkan::DiagnosticVertex, 3U>
@@ -1937,8 +1937,8 @@ int run_gx2_guest_triangle_test(bool visible_window = false)
         gx2_primitive_mode_triangles,
         3U,
         9U,
-        big_endian_index_buffer_address,
-        4U,
+        big_endian_index_buffer_address + 4U,
+        0U,
         1U});
 
     constexpr std::array<affogato::gpu::vulkan::DiagnosticVertex, 4U>
@@ -1966,9 +1966,10 @@ int run_gx2_guest_triangle_test(bool visible_window = false)
         0U});
     invoke("GX2SetFetchShader", std::array<std::uint32_t, 1U>{
         fetch_shader_descriptor_address});
-    constexpr std::array<std::uint16_t, 6U> float16_positions{
-        0xB400U, 0xBB00U, 0x3400U, 0xBB00U, 0x0000U, 0xB900U};
-    for (std::size_t vertex = 0U; vertex < 3U; ++vertex)
+    constexpr std::array<std::uint16_t, 8U> float16_positions{
+        0xB400U, 0xBB00U, 0x3400U, 0xBB00U,
+        0x0000U, 0xB900U, 0x0000U, 0x3900U};
+    for (std::size_t vertex = 0U; vertex < 4U; ++vertex)
     {
         core.memory.write16_be(
             vertex_buffer_address + static_cast<std::uint32_t>(
@@ -2001,7 +2002,7 @@ int run_gx2_guest_triangle_test(bool visible_window = false)
                                    sizeof(std::uint32_t))});
 
     constexpr std::array<std::uint32_t, 16U> pm4_indexed_draw_words{
-        0xC0016F00U, 0U, 0U,
+        0xC0016F00U, 0U, 1U,
         0xC0016800U, 0x256U, gx2_primitive_mode_triangles,
         0xC0002A00U, 0U,
         0xC0002F00U, 1U,
@@ -2070,13 +2071,13 @@ int run_gx2_guest_triangle_test(bool visible_window = false)
         !captured_state.draw_calls()[1U].draw_index_data->is_valid ||
         captured_state.draw_calls()[1U].draw_index_data->bytes !=
             std::vector<std::uint8_t>{2U, 0U, 0U, 0U, 1U, 0U} ||
-        captured_state.draw_calls()[1U].draw_index_data->byte_offset != 2U ||
+        captured_state.draw_calls()[1U].draw_index_data->byte_offset != 0U ||
         !captured_state.draw_calls()[2U].draw_index_data ||
         !captured_state.draw_calls()[2U].draw_index_data->is_valid ||
         captured_state.draw_calls()[2U].draw_index_data->bytes !=
             std::vector<std::uint8_t>{
                 0U, 0U, 0U, 2U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 1U} ||
-        captured_state.draw_calls()[2U].draw_index_data->byte_offset != 4U ||
+        captured_state.draw_calls()[2U].draw_index_data->byte_offset != 0U ||
         captured_state.draw_calls()[0U].draw_call !=
             std::optional<affogato::cpu::espresso::Gx2DrawCall>{
                 affogato::cpu::espresso::Gx2DrawCall{
@@ -2088,9 +2089,10 @@ int run_gx2_guest_triangle_test(bool visible_window = false)
                     3U,
                     true,
                     0U,
-                    index_buffer_address,
-                    2U,
+                    index_buffer_address + 2U,
+                    0U,
                     1U,
+                    0U,
                     0U}} ||
         captured_state.draw_calls()[2U].draw_call !=
             std::optional<affogato::cpu::espresso::Gx2DrawCall>{
@@ -2099,9 +2101,10 @@ int run_gx2_guest_triangle_test(bool visible_window = false)
                     3U,
                     true,
                     9U,
-                    big_endian_index_buffer_address,
-                    4U,
+                    big_endian_index_buffer_address + 4U,
+                    0U,
                     1U,
+                    0U,
                     0U}} ||
         captured_state.draw_calls()[3U].draw_call !=
             std::optional<affogato::cpu::espresso::Gx2DrawCall>{
@@ -2161,7 +2164,8 @@ int run_gx2_guest_triangle_test(bool visible_window = false)
                 0U,
                 1U,
                 0U,
-                0U} ||
+                0U,
+                1U} ||
         !captured_pm4_indexed_draw.draw_index_data ||
         !captured_pm4_indexed_draw.draw_index_data->is_valid ||
         captured_pm4_indexed_draw.draw_index_data->bytes !=

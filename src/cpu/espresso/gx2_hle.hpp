@@ -47,11 +47,15 @@ struct Gx2DrawCall
     bool indexed{};
     std::uint32_t index_type{};
     std::uint32_t element_address{};
+    // Byte offset within the selected index buffer; non-indexed draws use
+    // this as their first vertex.
     std::uint32_t element_offset{};
     std::uint32_t instance_count{};
     std::uint32_t base_instance{};
     // Raw PM4 DRAW_INITIATOR payload; GX2 HLE draw APIs leave this at zero.
     std::uint32_t draw_initiator{};
+    // GX2 indexed draw offset is Latte's base-vertex value, not index bytes.
+    std::uint32_t base_vertex{};
 
     constexpr bool operator==(const Gx2DrawCall&) const = default;
 };
