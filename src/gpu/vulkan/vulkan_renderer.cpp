@@ -15,6 +15,7 @@
 #include <optional>
 #include <ranges>
 #include <set>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -162,10 +163,15 @@ std::vector<DiagnosticVertex> decode_diagnostic_float2_draw(
     if (position_attribute == attributes.end() ||
         position_attribute->component_count < diagnostic_position_components ||
         position_attribute->selectors[0U] != 0U ||
-        position_attribute->selectors[1U] != 1U)
+        position_attribute->selectors[1U] != 1U ||
+        (position_attribute->data_format != 0x04U &&
+         position_attribute->data_format != 0x08U &&
+         position_attribute->data_format != 0x0DU &&
+         position_attribute->data_format != 0x11U &&
+         position_attribute->data_format != 0x13U))
     {
         throw std::runtime_error(
-            "Vulkan float2 diagnostic requires location 0 to select the first two float components");
+            "Vulkan float2 diagnostic requires location 0 to select the first two supported position components");
     }
 
     const auto vertex_buffer = std::ranges::find_if(
@@ -185,7 +191,8 @@ std::vector<DiagnosticVertex> decode_diagnostic_float2_draw(
     const std::uint32_t position_byte_size =
         diagnostic_position_components * position_attribute->component_size_bytes;
     if (!snapshot.is_valid || snapshot.binding.stride == 0U ||
-        (position_attribute->component_size_bytes != sizeof(float) &&
+        (position_attribute->component_size_bytes != sizeof(std::uint8_t) &&
+         position_attribute->component_size_bytes != sizeof(float) &&
          position_attribute->component_size_bytes != sizeof(std::uint16_t)) ||
         position_attribute->byte_offset > snapshot.binding.stride ||
         position_byte_size > snapshot.binding.stride -
@@ -238,24 +245,6 @@ std::vector<DiagnosticVertex> decode_diagnostic_float2_draw(
                 "Vulkan float2 diagnostic received a mismatched non-indexed vertex snapshot");
         }
     }
-
-    const auto read_be32 = [&snapshot](std::size_t offset) {
-        return (static_cast<std::uint32_t>(snapshot.bytes[offset]) << 24U) |
-            (static_cast<std::uint32_t>(snapshot.bytes[offset + 1U]) << 16U) |
-            (static_cast<std::uint32_t>(snapshot.bytes[offset + 2U]) << 8U) |
-            static_cast<std::uint32_t>(snapshot.bytes[offset + 3U]);
-    };
-    const auto read_position_component =
-        [&snapshot, &read_be32, &position_attribute](std::size_t offset) {
-            if (position_attribute->component_size_bytes == sizeof(std::uint16_t))
-            {
-                const std::uint16_t value = static_cast<std::uint16_t>(
-                    (static_cast<std::uint16_t>(snapshot.bytes[offset]) << 8U) |
-                    static_cast<std::uint16_t>(snapshot.bytes[offset + 1U]));
-                return affogato::gpu::decode_ieee754_binary16(value);
-            }
-            return std::bit_cast<float>(read_be32(offset));
-        };
 
     const auto read_index = [&command, &draw, &index_size_bytes](
         std::size_t index_number) {
@@ -323,11 +312,14 @@ std::vector<DiagnosticVertex> decode_diagnostic_float2_draw(
             throw std::runtime_error(
                 "Vulkan float2 diagnostic index exceeds its captured vertex range");
         }
-        const std::size_t vertex_offset = static_cast<std::size_t>(
-            captured_vertex_offset + position_attribute->byte_offset);
-        source_vertices[index].x = read_position_component(vertex_offset);
-        source_vertices[index].y = read_position_component(
-            vertex_offset + position_attribute->component_size_bytes);
+        const std::span<const std::uint8_t> vertex_bytes(snapshot.bytes);
+        const std::span<const std::uint8_t> current_vertex_bytes =
+            vertex_bytes.subspan(
+                static_cast<std::size_t>(captured_vertex_offset));
+        source_vertices[index].x = decode_latte_vertex_component(
+            current_vertex_bytes, *position_attribute, 0U);
+        source_vertices[index].y = decode_latte_vertex_component(
+            current_vertex_bytes, *position_attribute, 1U);
     }
 
     if (triangle_list)

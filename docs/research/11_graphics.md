@@ -121,6 +121,23 @@ positions into transient host vertices. The fixed diagnostic host shaders draw
 to the host swapchain. These operations do not execute arbitrary guest
 attributes or shaders and do not modify the guest render target.
 
+The decoder now also accepts `GX2_ATTRIB_FORMAT_UNORM_8_8` in its verified
+HLE-generated VTX encoding (data format `0x04`, unsigned normalized number
+format, with `GX2_ENDIAN_SWAP_NONE` selected explicitly). WUT defines the GX2
+format ID in [`include/gx2/enum.h`](https://github.com/devkitPro/wut/blob/master/include/gx2/enum.h)
+and its attribute selector mapping in
+[`libraries/libwhb/src/gfx_shader.c`](https://github.com/devkitPro/wut/blob/master/libraries/libwhb/src/gfx_shader.c);
+the [AMD R700 ISA reference](https://docs.amd.com/v/u/en-US/R700-Family_Instruction_Set_Architecture)
+describes normalized unsigned fetch values as the range `[0, 1]`. Because R700 is a
+related GPU-family reference rather than a Latte specification, Affogato limits
+this addition to the HLE VTX encoding and records the remaining
+hardware-specific uncertainty. The diagnostic renderer converts each byte by
+dividing by 255 and uses the first two components as its diagnostic position.
+CPU tests cover descriptor decoding, component values, and bounds; the hidden
+guest-triangle Vulkan smoke test also submits a guest `UNORM_8_8` triangle with
+the diagnostic host shader. No visible-window rerun or Latte shader execution
+is claimed for this format.
+
 ## Important state, formats, and invariants
 
 - `Gx2DrawCall` holds primitive mode, element count, indexed flag, index type,
@@ -130,10 +147,11 @@ attributes or shaders and do not modify the guest render target.
   mip offsets, view, and register words. A descriptor being captured does not
   mean its surface addressing is implemented.
 - The current diagnostic fetch decoder accepts HLE-generated, non-instanced
-  VTX programs and Float32x1/x2/x3/x4 plus Float16x2 in its supported encoding
-  combinations. Draw rendering uses two position components. Arbitrary guest
-  fetch programs, normalized integer attributes, divisors, and general
-  multi-attribute vertex layouts are not supported.
+  VTX programs and Float32x1/x2/x3/x4, Float16x2, and unsigned UNORM8x2 in the
+  supported encoding combinations. Draw rendering uses two position
+  components. Arbitrary guest fetch programs, other normalized/integer
+  attributes, divisors, and general multi-attribute vertex layouts are not
+  supported.
 - Diagnostic index expansion supports bounded captured U16/U32 streams in
   little- and big-endian forms. Primitive restart, instancing, and non-triangle
   diagnostic topology are rejected.
@@ -154,7 +172,7 @@ attributes or shaders and do not modify the guest render target.
 | --- | --- | --- |
 | Raw Latte PM4/ring command processor | Missing; HLE creates typed records | [packet/ring ABI, context display-list boundary, retirement and wait semantics](15_latte_command_processor.md) |
 | Guest draw route to Vulkan | Diagnostic-only opt-in route exists | ordinary queue integration and unsupported-state policy |
-| Fetch shader | Narrow HLE-generated format decoder | verified VTX variants, component/normalization semantics |
+| Fetch shader | Narrow HLE-generated format decoder | additional verified VTX variants, component/normalization semantics |
 | General vertex/index/instance handling | Partial snapshots and diagnostic expansion | fetch semantics, offset/base-instance rules, state capture |
 | Latte vertex/pixel shader execution | Missing; program words are captured | verified binary decoder, IR, translation and test corpus |
 | Guest render target for draws | Missing; draw diagnostic targets swapchain | surface addressing, Vulkan image cache, guest visibility/readback |

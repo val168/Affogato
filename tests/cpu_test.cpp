@@ -31782,6 +31782,7 @@ void gx2_set_sampler_border_color_hle_tests()
 void latte_vertex_fetch_decoder_tests()
 {
     using affogato::gpu::decode_latte_vertex_fetch_shader;
+    using affogato::gpu::decode_latte_vertex_component;
 
     assert(affogato::gpu::decode_ieee754_binary16(0x3C00U) == 1.0F);
     assert(affogato::gpu::decode_ieee754_binary16(0xBC00U) == -1.0F);
@@ -31847,6 +31848,45 @@ void latte_vertex_fetch_decoder_tests()
     assert(float16_attribute.front().data_format == 0x08U);
     assert(float16_attribute.front().number_format == 0U);
     assert(float16_attribute.front().endian_swap == 1U);
+
+    affogato::cpu::espresso::Gx2FetchShaderBinding unorm8_fetch_shader{};
+    unorm8_fetch_shader.program_size = 16U;
+    unorm8_fetch_shader.attribute_count = 1U;
+    unorm8_fetch_shader.program_words = {
+        1U | (2U << 8U) | (1U << 26U),
+        (1U << 12U) | (0x04U << 22U),
+        4U,
+        0U};
+    const auto unorm8_attribute =
+        decode_latte_vertex_fetch_shader(unorm8_fetch_shader);
+    assert(unorm8_attribute.size() == 1U);
+    assert(unorm8_attribute.front().data_format == 0x04U);
+    assert(unorm8_attribute.front().component_count == 2U);
+    assert(unorm8_attribute.front().component_size_bytes == sizeof(std::uint8_t));
+    assert(unorm8_attribute.front().byte_size == 2U);
+    assert(unorm8_attribute.front().endian_swap == 0U);
+
+    constexpr std::array<std::uint8_t, 8U> unorm8_vertex{
+        0x00U, 0xFFU, 0x40U, 0xC0U, 0x40U, 0xC0U, 0x80U, 0x20U};
+    const std::span<const std::uint8_t> unorm8_vertex_bytes(unorm8_vertex);
+    const float normalized_x = decode_latte_vertex_component(
+        unorm8_vertex_bytes, unorm8_attribute.front(), 0U);
+    const float normalized_y = decode_latte_vertex_component(
+        unorm8_vertex_bytes, unorm8_attribute.front(), 1U);
+    assert(std::abs(normalized_x - 64.0F / 255.0F) < 0.000001F);
+    assert(std::abs(normalized_y - 192.0F / 255.0F) < 0.000001F);
+
+    bool rejected_out_of_range_component = false;
+    try
+    {
+        static_cast<void>(decode_latte_vertex_component(
+            unorm8_vertex_bytes.first(4U), unorm8_attribute.front(), 0U));
+    }
+    catch (const std::runtime_error&)
+    {
+        rejected_out_of_range_component = true;
+    }
+    assert(rejected_out_of_range_component);
 
     affogato::cpu::espresso::Gx2FetchShaderBinding unsupported_fetch_shader{};
     unsupported_fetch_shader.program_size = 16U;

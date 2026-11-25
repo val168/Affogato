@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -123,10 +124,14 @@ decode_latte_vertex_fetch_shader(
             (word1 >> 18U) & 0x7U};
 
         // These are the Latte VTX data-format IDs written by
-        // GX2InitFetchShaderEx for the explicitly supported host diagnostic
-        // position formats.
+        // GX2InitFetchShaderEx for the host diagnostic position formats
+        // supported below.
         switch (attribute.data_format)
         {
+        case 0x04U: // GX2_ATTRIB_FORMAT_UNORM_8_8
+            attribute.component_count = 2U;
+            attribute.component_size_bytes = sizeof(std::uint8_t);
+            break;
         case 0x06U:
             attribute.component_count = 1U;
             attribute.component_size_bytes = sizeof(float);
@@ -153,14 +158,18 @@ decode_latte_vertex_fetch_shader(
                 std::to_string(attribute.data_format));
         }
 
+        const bool is_unorm8x2 = attribute.data_format == 0x04U;
         const bool is_float16x2 = attribute.data_format == 0x08U;
-        if ((is_float16x2 &&
+        if ((is_unorm8x2 &&
+             (attribute.number_format != 0U || attribute.endian_swap != 0U ||
+              ((word1 >> 30U) & 0x1U) != 0U)) ||
+            (is_float16x2 &&
              (attribute.number_format != 0U || attribute.endian_swap != 1U)) ||
-            (!is_float16x2 &&
+            (!is_unorm8x2 && !is_float16x2 &&
              (attribute.number_format != 2U || attribute.endian_swap != 2U)))
         {
             throw std::runtime_error(
-                "Latte vertex fetch decoder received an unsupported float format or endian mode");
+                "Latte vertex fetch decoder received an unsupported numeric format or endian mode");
         }
         attribute.byte_size =
             attribute.component_count * attribute.component_size_bytes;
@@ -175,6 +184,64 @@ decode_latte_vertex_fetch_shader(
     }
 
     return attributes;
+}
+
+[[nodiscard]] inline float decode_latte_vertex_component(
+    std::span<const std::uint8_t> vertex_bytes,
+    const LatteVertexAttribute& attribute,
+    std::size_t component_index)
+{
+    if (component_index >= attribute.component_count ||
+        attribute.component_size_bytes == 0U)
+    {
+        throw std::runtime_error(
+            "Latte vertex component index is outside the decoded attribute");
+    }
+
+    const std::size_t attribute_offset = attribute.byte_offset;
+    if (component_index >
+        (std::numeric_limits<std::size_t>::max() - attribute_offset) /
+            attribute.component_size_bytes)
+    {
+        throw std::runtime_error(
+            "Latte vertex component offset overflows host address space");
+    }
+
+    const std::size_t component_offset = attribute_offset +
+        component_index * attribute.component_size_bytes;
+    if (component_offset > vertex_bytes.size() ||
+        attribute.component_size_bytes > vertex_bytes.size() - component_offset)
+    {
+        throw std::runtime_error(
+            "Latte vertex component exceeds the captured vertex bytes");
+    }
+
+    if (attribute.data_format == 0x04U)
+    {
+        constexpr float unorm8_max = 255.0F;
+        return static_cast<float>(vertex_bytes[component_offset]) / unorm8_max;
+    }
+
+    if (attribute.data_format == 0x08U)
+    {
+        const std::uint16_t value = static_cast<std::uint16_t>(
+            (static_cast<std::uint16_t>(vertex_bytes[component_offset]) << 8U) |
+            static_cast<std::uint16_t>(vertex_bytes[component_offset + 1U]));
+        return decode_ieee754_binary16(value);
+    }
+
+    if (attribute.component_size_bytes == sizeof(float))
+    {
+        const std::uint32_t value =
+            (static_cast<std::uint32_t>(vertex_bytes[component_offset]) << 24U) |
+            (static_cast<std::uint32_t>(vertex_bytes[component_offset + 1U]) << 16U) |
+            (static_cast<std::uint32_t>(vertex_bytes[component_offset + 2U]) << 8U) |
+            static_cast<std::uint32_t>(vertex_bytes[component_offset + 3U]);
+        return std::bit_cast<float>(value);
+    }
+
+    throw std::runtime_error(
+        "Latte vertex component uses an unsupported data format");
 }
 
 }

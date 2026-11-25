@@ -2039,11 +2039,37 @@ int run_gx2_guest_triangle_test(bool visible_window = false)
         static_cast<std::uint32_t>(pm4_immediate_indexed_draw_words.size() *
                                    sizeof(std::uint32_t))});
 
+    attribute_stream[3U] = 0x04U;
+    attribute_stream[7U] = 0U; // Explicit GX2_ENDIAN_SWAP_NONE.
+    core.memory.write32_be(attribute_stream_address + 12U, attribute_stream[3U]);
+    core.memory.write32_be(attribute_stream_address + 28U, attribute_stream[7U]);
+    invoke("GX2InitFetchShaderEx", std::array<std::uint32_t, 6U>{
+        fetch_shader_descriptor_address,
+        fetch_shader_program_address,
+        1U,
+        attribute_stream_address,
+        0U,
+        0U});
+    invoke("GX2SetFetchShader", std::array<std::uint32_t, 1U>{
+        fetch_shader_descriptor_address});
+    constexpr std::array<std::array<std::uint8_t, 2U>, 3U> unorm8_positions{{
+        {26U, 32U}, {230U, 32U}, {128U, 224U}}};
+    for (std::size_t vertex = 0U; vertex < unorm8_positions.size(); ++vertex)
+    {
+        const std::uint32_t vertex_address = vertex_buffer_address +
+            static_cast<std::uint32_t>(
+                vertex * vertex_buffer_stride + position_attribute_offset);
+        core.memory.write8(vertex_address, unorm8_positions[vertex][0U]);
+        core.memory.write8(vertex_address + 1U, unorm8_positions[vertex][1U]);
+    }
+    invoke("GX2DrawEx", std::array<std::uint32_t, 4U>{
+        gx2_primitive_mode_triangles, 3U, 0U, 1U});
+
     const auto commands = affogato::cpu::espresso::take_gx2_commands(core.gx2);
     affogato::gpu::Gx2RegisterState captured_state;
     captured_state.apply(commands);
-    if (captured_state.draw_calls().size() != 9U ||
-        captured_state.draw_vertex_buffers().size() != 9U ||
+    if (captured_state.draw_calls().size() != 10U ||
+        captured_state.draw_vertex_buffers().size() != 10U ||
         !captured_state.draw_vertex_buffers()[0U][vertex_buffer_index] ||
         !captured_state.draw_vertex_buffers()[1U][vertex_buffer_index] ||
         !captured_state.draw_vertex_buffers()[2U][vertex_buffer_index] ||
@@ -2053,7 +2079,8 @@ int run_gx2_guest_triangle_test(bool visible_window = false)
         !captured_state.draw_vertex_buffers()[6U][vertex_buffer_index] ||
         !captured_state.draw_vertex_buffers()[7U][vertex_buffer_index] ||
         !captured_state.draw_vertex_buffers()[8U][vertex_buffer_index] ||
-        captured_state.draw_fetch_shaders().size() != 9U ||
+        !captured_state.draw_vertex_buffers()[9U][vertex_buffer_index] ||
+        captured_state.draw_fetch_shaders().size() != 10U ||
         !captured_state.draw_fetch_shaders()[0U] ||
         !captured_state.draw_fetch_shaders()[1U] ||
         !captured_state.draw_fetch_shaders()[2U] ||
@@ -2063,6 +2090,7 @@ int run_gx2_guest_triangle_test(bool visible_window = false)
         !captured_state.draw_fetch_shaders()[6U] ||
         !captured_state.draw_fetch_shaders()[7U] ||
         !captured_state.draw_fetch_shaders()[8U] ||
+        !captured_state.draw_fetch_shaders()[9U] ||
         captured_state.draw_calls()[0U].draw_vertex_data.size() != 1U ||
         captured_state.draw_calls()[1U].draw_vertex_data.size() != 1U ||
         captured_state.draw_calls()[2U].draw_vertex_data.size() != 1U ||
@@ -2072,6 +2100,7 @@ int run_gx2_guest_triangle_test(bool visible_window = false)
         captured_state.draw_calls()[6U].draw_vertex_data.size() != 1U ||
         captured_state.draw_calls()[7U].draw_vertex_data.size() != 1U ||
         captured_state.draw_calls()[8U].draw_vertex_data.size() != 1U ||
+        captured_state.draw_calls()[9U].draw_vertex_data.size() != 1U ||
         !captured_state.draw_calls()[0U].draw_vertex_data[0U].is_valid ||
         !captured_state.draw_calls()[1U].draw_vertex_data[0U].is_valid ||
         !captured_state.draw_calls()[2U].draw_vertex_data[0U].is_valid ||
@@ -2081,6 +2110,7 @@ int run_gx2_guest_triangle_test(bool visible_window = false)
         !captured_state.draw_calls()[6U].draw_vertex_data[0U].is_valid ||
         !captured_state.draw_calls()[7U].draw_vertex_data[0U].is_valid ||
         !captured_state.draw_calls()[8U].draw_vertex_data[0U].is_valid ||
+        !captured_state.draw_calls()[9U].draw_vertex_data[0U].is_valid ||
         captured_state.draw_fetch_shaders()[5U]->program_words[0U] !=
             (1U | (vertex_buffer_index << 8U) | (3U << 26U)) ||
         captured_state.draw_fetch_shaders()[5U]->program_words[1U] !=
@@ -2227,6 +2257,25 @@ int run_gx2_guest_triangle_test(bool visible_window = false)
             "GX2DirectCallDisplayList immediate-index packet was not captured correctly");
     }
 
+    if (!captured_state.draw_calls()[9U].draw_call ||
+        *captured_state.draw_calls()[9U].draw_call !=
+            affogato::cpu::espresso::Gx2DrawCall{
+                gx2_primitive_mode_triangles,
+                3U,
+                false,
+                0U,
+                0U,
+                0U,
+                1U,
+                0U,
+                0U} ||
+        ((captured_state.draw_fetch_shaders()[9U]->program_words[1U] >> 22U) &
+         0x3FU) != 0x04U)
+    {
+        throw std::runtime_error(
+            "GX2 UNORM8x2 position format was not captured correctly");
+    }
+
     affogato::gpu::vulkan::VulkanRenderer renderer(visible_window);
     renderer.consume_guest_commands(
         commands,
@@ -2238,7 +2287,8 @@ int run_gx2_guest_triangle_test(bool visible_window = false)
         renderer.poll_events();
         renderer.render_frame();
     }
-    std::cout << "GX2 float32/float16 triangle-list, indexed, strip, and fan geometry, "
+    std::cout << "GX2 float32/float16/UNORM8x2 triangle-list, indexed, strip, and fan "
+              << "geometry, "
               << "including unpredicated PM4 auto-index, indexed, and immediate-index "
               << "draws, using guest "
               << "memory were submitted "

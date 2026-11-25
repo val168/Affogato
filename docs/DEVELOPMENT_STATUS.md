@@ -296,6 +296,19 @@ and direct-call flush/completion semantics remain unsupported. Debug and
 Release builds and CTest passed 2/2; the hidden diagnostic triangle smoke test
 passed in both builds using host shaders.
 
+## Diagnostic UNORM8x2 position input (2026-11-25)
+
+The HLE-generated fetch decoder and explicit diagnostic Vulkan path now support
+unsigned normalized 8-bit x2 positions (`GX2_ATTRIB_FORMAT_UNORM_8_8`, VTX data
+format `0x04`) with `GX2_ENDIAN_SWAP_NONE` selected explicitly. The renderer
+converts each component to `byte / 255.0F`; tests check known values and reject
+truncated vertex bytes.
+The hidden triangle smoke test includes a guest-issued UNORM8x2 triangle and
+passes on the NVIDIA GeForce RTX 5070 Laptop GPU in Debug and Release. This
+validates the diagnostic route only: no guest Latte shader or guest render
+target is involved, and visible output for this new format has not been
+rechecked.
+
 ## PM4 immediate U16 index capture (2026-11-25)
 
 `DRAW_INDEX_IMMD` capture now supports WUT index types 0/4 (U16 little/big
