@@ -27,6 +27,7 @@ enum class GuestDrawPolicy
 {
     capture_only,
     diagnostic_float2_position,
+    diagnostic_latte_vertex_position_base_zero,
 };
 
 class VulkanRenderer

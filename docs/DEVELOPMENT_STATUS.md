@@ -1,5 +1,22 @@
 # Affogato Development Status
 
+## Controlled guest vertex-shader subset in Vulkan diagnostic (2026-11-25)
+
+The controlled GX2 triangle harness now installs a guest vertex shader through
+`GX2SetVertexShader` and captures it with the draw's fetch state and guest
+vertex bytes. An explicit diagnostic-only policy executes Affogato's existing
+CPU fetch and straight-line shader subsets per vertex, consumes the exported
+position XY, and submits the resulting geometry through the fixed Vulkan
+diagnostic shaders. The test uses GPR base zero, a related-generation AMD
+reference default that is not confirmed for arbitrary Latte workloads. The
+normal emulator draw path remains capture-only unless diagnostic drawing is
+explicitly enabled. The hidden triangle smoke passed in Debug and Release;
+Debug and Release builds succeeded and CTest passed 2/2 in both. It confirms
+the guest HLE-to-CPU-subset-to-Vulkan submission path, but does not verify
+visible window output, Latte shader translation, guest render-target writes,
+or WWHD rendering. See
+[`research/12_latte_shader_isa.md`](research/12_latte_shader_isa.md).
+
 ## Latte absolute constant-file reads in CPU shader subset (2026-11-25)
 
 The bounded Latte OP2 CPU executor now accepts an explicit span of up to 256

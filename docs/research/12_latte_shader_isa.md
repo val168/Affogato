@@ -628,7 +628,9 @@ This absolute constant-file mapping is R700-family behavior and has not been
 validated on Latte hardware. Although GX2 uniform-register uploads are now
 captured into draw-time raw register snapshots, no adapter yet builds stage
 constant vectors from those snapshots or calls the shader subset for normal
-guest draws.
+guest draws. An opt-in triangle diagnostic does call the draw-snapshot vertex
+subset using an explicit GPR base of zero; this is a controlled test path, not
+normal guest draw dispatch or a Latte hardware result.
 
 The R700 `ALU_WORD1_OP2` field table places `SRC0_ABS` at bit 0 and `SRC1_ABS`
 at bit 1 (Chapter 10, page 10-18). It describes absolute value before
@@ -674,3 +676,27 @@ CPU-side output records; it rejects relative addressing, buffer encoding, and
 invalid GPR ranges. It does not link these records to Vulkan stage outputs or
 implement CF export ordering, relative GPR addressing, or memory-buffer export
 semantics. R700/Cemu evidence is not independent Latte hardware validation.
+
+## Controlled vertex-subset diagnostic path
+
+The `--gx2-guest-triangle-smoke-test` harness now installs a bounded guest
+vertex shader through `GX2SetVertexShader`. It declares all 32 semantic-table
+entries, maps semantic 0 to table index 0, and uses the existing fixture's
+straight-line MOV program to copy fetched input GPR 1 to GPR 3 and export the
+result as position. `GuestDrawPolicy::diagnostic_latte_vertex_position_base_zero`
+executes Affogato's HLE fetch subset and supported CPU shader subset from each
+draw-time snapshot, then submits exported XY through the fixed diagnostic
+Vulkan pipeline. Missing shaders, unsupported shader operations, absent XY
+exports, multiple position exports, and out-of-range clip-space XY fail
+explicitly. The existing raw-attribute diagnostic policy remains separately
+available, and normal frontend execution still uses capture-only unless its
+diagnostic draw option is enabled.
+
+The test's GPR base zero is explicit. AMD's related-generation
+[R6xx/R7xx 3D Engine Programming Guide, Sections 2.5.1 and 2.5.3](https://www.x.org/docs/AMD/old/R6xx_R7xx_3D.pdf)
+describes fetch semantic linkage as `VS_GPR_BASE + 1 + table_index` and says
+the base is typically zero. That supports the controlled test setup, but does
+not establish the register's value for arbitrary Wii U shaders. The output is
+still rendered with host diagnostic shaders, does not write a guest render
+target, and does not demonstrate general Latte shader execution or WWHD
+rendering.

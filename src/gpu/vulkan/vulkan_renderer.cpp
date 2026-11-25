@@ -3,6 +3,7 @@
 #include "gpu/vulkan/diagnostic_shader_spirv.hpp"
 #include "gpu/latte_draw.hpp"
 #include "gpu/latte_vertex_fetch.hpp"
+#include "gpu/latte_vertex_shader_subset.hpp"
 
 #include <algorithm>
 #include <array>
@@ -291,6 +292,124 @@ std::vector<DiagnosticVertex> decode_diagnostic_float2_draw(
     return triangle_vertices;
 }
 
+std::vector<DiagnosticVertex> decode_diagnostic_latte_vertex_shader_draw(
+    const Gx2DrawSnapshotView& draw_snapshot)
+{
+    constexpr std::uint32_t gx2_primitive_mode_triangles = 4U;
+    constexpr std::uint32_t gx2_primitive_mode_triangle_fan = 5U;
+    constexpr std::uint32_t gx2_primitive_mode_triangle_strip = 6U;
+    constexpr std::uint32_t diagnostic_vertex_shader_gpr_base = 0U;
+    constexpr std::size_t latte_vertex_gpr_count = 128U;
+
+    if (!draw_snapshot.command.draw_call)
+    {
+        throw std::runtime_error(
+            "Vulkan Latte diagnostic draw has no captured GX2 draw parameters");
+    }
+    const cpu::espresso::Gx2DrawCall& draw =
+        *draw_snapshot.command.draw_call;
+    const bool triangle_list =
+        draw.primitive_mode == gx2_primitive_mode_triangles;
+    const bool triangle_strip =
+        draw.primitive_mode == gx2_primitive_mode_triangle_strip;
+    const bool triangle_fan =
+        draw.primitive_mode == gx2_primitive_mode_triangle_fan;
+    if ((!triangle_list && !triangle_strip && !triangle_fan) ||
+        draw.instance_count != 1U || draw.base_instance != 0U ||
+        draw.element_count == 0U ||
+        (triangle_list && draw.element_count % 3U != 0U) ||
+        ((triangle_strip || triangle_fan) && draw.element_count < 3U))
+    {
+        throw std::runtime_error(
+            "Vulkan Latte diagnostic supports triangle lists, strips, and fans without instancing or base instance");
+    }
+
+    const std::vector<std::uint32_t> vertex_indices =
+        decode_latte_draw_vertex_indices(draw_snapshot.command);
+    std::vector<DiagnosticVertex> source_vertices;
+    source_vertices.reserve(vertex_indices.size());
+    std::array<LatteShaderRegister, latte_vertex_gpr_count> shader_registers{};
+
+    for (const std::uint32_t vertex_index : vertex_indices)
+    {
+        shader_registers.fill({});
+        const LatteVertexShaderSubsetResult execution =
+            execute_latte_vertex_shader_subset(
+                draw_snapshot,
+                diagnostic_vertex_shader_gpr_base,
+                vertex_index,
+                shader_registers);
+
+        const LatteShaderExportValue* position_export = nullptr;
+        for (const LatteShaderExportBatch& export_batch :
+             execution.shader_execution.exports)
+        {
+            for (const LatteShaderExportValue& export_value : export_batch.values)
+            {
+                if (export_value.type != LatteExportType::position)
+                {
+                    continue;
+                }
+                if (position_export != nullptr)
+                {
+                    throw std::runtime_error(
+                        "Vulkan Latte diagnostic vertex shader emitted multiple position exports");
+                }
+                position_export = &export_value;
+            }
+        }
+
+        if (position_export == nullptr ||
+            !position_export->components[0U].has_value() ||
+            !position_export->components[1U].has_value())
+        {
+            throw std::runtime_error(
+                "Vulkan Latte diagnostic vertex shader did not export an XY position");
+        }
+
+        const float x = std::bit_cast<float>(
+            *position_export->components[0U]);
+        const float y = std::bit_cast<float>(
+            *position_export->components[1U]);
+        if (!std::isfinite(x) || !std::isfinite(y) ||
+            x < -1.0F || x > 1.0F || y < -1.0F || y > 1.0F)
+        {
+            throw std::runtime_error(
+                "Vulkan Latte diagnostic position is outside the supported clip-space XY range");
+        }
+        source_vertices.push_back({x, y});
+    }
+
+    if (triangle_list)
+    {
+        return source_vertices;
+    }
+
+    const std::size_t triangle_count = source_vertices.size() - 2U;
+    std::vector<DiagnosticVertex> triangle_vertices;
+    triangle_vertices.reserve(triangle_count * 3U);
+    for (std::size_t triangle_index = 0U;
+         triangle_index < triangle_count;
+         ++triangle_index)
+    {
+        if (triangle_fan)
+        {
+            triangle_vertices.push_back(source_vertices[0U]);
+            triangle_vertices.push_back(source_vertices[triangle_index + 1U]);
+            triangle_vertices.push_back(source_vertices[triangle_index + 2U]);
+            continue;
+        }
+
+        const bool reverse_winding = triangle_index % 2U != 0U;
+        triangle_vertices.push_back(
+            source_vertices[triangle_index + (reverse_winding ? 1U : 0U)]);
+        triangle_vertices.push_back(
+            source_vertices[triangle_index + (reverse_winding ? 0U : 1U)]);
+        triangle_vertices.push_back(source_vertices[triangle_index + 2U]);
+    }
+    return triangle_vertices;
+}
+
 }
 
 VulkanRenderer::VulkanRenderer(bool visible)
@@ -499,8 +618,24 @@ void VulkanRenderer::consume_guest_commands(
             throw std::runtime_error(
                 "Vulkan diagnostic draw has no captured GX2 fetch shader");
         }
-        std::vector<DiagnosticVertex> draw_vertices = decode_diagnostic_float2_draw(
-            draw_snapshot->command, *draw_snapshot->fetch_shader);
+        std::vector<DiagnosticVertex> draw_vertices;
+        if (draw_policy == GuestDrawPolicy::diagnostic_float2_position)
+        {
+            draw_vertices = decode_diagnostic_float2_draw(
+                draw_snapshot->command,
+                *draw_snapshot->fetch_shader);
+        }
+        else if (draw_policy == GuestDrawPolicy::
+                     diagnostic_latte_vertex_position_base_zero)
+        {
+            draw_vertices = decode_diagnostic_latte_vertex_shader_draw(
+                *draw_snapshot);
+        }
+        else
+        {
+            throw std::invalid_argument(
+                "Vulkan guest draw policy is unsupported");
+        }
         const std::size_t maximum_vertex_count =
             std::numeric_limits<std::uint32_t>::max();
         if (diagnostic_vertices.size() > maximum_vertex_count ||

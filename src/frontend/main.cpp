@@ -1814,6 +1814,8 @@ int run_gx2_guest_triangle_test(bool visible_window = false)
     constexpr std::uint32_t fetch_shader_descriptor_address = 0x3000U;
     constexpr std::uint32_t fetch_shader_program_address = 0x3100U;
     constexpr std::uint32_t attribute_stream_address = 0x3200U;
+    constexpr std::uint32_t vertex_shader_descriptor_address = 0x3300U;
+    constexpr std::uint32_t vertex_shader_program_address = 0x3400U;
     constexpr std::uint32_t guest_bctrl_instruction = 0x4E800421U;
     constexpr std::uint32_t gx2_primitive_mode_triangles = 4U;
     constexpr std::uint32_t gx2_primitive_mode_triangle_fan = 5U;
@@ -1874,6 +1876,51 @@ int run_gx2_guest_triangle_test(bool visible_window = false)
 
     invoke("GX2Init", std::array<std::uint32_t, 1U>{0U});
     core.gx2.capture_draw_vertex_data = true;
+
+    // This bounded diagnostic program copies fetched VS input r1 to r3 and
+    // exports r3 as position. It exercises only the existing CPU MOV subset.
+    std::array<std::uint32_t, 0x134U / sizeof(std::uint32_t)>
+        vertex_shader_descriptor{};
+    vertex_shader_descriptor[0x40U / sizeof(std::uint32_t)] = 32U;
+    vertex_shader_descriptor[0x44U / sizeof(std::uint32_t)] = 0U;
+    for (std::size_t semantic_index = 1U; semantic_index < 32U; ++semantic_index)
+    {
+        vertex_shader_descriptor[
+            0x44U / sizeof(std::uint32_t) + semantic_index] = 0xFFFFFFFFU;
+    }
+    vertex_shader_descriptor[0xD0U / sizeof(std::uint32_t)] = 72U * 4U;
+    vertex_shader_descriptor[0xD4U / sizeof(std::uint32_t)] =
+        vertex_shader_program_address;
+    std::array<std::uint32_t, 72U> vertex_shader_program{};
+    vertex_shader_program[0U] = 0x20000000U;
+    vertex_shader_program[1U] = 0x00000CA0U;
+    vertex_shader_program[2U] = 0x3CA00100U;
+    vertex_shader_program[3U] = 0x88062094U;
+    vertex_shader_program[64U] = 0x01000000U;
+    vertex_shader_program[65U] = 0x900C6000U;
+    vertex_shader_program[66U] = 0x01040000U;
+    vertex_shader_program[67U] = 0x900C6020U;
+    vertex_shader_program[68U] = 0x01080000U;
+    vertex_shader_program[69U] = 0x900C6040U;
+    vertex_shader_program[70U] = 0x010C0080U;
+    vertex_shader_program[71U] = 0x900C6060U;
+    for (std::size_t index = 0U; index < vertex_shader_descriptor.size(); ++index)
+    {
+        core.memory.write32_be(
+            vertex_shader_descriptor_address + static_cast<std::uint32_t>(
+                index * sizeof(std::uint32_t)),
+            vertex_shader_descriptor[index]);
+    }
+    for (std::size_t index = 0U; index < vertex_shader_program.size(); ++index)
+    {
+        core.memory.write32_be(
+            vertex_shader_program_address + static_cast<std::uint32_t>(
+                index * sizeof(std::uint32_t)),
+            vertex_shader_program[index]);
+    }
+    invoke("GX2SetVertexShader", std::array<std::uint32_t, 1U>{
+        vertex_shader_descriptor_address});
+
     invoke("GX2SetAttribBuffer", std::array<std::uint32_t, 4U>{
         vertex_buffer_index,
         vertex_buffer_size,
@@ -2289,7 +2336,8 @@ int run_gx2_guest_triangle_test(bool visible_window = false)
     affogato::gpu::vulkan::VulkanRenderer renderer(visible_window);
     renderer.consume_guest_commands(
         commands,
-        affogato::gpu::vulkan::GuestDrawPolicy::diagnostic_float2_position);
+        affogato::gpu::vulkan::GuestDrawPolicy::
+            diagnostic_latte_vertex_position_base_zero);
     renderer.set_guest_clear_color({0.08F, 0.75F, 0.2F, 1.0F});
     renderer.render_frame();
     while (visible_window && !renderer.should_close())
@@ -2300,10 +2348,10 @@ int run_gx2_guest_triangle_test(bool visible_window = false)
     std::cout << "GX2 float32/float16/UNORM8x4 triangle-list, indexed, strip, and fan "
               << "geometry, "
               << "including unpredicated PM4 auto-index, indexed, and immediate-index "
-              << "draws, using guest "
-              << "memory were submitted "
-              << "with the diagnostic Vulkan shader on " << renderer.device_name()
-              << ". Guest Latte shaders are not translated.\n";
+              << "draws used captured guest vertex input and the supported CPU "
+              << "MOV/export shader subset, then the fixed diagnostic Vulkan shader "
+              << "on " << renderer.device_name()
+              << ". General Latte shader translation is not implemented.\n";
     return 0;
 }
 
