@@ -32075,6 +32075,44 @@ void latte_control_flow_decoder_tests()
     assert((previous_vector == shader_registers[1U]));
     assert((shader_registers[3U] == shader_registers[1U]));
 
+    auto previous_vector_slots = alu_slots;
+    for (auto& slot : previous_vector_slots)
+    {
+        slot.word0 = (slot.word0 & ~0x1FFU) | 254U;
+    }
+    auto previous_vector_groups =
+        decode_latte_alu_op2_groups(previous_vector_slots);
+    assert(previous_vector_groups.size() == 1U);
+
+    shader_registers[5U].fill(0xDEADBEEFU);
+    const auto registers_before_missing_pv = shader_registers;
+    bool rejected_missing_previous_vector = false;
+    try
+    {
+        static_cast<void>(execute_latte_alu_op2_vector_group(
+            previous_vector_groups[0U], shader_registers));
+    }
+    catch (const std::runtime_error&)
+    {
+        rejected_missing_previous_vector = true;
+    }
+    assert(rejected_missing_previous_vector);
+    assert(shader_registers == registers_before_missing_pv);
+
+    for (auto& instruction : previous_vector_groups[0U].instructions)
+    {
+        instruction.destination_gpr = 5U;
+    }
+
+    const std::optional<LatteShaderRegister> incoming_previous_vector{
+        previous_vector};
+    const auto forwarded_vector = execute_latte_alu_op2_vector_group(
+        previous_vector_groups[0U],
+        shader_registers,
+        incoming_previous_vector);
+    assert((forwarded_vector == previous_vector));
+    assert((shader_registers[5U] == previous_vector));
+
     auto parallel_move_group = alu_groups[0U];
     for (std::size_t component = 0U;
          component < parallel_move_group.instructions.size();
@@ -32145,6 +32183,9 @@ void latte_control_flow_decoder_tests()
         slot.word1 |= static_cast<std::uint32_t>(
             integer_logic_opcodes[component]) << 7U;
     }
+    integer_logic_slots[0U].word0 =
+        (integer_logic_slots[0U].word0 & ~(0x1FFU << 13U)) |
+        (254U << 13U);
     const auto integer_logic_groups =
         decode_latte_alu_op2_groups(integer_logic_slots);
     assert(integer_logic_groups.size() == 1U);
@@ -32156,18 +32197,20 @@ void latte_control_flow_decoder_tests()
         assert(integer_logic_group.instructions[component].opcode ==
                integer_logic_opcodes[component]);
         assert(integer_logic_group.instructions[component].source1_selector ==
-               2U);
+               (component == 0U ? 254U : 2U));
         assert(integer_logic_group.instructions[component].source1_channel ==
                component);
     }
 
     const LatteShaderRegister expected_integer_logic_vector{
-        0x00F000F0U,
+        0x30A00000U,
         0xFFFFFFFFU,
         0x8000FFFFU,
         0x00000000U};
     const auto integer_logic_vector = execute_latte_alu_op2_vector_group(
-        integer_logic_group, shader_registers);
+        integer_logic_group,
+        shader_registers,
+        incoming_previous_vector);
     assert((integer_logic_vector == expected_integer_logic_vector));
     assert((shader_registers[3U] == expected_integer_logic_vector));
 

@@ -410,3 +410,15 @@ destination and returns the group's vector result. Tests cover the three
 bitwise truth tables and guest destination writes. Debug and Release builds and
 CTest passed 2/2 in both configurations, and `git diff --check` is clean. This
 is family-reference behavior, not direct Latte hardware verification.
+
+## Latte previous-vector forwarding (2026-11-25)
+
+Added selector `254` support for the R700-family PV source when the caller
+supplies the preceding supported group result. MOV and integer bitwise
+instructions can read PV components, while constants, literal slots, and PS
+remain unsupported. A missing incoming PV value is rejected before register
+writeback. Tests verify a first group feeding a second group and failure
+without partial writes. Debug and Release builds succeeded; CTest passed 2/2 in
+both configurations, and `git diff --check` is clean. This PV forwarding subset
+is based on R700-family documentation and has not been verified against Latte
+hardware.
