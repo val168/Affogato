@@ -1,5 +1,19 @@
 # Affogato Development Status
 
+## OP3 conditional moves in SPIR-V (2026-11-25)
+
+The experimental vertex SPIR-V emitter now lowers OP3 `CMOVE`, `CMOVGT`, and
+`CMOVGE` groups using ordered float comparisons with zero and raw-bit
+`OpSelect`. It rejects unsupported OP3 addressing, modifiers, and mixed OP2/
+OP3 clauses. Deterministic tests cover the three comparison opcodes, select
+emission, relative-source rejection, and `spirv-val` acceptance. A controlled
+GX2/Vulkan test encodes `CMOVGE` guest instructions, captures the guest shader,
+translates it, and verifies one covered and one uncovered pixel in Vulkan
+readback. Debug and Release CTest each passed 20/20. The test uses a diagnostic
+host fragment shader; it does not establish guest pixel-shader execution,
+visible-window verification, Latte hardware behavior, or WWHD rendering.
+Normal guest draws still do not select these translated shaders.
+
 ## OP3-only CPU shader clauses (2026-11-25)
 
 The straight-line CPU shader subset now identifies and decodes ALU clauses

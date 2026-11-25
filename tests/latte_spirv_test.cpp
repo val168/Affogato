@@ -236,6 +236,68 @@ int main(int argc, char* argv[])
     assert(module_contains_opcode(minimum_module, 184U));
     assert(module_contains_opcode(minimum_module, 169U));
 
+    auto conditional_move_program = program;
+    auto& conditional_move_clause = std::get<
+        affogato::gpu::LatteShaderIrAluClause>(
+            conditional_move_program.instructions[0U]);
+    conditional_move_clause.groups.clear();
+    affogato::gpu::LatteAluOp3InstructionGroup conditional_move_group{};
+    for (std::uint8_t lane = 0U; lane < 4U; ++lane)
+    {
+        affogato::gpu::LatteAluOp3Instruction operation{};
+        if (lane == 0U)
+        {
+            operation.opcode =
+                affogato::gpu::latte_alu_op3_conditional_move_equal_opcode;
+        }
+        else if (lane == 1U)
+        {
+            operation.opcode =
+                affogato::gpu::latte_alu_op3_conditional_move_greater_opcode;
+        }
+        else
+        {
+            operation.opcode = affogato::gpu::
+                latte_alu_op3_conditional_move_greater_equal_opcode;
+        }
+        operation.source0_selector = 1U;
+        operation.source0_channel = lane;
+        operation.source1_selector =
+            affogato::gpu::latte_alu_source_one_float_selector;
+        operation.source2_selector =
+            affogato::gpu::latte_alu_source_zero_selector;
+        operation.destination_gpr = 3U;
+        operation.destination_component = lane;
+        operation.last_in_group = lane == 3U;
+        conditional_move_group.instructions.push_back(operation);
+    }
+    conditional_move_clause.op3_groups.push_back(conditional_move_group);
+
+    const std::vector<std::uint32_t> conditional_move_module =
+        affogato::gpu::emit_latte_spirv_vertex_position_subset(
+            conditional_move_program,
+            {1U, 0U});
+    assert(module_contains_opcode(conditional_move_module, 180U));
+    assert(module_contains_opcode(conditional_move_module, 186U));
+    assert(module_contains_opcode(conditional_move_module, 190U));
+    assert(module_contains_opcode(conditional_move_module, 169U));
+
+    conditional_move_clause.op3_groups[0U]
+        .instructions[0U].source2_relative = true;
+    bool rejected_relative_op3_source = false;
+    try
+    {
+        static_cast<void>(
+            affogato::gpu::emit_latte_spirv_vertex_position_subset(
+                conditional_move_program,
+                {1U, 0U}));
+    }
+    catch (const std::runtime_error&)
+    {
+        rejected_relative_op3_source = true;
+    }
+    assert(rejected_relative_op3_source);
+
     add_clause.groups[0U].instructions[0U].source1_relative = true;
     bool rejected_relative_add_source = false;
     try
@@ -251,7 +313,7 @@ int main(int argc, char* argv[])
     }
     assert(rejected_relative_add_source);
 
-    if (argc == 8 && std::string_view(argv[1]) == "--write-modules")
+    if (argc == 9 && std::string_view(argv[1]) == "--write-modules")
     {
         write_module(argv[2], module);
         write_module(argv[3], modified_module);
@@ -259,6 +321,7 @@ int main(int argc, char* argv[])
         write_module(argv[5], multiply_module);
         write_module(argv[6], maximum_module);
         write_module(argv[7], minimum_module);
+        write_module(argv[8], conditional_move_module);
     }
     return 0;
 }

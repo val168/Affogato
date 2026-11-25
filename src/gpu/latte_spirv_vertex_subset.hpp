@@ -231,7 +231,7 @@ private:
             !source_registers[selector][channel].has_value())
         {
             throw std::runtime_error(
-                "Latte SPIR-V MOV reads an uninitialized or unsupported GPR");
+                "Latte SPIR-V source reads an uninitialized or unsupported GPR");
         }
         return *source_registers[selector][channel];
     }
@@ -260,12 +260,135 @@ private:
         return value;
     }
 
-    void execute_clause(const LatteShaderIrAluClause& clause)
+    void execute_op3_clause(
+        const std::vector<LatteAluOp3InstructionGroup>& groups)
     {
-        if (!clause.op3_groups.empty())
+        if (groups.empty())
         {
             throw std::runtime_error(
-                "Latte SPIR-V vertex subset does not support OP3 groups");
+                "Latte SPIR-V OP3 clause must contain an instruction group");
+        }
+
+        std::optional<VectorValue> previous_vector;
+        for (const LatteAluOp3InstructionGroup& group : groups)
+        {
+            if (group.instructions.size() != 4U)
+            {
+                throw std::runtime_error(
+                    "Latte SPIR-V OP3 group has an invalid lane count");
+            }
+
+            const RegisterValues source_registers = registers_;
+            VectorValue group_result{};
+            for (std::size_t lane = 0U;
+                 lane < group.instructions.size();
+                 ++lane)
+            {
+                const LatteAluOp3Instruction& operation =
+                    group.instructions[lane];
+                if ((operation.opcode !=
+                         latte_alu_op3_conditional_move_equal_opcode &&
+                     operation.opcode !=
+                         latte_alu_op3_conditional_move_greater_opcode &&
+                     operation.opcode !=
+                         latte_alu_op3_conditional_move_greater_equal_opcode) ||
+                    operation.destination_component != lane ||
+                    operation.last_in_group != (lane == 3U) ||
+                    operation.destination_gpr >= registers_.size() ||
+                    operation.source0_relative || operation.source1_relative ||
+                    operation.source2_relative || operation.index_mode != 0U ||
+                    operation.bank_swizzle != 0U ||
+                    operation.predicate_selection != 0U ||
+                    operation.destination_relative ||
+                    operation.destination_clamp)
+                {
+                    throw std::runtime_error(
+                        "Latte SPIR-V vertex subset received an unsupported OP3 operation or modifier");
+                }
+
+                std::uint32_t source0_id = source_value(
+                    operation.source0_selector,
+                    operation.source0_channel,
+                    source_registers,
+                    previous_vector);
+                source0_id = apply_source_modifiers(
+                    source0_id,
+                    false,
+                    operation.source0_negate);
+                const std::uint32_t source1_id = apply_source_modifiers(
+                    source_value(
+                        operation.source1_selector,
+                        operation.source1_channel,
+                        source_registers,
+                        previous_vector),
+                    false,
+                    operation.source1_negate);
+                const std::uint32_t source2_id = apply_source_modifiers(
+                    source_value(
+                        operation.source2_selector,
+                        operation.source2_channel,
+                        source_registers,
+                        previous_vector),
+                    false,
+                    operation.source2_negate);
+
+                const std::uint32_t source0_float_id = allocate_id();
+                append_instruction(function_body_, 124U, {
+                    float_type_id_, source0_float_id, source0_id});
+                const std::uint32_t zero_float_id = allocate_id();
+                append_instruction(function_body_, 124U, {
+                    float_type_id_, zero_float_id, constant(0U)});
+                std::uint32_t comparison_id = allocate_id();
+                std::uint16_t comparison_opcode = 0U;
+                switch (operation.opcode)
+                {
+                case latte_alu_op3_conditional_move_equal_opcode:
+                    comparison_opcode = 180U;
+                    break;
+                case latte_alu_op3_conditional_move_greater_opcode:
+                    comparison_opcode = 186U;
+                    break;
+                case latte_alu_op3_conditional_move_greater_equal_opcode:
+                    comparison_opcode = 190U;
+                    break;
+                default:
+                    throw std::runtime_error(
+                        "Latte SPIR-V vertex subset received an unsupported OP3 opcode");
+                }
+                append_instruction(function_body_, comparison_opcode, {
+                    bool_type_id_, comparison_id,
+                    source0_float_id, zero_float_id});
+
+                const std::uint32_t result_id = allocate_id();
+                append_instruction(function_body_, 169U, {
+                    uint_type_id_, result_id,
+                    comparison_id, source1_id, source2_id});
+                group_result[lane] = result_id;
+            }
+
+            for (std::size_t lane = 0U;
+                 lane < group.instructions.size();
+                 ++lane)
+            {
+                registers_[group.instructions[lane].destination_gpr][lane] =
+                    group_result[lane];
+            }
+            previous_vector = group_result;
+        }
+    }
+
+    void execute_clause(const LatteShaderIrAluClause& clause)
+    {
+        if (!clause.groups.empty() && !clause.op3_groups.empty())
+        {
+            throw std::runtime_error(
+                "Latte SPIR-V vertex subset cannot mix OP2 and OP3 groups");
+        }
+
+        if (!clause.op3_groups.empty())
+        {
+            execute_op3_clause(clause.op3_groups);
+            return;
         }
 
         if (clause.groups.empty())

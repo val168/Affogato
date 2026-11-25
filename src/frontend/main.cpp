@@ -1924,7 +1924,8 @@ enum class GuestTriangleShader
     spirv_maximum_self,
     spirv_minimum_self,
     spirv_maximum_zero,
-    spirv_minimum_zero
+    spirv_minimum_zero,
+    spirv_conditional_move
 };
 
 int run_gx2_guest_triangle_test(
@@ -2086,7 +2087,35 @@ int run_gx2_guest_triangle_test(
     vertex_shader_program[69U] = 0x900C6040U;
     vertex_shader_program[70U] = 0x010C0080U;
     vertex_shader_program[71U] = 0x900C6060U;
-    if (use_latte_spirv)
+    if (use_latte_spirv &&
+        shader == GuestTriangleShader::spirv_conditional_move)
+    {
+        for (std::uint32_t component = 0U; component < 4U; ++component)
+        {
+            const std::uint32_t slot = 64U + component * 2U;
+            const std::uint32_t source_word =
+                guest_position_gpr_selector |
+                (component << 10U) |
+                (static_cast<std::uint32_t>(
+                     affogato::gpu::latte_alu_source_one_float_selector)
+                 << 13U) |
+                (component << 23U) |
+                (component == 3U ? 0x80000000U : 0U);
+            const std::uint32_t destination_word =
+                affogato::gpu::latte_alu_source_zero_selector |
+                (component << 10U) |
+                (static_cast<std::uint32_t>(
+                     affogato::gpu::
+                         latte_alu_op3_conditional_move_greater_equal_opcode)
+                 << affogato::gpu::latte_alu_opcode_encoding_shift) |
+                (3U << 21U) |
+                (component << 29U);
+            vertex_shader_program[slot] = std::byteswap(source_word);
+            vertex_shader_program[slot + 1U] =
+                std::byteswap(destination_word);
+        }
+    }
+    else if (use_latte_spirv)
     {
         std::uint32_t operation_opcode =
             affogato::gpu::latte_alu_op2_add_float_opcode;
@@ -2678,7 +2707,8 @@ int run_gx2_guest_triangle_test(
         shader == GuestTriangleShader::spirv_add_negative_one_x ||
         shader == GuestTriangleShader::spirv_multiply_zero ||
         shader == GuestTriangleShader::spirv_maximum_zero ||
-        shader == GuestTriangleShader::spirv_minimum_zero;
+        shader == GuestTriangleShader::spirv_minimum_zero ||
+        shader == GuestTriangleShader::spirv_conditional_move;
     if (verify_shader_output)
     {
         renderer.render_frame();
@@ -2717,6 +2747,12 @@ int run_gx2_guest_triangle_test(
             shader_sample_x = (shader_frame->width * 60U) / 100U;
             shader_sample_y = (shader_frame->height * 23U) / 40U;
         }
+        else if (shader == GuestTriangleShader::spirv_conditional_move)
+        {
+            shader_sample_x = (shader_frame->width * 80U) / 100U;
+            shader_sample_y = (shader_frame->height * 60U) / 100U;
+            expect_red = true;
+        }
         const std::size_t shader_sample_offset =
             (static_cast<std::size_t>(shader_sample_y) * shader_frame->width +
              shader_sample_x) * 4U;
@@ -2740,6 +2776,30 @@ int run_gx2_guest_triangle_test(
                 ", " +
                 std::to_string(shader_frame->pixels[shader_sample_offset + 2U]) +
                 ")");
+        }
+
+        if (shader == GuestTriangleShader::spirv_conditional_move)
+        {
+            const std::uint32_t outside_x =
+                (shader_frame->width * 60U) / 100U;
+            const std::uint32_t outside_y =
+                (shader_frame->height * 80U) / 100U;
+            const std::size_t outside_offset =
+                (static_cast<std::size_t>(outside_y) * shader_frame->width +
+                 outside_x) * 4U;
+            if (shader_frame->pixels.size() < outside_offset + 4U)
+            {
+                throw std::runtime_error(
+                    "Vulkan OP3 shader output readback is smaller than the expected outside sample");
+            }
+            const bool outside_sample_is_red =
+                shader_frame->pixels[outside_offset] >= 200U &&
+                shader_frame->pixels[outside_offset + 2U] <= 40U;
+            if (outside_sample_is_red)
+            {
+                throw std::runtime_error(
+                    "Vulkan OP3 conditional-move output covered an outside sample");
+            }
         }
     }
     renderer.consume_guest_commands(
@@ -2827,6 +2887,11 @@ int run_gx2_guest_triangle_test(
     {
         shader_subset_description =
             "the bounded MOV/MIN_DX10-clamp-to-position SPIR-V vertex subset";
+    }
+    if (shader == GuestTriangleShader::spirv_conditional_move)
+    {
+        shader_subset_description =
+            "the bounded OP3 conditional-move-to-position SPIR-V vertex subset";
     }
     std::cout << "GX2 float32/float16/UNORM8x4 triangle-list, indexed, strip, and fan "
               << "geometry, "
@@ -2944,6 +3009,14 @@ int main(int argc, char* argv[])
                     false,
                     GuestTriangleShader::spirv_minimum_zero);
             }
+            if (std::string_view(argv[1]) ==
+                    "--gx2-guest-triangle-op3-conditional-move-spirv-smoke-test" &&
+                argc == 2)
+            {
+                return run_gx2_guest_triangle_test(
+                    false,
+                    GuestTriangleShader::spirv_conditional_move);
+            }
             if (std::string_view(argv[1]) == "--gx2-guest-triangle-display-test" &&
                 argc == 2)
             {
@@ -2965,6 +3038,7 @@ int main(int argc, char* argv[])
                          "       AffogatoFrontend.exe --gx2-guest-triangle-minimum-spirv-smoke-test\n"
                          "       AffogatoFrontend.exe --gx2-guest-triangle-maximum-zero-spirv-smoke-test\n"
                          "       AffogatoFrontend.exe --gx2-guest-triangle-minimum-zero-spirv-smoke-test\n"
+                         "       AffogatoFrontend.exe --gx2-guest-triangle-op3-conditional-move-spirv-smoke-test\n"
                          "       AffogatoFrontend.exe --gx2-guest-triangle-display-test\n";
             return 2;
         }
