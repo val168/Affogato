@@ -34,6 +34,7 @@ struct LatteShaderIrAluClause
 {
     std::vector<LatteAluOp2InstructionGroup> groups;
     std::vector<LatteAluOp3InstructionGroup> op3_groups;
+    std::vector<LatteAluVectorInstructionGroup> vector_groups;
 
     bool operator==(const LatteShaderIrAluClause&) const = default;
 };
@@ -143,15 +144,14 @@ struct LatteShaderIrProgram
                     opcode_encoding < latte_alu_first_op3_encoding;
             }
 
-            if (contains_op2 && contains_op3)
-            {
-                throw std::runtime_error(
-                    "Latte shader subset does not support mixed OP2/OP3 ALU clauses");
-            }
-
             std::vector<LatteAluOp2InstructionGroup> groups;
             std::vector<LatteAluOp3InstructionGroup> op3_groups;
-            if (contains_op3)
+            std::vector<LatteAluVectorInstructionGroup> vector_groups;
+            if (contains_op2 && contains_op3)
+            {
+                vector_groups = decode_latte_alu_vector_groups(slots);
+            }
+            else if (contains_op3)
             {
                 op3_groups = decode_latte_alu_op3_groups(slots);
             }
@@ -160,7 +160,7 @@ struct LatteShaderIrProgram
                 groups = decode_latte_alu_op2_groups(slots);
             }
 
-            if (groups.empty() && op3_groups.empty())
+            if (groups.empty() && op3_groups.empty() && vector_groups.empty())
             {
                 throw std::runtime_error(
                     "Latte shader subset requires at least one supported ALU group per clause");
@@ -168,7 +168,8 @@ struct LatteShaderIrProgram
             program.instructions.emplace_back(
                 LatteShaderIrAluClause{
                     std::move(groups),
-                    std::move(op3_groups)});
+                    std::move(op3_groups),
+                    std::move(vector_groups)});
             continue;
         }
 
@@ -218,11 +219,23 @@ namespace detail
         if (const auto* alu_clause =
                 std::get_if<LatteShaderIrAluClause>(&instruction))
         {
-            if (!alu_clause->groups.empty() &&
-                !alu_clause->op3_groups.empty())
+            const std::size_t active_group_representations =
+                static_cast<std::size_t>(!alu_clause->groups.empty()) +
+                static_cast<std::size_t>(!alu_clause->op3_groups.empty()) +
+                static_cast<std::size_t>(!alu_clause->vector_groups.empty());
+            if (active_group_representations > 1U)
             {
                 throw std::runtime_error(
-                    "Latte shader IR clause contains both OP2 and OP3 groups");
+                    "Latte shader IR clause contains incompatible group representations");
+            }
+
+            if (!alu_clause->vector_groups.empty())
+            {
+                static_cast<void>(execute_latte_alu_vector_clause(
+                    alu_clause->vector_groups,
+                    result.registers,
+                    constant_file));
+                continue;
             }
 
             if (!alu_clause->op3_groups.empty())

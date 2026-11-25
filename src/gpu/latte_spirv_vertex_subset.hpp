@@ -432,6 +432,12 @@ private:
 
     void execute_clause(const LatteShaderIrAluClause& clause)
     {
+        if (!clause.vector_groups.empty())
+        {
+            throw std::runtime_error(
+                "Latte SPIR-V vertex subset does not support mixed OP2/OP3 groups");
+        }
+
         if (!clause.groups.empty() && !clause.op3_groups.empty())
         {
             throw std::runtime_error(

@@ -859,6 +859,140 @@ execute_latte_alu_op2_vector_group(
     return group_vector;
 }
 
+// Execute a four-slot vector group that may mix supported OP2 and OP3
+// operations. All reads use the pre-group register snapshot, then writes are
+// committed together so lane ordering does not become observable.
+[[nodiscard]] inline LatteShaderRegister execute_latte_alu_vector_group(
+    const LatteAluVectorInstructionGroup& group,
+    std::span<LatteShaderRegister> guest_registers,
+    const std::optional<LatteShaderRegister>& incoming_previous_vector =
+        std::nullopt,
+    const LatteShaderConstantFile* constant_file = nullptr)
+{
+    if (group.instructions.size() != latte_shader_register_component_count)
+    {
+        throw std::runtime_error(
+            "Latte mixed ALU group must contain exactly four vector instructions");
+    }
+
+    const std::span<const LatteShaderRegister> read_only_registers(
+        guest_registers);
+    LatteShaderRegister group_vector{};
+    for (std::size_t component = 0U;
+         component < group.instructions.size();
+         ++component)
+    {
+        const LatteAluVectorInstruction& vector_instruction =
+            group.instructions[component];
+        if (const auto* op2_instruction =
+                std::get_if<LatteAluOp2Instruction>(&vector_instruction))
+        {
+            if (op2_instruction->destination_component != component ||
+                op2_instruction->last_in_group != (component == 3U))
+            {
+                throw std::runtime_error(
+                    "Latte mixed OP2/OP3 group has an invalid OP2 lane layout");
+            }
+
+            switch (op2_instruction->opcode)
+            {
+            case latte_alu_op2_move_opcode:
+                group_vector[component] = evaluate_latte_alu_move_value(
+                    *op2_instruction,
+                    read_only_registers,
+                    incoming_previous_vector,
+                    constant_file);
+                break;
+            case latte_alu_op2_add_float_opcode:
+            case latte_alu_op2_multiply_ieee_opcode:
+            case latte_alu_op2_maximum_dx10_opcode:
+            case latte_alu_op2_minimum_dx10_opcode:
+                group_vector[component] = evaluate_latte_alu_float_value(
+                    *op2_instruction,
+                    read_only_registers,
+                    incoming_previous_vector,
+                    constant_file);
+                break;
+            default:
+                group_vector[component] = evaluate_latte_alu_integer_value(
+                    *op2_instruction,
+                    read_only_registers,
+                    incoming_previous_vector,
+                    constant_file);
+                break;
+            }
+            continue;
+        }
+
+        const LatteAluOp3Instruction& op3_instruction =
+            std::get<LatteAluOp3Instruction>(vector_instruction);
+        if (op3_instruction.destination_component != component ||
+            op3_instruction.last_in_group != (component == 3U))
+        {
+            throw std::runtime_error(
+                "Latte mixed OP2/OP3 group has an invalid OP3 lane layout");
+        }
+        group_vector[component] =
+            evaluate_latte_alu_op3_conditional_move_value(
+                op3_instruction,
+                read_only_registers,
+                incoming_previous_vector,
+                constant_file);
+    }
+
+    for (std::size_t component = 0U;
+         component < group.instructions.size();
+         ++component)
+    {
+        const std::uint8_t destination_gpr = std::visit(
+            [](const auto& instruction)
+            {
+                return instruction.destination_gpr;
+            },
+            group.instructions[component]);
+        if (destination_gpr >= guest_registers.size())
+        {
+            throw std::runtime_error(
+                "Latte mixed ALU destination is outside the register file");
+        }
+        guest_registers[destination_gpr][component] = group_vector[component];
+    }
+
+    return group_vector;
+}
+
+// Execute mixed OP2/OP3 vector groups transactionally; PV is forwarded only
+// between groups in this clause.
+[[nodiscard]] inline LatteShaderRegister execute_latte_alu_vector_clause(
+    std::span<const LatteAluVectorInstructionGroup> groups,
+    std::span<LatteShaderRegister> guest_registers,
+    const LatteShaderConstantFile* constant_file = nullptr)
+{
+    if (groups.empty())
+    {
+        throw std::runtime_error("Latte mixed ALU clause must contain a group");
+    }
+
+    std::vector<LatteShaderRegister> working_registers(
+        guest_registers.begin(),
+        guest_registers.end());
+    std::optional<LatteShaderRegister> previous_vector;
+    for (const LatteAluVectorInstructionGroup& group : groups)
+    {
+        previous_vector = execute_latte_alu_vector_group(
+            group,
+            working_registers,
+            previous_vector,
+            constant_file);
+    }
+
+    std::copy(
+        working_registers.begin(),
+        working_registers.end(),
+        guest_registers.begin());
+    return *previous_vector;
+}
+
 // Execute a clause containing only four-slot OP2 vector groups. PV is visible
 // to later groups in the same clause and is reset when the caller starts a
 // separate clause. Work on a temporary register file so an unsupported later

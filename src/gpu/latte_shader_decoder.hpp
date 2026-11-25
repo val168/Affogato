@@ -9,6 +9,7 @@
 #include <stdexcept>
 #include <string>
 #include <utility>
+#include <variant>
 #include <vector>
 
 namespace affogato::gpu
@@ -206,6 +207,17 @@ struct LatteAluOp3InstructionGroup
     std::vector<LatteAluOp3Instruction> instructions;
 
     bool operator==(const LatteAluOp3InstructionGroup&) const = default;
+};
+
+using LatteAluVectorInstruction =
+    std::variant<LatteAluOp2Instruction, LatteAluOp3Instruction>;
+
+struct LatteAluVectorInstructionGroup
+{
+    std::size_t word_offset{};
+    std::vector<LatteAluVectorInstruction> instructions;
+
+    bool operator==(const LatteAluVectorInstructionGroup&) const = default;
 };
 
 // Decode verified control-flow records and the supported ALU-clause header.
@@ -555,6 +567,77 @@ decode_latte_alu_op2_groups(std::span<const LatteAluClauseSlot> slots)
     {
         throw std::runtime_error(
             "Latte ALU clause ends before the final instruction-group marker");
+    }
+
+    return groups;
+}
+
+// Decode mixed OP2/OP3 vector instructions while preserving their shared
+// LAST-delimited group boundaries. ALU.Trans and literal slots remain outside
+// this four-lane subset.
+[[nodiscard]] inline std::vector<LatteAluVectorInstructionGroup>
+decode_latte_alu_vector_groups(std::span<const LatteAluClauseSlot> slots)
+{
+    constexpr std::uint16_t literal_source_selector = 253U;
+
+    std::vector<LatteAluVectorInstructionGroup> groups;
+    LatteAluVectorInstructionGroup current_group;
+    for (const LatteAluClauseSlot& slot : slots)
+    {
+        const std::uint32_t opcode_encoding =
+            (slot.word1 >> latte_alu_opcode_encoding_shift) &
+            latte_alu_opcode_encoding_mask;
+        LatteAluVectorInstruction instruction = [&]()
+            -> LatteAluVectorInstruction
+        {
+            if (opcode_encoding >= latte_alu_first_op3_encoding)
+            {
+                LatteAluOp3Instruction op3_instruction =
+                    decode_latte_alu_op3_instruction(slot);
+                if (op3_instruction.source0_selector == literal_source_selector ||
+                    op3_instruction.source1_selector == literal_source_selector ||
+                    op3_instruction.source2_selector == literal_source_selector)
+                {
+                    throw std::runtime_error(
+                        "Latte mixed ALU group decoding does not support OP3 literal operands");
+                }
+                return op3_instruction;
+            }
+
+            LatteAluOp2Instruction op2_instruction =
+                decode_latte_alu_op2_instruction(slot);
+            if (op2_instruction.source0_selector == literal_source_selector ||
+                op2_instruction.source1_selector == literal_source_selector)
+            {
+                throw std::runtime_error(
+                    "Latte mixed ALU group decoding does not support OP2 literal operands");
+            }
+            return op2_instruction;
+        }();
+        const bool last_in_group = std::visit(
+            [](const auto& operation)
+            {
+                return operation.last_in_group;
+            },
+            instruction);
+
+        if (current_group.instructions.empty())
+        {
+            current_group.word_offset = slot.word_offset;
+        }
+        current_group.instructions.push_back(std::move(instruction));
+
+        if (last_in_group)
+        {
+            groups.push_back(std::move(current_group));
+            current_group = {};
+        }
+    }
+
+    if (!current_group.instructions.empty())
+    {
+        throw std::runtime_error(
+            "Latte mixed ALU clause ends before the final instruction-group marker");
     }
 
     return groups;

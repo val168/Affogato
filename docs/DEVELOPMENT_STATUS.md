@@ -1,5 +1,18 @@
 # Affogato Development Status
 
+## Mixed OP2/OP3 CPU shader groups (2026-11-25)
+
+The shader decoder and CPU reference now preserve OP2 and OP3 instruction
+types together in a shared four-lane X/Y/Z/W group. The executor reads all
+lanes from the pre-group register snapshot, commits lane results together, and
+forwards PV between groups in the clause. A decoded guest-word fixture mixes
+an OP2 MOV lane with three OP3 conditional moves and checks the resulting
+register state. The SPIR-V emitter rejects this mixed IR explicitly until its
+lane lowering supports it. ALU.Trans, literals, incomplete groups, and Latte
+hardware behavior remain unsupported or unverified. Debug CTest passed 22/22;
+Release CTest passed 22/22. These controlled tests do not exercise ordinary
+guest draw execution or establish WWHD rendering.
+
 ## OP3 integer conditional moves (2026-11-25)
 
 The experimental CPU shader subset and vertex SPIR-V emitter now support OP3

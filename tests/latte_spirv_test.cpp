@@ -7,6 +7,7 @@
 #include <span>
 #include <stdexcept>
 #include <string_view>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -41,7 +42,7 @@ namespace
 
     LatteShaderIrProgram program{};
     program.instructions.emplace_back(
-        LatteShaderIrAluClause{{move_group}, {}});
+        LatteShaderIrAluClause{{move_group}, {}, {}});
     program.instructions.emplace_back(
         LatteShaderIrExport{true, position_export});
     return program;
@@ -304,6 +305,37 @@ int main(int argc, char* argv[])
     assert(module_contains_opcode(integer_conditional_move_module, 173U));
     assert(module_contains_opcode(integer_conditional_move_module, 175U));
     assert(module_contains_opcode(integer_conditional_move_module, 169U));
+
+    auto mixed_program = program;
+    auto& mixed_clause = std::get<
+        affogato::gpu::LatteShaderIrAluClause>(
+            mixed_program.instructions[0U]);
+    mixed_clause.groups.clear();
+    affogato::gpu::LatteAluVectorInstructionGroup mixed_group{};
+    mixed_group.instructions.emplace_back(
+        std::get<affogato::gpu::LatteShaderIrAluClause>(
+            program.instructions[0U]).groups[0U].instructions[0U]);
+    for (std::size_t lane = 1U; lane < 4U; ++lane)
+    {
+        mixed_group.instructions.emplace_back(
+            conditional_move_group.instructions[lane]);
+    }
+    mixed_clause.vector_groups.push_back(std::move(mixed_group));
+    bool rejected_mixed_group = false;
+    try
+    {
+        static_cast<void>(
+            affogato::gpu::emit_latte_spirv_vertex_position_subset(
+                mixed_program,
+                {1U, 0U}));
+    }
+    catch (const std::runtime_error& error)
+    {
+        rejected_mixed_group =
+            std::string_view(error.what()).find("mixed OP2/OP3") !=
+            std::string_view::npos;
+    }
+    assert(rejected_mixed_group);
 
     conditional_move_clause.op3_groups[0U]
         .instructions[0U].source2_relative = true;
