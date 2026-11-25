@@ -21,6 +21,8 @@ struct DiagnosticVertex
 {
     float x{};
     float y{};
+    float z{};
+    float w{1.0F};
 };
 
 enum class GuestDrawPolicy

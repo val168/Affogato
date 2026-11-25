@@ -505,7 +505,14 @@ std::vector<DiagnosticVertex> decode_diagnostic_latte_spirv_vertex_draw(
             throw std::runtime_error(
                 "Vulkan Latte SPIR-V diagnostic input is outside finite clip-space XY bounds");
         }
-        source_vertices.push_back({x, y});
+        const float z = std::bit_cast<float>(input_register[2U]);
+        const float w = std::bit_cast<float>(input_register[3U]);
+        if (!std::isfinite(z) || !std::isfinite(w) || w == 0.0F)
+        {
+            throw std::runtime_error(
+                "Vulkan Latte SPIR-V diagnostic input has an invalid clip-space Z or W");
+        }
+        source_vertices.push_back({x, y, z, w});
     }
 
     return assemble_diagnostic_triangles(
@@ -718,6 +725,8 @@ void VulkanRenderer::set_guest_diagnostic_vertices(
     for (const DiagnosticVertex& vertex : vertices)
     {
         if (!std::isfinite(vertex.x) || !std::isfinite(vertex.y) ||
+            !std::isfinite(vertex.z) || !std::isfinite(vertex.w) ||
+            vertex.w == 0.0F ||
             vertex.x < -1.0F || vertex.x > 1.0F ||
             vertex.y < -1.0F || vertex.y > 1.0F)
         {
@@ -2542,7 +2551,7 @@ VkPipeline VulkanRenderer::create_diagnostic_graphics_pipeline(
     const VkVertexInputBindingDescription binding{
         0U, sizeof(DiagnosticVertex), VK_VERTEX_INPUT_RATE_VERTEX};
     const VkVertexInputAttributeDescription attribute{
-        0U, 0U, VK_FORMAT_R32G32_SFLOAT,
+        0U, 0U, VK_FORMAT_R32G32B32A32_SFLOAT,
         static_cast<std::uint32_t>(offsetof(DiagnosticVertex, x))};
     VkPipelineVertexInputStateCreateInfo vertex_input =
         make_info<VkPipelineVertexInputStateCreateInfo>(

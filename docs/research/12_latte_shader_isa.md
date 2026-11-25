@@ -1245,11 +1245,14 @@ describes `SEL_LINEAR` as selecting linear gradients in
 Espresso confirmation. The emitted VS qualifier documents the matching
 interface; Vulkan applies interpolation at the fragment input.
 
-SPIR-V fixtures for both stages pass `spirv-val`, and a controlled guest draw
-with the decoded `SEL_LINEAR` bit passes the Vulkan color-buffer readback. Its
-vertices have equal clip-space W, so the test verifies descriptor decoding,
-stage linkage, and execution but does not distinguish linear from
-perspective-correct numerical interpolation.
+SPIR-V fixtures for both stages pass `spirv-val`. The original controlled
+`SEL_LINEAR` draw uses equal clip-space W and checks its gradient. A further
+controlled test uses float4 guest positions with different W values, then runs
+the same guest geometry once with `SEL_LINEAR` and once with default perspective
+interpolation. It samples the projected triangle centroid in Vulkan
+framebuffer readback and requires the two green values to differ by at least 20
+UNORM levels. This verifies the Vulkan lowering and the fixture's expected
+behavior, not independent Latte hardware conformance.
 
 ### Centroid interpolation position (2026-11-25)
 

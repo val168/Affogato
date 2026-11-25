@@ -2012,6 +2012,7 @@ enum class GuestTriangleShader
     spirv_matched_varying_default_alpha,
     spirv_matched_two_varyings,
     spirv_matched_varying_linear,
+    spirv_matched_varying_perspective_unequal_w,
     spirv_matched_varying_centroid
 };
 
@@ -2115,9 +2116,63 @@ enum class GuestTriangleShader
          static_cast<unsigned int>(maximum_red - minimum_red) >= 20U);
 }
 
+[[nodiscard]] std::uint8_t sample_interpolated_green_at_triangle_centroid(
+    std::span<const std::uint8_t> rgba_pixels,
+    std::uint32_t width,
+    std::uint32_t height)
+{
+    constexpr std::array<affogato::gpu::vulkan::DiagnosticVertex, 3U>
+        clip_vertices{{
+            {-0.65F, 0.10F, 0.0F, 1.0F},
+            {0.65F, 0.10F, 0.0F, 2.0F},
+            {0.0F, 0.90F, 0.0F, 4.0F}}};
+    if (width == 0U || height == 0U)
+    {
+        throw std::runtime_error(
+            "Interpolation readback has zero dimensions");
+    }
+
+    float sample_ndc_x = 0.0F;
+    float sample_ndc_y = 0.0F;
+    for (const auto& vertex : clip_vertices)
+    {
+        sample_ndc_x += vertex.x / vertex.w;
+        sample_ndc_y += vertex.y / vertex.w;
+    }
+    sample_ndc_x /= static_cast<float>(clip_vertices.size());
+    sample_ndc_y /= static_cast<float>(clip_vertices.size());
+
+    const auto to_framebuffer_coordinate = [](float ndc, std::uint32_t extent)
+    {
+        const float normalized = (ndc + 1.0F) * 0.5F;
+        return static_cast<std::uint32_t>(
+            normalized * static_cast<float>(extent));
+    };
+    const std::uint32_t sample_x =
+        to_framebuffer_coordinate(sample_ndc_x, width);
+    const std::uint32_t sample_y =
+        to_framebuffer_coordinate(sample_ndc_y, height);
+    if (sample_x >= width || sample_y >= height)
+    {
+        throw std::runtime_error(
+            "Interpolation sample falls outside the framebuffer");
+    }
+
+    const std::size_t sample_offset =
+        (static_cast<std::size_t>(sample_y) * width + sample_x) * 4U;
+    if (sample_offset + 4U > rgba_pixels.size())
+    {
+        throw std::runtime_error(
+            "Interpolation sample exceeds the framebuffer readback");
+    }
+
+    return rgba_pixels[sample_offset + 1U];
+}
+
 int run_gx2_guest_triangle_test(
     bool visible_window = false,
-    GuestTriangleShader shader = GuestTriangleShader::cpu_mov)
+    GuestTriangleShader shader = GuestTriangleShader::cpu_mov,
+    std::uint8_t* interpolation_sample_output = nullptr)
 {
     const bool use_latte_spirv = shader != GuestTriangleShader::cpu_mov;
     const bool use_latte_pixel_spirv =
@@ -2137,6 +2192,8 @@ int run_gx2_guest_triangle_test(
         shader == GuestTriangleShader::spirv_matched_varying_default_alpha ||
         shader == GuestTriangleShader::spirv_matched_two_varyings ||
         shader == GuestTriangleShader::spirv_matched_varying_linear ||
+        shader == GuestTriangleShader::
+            spirv_matched_varying_perspective_unequal_w ||
         shader == GuestTriangleShader::spirv_matched_varying_centroid;
     const bool use_varying_passthrough =
         shader == GuestTriangleShader::spirv_matched_varying_move ||
@@ -2153,6 +2210,8 @@ int run_gx2_guest_triangle_test(
         shader == GuestTriangleShader::spirv_matched_varying_default_alpha ||
         shader == GuestTriangleShader::spirv_matched_two_varyings ||
         shader == GuestTriangleShader::spirv_matched_varying_linear ||
+        shader == GuestTriangleShader::
+            spirv_matched_varying_perspective_unequal_w ||
         shader == GuestTriangleShader::spirv_matched_varying_centroid;
     constexpr std::uint32_t vertex_buffer_address = 0x10000U;
     constexpr std::uint32_t index_buffer_address = 0x4000U;
@@ -2187,29 +2246,53 @@ int run_gx2_guest_triangle_test(
     constexpr std::uint32_t position_attribute_offset = 4U;
     constexpr std::uint32_t vertex_buffer_size = 4U * vertex_buffer_stride;
     constexpr std::uint16_t guest_position_gpr_selector = 1U;
+    const bool verify_unequal_w_interpolation =
+        shader == GuestTriangleShader::spirv_matched_varying_linear ||
+        shader == GuestTriangleShader::
+            spirv_matched_varying_perspective_unequal_w;
     // OP2 ALU_WORD0 bit 25 marks the source-1 negate modifier.
     constexpr std::uint32_t latte_source1_negate_mask = 1U << 25U;
-    constexpr std::array<affogato::gpu::vulkan::DiagnosticVertex, 3U> vertices{{
+    std::array<affogato::gpu::vulkan::DiagnosticVertex, 3U> vertices{{
         {-0.65F, -0.60F}, {0.65F, -0.60F}, {0.0F, 0.70F}}};
+    if (verify_unequal_w_interpolation)
+    {
+        vertices = {{{-0.65F, 0.10F, 0.0F, 1.0F},
+                     {0.65F, 0.10F, 0.0F, 2.0F},
+                     {0.0F, 0.90F, 0.0F, 4.0F}}};
+    }
 
     affogato::Emulator emulator;
     auto& core = emulator.core();
     core.configure_guest_heap(
         0x02000000U, static_cast<std::uint32_t>(core.memory.size()));
     core.memory.write32_be(call_stub_address, guest_bctrl_instruction);
-    const auto write_vertex_positions = [&core](
+    const std::uint32_t initial_position_attribute_offset =
+        verify_unequal_w_interpolation ? 0U : position_attribute_offset;
+    const auto write_vertex_positions = [&core,
+                                         verify_unequal_w_interpolation,
+                                         initial_position_attribute_offset](
         std::span<const affogato::gpu::vulkan::DiagnosticVertex> positions)
     {
         for (std::size_t index = 0U; index < positions.size(); ++index)
         {
+            const std::uint32_t vertex_address = vertex_buffer_address +
+                static_cast<std::uint32_t>(index * vertex_buffer_stride) +
+                initial_position_attribute_offset;
             core.memory.write32_be(
-                vertex_buffer_address + static_cast<std::uint32_t>(
-                    index * vertex_buffer_stride + position_attribute_offset),
+                vertex_address,
                 std::bit_cast<std::uint32_t>(positions[index].x));
             core.memory.write32_be(
-                vertex_buffer_address + static_cast<std::uint32_t>(
-                    index * vertex_buffer_stride + position_attribute_offset + 4U),
+                vertex_address + 4U,
                 std::bit_cast<std::uint32_t>(positions[index].y));
+            if (verify_unequal_w_interpolation)
+            {
+                core.memory.write32_be(
+                    vertex_address + 8U,
+                    std::bit_cast<std::uint32_t>(positions[index].z));
+                core.memory.write32_be(
+                    vertex_address + 12U,
+                    std::bit_cast<std::uint32_t>(positions[index].w));
+            }
         }
     };
     write_vertex_positions(vertices);
@@ -2762,8 +2845,14 @@ int run_gx2_guest_triangle_test(
         vertex_buffer_stride,
         vertex_buffer_address});
     std::array<std::uint32_t, 8U> attribute_stream{
-        0U, vertex_buffer_index, position_attribute_offset, 0x80DU,
-        0U, 0U, 0x00010405U, 3U};
+        0U,
+        vertex_buffer_index,
+        initial_position_attribute_offset,
+        verify_unequal_w_interpolation ? 0x813U : 0x80DU,
+        0U,
+        0U,
+        verify_unequal_w_interpolation ? 0x00010203U : 0x00010405U,
+        3U};
     for (std::size_t index = 0U; index < attribute_stream.size(); ++index)
     {
         core.memory.write32_be(
@@ -2837,8 +2926,12 @@ int run_gx2_guest_triangle_test(
     invoke("GX2DrawEx", std::array<std::uint32_t, 4U>{
         gx2_primitive_mode_triangle_fan, 4U, 0U, 1U});
 
+    attribute_stream[2U] = position_attribute_offset;
     attribute_stream[3U] = 0x08U;
+    attribute_stream[6U] = 0x00010405U;
+    core.memory.write32_be(attribute_stream_address + 8U, attribute_stream[2U]);
     core.memory.write32_be(attribute_stream_address + 12U, attribute_stream[3U]);
+    core.memory.write32_be(attribute_stream_address + 24U, attribute_stream[6U]);
     invoke("GX2InitFetchShaderEx", std::array<std::uint32_t, 6U>{
         fetch_shader_descriptor_address,
         fetch_shader_program_address,
@@ -2921,9 +3014,11 @@ int run_gx2_guest_triangle_test(
         static_cast<std::uint32_t>(pm4_immediate_indexed_draw_words.size() *
                                    sizeof(std::uint32_t))});
 
+    attribute_stream[2U] = position_attribute_offset;
     attribute_stream[3U] = 0x0AU;
     attribute_stream[7U] = 0U; // Explicit GX2_ENDIAN_SWAP_NONE.
     attribute_stream[6U] = 0x00010203U;
+    core.memory.write32_be(attribute_stream_address + 8U, attribute_stream[2U]);
     core.memory.write32_be(attribute_stream_address + 12U, attribute_stream[3U]);
     core.memory.write32_be(attribute_stream_address + 24U, attribute_stream[6U]);
     core.memory.write32_be(attribute_stream_address + 28U, attribute_stream[7U]);
@@ -3397,6 +3492,15 @@ int run_gx2_guest_triangle_test(
                     shader_frame->pixels,
                     shader);
             }
+            if (interpolation_sample_output != nullptr &&
+                verify_unequal_w_interpolation)
+            {
+                *interpolation_sample_output =
+                    sample_interpolated_green_at_triangle_centroid(
+                        shader_frame->pixels,
+                        shader_frame->width,
+                        shader_frame->height);
+            }
             if (!shader_sample_matches)
             {
                 throw std::runtime_error(
@@ -3856,9 +3960,41 @@ int main(int argc, char* argv[])
                     "--gx2-guest-triangle-matched-varying-linear-test" &&
                 argc == 2)
             {
-                return run_gx2_guest_triangle_test(
+                std::uint8_t linear_green = 0U;
+                const int linear_result = run_gx2_guest_triangle_test(
                     false,
-                    GuestTriangleShader::spirv_matched_varying_linear);
+                    GuestTriangleShader::spirv_matched_varying_linear,
+                    &linear_green);
+                if (linear_result != 0)
+                {
+                    return linear_result;
+                }
+
+                std::uint8_t perspective_green = 0U;
+                const int perspective_result = run_gx2_guest_triangle_test(
+                    false,
+                    GuestTriangleShader::
+                        spirv_matched_varying_perspective_unequal_w,
+                    &perspective_green);
+                if (perspective_result != 0)
+                {
+                    return perspective_result;
+                }
+
+                const std::uint8_t interpolation_difference =
+                    linear_green > perspective_green
+                        ? linear_green - perspective_green
+                        : perspective_green - linear_green;
+                constexpr std::uint8_t minimum_interpolation_difference = 20U;
+                if (interpolation_difference <
+                    minimum_interpolation_difference)
+                {
+                    throw std::runtime_error(
+                        "Vulkan linear and perspective interpolation samples are too similar: " +
+                        std::to_string(linear_green) + " versus " +
+                        std::to_string(perspective_green));
+                }
+                return 0;
             }
             if (std::string_view(argv[1]) ==
                     "--gx2-guest-triangle-matched-varying-centroid-test" &&
