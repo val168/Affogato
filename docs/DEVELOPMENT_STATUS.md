@@ -3,8 +3,9 @@
 ## Current implementation checkpoint (2026-11-25)
 
 `GX2SetContextState` and `GX2DirectCallDisplayList` now share a bounded PM4
-state-write decoder. It accepts Type-0 writes in the supported config/context
-windows, Type-2 filler, Type-3 NOP, `SET_CONFIG_REG`, and `SET_CONTEXT_REG`.
+state-write decoder. It accepts Type-0 writes in supported config/context and
+control-constant windows, Type-2 filler, Type-3 NOP, `SET_CONFIG_REG`,
+`SET_CONTEXT_REG`, and `SET_CTL_CONST` for the base-vertex/base-instance pair.
 Direct-call input is validated and copied from guest memory before decoding;
 malformed or unsupported streams do not append partial command batches. The
 HLE queues typed register updates; it does not execute GPU draws. Type-3 draw

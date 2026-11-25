@@ -990,10 +990,18 @@ std::vector<Gx2Command> decode_gx2_pm4_register_display_list(
     for (const affogato::gpu::LattePm4RegisterWrite& write :
          decoded.register_writes)
     {
+        Gx2CommandType command_type = Gx2CommandType::set_context_register;
+        if (write.space == affogato::gpu::LatteRegisterSpace::config)
+        {
+            command_type = Gx2CommandType::set_config_register;
+        }
+        else if (write.space == affogato::gpu::LatteRegisterSpace::control)
+        {
+            command_type = Gx2CommandType::set_control_constant;
+        }
+
         commands.push_back({
-            write.space == affogato::gpu::LatteRegisterSpace::config
-                ? Gx2CommandType::set_config_register
-                : Gx2CommandType::set_context_register,
+            command_type,
             write.address,
             write.value});
     }

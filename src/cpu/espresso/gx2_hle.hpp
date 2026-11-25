@@ -16,6 +16,7 @@ enum class Gx2CommandType
 {
     set_context_register,
     set_config_register,
+    set_control_constant,
     set_shader_resource,
     set_shader_sampler,
     flush,

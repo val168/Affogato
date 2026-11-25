@@ -24,6 +24,7 @@ enum class LatteRegisterSpace
 {
     config,
     context,
+    control,
 };
 
 struct LattePm4RegisterWrite
@@ -48,8 +49,9 @@ struct LattePm4DisplayListDecodeResult
 };
 
 // Input words are host-order values decoded from guest big-endian memory.
-// Only bounded config/context register writes, Type-2 filler, Type-3 NOP,
-// SET_CONFIG_REG, and SET_CONTEXT_REG packets are accepted.
+// Only bounded config/context/control register writes, Type-2 filler,
+// Type-3 NOP, SET_CONFIG_REG, SET_CONTEXT_REG, and SET_CTL_CONST packets are
+// accepted.
 [[nodiscard]] inline LattePm4DisplayListDecodeResult
 decode_latte_pm4_display_list(
     std::span<const std::uint32_t> words)
@@ -66,14 +68,19 @@ decode_latte_pm4_display_list(
     constexpr std::uint32_t type3_nop_opcode = 0x10U;
     constexpr std::uint32_t packet_count_shift = 16U;
     constexpr std::uint32_t packet_count_mask = 0x3FFFU;
-    // R7xx IT_SET_CONFIG_REG and IT_SET_CONTEXT_REG use dword offsets.
+    // R7xx SET_* register packets use dword offsets.
     constexpr std::uint32_t set_config_register_opcode = 0x68U;
     constexpr std::uint32_t set_context_register_opcode = 0x69U;
+    constexpr std::uint32_t set_control_constant_opcode = 0x6FU;
     // Register windows use byte addresses in captured GX2 state.
     constexpr std::uint32_t config_register_base = 0x8000U;
     constexpr std::uint32_t config_register_end = 0xAC00U;
     constexpr std::uint32_t context_register_base = 0x28000U;
     constexpr std::uint32_t context_register_end = 0x29000U;
+    // Decaf's Latte map identifies base-vertex and base-instance control
+    // registers as the complete currently modeled control-constant range.
+    constexpr std::uint32_t control_constant_base = 0x3CFF0U;
+    constexpr std::uint32_t control_constant_end = 0x3CFF8U;
     constexpr std::uint32_t register_stride = sizeof(std::uint32_t);
 
     LattePm4DisplayListDecodeResult result;
@@ -146,6 +153,12 @@ decode_latte_pm4_display_list(
                 register_space = LatteRegisterSpace::context;
                 register_window_end = context_register_end;
             }
+            else if (register_address >= control_constant_base &&
+                     register_address < control_constant_end)
+            {
+                register_space = LatteRegisterSpace::control;
+                register_window_end = control_constant_end;
+            }
             else
             {
                 result.error =
@@ -189,7 +202,8 @@ decode_latte_pm4_display_list(
         }
 
         if (opcode != set_config_register_opcode &&
-            opcode != set_context_register_opcode)
+            opcode != set_context_register_opcode &&
+            opcode != set_control_constant_opcode)
         {
             result.error = LattePm4DisplayListError::unsupported_opcode;
             result.error_word_offset = packet_header_offset;
@@ -207,16 +221,21 @@ decode_latte_pm4_display_list(
 
         const std::uint32_t register_offset = words[word_offset];
         const std::uint32_t register_count = payload_word_count - 1U;
-        const bool is_config_register_packet =
-            opcode == set_config_register_opcode;
-        const std::uint32_t register_window_base =
-            is_config_register_packet
-                ? config_register_base
-                : context_register_base;
-        const std::uint32_t register_window_end =
-            is_config_register_packet
-                ? config_register_end
-                : context_register_end;
+        LatteRegisterSpace register_space = LatteRegisterSpace::context;
+        std::uint32_t register_window_base = context_register_base;
+        std::uint32_t register_window_end = context_register_end;
+        if (opcode == set_config_register_opcode)
+        {
+            register_space = LatteRegisterSpace::config;
+            register_window_base = config_register_base;
+            register_window_end = config_register_end;
+        }
+        else if (opcode == set_control_constant_opcode)
+        {
+            register_space = LatteRegisterSpace::control;
+            register_window_base = control_constant_base;
+            register_window_end = control_constant_end;
+        }
         const std::uint32_t register_window_count =
             (register_window_end - register_window_base) / register_stride;
         if (register_offset >= register_window_count ||
@@ -236,9 +255,7 @@ decode_latte_pm4_display_list(
             const std::size_t value_index =
                 word_offset + 1U + register_index;
             result.register_writes.push_back({
-                is_config_register_packet
-                    ? LatteRegisterSpace::config
-                    : LatteRegisterSpace::context,
+                register_space,
                 register_window_base +
                     (register_offset + register_index) * register_stride,
                 words[value_index]});
