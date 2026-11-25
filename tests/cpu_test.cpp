@@ -16,6 +16,7 @@
 #include "gpu/gx2_register_state.hpp"
 #include "gpu/latte_shader_decoder.hpp"
 #include "gpu/latte_shader_interpreter.hpp"
+#include "gpu/latte_shader_program.hpp"
 #include "gpu/latte_surface_staging.hpp"
 #include "gpu/latte_vertex_fetch.hpp"
 #include "gpu/latte_texture_staging.hpp"
@@ -31953,6 +31954,7 @@ void latte_control_flow_decoder_tests()
     using affogato::gpu::decode_latte_alu_op2_groups;
     using affogato::gpu::decode_latte_control_flow;
     using affogato::gpu::evaluate_latte_normal_export;
+    using affogato::gpu::execute_latte_shader_subset;
     using affogato::gpu::LatteExportType;
     using affogato::gpu::evaluate_latte_alu_move_value;
     using affogato::gpu::execute_latte_alu_op2_clause;
@@ -32092,6 +32094,39 @@ void latte_control_flow_decoder_tests()
         0x80000000U,
         0x7F800000U};
     shader_registers[3U].fill(0xDEADBEEFU);
+
+    auto linear_shader_words = captured_alu_guest_words;
+    linear_shader_words[0U] = captured_alu_guest_words[2U];
+    linear_shader_words[1U] = captured_alu_guest_words[3U];
+    linear_shader_words[2U] = captured_alu_guest_words[4U];
+    linear_shader_words[3U] = captured_alu_guest_words[5U];
+    const auto shader_result = execute_latte_shader_subset(
+        linear_shader_words,
+        shader_registers);
+    assert(shader_result.registers[3U] == shader_registers[1U]);
+    assert(shader_result.exports.size() == 1U);
+    assert(shader_result.exports[0U].completes_type);
+    assert(shader_result.exports[0U].values.size() == 1U);
+    assert(shader_result.exports[0U].values[0U].type ==
+        LatteExportType::position);
+    assert(shader_result.exports[0U].values[0U].array_index == 0x3CU);
+    assert(shader_result.exports[0U].values[0U].components[0U] ==
+        shader_registers[1U][0U]);
+    assert(shader_result.exports[0U].values[0U].components[3U] ==
+        shader_registers[1U][3U]);
+
+    bool rejected_fetch_shader_call = false;
+    try
+    {
+        static_cast<void>(execute_latte_shader_subset(
+            captured_guest_words,
+            shader_registers));
+    }
+    catch (const std::runtime_error&)
+    {
+        rejected_fetch_shader_call = true;
+    }
+    assert(rejected_fetch_shader_call);
 
     const auto position_export = evaluate_latte_normal_export(
         *records[1U].export_fields,

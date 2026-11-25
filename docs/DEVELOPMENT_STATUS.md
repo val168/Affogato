@@ -514,3 +514,15 @@ draws, including the supported PM4 draw forms, submitted with the fixed
 diagnostic host shader. This verifies the visible diagnostic draw route only;
 guest Latte shaders, guest render-target writes from normal draws, and WWHD
 graphics remain unverified.
+
+## Straight-line Latte shader subset (2026-11-25)
+
+Added `execute_latte_shader_subset()` in
+[`latte_shader_program.hpp`](../src/gpu/latte_shader_program.hpp). It processes
+supported ALU clauses and normal export records in CF order, using caller-
+supplied initial GPRs, and returns the final GPR file plus ordered export
+batches. The assembled fixture verifies a MOV clause writing GPR 3 followed by
+a position export from that register. `CALL_FS` is rejected explicitly, as
+are other unsupported CF operations; the subset does not generate stage inputs,
+translate shaders to SPIR-V, or participate in guest draw submission. Debug
+and Release builds succeeded and CTest passed 2/2 in both configurations.

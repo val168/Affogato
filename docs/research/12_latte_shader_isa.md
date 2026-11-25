@@ -36,8 +36,12 @@ Relevant local implementation:
   clause executor supports sequences of four-slot X/Y/Z/W groups and commits
   guest-register updates only after all supported groups succeed. It also
   materializes the supported normal-export swizzle form into typed output
-  records. Shader control flow, ALU.Trans/PS state, literal/constant-file
-  reads, and other opcodes remain unsupported.
+  records.
+- `src/gpu/latte_shader_program.hpp` executes a straight-line subset containing
+  the supported ALU clauses and normal exports. It requires caller-provided
+  initial GPRs and explicitly rejects fetch-shader calls, branches, texture
+  clauses, and all unsupported CF operations. It is a testable CPU execution
+  slice, not connected to guest draw submission or Vulkan.
 
 ## Evidence categories
 
@@ -192,7 +196,7 @@ real shader fixtures before implementation.
 | GX2 vertex/pixel/geometry descriptor capture | Implemented and tested as capture | HLE descriptor/program range checks and draw-time state snapshots |
 | Fetch-shader parsing | Narrow diagnostic subset | `latte_vertex_fetch.hpp`; generated VTX programs only |
 | Latte shader control-flow decoding | Partial | `latte_shader_decoder.hpp` decodes fixture-verified `CALL_FS`, `EXPORT`, `EXPORT_DONE`, and `ALU` clause headers, including EOP, bounded clause ranges, and normal export metadata (type, GPRs, burst count, and component selectors). Unknown opcodes and malformed streams fail explicitly. Export values are not applied to stage outputs; branch/loop execution is absent. |
-| Latte ALU decoding/execution | Experimental subset | OP2 fields and LAST-delimited no-literal groups are decoded. A bounded clause executor runs sequential four-slot X/Y/Z/W groups with MOV and selected integer operations, forwards PV between groups within the clause, and leaves external registers unchanged if a later supported-subset check fails. ALU.Trans/PS, constant-file/literal reads, other opcodes, full shader control flow, and Latte-hardware validation are absent. |
+| Latte ALU decoding/execution | Experimental subset | OP2 fields and LAST-delimited no-literal groups are decoded. A bounded clause executor runs sequential four-slot X/Y/Z/W groups with MOV and selected integer operations, forwards PV between groups within the clause, and leaves external registers unchanged if a later supported-subset check fails. A straight-line shader subset connects ALU clauses to normal export materialization with caller-provided initial GPRs. Fetch shader execution, ALU.Trans/PS, constant-file/literal reads, other opcodes, general control flow, Vulkan use, and Latte-hardware validation are absent. |
 | Vertex/pixel shader translation | Missing | Stage interfaces, exports, constants, textures, and SPIR-V backend |
 | Guest shader integration with Vulkan draws | Missing | Shader modules, pipeline cache, descriptor binding, render-target path |
 | WWHD shader requirements | Unknown in Affogato | Existing recorded WWHD runs stop before a guest draw is captured |
@@ -404,6 +408,17 @@ temporary register file and commits only after every group is supported, so an
 unsupported later group cannot leave partial host-side test state. Tests cover
 PV forwarding across two groups and rejection without partial register writes.
 This is R700-family behavior and has not been validated against Latte hardware.
+
+`execute_latte_shader_subset()` connects the tested clause executor and normal
+export materializer for a bounded straight-line program. It processes CF
+records in guest order, resolves each ALU clause from its bytecode address,
+and records `EXPORT`/`EXPORT_DONE` batches in order. The caller supplies the
+initial GPR file, which means fetch-shader input generation is outside this
+subset. Unsupported CF records, including `CALL_FS`, fail explicitly; this
+avoids pretending to execute a fetch shader or control-flow operation. The
+fixture test removes the fetch-shader record from an assembled MOV/export
+program and verifies the resulting GPR and position export. No shader is yet
+executed by the emulator's normal draw path.
 
 Normal `EXPORT` and `EXPORT_DONE` records use the R700 Chapter 3.4.1
 `CF_ALLOC_EXPORT_DWORD0` and `CF_ALLOC_EXPORT_DWORD1_SWIZ` formats. The manual
