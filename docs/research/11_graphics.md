@@ -138,6 +138,32 @@ hidden guest-triangle Vulkan smoke test submits a guest `UNORM_8_8_8_8` triangle
 with the diagnostic host shader. No visible-window rerun or Latte shader
 execution is claimed for these formats.
 
+### Diagnostic swapchain pixel readback
+
+`VulkanRenderer` has an explicit frame-readback option used by the bounded
+guest-triangle SPIR-V smoke test. When enabled, swapchain creation requires
+the surface to advertise `VK_IMAGE_USAGE_TRANSFER_SRC_BIT` and the selected
+RGBA8/BGRA8 format to support transfer-source operations. A host-visible
+buffer is allocated per frame in flight; after rendering, the image transitions
+from `PRESENT_SRC_KHR` to `TRANSFER_SRC_OPTIMAL`, is copied to that buffer, and
+returns to presentation layout. The test waits for its submission, invalidates
+non-coherent memory when needed, and converts BGRA bytes to RGBA before checking
+an interior triangle pixel against the fixed diagnostic fragment output.
+This uses Vulkan's image-to-buffer copy requirements in the
+[Khronos Vulkan copy chapter](https://docs.vulkan.org/spec/latest/chapters/copies.html)
+and image usage rules in the
+[Vulkan image usage reference](https://docs.vulkan.org/refpages/latest/refpages/source/VkImageUsageFlagBits.html).
+
+On Debug, `--gx2-guest-triangle-spirv-smoke-test` passed on an NVIDIA GeForce
+RTX 5070 Laptop GPU, and the Debug Khronos validation layer emitted no
+messages. This is pixel evidence that captured guest vertex input and the
+bounded guest MOV vertex module rasterize through the diagnostic Vulkan
+pipeline. It is not a visible-window observation, does not write the guest
+color buffer, and still uses a fixed host fragment shader. The default
+renderer does not allocate readback buffers or synchronously wait for GPU
+completion. Swapchain readback is limited to four-channel RGBA/BGRA 8-bit
+formats; the test reports unsupported swapchain usage explicitly.
+
 ## Important state, formats, and invariants
 
 - `Gx2DrawCall` holds primitive mode, element count, indexed flag, index type,

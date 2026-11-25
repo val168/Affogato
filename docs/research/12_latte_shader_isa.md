@@ -753,9 +753,13 @@ module validity and encoding of this narrow pass-through shader. The explicit
 `--gx2-guest-triangle-spirv-smoke-test` then creates a Vulkan graphics pipeline
 from the generated module and submits captured guest draw ranges, using the
 fixed diagnostic fragment shader. The Debug run enables the Khronos validation
-layer when installed and emitted no validation messages. This is pipeline and
-draw-submission evidence, not pixel readback, visible-window verification, or
-CPU-versus-GPU output equivalence; normal guest draws remain capture-only.
+layer when installed and emitted no validation messages. The explicit test
+also copies a swapchain image to host-visible memory and checks an interior
+pixel for the diagnostic fragment output. This verifies rasterization of the
+captured guest vertex input and bounded MOV position output in that test path;
+it is not visible-window verification or CPU-versus-GPU output equivalence.
+Normal guest draws remain capture-only, and the fragment shader remains fixed
+host diagnostic code.
 
 The [Khronos SPIR-V specification](https://registry.khronos.org/SPIR-V/specs/unified1/SPIRV.html)
 defines module header and word-count encoding, logical instruction ordering,

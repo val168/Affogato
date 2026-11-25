@@ -509,7 +509,8 @@ std::vector<DiagnosticVertex> decode_diagnostic_latte_spirv_vertex_draw(
 
 }
 
-VulkanRenderer::VulkanRenderer(bool visible)
+VulkanRenderer::VulkanRenderer(bool visible, bool enable_frame_readback)
+    : frame_readback_enabled_(enable_frame_readback)
 {
     if (!glfwInit())
     {
@@ -1304,6 +1305,16 @@ void VulkanRenderer::create_swapchain()
         has_rgba8_swapchain_format &&
         (swapchain_format_properties.optimalTilingFeatures &
          VK_FORMAT_FEATURE_TRANSFER_DST_BIT) != 0U;
+    supports_swapchain_transfer_src_ =
+        (capabilities.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_SRC_BIT) != 0U &&
+        has_rgba8_swapchain_format &&
+        (swapchain_format_properties.optimalTilingFeatures &
+         VK_FORMAT_FEATURE_TRANSFER_SRC_BIT) != 0U;
+    if (frame_readback_enabled_ && !supports_swapchain_transfer_src_)
+    {
+        throw std::runtime_error(
+            "Vulkan swapchain does not support RGBA8 frame readback");
+    }
 
     std::uint32_t image_count = capabilities.minImageCount + 1U;
     if (capabilities.maxImageCount != 0U && image_count > capabilities.maxImageCount)
@@ -1324,6 +1335,10 @@ void VulkanRenderer::create_swapchain()
     if (supports_swapchain_transfer_dst_)
     {
         create_info.imageUsage |= VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    }
+    if (frame_readback_enabled_)
+    {
+        create_info.imageUsage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
     }
     if (families.graphics != families.present)
     {
@@ -1378,6 +1393,10 @@ void VulkanRenderer::create_swapchain()
     if (supports_swapchain_transfer_dst_)
     {
         create_scanout_upload_buffers();
+    }
+    if (frame_readback_enabled_)
+    {
+        create_frame_readback_buffers();
     }
 }
 
@@ -1443,6 +1462,116 @@ void VulkanRenderer::destroy_scanout_upload_buffers() noexcept
         }
     }
     scanout_upload_buffer_size_ = 0U;
+}
+
+void VulkanRenderer::create_frame_readback_buffers()
+{
+    const std::uint64_t pixel_count =
+        static_cast<std::uint64_t>(swapchain_extent_.width) * swapchain_extent_.height;
+    if (pixel_count > std::numeric_limits<VkDeviceSize>::max() / 4U)
+    {
+        throw std::runtime_error("Vulkan swapchain extent overflows frame readback size");
+    }
+    frame_readback_buffer_size_ = static_cast<VkDeviceSize>(pixel_count * 4U);
+
+    VkPhysicalDeviceMemoryProperties memory_properties{};
+    vkGetPhysicalDeviceMemoryProperties(physical_device_, &memory_properties);
+    for (FrameReadbackBuffer& readback : frame_readback_buffers_)
+    {
+        VkBufferCreateInfo buffer_info = make_info<VkBufferCreateInfo>(
+            VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO);
+        buffer_info.size = frame_readback_buffer_size_;
+        buffer_info.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+        buffer_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        check(vkCreateBuffer(device_, &buffer_info, nullptr, &readback.buffer),
+            "vkCreateBuffer(frame readback)");
+
+        VkMemoryRequirements requirements{};
+        vkGetBufferMemoryRequirements(device_, readback.buffer, &requirements);
+        const std::uint32_t memory_type_index = find_memory_type(
+            requirements.memoryTypeBits,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT,
+            VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+        readback.memory_coherent =
+            (memory_properties.memoryTypes[memory_type_index].propertyFlags &
+             VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) != 0U;
+        VkMemoryAllocateInfo allocation_info = make_info<VkMemoryAllocateInfo>(
+            VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO);
+        allocation_info.allocationSize = requirements.size;
+        allocation_info.memoryTypeIndex = memory_type_index;
+        check(vkAllocateMemory(device_, &allocation_info, nullptr, &readback.memory),
+            "vkAllocateMemory(frame readback)");
+        check(vkBindBufferMemory(device_, readback.buffer, readback.memory, 0U),
+            "vkBindBufferMemory(frame readback)");
+    }
+}
+
+void VulkanRenderer::destroy_frame_readback_buffers() noexcept
+{
+    if (device_ == VK_NULL_HANDLE)
+    {
+        return;
+    }
+    for (FrameReadbackBuffer& readback : frame_readback_buffers_)
+    {
+        if (readback.buffer != VK_NULL_HANDLE)
+        {
+            vkDestroyBuffer(device_, readback.buffer, nullptr);
+            readback.buffer = VK_NULL_HANDLE;
+        }
+        if (readback.memory != VK_NULL_HANDLE)
+        {
+            vkFreeMemory(device_, readback.memory, nullptr);
+            readback.memory = VK_NULL_HANDLE;
+        }
+    }
+    frame_readback_buffer_size_ = 0U;
+}
+
+void VulkanRenderer::read_frame_pixels(std::size_t frame_index)
+{
+    FrameReadbackBuffer& readback = frame_readback_buffers_[frame_index];
+    const std::size_t pixel_count =
+        static_cast<std::size_t>(swapchain_extent_.width) * swapchain_extent_.height;
+    Rgba8TextureStaging result{};
+    result.width = swapchain_extent_.width;
+    result.height = swapchain_extent_.height;
+    result.pixels.resize(pixel_count * 4U);
+
+    void* mapped_memory = nullptr;
+    check(vkMapMemory(
+        device_, readback.memory, 0U, VK_WHOLE_SIZE, 0U, &mapped_memory),
+        "vkMapMemory(frame readback)");
+    if (!readback.memory_coherent)
+    {
+        VkMappedMemoryRange invalidate_range = make_info<VkMappedMemoryRange>(
+            VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE);
+        invalidate_range.memory = readback.memory;
+        invalidate_range.offset = 0U;
+        invalidate_range.size = VK_WHOLE_SIZE;
+        const VkResult invalidate_result =
+            vkInvalidateMappedMemoryRanges(device_, 1U, &invalidate_range);
+        if (invalidate_result != VK_SUCCESS)
+        {
+            vkUnmapMemory(device_, readback.memory);
+            fail("vkInvalidateMappedMemoryRanges(frame readback)", invalidate_result);
+        }
+    }
+
+    const auto* source_pixels = static_cast<const std::uint8_t*>(mapped_memory);
+    const bool swapchain_is_bgra =
+        swapchain_format_ == VK_FORMAT_B8G8R8A8_SRGB ||
+        swapchain_format_ == VK_FORMAT_B8G8R8A8_UNORM;
+    for (std::size_t pixel_index = 0U; pixel_index < pixel_count; ++pixel_index)
+    {
+        const std::size_t offset = pixel_index * 4U;
+        result.pixels[offset] = source_pixels[offset + (swapchain_is_bgra ? 2U : 0U)];
+        result.pixels[offset + 1U] = source_pixels[offset + 1U];
+        result.pixels[offset + 2U] = source_pixels[offset + (swapchain_is_bgra ? 0U : 2U)];
+        result.pixels[offset + 3U] = source_pixels[offset + 3U];
+    }
+    vkUnmapMemory(device_, readback.memory);
+    frame_readback_ = std::move(result);
 }
 
 void VulkanRenderer::create_image_views()
@@ -1764,6 +1893,8 @@ void VulkanRenderer::create_synchronization()
 
 void VulkanRenderer::render_frame()
 {
+    frame_readback_.reset();
+
     int width = 0;
     int height = 0;
     glfwGetFramebufferSize(window_, &width, &height);
@@ -1988,6 +2119,91 @@ void VulkanRenderer::render_frame()
         }
         vkCmdEndRenderPass(command_buffer);
     }
+    if (frame_readback_enabled_)
+    {
+        VkImageMemoryBarrier to_transfer_source = make_info<VkImageMemoryBarrier>(
+            VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER);
+        to_transfer_source.srcAccessMask = present_guest_scanout
+            ? VK_ACCESS_TRANSFER_WRITE_BIT
+            : VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+        to_transfer_source.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+        to_transfer_source.oldLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+        to_transfer_source.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        to_transfer_source.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        to_transfer_source.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        to_transfer_source.image = swapchain_images_[image_index];
+        to_transfer_source.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        to_transfer_source.subresourceRange.baseMipLevel = 0U;
+        to_transfer_source.subresourceRange.levelCount = 1U;
+        to_transfer_source.subresourceRange.baseArrayLayer = 0U;
+        to_transfer_source.subresourceRange.layerCount = 1U;
+        vkCmdPipelineBarrier(
+            command_buffer,
+            present_guest_scanout
+                ? VK_PIPELINE_STAGE_TRANSFER_BIT
+                : VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+            VK_PIPELINE_STAGE_TRANSFER_BIT,
+            0U,
+            0U,
+            nullptr,
+            0U,
+            nullptr,
+            1U,
+            &to_transfer_source);
+
+        VkBufferImageCopy readback_region{};
+        readback_region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        readback_region.imageSubresource.layerCount = 1U;
+        readback_region.imageExtent = {
+            swapchain_extent_.width,
+            swapchain_extent_.height,
+            1U};
+        vkCmdCopyImageToBuffer(
+            command_buffer,
+            swapchain_images_[image_index],
+            VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+            frame_readback_buffers_[current_frame_].buffer,
+            1U,
+            &readback_region);
+
+        VkBufferMemoryBarrier to_host = make_info<VkBufferMemoryBarrier>(
+            VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER);
+        to_host.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        to_host.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
+        to_host.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        to_host.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        to_host.buffer = frame_readback_buffers_[current_frame_].buffer;
+        to_host.offset = 0U;
+        to_host.size = frame_readback_buffer_size_;
+        vkCmdPipelineBarrier(
+            command_buffer,
+            VK_PIPELINE_STAGE_TRANSFER_BIT,
+            VK_PIPELINE_STAGE_HOST_BIT,
+            0U,
+            0U,
+            nullptr,
+            1U,
+            &to_host,
+            0U,
+            nullptr);
+
+        VkImageMemoryBarrier to_present = to_transfer_source;
+        to_present.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+        to_present.dstAccessMask = 0U;
+        to_present.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        to_present.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+        vkCmdPipelineBarrier(
+            command_buffer,
+            VK_PIPELINE_STAGE_TRANSFER_BIT,
+            VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
+            0U,
+            0U,
+            nullptr,
+            0U,
+            nullptr,
+            1U,
+            &to_present);
+    }
     check(vkEndCommandBuffer(command_buffer), "vkEndCommandBuffer");
 
     const VkPipelineStageFlags wait_stage = present_guest_scanout
@@ -2006,6 +2222,14 @@ void VulkanRenderer::render_frame()
     if (present_guest_scanout)
     {
         swapchain_images_initialized_[image_index] = true;
+    }
+    if (frame_readback_enabled_)
+    {
+        check(vkWaitForFences(
+            device_, 1U, &in_flight_[current_frame_], VK_TRUE,
+            std::numeric_limits<std::uint64_t>::max()),
+            "vkWaitForFences(frame readback)");
+        read_frame_pixels(current_frame_);
     }
 
     VkPresentInfoKHR present_info = make_info<VkPresentInfoKHR>(VK_STRUCTURE_TYPE_PRESENT_INFO_KHR);
@@ -2104,6 +2328,7 @@ void VulkanRenderer::destroy_swapchain() noexcept
     }
     render_finished_.clear();
     swapchain_images_initialized_.clear();
+    destroy_frame_readback_buffers();
     destroy_scanout_upload_buffers();
     swapchain_images_.clear();
     images_in_flight_.clear();

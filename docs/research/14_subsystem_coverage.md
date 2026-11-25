@@ -52,12 +52,12 @@ mean the guest behavior is implemented.
 | Latte shader control-flow and clause records | Partial | `latte_shader_decoder.hpp` decodes fixture-verified `CALL_FS`, `EXPORT`, `EXPORT_DONE`, one `ALU` header variant, bounded raw slots, normal export metadata, and no-literal OP2 groups using LAST. Absolute-GPR normal exports can be materialized as typed CPU-side values, but are not applied to graphics stage outputs. Literal clauses and OP3 groups remain unsupported; branch/loop decoding or execution is absent. |
 | Primitive assembly | Diagnostic partial | Diagnostic route supports triangle lists, strips, fans, and draw-time U16/U32 LE/BE index expansion through `decode_latte_draw_vertex_indices()`; indexed format, first-vertex, base-vertex, invalid snapshot, restart, and overflow cases are CPU-tested. One explicitly selected diagnostic policy feeds these indices through the existing CPU vertex-shader subset; rasterization remains outside normal guest execution. |
 | Guest draw dispatch | Diagnostic only | Ordered captured commands can reach the fixed diagnostic host pipeline when explicitly opted in. Normal guest shader/render-target semantics are not executed. |
-| Vertex/pixel/geometry shader execution | Experimental CPU subset; explicit diagnostic use | Four-slot no-literal X/Y/Z/W OP2 groups support MOV; floating ADD, IEEE MUL, DX10 MAX/MIN; and integer AND/OR/XOR/NOT/ADD/SUB/MAX/MIN/comparison operations with absolute-GPR, inline-constant, absolute constant-file, or prior-PV sources. A straight-line CPU executor accepts sparse constant vectors and sequences ALU clauses with normal exports through a typed `LatteShaderIrProgram` containing OP2 clauses and normal exports. The controlled Vulkan triangle diagnostic now executes its captured guest VS subset per fetched vertex (GPR base zero) and passes position XY to fixed host diagnostic shaders. This does not execute shaders in normal guest draws, emit guest pixels, or write a guest render target. The generic executor rejects `CALL_FS`; the vertex-specific CPU path permits only a canonical leading call after separately processing Affogato's captured fetch subset. Other call forms and general control flow remain unsupported. Floating operations implement source sign modifiers and output scaling; DX10 min/max preserve the manual's ordered selection behavior. MOV applies source-0 absolute/negate as binary32 sign-bit operations; integer operations reject those modifiers. Predicate selection, predicate/mask updates, destination clamp, and nonzero bank swizzles are rejected. Coverage is based on R700-family semantics and assembled fixtures, not Latte hardware validation. Kcache, literals, relative constant addressing, PS, texture execution, general SPIR-V translation and normal guest draw integration remain absent; a bounded MOV-to-position vertex module subset is generated, `spirv-val` validated, and used by an explicit diagnostic Vulkan draw policy. Pixel readback and normal guest shader execution remain unverified. |
+| Vertex/pixel/geometry shader execution | Experimental CPU subset; explicit diagnostic use | Four-slot no-literal X/Y/Z/W OP2 groups support MOV; floating ADD, IEEE MUL, DX10 MAX/MIN; and integer AND/OR/XOR/NOT/ADD/SUB/MAX/MIN/comparison operations with absolute-GPR, inline-constant, absolute constant-file, or prior-PV sources. A straight-line CPU executor accepts sparse constant vectors and sequences ALU clauses with normal exports through a typed `LatteShaderIrProgram` containing OP2 clauses and normal exports. The controlled Vulkan triangle diagnostic executes its captured guest VS subset per fetched vertex (GPR base zero), emits bounded MOV-to-position SPIR-V, and passes position XY to a fixed host diagnostic fragment shader. The explicit smoke test reads back an interior swapchain pixel and verifies the diagnostic fragment output. This does not execute shaders in normal guest draws or write a guest render target. The generic executor rejects `CALL_FS`; the vertex-specific CPU path permits only a canonical leading call after separately processing Affogato's captured fetch subset. Other call forms and general control flow remain unsupported. Floating operations implement source sign modifiers and output scaling; DX10 min/max preserve the manual's ordered selection behavior. MOV applies source-0 absolute/negate as binary32 sign-bit operations; integer operations reject those modifiers. Predicate selection, predicate/mask updates, destination clamp, and nonzero bank swizzles are rejected. Coverage is based on R700-family semantics and assembled fixtures, not Latte hardware validation. Kcache, literals, relative constant addressing, PS, texture execution, general SPIR-V translation and normal guest draw integration remain absent. |
 | Texture/sampler decode | Partial | Selected register descriptors are decoded; bounded linear-aligned, 1D thin1, and zero-swizzle 2D thin1 CPU staging exists for selected 8/16/32-bit UNORM formats. Guest shader sampling, depth tiling, mip/array/compressed staging, and other layouts remain absent. |
 | Depth/stencil/blend/raster state | Partial capture | Some HLE register state is recorded; Vulkan state mapping and guest draw behavior are absent. |
 | GPU memory coherence | Blocked | Requires an explicit ownership/ordering model between emulator worker, renderer thread, host Vulkan resources, guest reads and scanout. |
 | GPU synchronization/fences | Partial capture | Flush/draw-done/fence events are represented; actual completion, wait, and memory visibility semantics are not implemented. |
-| Vulkan backend | Implemented and verified backend subset | Window, swapchain, scanout upload, diagnostic shader and texture/clear smoke routes work; does not imply Latte execution. |
+| Vulkan backend | Implemented and verified backend subset | Window, swapchain, scanout upload, diagnostic shader and texture/clear smoke routes work. The opt-in triangle test copies the rendered swapchain image to host memory and checks a diagnostic pixel. This does not imply normal Latte execution or guest render-target writes. |
 
 ## GX2 and Cafe OS
 
@@ -84,7 +84,11 @@ mean the guest behavior is implemented.
 - `--gx2-guest-scanout-smoke-test` validates guest HLE clear/copy/scanout bytes
   and Vulkan submission. It does not execute a guest draw.
 - `--gx2-guest-triangle-smoke-test` exercises controlled PPC/HLE draws and
-  guest-backed snapshots with diagnostic shaders. An earlier version of the
+  guest-backed snapshots with diagnostic shaders. The SPIR-V variant copies
+  the swapchain image to host memory and checks an interior pixel for the
+  diagnostic fragment color. This verifies diagnostic raster output, not
+  visible presentation, guest color-buffer writes, guest pixel shaders, or
+  WWHD. An earlier version of the
   visible `--gx2-guest-triangle-display-test` was observed on the NVIDIA
   GeForce RTX 5070 Laptop GPU; its raw-attribute diagnostic geometry remained
   responsive after resizing and closed cleanly with no Vulkan validation
@@ -112,9 +116,8 @@ mean the guest behavior is implemented.
    command bytes.
 4. Add a shared, independently tested surface-address/format subsystem before
    attempting guest draw writes or additional tiled scanout formats.
-5. Add offscreen color readback for the bounded MOV-to-position SPIR-V draw,
-   compare pixels with CPU reference output, then expand the typed IR/backend
-   for verified instruction families.
+5. Compare readback pixels with CPU reference output, then expand the typed
+   IR/backend for verified instruction families.
 6. Feed a controlled WUT/Decaf-derived guest draw through captured vertex,
    shader, target, copy, and scanout state; verify pixels by readback.
 7. Rerun title workloads and collect actual draw/shader/surface evidence before

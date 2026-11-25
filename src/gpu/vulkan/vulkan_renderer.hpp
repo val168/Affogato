@@ -34,7 +34,9 @@ enum class GuestDrawPolicy
 class VulkanRenderer
 {
 public:
-    explicit VulkanRenderer(bool visible = true);
+    explicit VulkanRenderer(
+        bool visible = true,
+        bool enable_frame_readback = false);
     ~VulkanRenderer();
 
     VulkanRenderer(const VulkanRenderer&) = delete;
@@ -47,6 +49,10 @@ public:
         std::span<const DiagnosticVertex> vertices);
     void clear_guest_diagnostic_draws() noexcept;
     [[nodiscard]] bool set_guest_scanout(Rgba8TextureStaging scanout);
+    [[nodiscard]] const std::optional<Rgba8TextureStaging>& frame_readback() const noexcept
+    {
+        return frame_readback_;
+    }
     void consume_guest_commands(
         std::span<const cpu::espresso::Gx2Command> commands,
         GuestDrawPolicy draw_policy = GuestDrawPolicy::capture_only);
@@ -91,6 +97,13 @@ private:
         bool memory_coherent{};
     };
 
+    struct FrameReadbackBuffer
+    {
+        VkBuffer buffer{};
+        VkDeviceMemory memory{};
+        bool memory_coherent{};
+    };
+
     struct DiagnosticDrawRange
     {
         std::uint32_t first_vertex{};
@@ -120,6 +133,9 @@ private:
     void create_synchronization();
     void create_scanout_upload_buffers();
     void destroy_scanout_upload_buffers() noexcept;
+    void create_frame_readback_buffers();
+    void destroy_frame_readback_buffers() noexcept;
+    void read_frame_pixels(std::size_t frame_index);
     void recreate_swapchain();
     void destroy_swapchain() noexcept;
     void destroy_uploaded_textures() noexcept;
@@ -161,6 +177,8 @@ private:
     std::vector<bool> swapchain_images_initialized_;
     std::array<ScanoutUploadBuffer, frames_in_flight> scanout_upload_buffers_{};
     VkDeviceSize scanout_upload_buffer_size_{};
+    std::array<FrameReadbackBuffer, frames_in_flight> frame_readback_buffers_{};
+    VkDeviceSize frame_readback_buffer_size_{};
     VkBuffer diagnostic_vertex_buffer_{};
     VkDeviceMemory diagnostic_vertex_memory_{};
     bool diagnostic_vertex_memory_coherent_{};
@@ -170,8 +188,11 @@ private:
     bool diagnostic_draw_uses_latte_vertex_pipeline_{};
     std::vector<std::uint8_t> scaled_scanout_pixels_;
     bool supports_swapchain_transfer_dst_{};
+    bool supports_swapchain_transfer_src_{};
+    bool frame_readback_enabled_{};
     bool guest_scanout_dirty_{};
     std::optional<Rgba8TextureStaging> guest_scanout_;
+    std::optional<Rgba8TextureStaging> frame_readback_;
     std::vector<UploadedTexture> uploaded_textures_;
     std::size_t current_frame_{};
     std::array<float, 4U> guest_clear_color_{0.025F, 0.055F, 0.09F, 1.0F};

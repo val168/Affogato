@@ -1,5 +1,24 @@
 # Affogato Development Status
 
+## Diagnostic Vulkan pixel readback for the Latte MOV vertex subset (2026-11-25)
+
+The explicit guest-triangle diagnostic can request swapchain transfer-source
+usage and copy the rendered image into host-visible memory. The
+`--gx2-guest-triangle-spirv-smoke-test` enables this test-only path, waits for
+its submitted frame, normalizes the supported BGRA/RGBA byte order, and checks
+an interior pixel for the fixed diagnostic fragment color. Debug and Release
+builds and CTest passed 6/6 in both configurations, including the opt-in GPU
+integration test. The test passed on an NVIDIA GeForce RTX 5070 Laptop GPU.
+The Debug renderer enables `VK_LAYER_KHRONOS_validation` when installed and
+emitted no validation messages. This verifies that captured guest vertex input
+and the bounded MOV vertex module rasterize into the swapchain image. It does
+not verify visible-window output, guest color-buffer writes, guest pixel
+shaders, or WWHD. Normal rendering does not allocate readback buffers or wait
+synchronously. See [`research/11_graphics.md`](research/11_graphics.md).
+Enable its CTest registration with
+`-DAFFOGATO_ENABLE_VULKAN_INTEGRATION_TESTS=ON`; it is off by default so the
+standard suite remains usable without a Vulkan-capable display.
+
 ## Diagnostic Vulkan draw using the Latte MOV vertex subset (2026-11-25)
 
 An opt-in `--gx2-guest-triangle-spirv-smoke-test` now takes captured guest
@@ -9,10 +28,10 @@ the captured triangle-list, strip, and fan draw ranges. The fixed diagnostic
 fragment shader is still used. Debug and Release builds passed, CTest passed
 5/5 in both configurations, and the hidden smoke passed in both; the Debug
 renderer enables `VK_LAYER_KHRONOS_validation` when installed, and no
-validation messages were emitted. This verifies Vulkan pipeline creation and
-draw submission for the supported guest MOV vertex shader, not pixel readback,
-visible-window output, arbitrary shaders, guest render-target writes, or
-WWHD. See [`research/12_latte_shader_isa.md`](research/12_latte_shader_isa.md).
+validation messages were emitted. That stage verified Vulkan pipeline
+creation and draw submission. Pixel readback evidence is recorded above;
+arbitrary shaders, guest render-target writes, and WWHD remain unsupported.
+See [`research/12_latte_shader_isa.md`](research/12_latte_shader_isa.md).
 
 ## Validated SPIR-V vertex MOV subset (2026-11-25)
 

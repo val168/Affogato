@@ -9,6 +9,11 @@ enable_language(C)
 include(CTest)
 include(FetchContent)
 
+option(AFFOGATO_ENABLE_VULKAN_INTEGRATION_TESTS
+    "Run Vulkan tests that require an available graphics device and window system"
+    OFF
+)
+
 find_package(Vulkan 1.3 REQUIRED)
 
 if(NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
@@ -278,6 +283,13 @@ if(BUILD_TESTING)
             -Wall -Wextra -Wpedantic -UNDEBUG)
     endif()
     add_test(NAME affogato_recompiler_tests COMMAND affogato_recompiler_tests)
+
+    if(AFFOGATO_ENABLE_VULKAN_INTEGRATION_TESTS)
+        add_test(
+            NAME affogato_vulkan_guest_triangle_readback
+            COMMAND affogato_frontend --gx2-guest-triangle-spirv-smoke-test
+        )
+    endif()
 
     add_executable(affogato_recompiler_benchmark
         tests/recompiler_benchmark.cpp

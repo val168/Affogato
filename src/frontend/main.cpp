@@ -2335,7 +2335,7 @@ int run_gx2_guest_triangle_test(
             "GX2 UNORM8x4 position format was not captured correctly");
     }
 
-    affogato::gpu::vulkan::VulkanRenderer renderer(visible_window);
+    affogato::gpu::vulkan::VulkanRenderer renderer(visible_window, true);
     renderer.consume_guest_commands(
         commands,
         use_latte_spirv
@@ -2345,6 +2345,23 @@ int run_gx2_guest_triangle_test(
                 diagnostic_latte_vertex_position_base_zero);
     renderer.set_guest_clear_color({0.08F, 0.75F, 0.2F, 1.0F});
     renderer.render_frame();
+    const auto& rendered_frame = renderer.frame_readback();
+    if (!rendered_frame || rendered_frame->width == 0U ||
+        rendered_frame->height == 0U)
+    {
+        throw std::runtime_error("Vulkan guest triangle frame readback is unavailable");
+    }
+    const std::uint32_t sample_x = rendered_frame->width / 2U;
+    const std::uint32_t sample_y = (rendered_frame->height * 5U) / 12U;
+    const std::size_t sample_offset =
+        (static_cast<std::size_t>(sample_y) * rendered_frame->width + sample_x) * 4U;
+    if (rendered_frame->pixels.size() < sample_offset + 4U ||
+        rendered_frame->pixels[sample_offset] < 200U ||
+        rendered_frame->pixels[sample_offset + 2U] > 40U)
+    {
+        throw std::runtime_error(
+            "Vulkan guest triangle readback did not contain the diagnostic fragment color");
+    }
     while (visible_window && !renderer.should_close())
     {
         renderer.poll_events();
@@ -2357,7 +2374,7 @@ int run_gx2_guest_triangle_test(
               << (use_latte_spirv
                     ? "the bounded MOV-to-position SPIR-V vertex subset"
                     : "the supported CPU MOV/export shader subset")
-              << ", then the fixed diagnostic fragment shader on "
+              << ", and frame readback verified the diagnostic fragment output on "
               << renderer.device_name()
               << ". General Latte shader translation and guest render-target writes "
               << "remain unsupported.\n";
