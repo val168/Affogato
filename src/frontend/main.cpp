@@ -2040,8 +2040,8 @@ int run_gx2_guest_triangle_test(
         color_buffer_descriptor_address,
         0U});
 
-    // This bounded diagnostic program copies fetched VS input r1 to r3 and
-    // exports r3 as position. It exercises only the existing CPU MOV subset.
+    // The CPU diagnostic uses MOV; the SPIR-V variant uses ADD with zero to
+    // preserve the same position while exercising binary32 shader arithmetic.
     std::array<std::uint32_t, 0x134U / sizeof(std::uint32_t)>
         vertex_shader_descriptor{};
     vertex_shader_descriptor[0x40U / sizeof(std::uint32_t)] = 32U;
@@ -2067,6 +2067,24 @@ int run_gx2_guest_triangle_test(
     vertex_shader_program[69U] = 0x900C6040U;
     vertex_shader_program[70U] = 0x010C0080U;
     vertex_shader_program[71U] = 0x900C6060U;
+    if (use_latte_spirv)
+    {
+        for (std::uint32_t component = 0U; component < 4U; ++component)
+        {
+            const std::uint32_t slot = 64U + component * 2U;
+            const std::uint32_t source_word =
+                1U |
+                (248U << 13U) |
+                (component << 10U) |
+                (component << 23U) |
+                (component == 3U ? 0x80000000U : 0U);
+            const std::uint32_t destination_word =
+                0x00600010U | (component << 29U);
+            vertex_shader_program[slot] = std::byteswap(source_word);
+            vertex_shader_program[slot + 1U] =
+                std::byteswap(destination_word);
+        }
+    }
     for (std::size_t index = 0U; index < vertex_shader_descriptor.size(); ++index)
     {
         core.memory.write32_be(
@@ -2602,7 +2620,7 @@ int run_gx2_guest_triangle_test(
               << "including unpredicated PM4 auto-index, indexed, and immediate-index "
               << "draws used captured guest vertex input and "
               << (use_latte_spirv
-                    ? "the bounded MOV-to-position SPIR-V vertex subset"
+                    ? "the bounded MOV/ADD-to-position SPIR-V vertex subset"
                     : "the supported CPU MOV/export shader subset")
               << "; Vulkan readback and guest-memory writeback verified the "
                  "diagnostic color-buffer path on "

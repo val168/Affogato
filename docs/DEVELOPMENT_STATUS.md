@@ -11,10 +11,12 @@ sources and other unsupported modifiers remain rejected. The encoding and
 Latte hardware behavior has not been independently verified. CPU-only tests
 check emitted operations and modifier handling, and `spirv-val` validates the
 generated module. Debug and Release builds passed; CTest passed 7/7 in both,
-including the existing diagnostic Vulkan readback test. That Vulkan test still
-uses the MOV fixture: this checkpoint does not establish runtime execution of
-a guest ADD shader, ordinary guest draw rendering, guest pixel shaders, or
-WWHD. See [`research/12_latte_shader_isa.md`](research/12_latte_shader_isa.md).
+including the diagnostic Vulkan readback test. Its guest vertex shader now
+uses ADD with a zero source, preserving the known geometry while routing the
+generated ADD module through Vulkan and checking the resulting frame readback.
+This does not yet verify a nonzero arithmetic result against a pixel location,
+ordinary guest draw rendering, guest pixel shaders, or WWHD. See
+[`research/12_latte_shader_isa.md`](research/12_latte_shader_isa.md).
 
 ## Guest draw-to-scanout ordering audit (2026-11-25)
 
