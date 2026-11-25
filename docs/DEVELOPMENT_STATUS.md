@@ -415,10 +415,20 @@ is family-reference behavior, not direct Latte hardware verification.
 
 Added selector `254` support for the R700-family PV source when the caller
 supplies the preceding supported group result. MOV and integer bitwise
-instructions can read PV components, while constants, literal slots, and PS
-remain unsupported. A missing incoming PV value is rejected before register
-writeback. Tests verify a first group feeding a second group and failure
-without partial writes. Debug and Release builds succeeded; CTest passed 2/2 in
-both configurations, and `git diff --check` is clean. This PV forwarding subset
-is based on R700-family documentation and has not been verified against Latte
-hardware.
+instructions can read PV components. A missing incoming PV value is rejected
+before register writeback. Tests verify a first group feeding a second group
+and failure without partial writes. Debug and Release builds succeeded; CTest
+passed 2/2 in both configurations, and `git diff --check` is clean. This PV
+forwarding subset is based on R700-family documentation and has not been
+verified against Latte hardware.
+
+## Latte inline constants and NOT_INT (2026-11-25)
+
+Added the R700-family inline source selectors `248`–`252` and `NOT_INT` opcode
+`0x033` to the bounded four-lane OP2 path. The decoder records the source
+absolute modifiers at word1 bits 0 and 1; the current raw-bit evaluators reject
+them rather than treating floating-point absolute-value behavior as a no-op.
+Tests check exact constant bit patterns, decode/execute AND, OR, XOR, and NOT
+groups, and verify unsupported modifiers fail before writeback. Debug and
+Release builds succeeded; CTest passed 2/2 in each, and `git diff --check` is
+clean. Behavior is not verified against Latte hardware.

@@ -31,11 +31,11 @@ Relevant local implementation:
   to the little-endian Latte DWORD values represented in GFD shader code, then
   decodes a narrow control-flow subset, ALU clause ranges, OP2 fields, and
   no-literal OP2 group boundaries.
-- `src/gpu/latte_shader_interpreter.hpp` evaluates absolute-GPR MOV and integer
-  AND/OR/XOR values and executes supported four-slot X/Y/Z/W groups. It can
-  forward a previous group's PV value when explicitly supplied. It returns the
-  vector-group result and applies guest-register writes; shader clauses, PS
-  state, constants, literals, and other opcodes remain unsupported.
+- `src/gpu/latte_shader_interpreter.hpp` evaluates MOV and integer bitwise
+  OP2 values from absolute GPRs, inline constants, and supplied prior-PV values.
+  Its four-slot X/Y/Z/W executor applies guest-register writes and returns the
+  group vector result; shader clauses, PS state, literal/constant-file reads,
+  and other opcodes remain unsupported.
 
 ## Evidence categories
 
@@ -187,7 +187,7 @@ real shader fixtures before implementation.
 | GX2 vertex/pixel/geometry descriptor capture | Implemented and tested as capture | HLE descriptor/program range checks and draw-time state snapshots |
 | Fetch-shader parsing | Narrow diagnostic subset | `latte_vertex_fetch.hpp`; generated VTX programs only |
 | Latte shader control-flow decoding | Partial | `latte_shader_decoder.hpp` decodes fixture-verified `CALL_FS`, `EXPORT`, `EXPORT_DONE`, and `ALU` clause headers, including EOP and bounded clause ranges. Unknown opcodes and malformed streams fail explicitly. No branch/loop decoding or clause execution. |
-| Latte ALU decoding/execution | Experimental subset | OP2 fields and LAST-delimited no-literal groups are decoded. Four-slot X/Y/Z/W groups support MOV and integer AND/OR/XOR with absolute GPR or supplied prior-PV sources and no modifiers; destination lanes are written after parallel source reads and the vector result is returned. No PS, constants, literals, other opcodes, clause execution, or Latte-hardware validation. |
+| Latte ALU decoding/execution | Experimental subset | OP2 fields and LAST-delimited no-literal groups are decoded. Four-slot X/Y/Z/W groups support MOV and integer AND/OR/XOR/NOT with absolute GPR, inline constant, or supplied prior-PV sources and no modifiers; destination lanes are written after parallel source reads and the vector result is returned. No PS, constant-file/literal reads, other opcodes, clause execution, or Latte-hardware validation. |
 | Vertex/pixel shader translation | Missing | Stage interfaces, exports, constants, textures, and SPIR-V backend |
 | Guest shader integration with Vulkan draws | Missing | Shader modules, pipeline cache, descriptor binding, render-target path |
 | WWHD shader requirements | Unknown in Affogato | Existing recorded WWHD runs stop before a guest draw is captured |
@@ -308,27 +308,41 @@ unterminated final group. This does not parse literal payload slots or execute
 groups. The pass-through fixture contains one four-slot group and no literals.
 
 `execute_latte_alu_op2_vector_group()` supports four ordered X/Y/Z/W slots with
-MOV or integer AND/OR/XOR, absolute GPR or explicitly supplied previous-PV
-sources, write masks enabled, and no other modifiers. It gathers all sources
-before updating destination lanes and returns the resulting vector value. A
-missing PV input is rejected before any destination write. Tests cover
-bit-preserving MOV values, same-group source/destination overlap, PV forwarding,
-integer truth tables, and rejection without partial register writes. The group
-behavior follows the R700-family reference and the assembled fixture; it is
-not independently verified against Latte hardware. PS, constants, literals,
-other groups/opcodes, clause execution, shader IR, and translation remain
-absent. The pass-through shader does not establish complete shader decoding.
+MOV or integer AND/OR/XOR/NOT, absolute GPR or explicitly supplied previous-PV
+sources, inline constants `248`–`252`, write masks enabled, and no other
+modifiers. The OP2 decoder records `SRC0_ABS` and `SRC1_ABS` from word1 bits 0
+and 1. The bounded raw-bit evaluator rejects these modifiers; the R700 manual
+defines absolute value only for floating-point inputs, whose semantics are not
+implemented here. The executor gathers all sources before updating destination
+lanes and returns the resulting vector value. A missing PV input is rejected
+before any destination write. Tests cover bit-preserving MOV values, same-group
+source/destination overlap, PV forwarding, inline constant bit patterns,
+integer logical truth tables, and rejection without partial register writes.
+The group behavior follows the R700-family reference and the assembled fixture;
+it is not independently verified against Latte hardware. PS, literal and
+constant-file reads, other groups/opcodes, clause execution, shader IR, and
+translation remain absent. The pass-through shader does not establish complete
+shader decoding.
 
 For the integer logic subset, the R700 manual documents `AND_INT` as
-`src0 & src1` (Chapter 9, “AND Bitwise”), with corresponding OR/XOR operations
-in the integer instruction tables. Cemu's `LatteClauseInstruction_ALU` opcode
-definitions map `AND_INT`, `OR_INT`, and `XOR_INT` to `0x030`, `0x031`, and
-`0x032`. Affogato tests those raw opcode fields through its decoder and checks
-the bitwise results. These references are family/implementation evidence; no
-Latte hardware output has been captured for this subset.
+`src0 & src1` (Chapter 9, “AND Bitwise”), `NOT_INT` as `~src0` (Chapter 9,
+“Bit-Wise NOT”), and corresponding OR/XOR operations in the integer instruction
+tables. Cemu's `LatteClauseInstruction_ALU` opcode definitions map these
+instructions to `0x030`–`0x033`. Affogato tests those raw opcode fields through
+its decoder and checks the bitwise results. These references are
+family/implementation evidence; no Latte hardware output has been captured
+for this subset.
 
-The same R700 microcode table assigns selector `254` to PV and `255` to PS
-(Chapter 10, `ALU_WORD0`). Affogato now accepts PV only when the caller supplies
-the preceding supported vector-group result. Selector `255`, inline constants,
-constant files, and literal slots remain explicit errors; PS requires a scalar
+The R700 microcode table assigns selectors `248`–`252` to the inline constants
+`0.0`, `1.0`, integer `1`, integer `-1`, and `0.5`; selector `254` is PV and
+`255` is PS (Chapter 10, `ALU_WORD0`). Affogato returns the exact 32-bit
+patterns for those inline constants and accepts PV only when the caller
+supplies the preceding supported vector-group result. Selector `253` literals,
+constant files, and selector `255` PS remain unsupported; PS requires a scalar
 ALU.Trans implementation that Affogato does not yet have.
+
+The R700 `ALU_WORD1_OP2` field table places `SRC0_ABS` at bit 0 and `SRC1_ABS`
+at bit 1 (Chapter 10, page 10-18). It describes absolute value before
+negation and says to use it only for floating-point inputs. The decoder exposes
+these bits, while the current evaluator rejects them pending floating-point
+modifier semantics.

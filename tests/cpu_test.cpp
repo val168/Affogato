@@ -32039,6 +32039,8 @@ void latte_control_flow_decoder_tests()
     assert(!first_move.source1_relative);
     assert(!first_move.source0_negate);
     assert(!first_move.source1_negate);
+    assert(!first_move.source0_absolute);
+    assert(!first_move.source1_absolute);
     assert(!first_move.destination_relative);
     assert(!first_move.destination_clamp);
     assert(first_move.output_modifier == 0U);
@@ -32113,6 +32115,43 @@ void latte_control_flow_decoder_tests()
     assert((forwarded_vector == previous_vector));
     assert((shader_registers[5U] == previous_vector));
 
+    using affogato::gpu::latte_alu_source_half_float_selector;
+    using affogato::gpu::latte_alu_source_negative_one_integer_selector;
+    using affogato::gpu::latte_alu_source_one_float_selector;
+    using affogato::gpu::latte_alu_source_one_integer_selector;
+    using affogato::gpu::latte_alu_source_zero_selector;
+
+    constexpr std::array<std::uint16_t, 4U> inline_constant_selectors{
+        latte_alu_source_zero_selector,
+        latte_alu_source_one_float_selector,
+        latte_alu_source_one_integer_selector,
+        latte_alu_source_negative_one_integer_selector};
+    auto inline_constant_slots = alu_slots;
+    for (std::size_t component = 0U;
+         component < inline_constant_slots.size();
+         ++component)
+    {
+        auto& slot = inline_constant_slots[component];
+        slot.word0 = (slot.word0 & ~0x1FFU) |
+            inline_constant_selectors[component];
+        slot.word1 = (slot.word1 & ~(0x7FU << 21U)) | (6U << 21U);
+    }
+    inline_constant_slots.back().word0 =
+        (inline_constant_slots.back().word0 & ~0x1FFU) |
+        latte_alu_source_half_float_selector;
+    const auto inline_constant_groups =
+        decode_latte_alu_op2_groups(inline_constant_slots);
+    assert(inline_constant_groups.size() == 1U);
+    const LatteShaderRegister expected_inline_constants{
+        0x00000000U,
+        0x3F800000U,
+        0x00000001U,
+        0x3F000000U};
+    const auto inline_constant_vector = execute_latte_alu_op2_vector_group(
+        inline_constant_groups[0U], shader_registers);
+    assert((inline_constant_vector == expected_inline_constants));
+    assert((shader_registers[6U] == expected_inline_constants));
+
     auto parallel_move_group = alu_groups[0U];
     for (std::size_t component = 0U;
          component < parallel_move_group.instructions.size();
@@ -32150,6 +32189,7 @@ void latte_control_flow_decoder_tests()
     assert(shader_registers == registers_before_unsupported_group);
 
     using affogato::gpu::latte_alu_op2_and_integer_opcode;
+    using affogato::gpu::latte_alu_op2_not_integer_opcode;
     using affogato::gpu::latte_alu_op2_or_integer_opcode;
     using affogato::gpu::latte_alu_op2_xor_integer_opcode;
 
@@ -32168,7 +32208,7 @@ void latte_control_flow_decoder_tests()
         latte_alu_op2_and_integer_opcode,
         latte_alu_op2_or_integer_opcode,
         latte_alu_op2_xor_integer_opcode,
-        latte_alu_op2_and_integer_opcode};
+        latte_alu_op2_not_integer_opcode};
     auto integer_logic_slots = alu_slots;
     for (std::size_t component = 0U;
          component < integer_logic_slots.size();
@@ -32186,6 +32226,9 @@ void latte_control_flow_decoder_tests()
     integer_logic_slots[0U].word0 =
         (integer_logic_slots[0U].word0 & ~(0x1FFU << 13U)) |
         (254U << 13U);
+    integer_logic_slots[1U].word0 =
+        (integer_logic_slots[1U].word0 & ~0x1FFU) |
+        latte_alu_source_negative_one_integer_selector;
     const auto integer_logic_groups =
         decode_latte_alu_op2_groups(integer_logic_slots);
     assert(integer_logic_groups.size() == 1U);
@@ -32206,7 +32249,7 @@ void latte_control_flow_decoder_tests()
         0x30A00000U,
         0xFFFFFFFFU,
         0x8000FFFFU,
-        0x00000000U};
+        0xFEDCBA98U};
     const auto integer_logic_vector = execute_latte_alu_op2_vector_group(
         integer_logic_group,
         shader_registers,
@@ -32256,6 +32299,48 @@ void latte_control_flow_decoder_tests()
     }
     assert(rejected_op3_layout);
 
+    constexpr std::array<std::uint32_t, 2U> source_absolute_masks{
+        1U,
+        2U};
+    for (const std::uint32_t source_absolute_mask : source_absolute_masks)
+    {
+        bool rejected_source_absolute_modifier = false;
+        try
+        {
+            shader_registers[3U].fill(0xDEADBEEFU);
+            if (source_absolute_mask == 1U)
+            {
+                auto absolute_source_slots = alu_slots;
+                absolute_source_slots[0U].word1 |= source_absolute_mask;
+                const auto absolute_source_groups =
+                    decode_latte_alu_op2_groups(absolute_source_slots);
+                static_cast<void>(execute_latte_alu_op2_vector_group(
+                    absolute_source_groups[0U],
+                    shader_registers));
+            }
+            else
+            {
+                auto absolute_source_slots = integer_logic_slots;
+                absolute_source_slots[0U].word1 |= source_absolute_mask;
+                const auto absolute_source_groups =
+                    decode_latte_alu_op2_groups(absolute_source_slots);
+                static_cast<void>(execute_latte_alu_op2_vector_group(
+                    absolute_source_groups[0U],
+                    shader_registers,
+                    incoming_previous_vector));
+            }
+        }
+        catch (const std::runtime_error&)
+        {
+            rejected_source_absolute_modifier = true;
+        }
+
+        assert(rejected_source_absolute_modifier);
+        assert((shader_registers[3U] ==
+                LatteShaderRegister{0xDEADBEEFU, 0xDEADBEEFU,
+                                    0xDEADBEEFU, 0xDEADBEEFU}));
+    }
+
     std::array<LatteShaderRegister, 128U> guest_registers{};
     std::array<std::uint32_t, 4U> move_results{};
     guest_registers[1U] = {
@@ -32273,20 +32358,11 @@ void latte_control_flow_decoder_tests()
     assert((move_results == guest_registers[1U]));
     assert(guest_registers[2U] == LatteShaderRegister{});
 
-    bool rejected_constant_source = false;
-    try
-    {
-        auto constant_source_move = first_move;
-        constant_source_move.source0_selector = 248U;
-        static_cast<void>(evaluate_latte_alu_move_value(
-            constant_source_move,
-            guest_registers));
-    }
-    catch (const std::runtime_error&)
-    {
-        rejected_constant_source = true;
-    }
-    assert(rejected_constant_source);
+    auto zero_constant_move = first_move;
+    zero_constant_move.source0_selector =
+        affogato::gpu::latte_alu_source_zero_selector;
+    assert(evaluate_latte_alu_move_value(zero_constant_move, guest_registers) ==
+           0x00000000U);
 
     bool rejected_short_register_file = false;
     try

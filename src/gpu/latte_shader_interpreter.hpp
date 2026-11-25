@@ -16,12 +16,20 @@ inline constexpr std::uint16_t latte_alu_op2_move_opcode = 0x019U; // OP2_INST_M
 inline constexpr std::uint16_t latte_alu_op2_and_integer_opcode = 0x030U;
 inline constexpr std::uint16_t latte_alu_op2_or_integer_opcode = 0x031U;
 inline constexpr std::uint16_t latte_alu_op2_xor_integer_opcode = 0x032U;
+inline constexpr std::uint16_t latte_alu_op2_not_integer_opcode = 0x033U;
+inline constexpr std::uint16_t latte_alu_source_zero_selector = 248U;
+inline constexpr std::uint16_t latte_alu_source_one_float_selector = 249U;
+inline constexpr std::uint16_t latte_alu_source_one_integer_selector = 250U;
+inline constexpr std::uint16_t latte_alu_source_negative_one_integer_selector =
+    251U;
+inline constexpr std::uint16_t latte_alu_source_half_float_selector = 252U;
+inline constexpr std::uint16_t latte_alu_source_previous_vector_selector = 254U;
 inline constexpr std::size_t latte_shader_register_component_count = 4U;
 
 using LatteShaderRegister =
     std::array<std::uint32_t, latte_shader_register_component_count>;
 
-[[nodiscard]] inline std::uint32_t read_latte_alu_gpr_or_pv_source(
+[[nodiscard]] inline std::uint32_t read_latte_alu_source(
     std::uint16_t source_selector,
     std::uint8_t source_channel,
     std::span<const LatteShaderRegister> guest_registers,
@@ -33,8 +41,7 @@ using LatteShaderRegister =
             "Latte ALU source channel is outside a four-component register");
     }
 
-    constexpr std::uint16_t previous_vector_selector = 254U;
-    if (source_selector == previous_vector_selector)
+    if (source_selector == latte_alu_source_previous_vector_selector)
     {
         if (!incoming_previous_vector.has_value())
         {
@@ -45,20 +52,37 @@ using LatteShaderRegister =
         return (*incoming_previous_vector)[source_channel];
     }
 
+    switch (source_selector)
+    {
+    case latte_alu_source_zero_selector:
+        return 0x00000000U;
+    case latte_alu_source_one_float_selector:
+        return 0x3F800000U;
+    case latte_alu_source_one_integer_selector:
+        return 0x00000001U;
+    case latte_alu_source_negative_one_integer_selector:
+        return 0xFFFFFFFFU;
+    case latte_alu_source_half_float_selector:
+        return 0x3F000000U;
+    default:
+        break;
+    }
+
     constexpr std::uint16_t maximum_gpr_selector = 127U;
     if (source_selector > maximum_gpr_selector ||
         source_selector >= guest_registers.size())
     {
         throw std::runtime_error(
-            "Latte ALU source selector is not a supported GPR or PV");
+            "Latte ALU source selector is not a supported GPR, "
+            "inline constant, or PV");
     }
 
     return guest_registers[source_selector][source_channel];
 }
 
-// Evaluate the fixture-verified absolute GPR component-copy form of MOV.
+// Evaluate supported GPR, inline-constant, and prior-PV forms of MOV.
 // The group executor applies destination writes and returns the vector result;
-// previous-scalar state and MOV source modes other than GPR remain unsupported.
+// previous-scalar state and other source modes remain unsupported.
 // Shader registers hold raw 32-bit values so MOV preserves all source bits.
 [[nodiscard]] inline std::uint32_t evaluate_latte_alu_move_value(
     const LatteAluOp2Instruction& instruction,
@@ -73,6 +97,7 @@ using LatteShaderRegister =
     }
 
     if (instruction.source0_relative || instruction.source0_negate ||
+        instruction.source0_absolute ||
         instruction.destination_relative || instruction.destination_clamp ||
         instruction.output_modifier != 0U || instruction.index_mode != 0U ||
         !instruction.write_mask)
@@ -94,14 +119,14 @@ using LatteShaderRegister =
             "Latte ALU MOV destination is outside a four-component GPR");
     }
 
-    return read_latte_alu_gpr_or_pv_source(
+    return read_latte_alu_source(
         instruction.source0_selector,
         instruction.source0_channel,
         guest_registers,
         incoming_previous_vector);
 }
 
-// Evaluate absolute-GPR operands for the supported integer bitwise OP2 family.
+// Evaluate supported GPR, inline-constant, and prior-PV integer logic operands.
 [[nodiscard]] inline std::uint32_t evaluate_latte_alu_integer_logic_value(
     const LatteAluOp2Instruction& instruction,
     std::span<const LatteShaderRegister> guest_registers,
@@ -110,7 +135,8 @@ using LatteShaderRegister =
 {
     if (instruction.opcode != latte_alu_op2_and_integer_opcode &&
         instruction.opcode != latte_alu_op2_or_integer_opcode &&
-        instruction.opcode != latte_alu_op2_xor_integer_opcode)
+        instruction.opcode != latte_alu_op2_xor_integer_opcode &&
+        instruction.opcode != latte_alu_op2_not_integer_opcode)
     {
         throw std::runtime_error(
             "Latte integer logic evaluation received an unsupported opcode");
@@ -118,6 +144,7 @@ using LatteShaderRegister =
 
     if (instruction.source0_relative || instruction.source1_relative ||
         instruction.source0_negate || instruction.source1_negate ||
+        instruction.source0_absolute || instruction.source1_absolute ||
         instruction.destination_relative || instruction.destination_clamp ||
         instruction.output_modifier != 0U || instruction.index_mode != 0U ||
         !instruction.write_mask)
@@ -139,12 +166,17 @@ using LatteShaderRegister =
             "Latte integer logic destination is outside a four-component GPR");
     }
 
-    const std::uint32_t source0 = read_latte_alu_gpr_or_pv_source(
+    const std::uint32_t source0 = read_latte_alu_source(
         instruction.source0_selector,
         instruction.source0_channel,
         guest_registers,
         incoming_previous_vector);
-    const std::uint32_t source1 = read_latte_alu_gpr_or_pv_source(
+    if (instruction.opcode == latte_alu_op2_not_integer_opcode)
+    {
+        return ~source0;
+    }
+
+    const std::uint32_t source1 = read_latte_alu_source(
         instruction.source1_selector,
         instruction.source1_channel,
         guest_registers,
@@ -208,6 +240,7 @@ execute_latte_alu_op2_vector_group(
         case latte_alu_op2_and_integer_opcode:
         case latte_alu_op2_or_integer_opcode:
         case latte_alu_op2_xor_integer_opcode:
+        case latte_alu_op2_not_integer_opcode:
             group_vector[component] =
                 evaluate_latte_alu_integer_logic_value(
                     instruction,

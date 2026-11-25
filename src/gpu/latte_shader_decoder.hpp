@@ -58,6 +58,8 @@ struct LatteAluOp2Instruction
     bool source1_relative{};
     bool source0_negate{};
     bool source1_negate{};
+    bool source0_absolute{};
+    bool source1_absolute{};
     bool destination_relative{};
     bool destination_clamp{};
     bool write_mask{};
@@ -272,6 +274,8 @@ decode_latte_alu_clause_slots(
         ((slot.word0 >> 22U) & 1U) != 0U,
         ((slot.word0 >> 12U) & 1U) != 0U,
         ((slot.word0 >> 25U) & 1U) != 0U,
+        (slot.word1 & 1U) != 0U,
+        ((slot.word1 >> 1U) & 1U) != 0U,
         ((slot.word1 >> 28U) & 1U) != 0U,
         ((slot.word1 >> 31U) & 1U) != 0U,
         ((slot.word1 >> 4U) & 1U) != 0U,
