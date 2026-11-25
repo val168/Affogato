@@ -396,7 +396,17 @@ private:
         const RegisterValues& source_registers,
         const std::optional<VectorValue>& previous_vector)
     {
-        const bool is_integer_comparison =
+        const bool is_integer_operation =
+            operation.opcode == latte_alu_op2_and_integer_opcode ||
+            operation.opcode == latte_alu_op2_or_integer_opcode ||
+            operation.opcode == latte_alu_op2_xor_integer_opcode ||
+            operation.opcode == latte_alu_op2_not_integer_opcode ||
+            operation.opcode == latte_alu_op2_add_integer_opcode ||
+            operation.opcode == latte_alu_op2_subtract_integer_opcode ||
+            operation.opcode == latte_alu_op2_maximum_signed_integer_opcode ||
+            operation.opcode == latte_alu_op2_minimum_signed_integer_opcode ||
+            operation.opcode == latte_alu_op2_maximum_unsigned_integer_opcode ||
+            operation.opcode == latte_alu_op2_minimum_unsigned_integer_opcode ||
             operation.opcode == latte_alu_op2_set_equal_integer_opcode ||
             operation.opcode == latte_alu_op2_set_not_equal_integer_opcode ||
             operation.opcode == latte_alu_op2_set_greater_integer_opcode ||
@@ -408,7 +418,7 @@ private:
              operation.opcode != latte_alu_op2_multiply_ieee_opcode &&
              operation.opcode != latte_alu_op2_maximum_dx10_opcode &&
              operation.opcode != latte_alu_op2_minimum_dx10_opcode &&
-             !is_integer_comparison) ||
+             !is_integer_operation) ||
             operation.destination_gpr >= registers_.size() ||
             !operation.write_mask || operation.source0_relative ||
             operation.update_execute_mask || operation.update_predicate ||
@@ -421,7 +431,7 @@ private:
               operation.source1_negate)) ||
             (operation.opcode != latte_alu_op2_move_opcode &&
              operation.source1_relative) ||
-            (is_integer_comparison &&
+            (is_integer_operation &&
              (operation.source0_absolute || operation.source0_negate ||
               operation.source1_absolute || operation.source1_negate)))
         {
@@ -443,18 +453,92 @@ private:
             return source0_id;
         }
 
+        if (is_integer_operation)
+        {
+            if (operation.opcode == latte_alu_op2_not_integer_opcode)
+            {
+                const std::uint32_t result_id = allocate_id();
+                append_instruction(function_body_, 200U, {
+                    uint_type_id_, result_id, source0_id});
+                return result_id;
+            }
+        }
+
         std::uint32_t source1_id = source_value(
             operation.source1_selector,
             operation.source1_channel,
             source_registers,
             previous_vector);
-        if (is_integer_comparison)
+        if (is_integer_operation)
         {
+            if (operation.opcode == latte_alu_op2_add_integer_opcode ||
+                operation.opcode == latte_alu_op2_subtract_integer_opcode ||
+                operation.opcode == latte_alu_op2_and_integer_opcode ||
+                operation.opcode == latte_alu_op2_or_integer_opcode ||
+                operation.opcode == latte_alu_op2_xor_integer_opcode)
+            {
+                std::uint16_t arithmetic_opcode = 0U;
+                switch (operation.opcode)
+                {
+                case latte_alu_op2_add_integer_opcode:
+                    arithmetic_opcode = 128U;
+                    break;
+                case latte_alu_op2_subtract_integer_opcode:
+                    arithmetic_opcode = 130U;
+                    break;
+                case latte_alu_op2_and_integer_opcode:
+                    arithmetic_opcode = 199U;
+                    break;
+                case latte_alu_op2_or_integer_opcode:
+                    arithmetic_opcode = 197U;
+                    break;
+                case latte_alu_op2_xor_integer_opcode:
+                    arithmetic_opcode = 198U;
+                    break;
+                default:
+                    throw std::runtime_error(
+                        "Latte SPIR-V vertex subset received an unsupported integer operation");
+                }
+                const std::uint32_t result_id = allocate_id();
+                append_instruction(function_body_, arithmetic_opcode, {
+                    uint_type_id_, result_id, source0_id, source1_id});
+                return result_id;
+            }
+
             std::uint32_t comparison_source0_id = source0_id;
             std::uint32_t comparison_source1_id = source1_id;
             std::uint16_t comparison_opcode = 0U;
+            bool return_comparison_mask = true;
             switch (operation.opcode)
             {
+            case latte_alu_op2_maximum_signed_integer_opcode:
+                comparison_opcode = 175U;
+                return_comparison_mask = false;
+                comparison_source0_id = allocate_id();
+                append_instruction(function_body_, 124U, {
+                    int_type_id_, comparison_source0_id, source0_id});
+                comparison_source1_id = allocate_id();
+                append_instruction(function_body_, 124U, {
+                    int_type_id_, comparison_source1_id, source1_id});
+                break;
+            case latte_alu_op2_minimum_signed_integer_opcode:
+                comparison_opcode = 179U;
+                return_comparison_mask = false;
+                comparison_source0_id = allocate_id();
+                append_instruction(function_body_, 124U, {
+                    int_type_id_, comparison_source0_id, source0_id});
+                comparison_source1_id = allocate_id();
+                append_instruction(function_body_, 124U, {
+                    int_type_id_, comparison_source1_id, source1_id});
+                break;
+            case latte_alu_op2_maximum_unsigned_integer_opcode:
+                comparison_opcode = 174U;
+                return_comparison_mask = false;
+                break;
+            case latte_alu_op2_minimum_unsigned_integer_opcode:
+                comparison_opcode = 178U;
+                return_comparison_mask = false;
+                break;
             case latte_alu_op2_set_equal_integer_opcode:
                 comparison_opcode = 170U;
                 break;
@@ -495,9 +579,18 @@ private:
                 bool_type_id_, comparison_id,
                 comparison_source0_id, comparison_source1_id});
             const std::uint32_t result_id = allocate_id();
-            append_instruction(function_body_, 169U, {
-                uint_type_id_, result_id, comparison_id,
-                unsigned_all_bits_set_id_, unsigned_zero_id_});
+            if (return_comparison_mask)
+            {
+                append_instruction(function_body_, 169U, {
+                    uint_type_id_, result_id, comparison_id,
+                    unsigned_all_bits_set_id_, unsigned_zero_id_});
+            }
+            else
+            {
+                append_instruction(function_body_, 169U, {
+                    uint_type_id_, result_id, comparison_id,
+                    source0_id, source1_id});
+            }
             return result_id;
         }
 

@@ -1,5 +1,18 @@
 # Affogato Development Status
 
+## OP2 integer ALU SPIR-V lowering (2026-11-25)
+
+The experimental vertex SPIR-V emitter now lowers OP2 integer AND/OR/XOR/NOT,
+wrapping ADD/SUB, signed/unsigned MIN/MAX, and the six equality/greater-than
+comparison forms. The implementation uses 32-bit integer instructions,
+explicit signed bitcasts for signed ordering, and select operations for min/max
+and comparison masks. The combined generated module covering all 16 operations
+passes `spirv-val`; per-operation checks verify each emitted opcode. Debug and
+Release builds passed, and both full CTest suites passed 25/25. No Vulkan
+pixel-output test or Latte hardware verification exercises these new integer
+OP2 operations yet. A unary NOT fixture uses an invalid source 1 selector to
+verify the emitter leaves that unused operand unread.
+
 ## OP2 integer comparison SPIR-V lowering (2026-11-25)
 
 The experimental vertex SPIR-V emitter now lowers OP2 `SETE_INT`,

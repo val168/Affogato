@@ -237,7 +237,55 @@ int main(int argc, char* argv[])
     assert(module_contains_opcode(minimum_module, 184U));
     assert(module_contains_opcode(minimum_module, 169U));
 
-    constexpr std::array integer_comparisons{
+    auto not_program = add_program;
+    auto& not_clause = std::get<
+        affogato::gpu::LatteShaderIrAluClause>(not_program.instructions[0U]);
+    for (auto& operation : not_clause.groups[0U].instructions)
+    {
+        operation.opcode = affogato::gpu::latte_alu_op2_not_integer_opcode;
+        operation.source1_selector = 0xFFFFU;
+        operation.source1_channel = 0xFFU;
+        operation.source1_relative = false;
+        operation.source1_absolute = false;
+        operation.source1_negate = false;
+    }
+    const std::vector<std::uint32_t> not_module =
+        affogato::gpu::emit_latte_spirv_vertex_position_subset(
+            not_program,
+            {1U, 0U});
+    assert(module_contains_opcode(not_module, 200U));
+
+    constexpr std::array integer_operations{
+        std::pair{
+            affogato::gpu::latte_alu_op2_and_integer_opcode,
+            std::uint16_t{199U}},
+        std::pair{
+            affogato::gpu::latte_alu_op2_or_integer_opcode,
+            std::uint16_t{197U}},
+        std::pair{
+            affogato::gpu::latte_alu_op2_xor_integer_opcode,
+            std::uint16_t{198U}},
+        std::pair{
+            affogato::gpu::latte_alu_op2_not_integer_opcode,
+            std::uint16_t{200U}},
+        std::pair{
+            affogato::gpu::latte_alu_op2_add_integer_opcode,
+            std::uint16_t{128U}},
+        std::pair{
+            affogato::gpu::latte_alu_op2_subtract_integer_opcode,
+            std::uint16_t{130U}},
+        std::pair{
+            affogato::gpu::latte_alu_op2_maximum_signed_integer_opcode,
+            std::uint16_t{175U}},
+        std::pair{
+            affogato::gpu::latte_alu_op2_minimum_signed_integer_opcode,
+            std::uint16_t{179U}},
+        std::pair{
+            affogato::gpu::latte_alu_op2_maximum_unsigned_integer_opcode,
+            std::uint16_t{174U}},
+        std::pair{
+            affogato::gpu::latte_alu_op2_minimum_unsigned_integer_opcode,
+            std::uint16_t{178U}},
         std::pair{
             affogato::gpu::latte_alu_op2_set_equal_integer_opcode,
             std::uint16_t{170U}},
@@ -256,13 +304,13 @@ int main(int argc, char* argv[])
         std::pair{
             affogato::gpu::latte_alu_op2_set_greater_equal_unsigned_opcode,
             std::uint16_t{174U}}};
-    for (const auto& [latte_opcode, spirv_opcode] : integer_comparisons)
+    for (const auto& [latte_opcode, spirv_opcode] : integer_operations)
     {
-        auto comparison_program = add_program;
-        auto& comparison_clause = std::get<
+        auto integer_operation_program = add_program;
+        auto& integer_operation_clause = std::get<
             affogato::gpu::LatteShaderIrAluClause>(
-                comparison_program.instructions[0U]);
-        for (auto& operation : comparison_clause.groups[0U].instructions)
+                integer_operation_program.instructions[0U]);
+        for (auto& operation : integer_operation_clause.groups[0U].instructions)
         {
             operation.opcode = latte_opcode;
             operation.source1_relative = false;
@@ -270,39 +318,42 @@ int main(int argc, char* argv[])
             operation.source1_negate = false;
         }
 
-        const std::vector<std::uint32_t> comparison_module =
+        const std::vector<std::uint32_t> integer_operation_module =
             affogato::gpu::emit_latte_spirv_vertex_position_subset(
-                comparison_program,
+                integer_operation_program,
                 {1U, 0U});
-        assert(module_contains_opcode(comparison_module, spirv_opcode));
-        assert(module_contains_opcode(comparison_module, 169U));
+        assert(module_contains_opcode(integer_operation_module, spirv_opcode));
+        if (spirv_opcode >= 170U && spirv_opcode <= 179U)
+        {
+            assert(module_contains_opcode(integer_operation_module, 169U));
+        }
     }
 
-    auto integer_comparison_program = add_program;
-    auto& integer_comparison_clause = std::get<
+    auto integer_alu_program = add_program;
+    auto& integer_alu_clause = std::get<
         affogato::gpu::LatteShaderIrAluClause>(
-            integer_comparison_program.instructions[0U]);
-    integer_comparison_clause.groups.clear();
-    for (std::size_t group_index = 0U; group_index < 2U; ++group_index)
+            integer_alu_program.instructions[0U]);
+    integer_alu_clause.groups.clear();
+    for (std::size_t group_index = 0U; group_index < 4U; ++group_index)
     {
         auto group = add_clause.groups[0U];
         for (std::size_t lane = 0U; lane < group.instructions.size(); ++lane)
         {
             const std::size_t opcode_index = group_index * 4U + lane;
-            if (opcode_index < integer_comparisons.size())
+            if (opcode_index < integer_operations.size())
             {
                 group.instructions[lane].opcode =
-                    integer_comparisons[opcode_index].first;
+                    integer_operations[opcode_index].first;
                 group.instructions[lane].source1_relative = false;
                 group.instructions[lane].source1_absolute = false;
                 group.instructions[lane].source1_negate = false;
             }
         }
-        integer_comparison_clause.groups.push_back(std::move(group));
+        integer_alu_clause.groups.push_back(std::move(group));
     }
-    const std::vector<std::uint32_t> integer_comparison_module =
+    const std::vector<std::uint32_t> integer_alu_module =
         affogato::gpu::emit_latte_spirv_vertex_position_subset(
-            integer_comparison_program,
+            integer_alu_program,
             {1U, 0U});
 
     auto conditional_move_program = program;
@@ -439,7 +490,7 @@ int main(int argc, char* argv[])
         write_module(argv[8], conditional_move_module);
         write_module(argv[9], integer_conditional_move_module);
         write_module(argv[10], mixed_module);
-        write_module(argv[11], integer_comparison_module);
+        write_module(argv[11], integer_alu_module);
     }
     return 0;
 }
