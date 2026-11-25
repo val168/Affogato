@@ -32813,6 +32813,93 @@ void latte_control_flow_decoder_tests()
     assert((unsigned_compare_result == expected_unsigned_compare));
     assert((shader_registers[7U] == expected_unsigned_compare));
 
+    using affogato::gpu::latte_alu_op2_add_float_opcode;
+    using affogato::gpu::latte_alu_op2_maximum_dx10_opcode;
+    using affogato::gpu::latte_alu_op2_minimum_dx10_opcode;
+    using affogato::gpu::latte_alu_op2_multiply_ieee_opcode;
+    constexpr std::array<std::uint16_t, 4U> float_opcodes{
+        latte_alu_op2_add_float_opcode,
+        latte_alu_op2_multiply_ieee_opcode,
+        latte_alu_op2_maximum_dx10_opcode,
+        latte_alu_op2_minimum_dx10_opcode};
+    auto float_slots = alu_slots;
+    for (std::size_t component = 0U;
+         component < float_slots.size();
+         ++component)
+    {
+        auto& slot = float_slots[component];
+        slot.word0 = (slot.word0 & ~0x1FFU) | 1U;
+        slot.word0 = (slot.word0 & ~(0x1FFU << 13U)) | (2U << 13U);
+        slot.word0 = (slot.word0 & ~(0x03U << 10U)) |
+            (static_cast<std::uint32_t>(component) << 10U);
+        slot.word0 = (slot.word0 & ~(0x03U << 23U)) |
+            (static_cast<std::uint32_t>(component) << 23U);
+        slot.word1 = (slot.word1 & ~(0x7FFU << 7U)) |
+            (static_cast<std::uint32_t>(float_opcodes[component]) << 7U);
+        slot.word1 = (slot.word1 & ~(0x7FU << 21U)) | (3U << 21U);
+    }
+    float_slots[1U].word0 |= 1U << 12U;
+    float_slots[1U].word1 |= 1U;
+    float_slots[1U].word1 |= 1U << 5U;
+    const auto float_groups = decode_latte_alu_op2_groups(float_slots);
+    assert(float_groups.size() == 1U);
+    assert(float_groups[0U].instructions.size() == 4U);
+    for (std::size_t component = 0U;
+         component < float_opcodes.size();
+         ++component)
+    {
+        assert(float_groups[0U].instructions[component].opcode ==
+               float_opcodes[component]);
+    }
+    shader_registers[1U] = {
+        0x3FA00000U,
+        0xC0000000U,
+        0x7FC12345U,
+        0x40800000U};
+    shader_registers[2U] = {
+        0x40300000U,
+        0x40600000U,
+        0x3F800000U,
+        0x40000000U};
+    const LatteShaderRegister expected_float_vector{
+        0x40800000U,
+        0xC1600000U,
+        0x3F800000U,
+        0x40000000U};
+    const auto float_result = execute_latte_alu_op2_vector_group(
+        float_groups[0U],
+        shader_registers);
+    assert((float_result == expected_float_vector));
+    assert((shader_registers[3U] == expected_float_vector));
+
+    shader_registers[1U][2U] = 0x80000000U;
+    shader_registers[2U][2U] = 0x00000000U;
+    shader_registers[1U][3U] = 0x80000000U;
+    shader_registers[2U][3U] = 0x00000000U;
+    const auto float_minmax_signed_zero_result =
+        execute_latte_alu_op2_vector_group(
+            float_groups[0U],
+            shader_registers);
+    assert(float_minmax_signed_zero_result[2U] == 0x80000000U);
+    assert(float_minmax_signed_zero_result[3U] == 0x00000000U);
+
+    auto unsupported_float_modifier = float_groups[0U];
+    unsupported_float_modifier.instructions[0U].destination_clamp = true;
+    const auto registers_before_unsupported_float = shader_registers;
+    bool rejected_unsupported_float_modifier = false;
+    try
+    {
+        static_cast<void>(execute_latte_alu_op2_vector_group(
+            unsupported_float_modifier,
+            shader_registers));
+    }
+    catch (const std::runtime_error&)
+    {
+        rejected_unsupported_float_modifier = true;
+    }
+    assert(rejected_unsupported_float_modifier);
+    assert(shader_registers == registers_before_unsupported_float);
+
     auto move_modifier_slots = alu_slots;
     move_modifier_slots[0U].word1 |= 1U;
     move_modifier_slots[1U].word0 |= 1U << 12U;

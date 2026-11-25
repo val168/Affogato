@@ -427,6 +427,19 @@ operand, then returns the original selected operand. Tests cover values across
 the signed boundary and unsigned high-bit cases. This is reference-derived and
 not verified against Latte hardware.
 
+The R700 OP2 table assigns floating-point `ADD`, `MUL_IEEE`, `MAX_DX10`, and
+`MIN_DX10` opcodes `0x000`, `0x002`, `0x005`, and `0x006` (Chapter 10). The
+Chapter 9 descriptions define add and IEEE multiply and specify ordered
+selection for DX10 min/max: MAX chooses source 0 on `src0 >= src1`, while MIN
+chooses source 0 only on `src0 < src1`; otherwise each selects source 1. These
+ordered comparisons also define which input is selected for NaNs and equal
+signed zeros. Affogato evaluates those four operations with sign-bit absolute
+and negate modifiers and the scalar output multiplier. Tests cover normal
+values, NaN selection, signed-zero tie behavior, source modifiers, and OMOD.
+This is a bounded R700-family CPU model, not Latte hardware verification.
+The reference is AMD's [R700-Family Instruction Set Architecture, Chapters 9
+and 10](https://docs.amd.com/v/u/en-US/R700-Family_Instruction_Set_Architecture).
+
 The R700 OP2 table assigns `SETE_INT`, `SETGT_INT`, `SETGE_INT`, `SETNE_INT`,
 `SETGT_UINT`, and `SETGE_UINT` opcodes `0x03A`–`0x03F`. The Chapter 9
 descriptions define signed or unsigned comparisons and write `0xFFFFFFFF` for

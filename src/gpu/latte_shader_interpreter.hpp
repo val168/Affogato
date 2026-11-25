@@ -15,6 +15,12 @@ namespace affogato::gpu
 {
 
 inline constexpr std::uint16_t latte_alu_op2_move_opcode = 0x019U; // OP2_INST_MOV
+inline constexpr std::uint16_t latte_alu_op2_add_float_opcode = 0x000U;
+inline constexpr std::uint16_t latte_alu_op2_multiply_ieee_opcode = 0x002U;
+inline constexpr std::uint16_t latte_alu_op2_maximum_dx10_opcode = 0x005U;
+inline constexpr std::uint16_t latte_alu_op2_minimum_dx10_opcode = 0x006U;
+inline constexpr std::uint32_t latte_binary32_sign_mask = 0x80000000U;
+inline constexpr std::uint32_t latte_binary32_magnitude_mask = 0x7FFFFFFFU;
 inline constexpr std::uint16_t latte_alu_op2_and_integer_opcode = 0x030U;
 inline constexpr std::uint16_t latte_alu_op2_or_integer_opcode = 0x031U;
 inline constexpr std::uint16_t latte_alu_op2_xor_integer_opcode = 0x032U;
@@ -246,15 +252,130 @@ evaluate_latte_normal_export(
     // payloads and the distinction between positive and negative zero.
     if (instruction.source0_absolute)
     {
-        source_value &= 0x7FFFFFFFU;
+        source_value &= latte_binary32_magnitude_mask;
     }
 
     if (instruction.source0_negate)
     {
-        source_value ^= 0x80000000U;
+        source_value ^= latte_binary32_sign_mask;
     }
 
     return source_value;
+}
+
+// Evaluate the documented two-source binary32 OP2 subset. The DX10 min/max
+// forms select source 1 when the ordered comparison with source 0 is false,
+// including when either operand is NaN.
+[[nodiscard]] inline std::uint32_t evaluate_latte_alu_float_value(
+    const LatteAluOp2Instruction& instruction,
+    std::span<const LatteShaderRegister> guest_registers,
+    const std::optional<LatteShaderRegister>& incoming_previous_vector =
+        std::nullopt)
+{
+    if (instruction.opcode != latte_alu_op2_add_float_opcode &&
+        instruction.opcode != latte_alu_op2_multiply_ieee_opcode &&
+        instruction.opcode != latte_alu_op2_maximum_dx10_opcode &&
+        instruction.opcode != latte_alu_op2_minimum_dx10_opcode)
+    {
+        throw std::runtime_error(
+            "Latte floating-point evaluation received an unsupported opcode");
+    }
+
+    if (instruction.source0_relative || instruction.source1_relative ||
+        instruction.update_execute_mask || instruction.update_predicate ||
+        instruction.bank_swizzle != 0U ||
+        instruction.predicate_selection != 0U ||
+        instruction.destination_relative || instruction.destination_clamp ||
+        instruction.index_mode != 0U || !instruction.write_mask)
+    {
+        throw std::runtime_error(
+            "Latte floating-point evaluation received unsupported modifiers");
+    }
+
+    if (instruction.destination_gpr >= guest_registers.size())
+    {
+        throw std::runtime_error(
+            "Latte floating-point destination is outside the register file");
+    }
+
+    if (instruction.destination_component >=
+        latte_shader_register_component_count)
+    {
+        throw std::runtime_error(
+            "Latte floating-point destination is outside a four-component GPR");
+    }
+
+    const auto apply_source_modifiers = [](std::uint32_t value,
+                                           bool absolute,
+                                           bool negate)
+    {
+        if (absolute)
+        {
+            value &= latte_binary32_magnitude_mask;
+        }
+        if (negate)
+        {
+            value ^= latte_binary32_sign_mask;
+        }
+        return std::bit_cast<float>(value);
+    };
+
+    const float source0 = apply_source_modifiers(
+        read_latte_alu_source(
+            instruction.source0_selector,
+            instruction.source0_channel,
+            guest_registers,
+            incoming_previous_vector),
+        instruction.source0_absolute,
+        instruction.source0_negate);
+    const float source1 = apply_source_modifiers(
+        read_latte_alu_source(
+            instruction.source1_selector,
+            instruction.source1_channel,
+            guest_registers,
+            incoming_previous_vector),
+        instruction.source1_absolute,
+        instruction.source1_negate);
+
+    float result = 0.0F;
+    switch (instruction.opcode)
+    {
+    case latte_alu_op2_add_float_opcode:
+        result = source0 + source1;
+        break;
+    case latte_alu_op2_multiply_ieee_opcode:
+        result = source0 * source1;
+        break;
+    case latte_alu_op2_maximum_dx10_opcode:
+        result = source0 >= source1 ? source0 : source1;
+        break;
+    case latte_alu_op2_minimum_dx10_opcode:
+        result = source0 < source1 ? source0 : source1;
+        break;
+    default:
+        throw std::runtime_error(
+            "Latte floating-point evaluation received an unsupported opcode");
+    }
+
+    switch (instruction.output_modifier)
+    {
+    case 0U:
+        break;
+    case 1U:
+        result *= 2.0F;
+        break;
+    case 2U:
+        result *= 4.0F;
+        break;
+    case 3U:
+        result *= 0.5F;
+        break;
+    default:
+        throw std::runtime_error(
+            "Latte floating-point output modifier is invalid");
+    }
+
+    return std::bit_cast<std::uint32_t>(result);
 }
 
 // Evaluate supported GPR, inline-constant, and prior-PV integer operands.
@@ -415,6 +536,15 @@ execute_latte_alu_op2_vector_group(
         {
         case latte_alu_op2_move_opcode:
             group_vector[component] = evaluate_latte_alu_move_value(
+                instruction,
+                read_only_registers,
+                incoming_previous_vector);
+            break;
+        case latte_alu_op2_add_float_opcode:
+        case latte_alu_op2_multiply_ieee_opcode:
+        case latte_alu_op2_maximum_dx10_opcode:
+        case latte_alu_op2_minimum_dx10_opcode:
+            group_vector[component] = evaluate_latte_alu_float_value(
                 instruction,
                 read_only_registers,
                 incoming_previous_vector);

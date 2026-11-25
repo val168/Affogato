@@ -571,3 +571,16 @@ and extracts the table from a subsequent draw snapshot. This is reference
 cross-checking, not Wii U hardware verification. The resolver is still not
 connected to shader invocation inputs, and fetch-instruction decoding remains
 unresolved.
+
+## Bounded Latte floating-point OP2 operations (2026-11-25)
+
+Expanded the no-literal four-lane OP2 CPU executor with R700-family `ADD`,
+`MUL_IEEE`, `MAX_DX10`, and `MIN_DX10` operations. The subset honors source
+absolute/negate flags and the output multiplier, and rejects destination
+clamp, predicate/mask updates, relative addressing, and other unsupported
+state before writing registers. Regression coverage checks opcode decoding,
+normal arithmetic, NaN selection, signed-zero selection, modifiers, and
+transactional rejection. Debug and Release builds succeeded; CTest passed 2/2
+in both configurations. These operations follow the R700 ISA manual and are
+not verified against Latte hardware; they remain an isolated CPU shader model,
+not guest draw execution or Vulkan shader translation.
