@@ -162,8 +162,6 @@ std::vector<DiagnosticVertex> decode_diagnostic_float2_draw(
         });
     if (position_attribute == attributes.end() ||
         position_attribute->component_count < diagnostic_position_components ||
-        position_attribute->selectors[0U] != 0U ||
-        position_attribute->selectors[1U] != 1U ||
         (position_attribute->data_format != 0x04U &&
          position_attribute->data_format != 0x0AU &&
          position_attribute->data_format != 0x08U &&
@@ -317,10 +315,18 @@ std::vector<DiagnosticVertex> decode_diagnostic_float2_draw(
         const std::span<const std::uint8_t> current_vertex_bytes =
             vertex_bytes.subspan(
                 static_cast<std::size_t>(captured_vertex_offset));
-        source_vertices[index].x = decode_latte_vertex_component(
-            current_vertex_bytes, *position_attribute, 0U);
-        source_vertices[index].y = decode_latte_vertex_component(
-            current_vertex_bytes, *position_attribute, 1U);
+        const auto decoded_attribute = decode_latte_vertex_attribute_vector(
+            current_vertex_bytes,
+            *position_attribute);
+        if (!decoded_attribute[0U].has_value() ||
+            !decoded_attribute[1U].has_value())
+        {
+            throw std::runtime_error(
+                "Vulkan float2 diagnostic position swizzle masks a required component");
+        }
+
+        source_vertices[index].x = std::bit_cast<float>(*decoded_attribute[0U]);
+        source_vertices[index].y = std::bit_cast<float>(*decoded_attribute[1U]);
     }
 
     if (triangle_list)
