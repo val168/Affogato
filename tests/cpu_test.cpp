@@ -29174,6 +29174,29 @@ void gx2_direct_call_display_list_hle_tests()
             draw_packet_words[index]);
     }
     core.gx2.capture_draw_vertex_data = true;
+    core.gx2.capture_draw_color_buffer_data = true;
+    Gx2ColorBufferState draw_color_buffer{};
+    draw_color_buffer.dimension = 1U;
+    draw_color_buffer.width = 2U;
+    draw_color_buffer.height = 2U;
+    draw_color_buffer.depth = 1U;
+    draw_color_buffer.mip_levels = 1U;
+    draw_color_buffer.format = 0x1AU;
+    draw_color_buffer.use = 0x02U;
+    draw_color_buffer.image_size = 16U;
+    draw_color_buffer.image_address = 0x800U;
+    draw_color_buffer.tile_mode =
+        affogato::gpu::gx2_tile_mode_linear_aligned;
+    draw_color_buffer.alignment = 1U;
+    draw_color_buffer.pitch = 2U;
+    draw_color_buffer.view_num_slices = 1U;
+    core.gx2.color_buffer_descriptors[0U] = draw_color_buffer;
+    constexpr std::array<std::uint8_t, 16U> draw_color_bytes{
+        0x11U, 0x22U, 0x33U, 0xFFU,
+        0x44U, 0x55U, 0x66U, 0xFFU,
+        0x77U, 0x88U, 0x99U, 0xFFU,
+        0xAAU, 0xBBU, 0xCCU, 0xFFU};
+    core.memory.write_bytes(draw_color_buffer.image_address, draw_color_bytes);
     core.gx2.vertex_buffers[0U] =
         Gx2VertexBufferBinding{0U, 32U, 8U, 0x400U};
     for (std::uint32_t vertex_index = 0U; vertex_index < 8U; ++vertex_index)
@@ -29205,6 +29228,12 @@ void gx2_direct_call_display_list_hle_tests()
     assert(draw_command.draw_vertex_data.size() == 1U);
     assert(draw_command.draw_vertex_data[0U].is_valid);
     assert(draw_command.draw_vertex_data[0U].bytes.size() == 24U);
+    assert(draw_command.draw_color_buffer_data.size() == 1U);
+    assert(draw_command.draw_color_buffer_data[0U].status ==
+           Gx2ColorBufferSnapshotStatus::captured);
+    assert(draw_command.draw_color_buffer_data[0U].bytes ==
+           std::vector<std::uint8_t>(
+               draw_color_bytes.begin(), draw_color_bytes.end()));
 
     // PM4 draw setup is register state and survives a later direct-call list.
     constexpr std::array<std::uint32_t, 3U> stateful_auto_draw_words{

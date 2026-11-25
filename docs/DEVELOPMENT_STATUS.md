@@ -176,8 +176,9 @@ explicit failed snapshot statuses. Direct GX2 draw HLE calls and decoded PM4
 display-list draws both capture this data when enabled. Tests cover successful
 capture, immutability, unsupported layout, and unmapped guest memory. Debug and
 Release builds succeeded and CTest passed 6/6 in each configuration. This only
-provides draw-time input for a future offscreen-target path: draws still do not
-write results back to guest color-buffer memory.
+provides draw-time input for a future offscreen-target path: direct GX2 draw
+calls and PM4 display-list draws are covered, but draws still do not write
+results back to guest color-buffer memory.
 
 `GX2SetContextState` and `GX2DirectCallDisplayList` share a bounded PM4
 decoder. It accepts Type-0 writes in supported config/context and
