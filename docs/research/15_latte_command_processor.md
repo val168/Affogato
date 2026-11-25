@@ -34,9 +34,14 @@ Reference emulator architecture:
   also notes the lack of a perfectly matching public card document.
 - AMD's R6xx/R7xx guide, section 5.2.1, defines Type-0 as sequential DWORD
   writes: BASE_INDEX is a DWORD register address and COUNT is the number of
-  payload DWORDs minus one. This packet format is used here as family-level
-  evidence; the supported destination is deliberately limited to Latte's
-  documented context-register window.
+  payload DWORDs minus one. Section 5.3.3 gives the config/context register
+  window bases. These are family-level evidence; the parser intentionally
+  accepts only bounded writes within those windows.
+- Cemu's
+  [`GX2_Draw.cpp`](https://github.com/cemu-project/Cemu/blob/main/src/Cafe/OS/libs/gx2/GX2_Draw.cpp)
+  emits `SET_CONFIG_REG` packets while setting up GX2 draw state. The opcode
+  and packet payload shape are reference implementation evidence; Affogato
+  does not yet execute the draw packet that follows those setup writes.
 - Linux's Radeon R6xx/R7xx packet definitions assign Type-3 opcode `0x10` to
   `NOP` ([`r600d.h`](https://github.com/torvalds/linux/blob/master/drivers/gpu/drm/radeon/r600d.h)). Affogato consumes its bounded payload without
   producing register writes. This is family-level evidence, not a
@@ -83,11 +88,12 @@ These sources distinguish three behaviors that must not be collapsed into a
 single host callback: constructing a guest display list, queuing an indirect
 call into a command stream, and submitting a display-list buffer directly.
 Affogato registers `GX2DirectCallDisplayList` for a narrow subset: it validates
-and copies the guest bytes at call time, then queues the supported context
-register writes in order. The shared decoder accepts Type-0 context-window
-writes, Type-2 filler, Type-3 NOP and Type-3 `SET_CONTEXT_REG`. Other opcodes,
-including draw packets, fail explicitly. This is state submission through the
-current HLE queue, not GPU execution. `GX2BeginDisplayListEx`,
+and copies the guest bytes at call time, then queues supported config/context
+register writes in order. The shared decoder accepts bounded Type-0 writes in
+the config or context windows, Type-2 filler, Type-3 NOP, Type-3
+`SET_CONFIG_REG`, and Type-3 `SET_CONTEXT_REG`. Other opcodes, including draw
+packets, fail explicitly. This is state submission through the current HLE
+queue, not GPU execution. `GX2BeginDisplayListEx`,
 `GX2EndDisplayList`, `GX2CallDisplayList` and `GX2CopyDisplayList` remain
 unregistered; queued indirect calls and guest-authored recording therefore
 remain unsupported.
@@ -129,9 +135,10 @@ verified against a Latte fixture or Wii U behavior.
   PM4 display-list size at zero because Affogato does not generate authentic
   restore packets. `GX2GetContextStateDisplayList` returns that embedded
   buffer and size. `GX2SetContextState` restores Affogato's captured register
-  shadow when the size is zero. A bounded nonempty subset decodes Type-2 filler
-  and Type-3 `SET_CONTEXT_REG` packets into typed register commands; other
-  packet types/opcodes, predication, truncation, and out-of-window writes fail
+  shadow when the size is zero. A bounded nonempty subset decodes Type-2 filler,
+  Type-3 NOP, config/context Type-0 writes, and Type-3 `SET_CONFIG_REG` /
+  `SET_CONTEXT_REG` packets into typed register commands; other packet
+  types/opcodes, predication, truncation, and out-of-window writes fail
   explicitly. Queuing these values does not execute GPU work or retire a fence.
 - `tests/cpu_test.cpp` covers command-pool attributes, context-state setup,
   zero-length display-list results, shadow restoration, big-endian packet
@@ -162,13 +169,13 @@ lists and guest-written command streams remain unsupported.
 | Capability | Status | Evidence / dependency |
 | --- | --- | --- |
 | GX2 command-pool registration | Partial and tested | Bounds/alignment/ownership checks in `initialize_gx2` |
-| GX2 display-list API lifecycle and submission | Partial and tested | `GX2DirectCallDisplayList` copies a bounded guest-memory stream and queues only supported context-register writes; recording, queued indirect call, and copy APIs remain missing. |
+| GX2 display-list API lifecycle and submission | Partial and tested | `GX2DirectCallDisplayList` copies a bounded guest-memory stream and queues only supported config/context register writes; recording, queued indirect call, and copy APIs remain missing. |
 | Typed GX2 HLE event ordering | Partial and tested | `pending_commands`, register shadow and frontend drain |
 | PM4 packet framing | Partial and tested | Type-0 payload lengths, Type-2 filler and Type-3 lengths; Type-1 remains unsupported |
-| PM4 register writes | Partial and tested | Type-0 sequential writes and Type-3 `SET_CONTEXT_REG` are bounded to the context-register byte range |
-| Type-3 operations | Partial and tested | `NOP` and `SET_CONTEXT_REG`; other opcodes are rejected |
+| PM4 register writes | Partial and tested | Type-0 sequential writes and Type-3 `SET_CONFIG_REG` / `SET_CONTEXT_REG` are bounded to the supported config/context byte windows |
+| Type-3 operations | Partial and tested | `NOP`, `SET_CONFIG_REG`, and `SET_CONTEXT_REG`; other opcodes are rejected |
 | Indirect buffers / nested lists | Missing | Guest bounds, alignment, recursion limit, lifetime and ordering |
-| Context display-list generation/decoding | Partial | generation leaves size zero; empty lists restore the register shadow; bounded Type-0 context writes and Type-2/Type-3 `SET_CONTEXT_REG` lists decode into typed writes; GPU packet execution is not implemented |
+| Context display-list generation/decoding | Partial | generation leaves size zero; empty lists restore the register shadow; bounded Type-0 config/context writes and Type-2/Type-3 config/context register lists decode into typed writes; GPU packet execution is not implemented |
 | GPU completion and waits | Partial / not renderer-backed | Must follow actual submission, fence, and memory-visibility semantics |
 
 ## Design constraints for a first implementation
@@ -195,12 +202,15 @@ lists and guest-written command streams remain unsupported.
 
 ## Acceptance tests
 
-- Current fixtures cover Type-0 count/base-index and sequential-write behavior,
-  Type-2 filler, and Type-3 NOP payload advancement and
-  `SET_CONTEXT_REG` count/opcode/register-offset behavior. The Type-0 packet
-  layout is cross-checked against AMD R6xx/R7xx guide section 5.2.1, and the
-  NOP opcode against Radeon R6xx/R7xx packet definitions; no independent
-  Latte-produced stream fixture is available yet.
+- Current fixtures cover Type-0 count/base-index and sequential-write behavior
+  in config/context windows, Type-2 filler, and Type-3 NOP payload advancement,
+  `SET_CONFIG_REG`, and `SET_CONTEXT_REG` count/opcode/register-offset
+  behavior. The Type-0 packet layout and config/context register bases are
+  cross-checked against AMD R6xx/R7xx guide sections 5.2.1 and 5.3.3. Cemu's
+  `src/Cafe/OS/libs/gx2/GX2_Draw.cpp` independently shows GX2 draw setup
+  emitting `SET_CONFIG_REG` packets. These are related-family and reference
+  implementation evidence; no independent Latte-produced stream fixture is
+  available yet.
 - Big-endian dword decoding, empty/truncated streams, count overflow, unknown
   type/opcode, invalid register range, and exact cursor advancement.
 - Tests proving malformed packets do not partially mutate the register shadow

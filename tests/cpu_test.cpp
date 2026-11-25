@@ -28738,6 +28738,46 @@ void gx2_set_context_state_hle_tests()
                 0x28104U,
                 0x50607080U}));
 
+    // SET_CONFIG_REG uses a dword offset from the config-register base. A
+    // Type-0 write addresses the same byte-addressed register window directly.
+    core.state.cia = core.hle.bind_import("gx2", "GX2SetContextState");
+    core.state.lr = return_address;
+    core.state.gpr[3] = context_state;
+    core.memory.write32_be(
+        context_state + display_list_offset, 0xC0026800U);
+    core.memory.write32_be(
+        context_state + display_list_offset + 4U, 0x2U);
+    core.memory.write32_be(
+        context_state + display_list_offset + 8U, 0x11223344U);
+    core.memory.write32_be(
+        context_state + display_list_offset + 12U, 0x55667788U);
+    core.memory.write32_be(
+        context_state + display_list_offset + 16U, 0x00002004U);
+    core.memory.write32_be(
+        context_state + display_list_offset + 20U, 0x99AABBCCU);
+    core.memory.write32_be(context_state + display_list_size_offset, 24U);
+    const std::size_t commands_before_config_writes =
+        core.gx2.pending_commands.size();
+    const RunResult config_write_result = core.run(1U);
+    assert(config_write_result.reason == StopReason::instruction_limit);
+    assert(core.gx2.pending_commands.size() ==
+           commands_before_config_writes + 3U);
+    assert((core.gx2.pending_commands[commands_before_config_writes] ==
+            Gx2Command{
+                Gx2CommandType::set_config_register,
+                0x8008U,
+                0x11223344U}));
+    assert((core.gx2.pending_commands[commands_before_config_writes + 1U] ==
+            Gx2Command{
+                Gx2CommandType::set_config_register,
+                0x800CU,
+                0x55667788U}));
+    assert((core.gx2.pending_commands[commands_before_config_writes + 2U] ==
+            Gx2Command{
+                Gx2CommandType::set_config_register,
+                0x8010U,
+                0x99AABBCCU}));
+
     // Type-0 BASE_INDEX addresses consecutive register dwords. Reject the
     // packet if its final register would leave the context window.
     core.state.cia = core.hle.bind_import("gx2", "GX2SetContextState");
@@ -28846,7 +28886,7 @@ void gx2_set_context_state_hle_tests()
     const RunResult register_overrun = core.run(1U);
     assert(register_overrun.reason == StopReason::hle_error);
     assert(register_overrun.detail.find(
-               "PM4 display list writes outside the context-register range") !=
+               "PM4 display list writes outside a supported register window") !=
            std::string::npos);
     assert(core.gx2.pending_commands == commands_before_register_overrun);
     assert(core.gx2.current_context_state == active_context_before_list_error);

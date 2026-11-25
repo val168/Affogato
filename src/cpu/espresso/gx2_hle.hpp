@@ -15,6 +15,7 @@ class HleDispatcher;
 enum class Gx2CommandType
 {
     set_context_register,
+    set_config_register,
     set_shader_resource,
     set_shader_sampler,
     flush,

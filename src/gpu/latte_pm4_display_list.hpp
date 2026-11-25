@@ -8,7 +8,7 @@
 namespace affogato::gpu
 {
 
-enum class LatteContextDisplayListError
+enum class LattePm4DisplayListError
 {
     none,
     unsupported_packet_type,
@@ -20,32 +20,38 @@ enum class LatteContextDisplayListError
     register_range_out_of_bounds,
 };
 
-struct LatteContextRegisterWrite
+enum class LatteRegisterSpace
 {
+    config,
+    context,
+};
+
+struct LattePm4RegisterWrite
+{
+    LatteRegisterSpace space{};
     std::uint32_t address{};
     std::uint32_t value{};
 
-    bool operator==(const LatteContextRegisterWrite&) const = default;
+    bool operator==(const LattePm4RegisterWrite&) const = default;
 };
 
-struct LatteContextDisplayListDecodeResult
+struct LattePm4DisplayListDecodeResult
 {
-    std::vector<LatteContextRegisterWrite> register_writes;
-    LatteContextDisplayListError error{LatteContextDisplayListError::none};
+    std::vector<LattePm4RegisterWrite> register_writes;
+    LattePm4DisplayListError error{LattePm4DisplayListError::none};
     std::size_t error_word_offset{};
 
     [[nodiscard]] bool succeeded() const noexcept
     {
-        return error == LatteContextDisplayListError::none;
+        return error == LattePm4DisplayListError::none;
     }
 };
 
-// The input contains host-order values previously read from guest big-endian
-// memory. This intentionally supports Type-2 filler, Type-0 writes to the
-// context-register window, and Type-3 SET_CONTEXT_REG packets captured from
-// bounded GX2 context display lists.
-[[nodiscard]] inline LatteContextDisplayListDecodeResult
-decode_latte_context_display_list(
+// Input words are host-order values decoded from guest big-endian memory.
+// Only bounded config/context register writes, Type-2 filler, Type-3 NOP,
+// SET_CONFIG_REG, and SET_CONTEXT_REG packets are accepted.
+[[nodiscard]] inline LattePm4DisplayListDecodeResult
+decode_latte_pm4_display_list(
     std::span<const std::uint32_t> words)
 {
     constexpr std::uint32_t packet_type_mask = 0xC0000000U;
@@ -60,14 +66,17 @@ decode_latte_context_display_list(
     constexpr std::uint32_t type3_nop_opcode = 0x10U;
     constexpr std::uint32_t packet_count_shift = 16U;
     constexpr std::uint32_t packet_count_mask = 0x3FFFU;
-    // R7xx IT_SET_CONTEXT_REG; its offset is measured in register dwords.
+    // R7xx IT_SET_CONFIG_REG and IT_SET_CONTEXT_REG use dword offsets.
+    constexpr std::uint32_t set_config_register_opcode = 0x68U;
     constexpr std::uint32_t set_context_register_opcode = 0x69U;
-    // Context register byte range from the Latte register map.
+    // Register windows use byte addresses in captured GX2 state.
+    constexpr std::uint32_t config_register_base = 0x8000U;
+    constexpr std::uint32_t config_register_end = 0xAC00U;
     constexpr std::uint32_t context_register_base = 0x28000U;
     constexpr std::uint32_t context_register_end = 0x29000U;
     constexpr std::uint32_t register_stride = sizeof(std::uint32_t);
 
-    LatteContextDisplayListDecodeResult result;
+    LattePm4DisplayListDecodeResult result;
     std::size_t word_offset = 0U;
 
     while (word_offset < words.size())
@@ -80,7 +89,7 @@ decode_latte_context_display_list(
         {
             if ((header & type2_reserved_mask) != 0U)
             {
-                result.error = LatteContextDisplayListError::invalid_type2_header;
+                result.error = LattePm4DisplayListError::invalid_type2_header;
                 result.error_word_offset = packet_header_offset;
                 result.register_writes.clear();
                 return result;
@@ -91,7 +100,7 @@ decode_latte_context_display_list(
 
         if (packet_type != packet_type0 && packet_type != packet_type3)
         {
-            result.error = LatteContextDisplayListError::unsupported_packet_type;
+            result.error = LattePm4DisplayListError::unsupported_packet_type;
             result.error_word_offset = packet_header_offset;
             result.register_writes.clear();
             return result;
@@ -101,7 +110,7 @@ decode_latte_context_display_list(
             ((header & type3_reserved_mask) != 0U ||
              (header & type3_predicate_mask) != 0U))
         {
-            result.error = LatteContextDisplayListError::invalid_type3_header;
+            result.error = LattePm4DisplayListError::invalid_type3_header;
             result.error_word_offset = packet_header_offset;
             result.register_writes.clear();
             return result;
@@ -111,7 +120,7 @@ decode_latte_context_display_list(
             ((header >> packet_count_shift) & packet_count_mask) + 1U;
         if (payload_word_count > words.size() - word_offset)
         {
-            result.error = LatteContextDisplayListError::truncated_packet;
+            result.error = LattePm4DisplayListError::truncated_packet;
             result.error_word_offset = packet_header_offset;
             result.register_writes.clear();
             return result;
@@ -119,18 +128,38 @@ decode_latte_context_display_list(
 
         if (packet_type == packet_type0)
         {
-            // Type-0 BASE_INDEX is a register dword index. Restrict this
-            // context restore path to the window it can safely model.
+            // Type-0 BASE_INDEX is a register dword index. Accept only a
+            // complete range inside one register window modeled by Affogato.
             const std::uint32_t register_address =
                 (header & 0x0000FFFFU) * register_stride;
-            if (register_address < context_register_base ||
-                register_address >= context_register_end ||
-                payload_word_count >
-                    (context_register_end - register_address) /
-                        register_stride)
+            LatteRegisterSpace register_space{};
+            std::uint32_t register_window_end{};
+            if (register_address >= config_register_base &&
+                register_address < config_register_end)
+            {
+                register_space = LatteRegisterSpace::config;
+                register_window_end = config_register_end;
+            }
+            else if (register_address >= context_register_base &&
+                     register_address < context_register_end)
+            {
+                register_space = LatteRegisterSpace::context;
+                register_window_end = context_register_end;
+            }
+            else
             {
                 result.error =
-                    LatteContextDisplayListError::register_range_out_of_bounds;
+                    LattePm4DisplayListError::register_range_out_of_bounds;
+                result.error_word_offset = packet_header_offset;
+                result.register_writes.clear();
+                return result;
+            }
+
+            if (payload_word_count >
+                (register_window_end - register_address) / register_stride)
+            {
+                result.error =
+                    LattePm4DisplayListError::register_range_out_of_bounds;
                 result.error_word_offset = packet_header_offset;
                 result.register_writes.clear();
                 return result;
@@ -141,6 +170,7 @@ decode_latte_context_display_list(
                  ++register_index)
             {
                 result.register_writes.push_back({
+                    register_space,
                     register_address + register_index * register_stride,
                     words[word_offset + register_index]});
             }
@@ -158,9 +188,10 @@ decode_latte_context_display_list(
             continue;
         }
 
-        if (opcode != set_context_register_opcode)
+        if (opcode != set_config_register_opcode &&
+            opcode != set_context_register_opcode)
         {
-            result.error = LatteContextDisplayListError::unsupported_opcode;
+            result.error = LattePm4DisplayListError::unsupported_opcode;
             result.error_word_offset = packet_header_offset;
             result.register_writes.clear();
             return result;
@@ -168,7 +199,7 @@ decode_latte_context_display_list(
 
         if (payload_word_count < 2U)
         {
-            result.error = LatteContextDisplayListError::missing_register_data;
+            result.error = LattePm4DisplayListError::missing_register_data;
             result.error_word_offset = packet_header_offset;
             result.register_writes.clear();
             return result;
@@ -176,13 +207,23 @@ decode_latte_context_display_list(
 
         const std::uint32_t register_offset = words[word_offset];
         const std::uint32_t register_count = payload_word_count - 1U;
-        const std::uint32_t context_register_count =
-            (context_register_end - context_register_base) / register_stride;
-        if (register_offset >= context_register_count ||
-            register_count > context_register_count - register_offset)
+        const bool is_config_register_packet =
+            opcode == set_config_register_opcode;
+        const std::uint32_t register_window_base =
+            is_config_register_packet
+                ? config_register_base
+                : context_register_base;
+        const std::uint32_t register_window_end =
+            is_config_register_packet
+                ? config_register_end
+                : context_register_end;
+        const std::uint32_t register_window_count =
+            (register_window_end - register_window_base) / register_stride;
+        if (register_offset >= register_window_count ||
+            register_count > register_window_count - register_offset)
         {
             result.error =
-                LatteContextDisplayListError::register_range_out_of_bounds;
+                LattePm4DisplayListError::register_range_out_of_bounds;
             result.error_word_offset = packet_header_offset;
             result.register_writes.clear();
             return result;
@@ -195,7 +236,10 @@ decode_latte_context_display_list(
             const std::size_t value_index =
                 word_offset + 1U + register_index;
             result.register_writes.push_back({
-                context_register_base +
+                is_config_register_packet
+                    ? LatteRegisterSpace::config
+                    : LatteRegisterSpace::context,
+                register_window_base +
                     (register_offset + register_index) * register_stride,
                 words[value_index]});
         }

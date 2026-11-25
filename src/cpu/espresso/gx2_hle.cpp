@@ -4,7 +4,7 @@
 #include "cpu/espresso/guest_memory.hpp"
 #include "cpu/espresso/hle_dispatcher.hpp"
 #include "cpu/espresso/interpreter.hpp"
-#include "gpu/latte_context_display_list.hpp"
+#include "gpu/latte_pm4_display_list.hpp"
 #include "gpu/latte_surface_staging.hpp"
 #include "gpu/latte_texture_staging.hpp"
 
@@ -925,7 +925,7 @@ std::vector<Gx2Command> read_gx2_context_restore_commands(
     return commands;
 }
 
-std::vector<Gx2Command> decode_gx2_context_register_display_list(
+std::vector<Gx2Command> decode_gx2_pm4_register_display_list(
     std::span<const std::uint8_t> display_list_bytes,
     const char* api_name)
 {
@@ -948,34 +948,34 @@ std::vector<Gx2Command> decode_gx2_context_register_display_list(
             static_cast<std::uint32_t>(display_list_bytes[byte_offset + 3U]);
     }
 
-    const auto decoded = affogato::gpu::decode_latte_context_display_list(words);
+    const auto decoded = affogato::gpu::decode_latte_pm4_display_list(words);
     if (!decoded.succeeded())
     {
         const char* reason = "contains an unsupported packet";
         switch (decoded.error)
         {
-        case affogato::gpu::LatteContextDisplayListError::none:
+        case affogato::gpu::LattePm4DisplayListError::none:
             break;
-        case affogato::gpu::LatteContextDisplayListError::unsupported_packet_type:
+        case affogato::gpu::LattePm4DisplayListError::unsupported_packet_type:
             reason = "contains an unsupported packet type";
             break;
-        case affogato::gpu::LatteContextDisplayListError::invalid_type2_header:
+        case affogato::gpu::LattePm4DisplayListError::invalid_type2_header:
             reason = "contains an invalid Type-2 header";
             break;
-        case affogato::gpu::LatteContextDisplayListError::invalid_type3_header:
+        case affogato::gpu::LattePm4DisplayListError::invalid_type3_header:
             reason = "contains a predicated or invalid Type-3 header";
             break;
-        case affogato::gpu::LatteContextDisplayListError::truncated_packet:
+        case affogato::gpu::LattePm4DisplayListError::truncated_packet:
             reason = "contains a truncated packet";
             break;
-        case affogato::gpu::LatteContextDisplayListError::unsupported_opcode:
+        case affogato::gpu::LattePm4DisplayListError::unsupported_opcode:
             reason = "contains an unsupported Type-3 opcode";
             break;
-        case affogato::gpu::LatteContextDisplayListError::missing_register_data:
+        case affogato::gpu::LattePm4DisplayListError::missing_register_data:
             reason = "contains a register packet without register data";
             break;
-        case affogato::gpu::LatteContextDisplayListError::register_range_out_of_bounds:
-            reason = "writes outside the context-register range";
+        case affogato::gpu::LattePm4DisplayListError::register_range_out_of_bounds:
+            reason = "writes outside a supported register window";
             break;
         }
 
@@ -987,11 +987,13 @@ std::vector<Gx2Command> decode_gx2_context_register_display_list(
 
     std::vector<Gx2Command> commands;
     commands.reserve(decoded.register_writes.size());
-    for (const affogato::gpu::LatteContextRegisterWrite& write :
+    for (const affogato::gpu::LattePm4RegisterWrite& write :
          decoded.register_writes)
     {
         commands.push_back({
-            Gx2CommandType::set_context_register,
+            write.space == affogato::gpu::LatteRegisterSpace::config
+                ? Gx2CommandType::set_config_register
+                : Gx2CommandType::set_context_register,
             write.address,
             write.value});
     }
@@ -5515,7 +5517,7 @@ void register_gx2_hle(HleDispatcher& dispatcher)
             }
             else
             {
-                restore_commands = decode_gx2_context_register_display_list(
+                restore_commands = decode_gx2_pm4_register_display_list(
                     std::span<const std::uint8_t>(context_bytes).subspan(
                         gx2_context_display_list_offset, display_list_size),
                     api_name);
@@ -5593,7 +5595,7 @@ void register_gx2_hle(HleDispatcher& dispatcher)
             }
 
             std::vector<Gx2Command> register_commands =
-                decode_gx2_context_register_display_list(
+                decode_gx2_pm4_register_display_list(
                     display_list_bytes, api_name);
 
             // The frontend consumes the copied, decoded register commands in

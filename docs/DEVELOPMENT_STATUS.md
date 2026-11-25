@@ -3,16 +3,19 @@
 ## Current implementation checkpoint (2026-11-25)
 
 `GX2SetContextState` and `GX2DirectCallDisplayList` now share a bounded PM4
-state-write decoder. It accepts Type-0 context-window writes, Type-2 filler,
-Type-3 NOP, and Type-3 `SET_CONTEXT_REG`. Direct-call input is validated and
-copied from guest memory before decoding; malformed or unsupported streams do
-not append partial command batches. The HLE queues typed register updates; it
-does not execute GPU draws. Type-3 draw/state operations outside the subset,
-indirect-buffer recursion, list recording/copy APIs, raw ring processing, and
-GPU retirement remain unsupported. Debug/Release builds and CTest passed 2/2
-in each configuration. The detailed interface and packet research is in
+state-write decoder. It accepts Type-0 writes in the supported config/context
+windows, Type-2 filler, Type-3 NOP, `SET_CONFIG_REG`, and `SET_CONTEXT_REG`.
+Direct-call input is validated and copied from guest memory before decoding;
+malformed or unsupported streams do not append partial command batches. The
+HLE queues typed register updates; it does not execute GPU draws. Type-3 draw
+and other state operations outside the subset, indirect-buffer recursion,
+list recording/copy APIs, raw ring processing, and GPU retirement remain
+unsupported. Debug/Release builds and CTest passed 2/2 in each configuration.
+The packet research is cross-checked against the AMD R6xx/R7xx guide and Cemu's
+GX2 draw packet construction; no Latte-produced fixture is available. Details
+are in
 [`research/15_latte_command_processor.md`](research/15_latte_command_processor.md).
-The implementation is pushed through `e69c35d`.
+This update builds on the implementation pushed through `e69c35d`.
 
 ## Documentation-driven subsystem audit (2026-11-24)
 
