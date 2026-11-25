@@ -34,9 +34,12 @@ Relevant local implementation:
   its destination GPR plus optional component bits. It takes the resolved
   vertex index and `VS_GPR_BASE` explicitly. Table extraction rejects
   incomplete, duplicate, or wrongly typed entries. Multiple attributes are
-  not yet assembled into a complete invocation input file, and system inputs
-  are not modeled. This fetch path is separate from the guest vertex/pixel
-  shader ISA.
+  assembled into a caller-provided register file with transactional writes.
+  `execute_latte_vertex_shader_subset()` joins that fetch subset to the
+  supported straight-line CPU shader subset for one explicitly selected
+  vertex. This is a deterministic CPU execution path, not normal GX2 draw
+  execution; system inputs are not modeled. The fetch path remains separate
+  from general guest vertex/pixel shader execution.
 - `GX2InitFetchShaderEx` in `src/cpu/espresso/gx2_hle.cpp` emits one four-dword
   record per attribute. Word 0 selects the semantic VTX form; under that form,
   word 1's overlapping low field is a semantic ID, not a direct destination
@@ -44,8 +47,9 @@ Relevant local implementation:
   Arbitrary guest fetch programs and the full Latte field width remain
   unsupported.
   `GX2SetFetchShader` captures the guest descriptor and program but does not
-  itself emit `SQ_VTX_SEMANTIC` register writes. The current HLE therefore does
-  not establish a complete fetch-to-VS input path.
+  itself emit `SQ_VTX_SEMANTIC` register writes. The CPU subset helper is not
+  yet called from normal GX2 draw processing, so captured draw commands do not
+  automatically fetch vertices and execute the supported shader subset.
 - `src/gpu/latte_shader_decoder.hpp` converts the captured big-endian words
   to the little-endian Latte DWORD values represented in GFD shader code, then
   decodes a narrow control-flow subset, ALU clause ranges, OP2 fields, and
@@ -259,7 +263,7 @@ arbitrary guest fetch programs or claiming Latte hardware verification.
 | Capability | Status | Evidence / dependency |
 | --- | --- | --- |
 | GX2 vertex/pixel/geometry descriptor capture | Implemented and tested as capture | HLE descriptor/program range checks and draw-time state snapshots |
-| Fetch-shader parsing and semantic linkage | Narrow CPU subset | `latte_vertex_fetch.hpp` recognizes Affogato-generated semantic VTX records, decodes supported formats, applies destination selectors (component swizzles, 0.0, 1.0, and masked writes), extracts a complete correctly typed 32-entry `SQ_VTX_SEMANTIC` table from a draw snapshot, and maps attributes plus immutable vertex snapshots into a caller-provided register file at an explicit vertex index and `VS_GPR_BASE + 1 + table index`. Writes are validated transactionally. AMD references differ on semantic-field width (R6xx: 8; R700 ISA Chapter 5: 9, while its Chapter 9 semantic-format table says 8); Latte applicability remains unresolved. Arbitrary guest fetch programs are not executed, and system-generated inputs remain unsupported. No Wii U hardware verification. |
+| Fetch-shader parsing and semantic linkage | Narrow CPU subset | `latte_vertex_fetch.hpp` recognizes Affogato-generated semantic VTX records, decodes supported formats, applies destination selectors (component swizzles, 0.0, 1.0, and masked writes), extracts a complete correctly typed 32-entry `SQ_VTX_SEMANTIC` table from a draw snapshot, and maps attributes plus immutable vertex snapshots into a caller-provided register file at an explicit vertex index and `VS_GPR_BASE + 1 + table index`. `execute_latte_vertex_shader_subset()` passes this input file to the supported CPU shader subset in one deterministic test path. Writes are validated transactionally. AMD references differ on semantic-field width (R6xx: 8; R700 ISA Chapter 5: 9, while its Chapter 9 semantic-format table says 8); Latte applicability remains unresolved. Arbitrary guest fetch programs are not executed, normal draw dispatch is not connected, and system-generated inputs remain unsupported. No Wii U hardware verification. |
 | Latte shader control-flow decoding | Partial | `latte_shader_decoder.hpp` decodes fixture-verified `CALL_FS`, `EXPORT`, `EXPORT_DONE`, and `ALU` clause headers, including EOP, bounded clause ranges, and normal export metadata (type, GPRs, burst count, and component selectors). Unknown opcodes and malformed streams fail explicitly. Export values are not applied to stage outputs; branch/loop execution is absent. |
 | Latte ALU decoding/execution | Experimental subset | OP2 fields and LAST-delimited no-literal groups are decoded. A bounded clause executor runs sequential four-slot X/Y/Z/W groups with MOV and selected integer operations, forwards PV between groups within the clause, and leaves external registers unchanged if a later supported-subset check fails. A straight-line shader subset connects ALU clauses to normal export materialization with caller-provided initial GPRs. Fetch shader execution, ALU.Trans/PS, constant-file/literal reads, other opcodes, general control flow, Vulkan use, and Latte-hardware validation are absent. |
 | Vertex/pixel shader translation | Missing | Stage interfaces, exports, constants, textures, and SPIR-V backend |

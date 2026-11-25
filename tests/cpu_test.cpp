@@ -19,6 +19,7 @@
 #include "gpu/latte_shader_program.hpp"
 #include "gpu/latte_surface_staging.hpp"
 #include "gpu/latte_vertex_fetch.hpp"
+#include "gpu/latte_vertex_shader_subset.hpp"
 #include "gpu/latte_texture_staging.hpp"
 
 #include <algorithm>
@@ -32293,6 +32294,7 @@ void latte_control_flow_decoder_tests()
     using affogato::gpu::decode_latte_control_flow;
     using affogato::gpu::evaluate_latte_normal_export;
     using affogato::gpu::execute_latte_shader_subset;
+    using affogato::gpu::execute_latte_vertex_shader_subset;
     using affogato::gpu::LatteExportType;
     using affogato::gpu::evaluate_latte_alu_move_value;
     using affogato::gpu::execute_latte_alu_op2_clause;
@@ -32452,6 +32454,51 @@ void latte_control_flow_decoder_tests()
         shader_registers[1U][0U]);
     assert(shader_result.exports[0U].values[0U].components[3U] ==
         shader_registers[1U][3U]);
+
+    affogato::cpu::espresso::Gx2FetchShaderBinding fetch_shader{};
+    fetch_shader.program_size = 16U;
+    fetch_shader.attribute_count = 1U;
+    fetch_shader.program_words = {
+        1U | (1U << 8U) | (7U << 26U),
+        7U | (1U << 9U) | (4U << 15U) | (7U << 18U) |
+            (0x0DU << 22U) | (2U << 28U),
+        2U << 16U,
+        0U};
+
+    std::array<std::uint32_t, 32U> vertex_semantic_table{};
+    vertex_semantic_table.fill(0xFFFFFFFFU);
+    vertex_semantic_table[0U] = 7U;
+
+    affogato::cpu::espresso::Gx2VertexBufferSnapshot vertex_buffer{};
+    vertex_buffer.binding = {1U, 16U, 8U, 0x1000U};
+    vertex_buffer.byte_offset = 8U;
+    vertex_buffer.is_valid = true;
+    vertex_buffer.bytes = {
+        0x3FU, 0xC0U, 0x00U, 0x00U,
+        0xC0U, 0x00U, 0x00U, 0x00U};
+    const std::array<
+        affogato::cpu::espresso::Gx2VertexBufferSnapshot, 1U>
+        vertex_buffers{vertex_buffer};
+
+    std::array<LatteShaderRegister, 8U> initial_vertex_registers{};
+    initial_vertex_registers[1U].fill(0xDEADBEEFU);
+    const auto vertex_shader_result = execute_latte_vertex_shader_subset(
+        linear_shader_words,
+        fetch_shader,
+        vertex_buffers,
+        vertex_semantic_table,
+        0U,
+        1U,
+        initial_vertex_registers);
+    assert(vertex_shader_result.fetched_attribute_count == 1U);
+    assert(vertex_shader_result.shader_execution.registers[1U] ==
+        (LatteShaderRegister{
+            0xC0000000U,
+            0x3FC00000U,
+            0U,
+            0xDEADBEEFU}));
+    assert(vertex_shader_result.shader_execution.registers[3U] ==
+        vertex_shader_result.shader_execution.registers[1U]);
 
     bool rejected_fetch_shader_call = false;
     try

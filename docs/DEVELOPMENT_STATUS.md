@@ -622,3 +622,21 @@ builds succeeded, CTest passed 2/2 in each configuration, and the existing
 diagnostic Vulkan triangle smoke test passed. This is input assembly for an
 explicit caller-supplied vertex index; it does not execute a Latte vertex
 shader or establish Wii U hardware conformance.
+
+## CPU vertex-fetch to shader-subset path (2026-11-25)
+
+Added `execute_latte_vertex_shader_subset()` in
+[`latte_vertex_shader_subset.hpp`](../src/gpu/latte_vertex_shader_subset.hpp).
+It parses the existing HLE-generated fetch-shader subset, resolves supported
+draw-time vertex snapshots and semantics for one explicitly supplied vertex
+index, then passes the populated registers into the existing straight-line
+CPU shader subset. A deterministic fixture verifies big-endian Float32x2
+input, a destination selector with a masked component, MOV execution, and
+register output. This composes tested CPU helpers; it is not wired to ordinary
+GX2 draw processing, does not execute general guest fetch programs, and does
+not generate Vulkan shaders. The fixture initially failed because its fetch
+record omitted the documented Float32 endian mode; correcting the fixture made
+Debug CTest pass 2/2. The previous Release build/test and diagnostic GPU smoke
+test passed before this new integration header was added. Release build and
+CTest passed 2/2 for this stage. The GPU smoke test was not rerun after adding
+the CPU-only integration helper.
