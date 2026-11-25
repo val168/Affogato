@@ -1,5 +1,17 @@
 # Affogato Development Status
 
+## WWHD startup blocker reproduction (2026-11-25)
+
+A headless interpreter run of the local WWHD RPX, limited to 10,000,000
+instructions, stopped after 6,081,749 instructions with CIA `0` and
+`unsupported PowerPC instruction 0x46524D48`. The HLE trace reaches GX2
+sampler initialization and surface-size calculations, but contains no GX2 draw
+or scan-buffer swap calls before stopping. This run therefore does not exercise
+the experimental Latte vertex-subset frontend option and provides no evidence
+of WWHD rendering. The stop remains an execution blocker to investigate from
+the guest control-flow and memory state; no callback or successful behavior
+should be fabricated to bypass it.
+
 ## Frontend Latte vertex-subset diagnostic mode (2026-11-25)
 
 The game-launch UI now offers an explicit experimental mode that routes normal
