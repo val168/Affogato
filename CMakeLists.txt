@@ -647,6 +647,11 @@ if(BUILD_TESTING)
             COMMAND affogato_frontend
                 --gx2-guest-triangle-matched-varying-unsigned-min-readback-test
         )
+        add_test(
+            NAME affogato_vulkan_guest_matched_varying_default_input_readback
+            COMMAND affogato_frontend
+                --gx2-guest-triangle-matched-varying-default-alpha-test
+        )
     endif()
 
     add_executable(affogato_recompiler_benchmark

@@ -11,10 +11,12 @@ remain explicit errors. The guest ALU subset and MRT0 export constraints are
 unchanged.
 
 Synthetic modules with multiple varyings and with a varying plus a default
-input pass `spirv-val`, and duplicate-input rejection is covered. Existing
-one-varying Vulkan readbacks pass. The combined and multi-varying output has
-not yet been exercised through framebuffer readback, nor does this establish
-ordinary Latte draw execution or WWHD rendering.
+input pass `spirv-val`, and duplicate-input rejection is covered. The
+`--gx2-guest-triangle-matched-varying-default-alpha-test` runs through guest
+GX2 HLE and the diagnostic draw path; Vulkan readback confirms the interpolated
+green gradient and zero alpha loaded from the unmatched input's default.
+Multiple-varying framebuffer readback remains untested. These checks do not
+establish ordinary Latte draw execution or WWHD rendering.
 
 ## GX2 renderer draw-snapshot batch lifetime (2026-11-25)
 
