@@ -1971,20 +1971,29 @@ enum class GuestTriangleShader
     spirv_constant_pixel_color,
     spirv_default_pixel_input,
     spirv_matched_varying_move,
-    spirv_matched_varying_add_zero,
-    spirv_matched_varying_multiply_one
+    spirv_matched_varying_add_half,
+    spirv_matched_varying_multiply_half
 };
 
-[[nodiscard]] bool contains_interpolated_green_pixels(
-    std::span<const std::uint8_t> rgba_pixels)
+[[nodiscard]] bool contains_expected_interpolated_pixels(
+    std::span<const std::uint8_t> rgba_pixels,
+    GuestTriangleShader shader)
 {
     constexpr std::size_t bytes_per_pixel = 4U;
-    constexpr std::uint8_t maximum_channel_for_zero = 40U;
+    constexpr std::uint8_t maximum_zero_channel = 40U;
     constexpr std::uint8_t minimum_varying_green = 50U;
-    constexpr std::uint8_t minimum_alpha = 200U;
+    constexpr std::uint8_t minimum_add_half_channel = 100U;
+    constexpr std::uint8_t minimum_multiply_half_alpha = 110U;
+    constexpr std::uint8_t maximum_multiply_half_alpha = 145U;
+    constexpr std::uint8_t minimum_opaque_alpha = 200U;
     std::uint8_t minimum_green = 255U;
     std::uint8_t maximum_green = 0U;
     std::size_t matching_pixel_count = 0U;
+
+    const bool is_add_half =
+        shader == GuestTriangleShader::spirv_matched_varying_add_half;
+    const bool is_multiply_half =
+        shader == GuestTriangleShader::spirv_matched_varying_multiply_half;
 
     for (std::size_t pixel_offset = 0U;
          pixel_offset + bytes_per_pixel <= rgba_pixels.size();
@@ -1994,10 +2003,17 @@ enum class GuestTriangleShader
         const std::uint8_t green = rgba_pixels[pixel_offset + 1U];
         const std::uint8_t blue = rgba_pixels[pixel_offset + 2U];
         const std::uint8_t alpha = rgba_pixels[pixel_offset + 3U];
-        if (red > maximum_channel_for_zero ||
-            green < minimum_varying_green ||
-            blue > maximum_channel_for_zero ||
-            alpha < minimum_alpha)
+        const bool has_expected_red_and_blue = is_add_half
+            ? red >= minimum_add_half_channel &&
+                blue >= minimum_add_half_channel
+            : red <= maximum_zero_channel && blue <= maximum_zero_channel;
+        const bool has_expected_green = green >= minimum_varying_green;
+        const bool has_expected_alpha = is_multiply_half
+            ? alpha >= minimum_multiply_half_alpha &&
+                alpha <= maximum_multiply_half_alpha
+            : alpha >= minimum_opaque_alpha;
+        if (!has_expected_red_and_blue || !has_expected_green ||
+            !has_expected_alpha)
         {
             continue;
         }
@@ -2020,12 +2036,12 @@ int run_gx2_guest_triangle_test(
         shader == GuestTriangleShader::spirv_constant_pixel_color ||
         shader == GuestTriangleShader::spirv_default_pixel_input ||
         shader == GuestTriangleShader::spirv_matched_varying_move ||
-        shader == GuestTriangleShader::spirv_matched_varying_add_zero ||
-        shader == GuestTriangleShader::spirv_matched_varying_multiply_one;
+        shader == GuestTriangleShader::spirv_matched_varying_add_half ||
+        shader == GuestTriangleShader::spirv_matched_varying_multiply_half;
     const bool use_varying_passthrough =
         shader == GuestTriangleShader::spirv_matched_varying_move ||
-        shader == GuestTriangleShader::spirv_matched_varying_add_zero ||
-        shader == GuestTriangleShader::spirv_matched_varying_multiply_one;
+        shader == GuestTriangleShader::spirv_matched_varying_add_half ||
+        shader == GuestTriangleShader::spirv_matched_varying_multiply_half;
     constexpr std::uint32_t vertex_buffer_address = 0x10000U;
     constexpr std::uint32_t index_buffer_address = 0x4000U;
     constexpr std::uint32_t big_endian_index_buffer_address = 0x5000U;
@@ -2448,17 +2464,17 @@ int run_gx2_guest_triangle_test(
             std::uint32_t source1_encoding = 0U;
             std::uint16_t pixel_opcode =
                 affogato::gpu::latte_alu_op2_move_opcode;
-            if (shader == GuestTriangleShader::spirv_matched_varying_add_zero)
+            if (shader == GuestTriangleShader::spirv_matched_varying_add_half)
             {
                 source1_encoding = static_cast<std::uint32_t>(
-                    affogato::gpu::latte_alu_source_zero_selector);
+                    affogato::gpu::latte_alu_source_half_float_selector);
                 pixel_opcode = affogato::gpu::latte_alu_op2_add_float_opcode;
             }
             else if (shader ==
-                     GuestTriangleShader::spirv_matched_varying_multiply_one)
+                     GuestTriangleShader::spirv_matched_varying_multiply_half)
             {
                 source1_encoding = static_cast<std::uint32_t>(
-                    affogato::gpu::latte_alu_source_one_float_selector);
+                    affogato::gpu::latte_alu_source_half_float_selector);
                 pixel_opcode =
                     affogato::gpu::latte_alu_op2_multiply_ieee_opcode;
             }
@@ -2978,8 +2994,9 @@ int run_gx2_guest_triangle_test(
     }
     if (use_varying_passthrough)
     {
-        has_diagnostic_color = contains_interpolated_green_pixels(
-            color_buffer_updates.front().bytes);
+        has_diagnostic_color = contains_expected_interpolated_pixels(
+            color_buffer_updates.front().bytes,
+            shader);
     }
     if (!has_diagnostic_color)
     {
@@ -3135,8 +3152,9 @@ int run_gx2_guest_triangle_test(
             }
             if (use_varying_passthrough)
             {
-                shader_sample_matches = contains_interpolated_green_pixels(
-                    shader_frame->pixels);
+                shader_sample_matches = contains_expected_interpolated_pixels(
+                    shader_frame->pixels,
+                    shader);
             }
             if (!shader_sample_matches)
             {
@@ -3223,8 +3241,9 @@ int run_gx2_guest_triangle_test(
     }
     if (use_varying_passthrough)
     {
-        presented_diagnostic_color = contains_interpolated_green_pixels(
-            rendered_frame->pixels);
+        presented_diagnostic_color = contains_expected_interpolated_pixels(
+            rendered_frame->pixels,
+            shader);
     }
     if (!presented_diagnostic_color)
     {
@@ -3511,20 +3530,20 @@ int main(int argc, char* argv[])
                     GuestTriangleShader::spirv_matched_varying_move);
             }
             if (std::string_view(argv[1]) ==
-                    "--gx2-guest-triangle-matched-varying-add-zero-smoke-test" &&
+                    "--gx2-guest-triangle-matched-varying-add-half-smoke-test" &&
                 argc == 2)
             {
                 return run_gx2_guest_triangle_test(
                     false,
-                    GuestTriangleShader::spirv_matched_varying_add_zero);
+                    GuestTriangleShader::spirv_matched_varying_add_half);
             }
             if (std::string_view(argv[1]) ==
-                    "--gx2-guest-triangle-matched-varying-multiply-one-smoke-test" &&
+                    "--gx2-guest-triangle-matched-varying-multiply-half-smoke-test" &&
                 argc == 2)
             {
                 return run_gx2_guest_triangle_test(
                     false,
-                    GuestTriangleShader::spirv_matched_varying_multiply_one);
+                    GuestTriangleShader::spirv_matched_varying_multiply_half);
             }
             if (std::string_view(argv[1]) == "--gx2-guest-triangle-display-test" &&
                 argc == 2)

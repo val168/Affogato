@@ -138,8 +138,8 @@ HLE fixture issues a parameter export at guest array index 0 with semantic
 `pixel_input_index`. The vertex module writes the selected guest GPR vector.
 The captured pixel program contains a four-lane OP2 MOV group from that input
 GPR to the MRT0 export GPR; the bounded fragment emitter translates those MOVs
-to SPIR-V. Deterministic MOV, ADD-by-zero, and IEEE-MUL-by-one modules pass
-`spirv-val`. Each guest PPC/GX2 fixture also routes the respective program
+to SPIR-V. Deterministic MOV, ADD-by-0.5, and IEEE-MUL-by-0.5 modules
+pass `spirv-val`. Each guest PPC/GX2 fixture also routes the respective program
 through the same matched-input Vulkan pipeline and verifies the interpolated
 green gradient in framebuffer readback; the MOV variant additionally verifies
 the presented frame and scanout copy. This verifies these bounded operations

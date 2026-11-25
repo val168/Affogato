@@ -13,8 +13,8 @@ and swapchain frame, and the scanout copy path remains in the test. This
 executes the tested guest MOV subset, while other guest pixel operations,
 ordinary game draw routing, and WWHD rendering remain unsupported.
 The matched fragment emitter also supports float ADD and IEEE MUL. Controlled
-guest shader fixtures execute MOV, ADD-by-zero, and MUL-by-one, each passing
-Vulkan readback for the same interpolated gradient. Their generated modules
+guest shader fixtures execute MOV, ADD-by-one-half, and MUL-by-one-half, each
+passing Vulkan readback for the interpolated gradient. Their generated modules
 pass `spirv-val`. This verifies the bounded operations on these inputs, not
 general Latte arithmetic behavior. Full Debug and Release CTest passed 39/39.
 
@@ -26,7 +26,7 @@ centroid, sample, and point-sprite inputs fail explicitly. The separate matched
 matched-input module consumes one linked `float4`, executes supported
 four-lane guest MOV, float ADD, or IEEE MUL groups, and applies the guest MRT0
 swizzle. Each generated module has a `spirv-val` fixture. The guest integration
-tests verify MOV, ADD-by-zero, and MUL-by-one through Vulkan readback.
+tests verify MOV, ADD-by-0.5, and MUL-by-0.5 through Vulkan readback.
 
 ## Vertex shader parameter exports to SPIR-V (2026-11-25)
 

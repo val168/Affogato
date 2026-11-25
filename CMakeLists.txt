@@ -526,14 +526,14 @@ if(BUILD_TESTING)
                 --gx2-guest-triangle-matched-varying-move-smoke-test
         )
         add_test(
-            NAME affogato_vulkan_guest_matched_varying_add_zero_readback
+            NAME affogato_vulkan_guest_matched_varying_add_half_readback
             COMMAND affogato_frontend
-                --gx2-guest-triangle-matched-varying-add-zero-smoke-test
+                --gx2-guest-triangle-matched-varying-add-half-smoke-test
         )
         add_test(
-            NAME affogato_vulkan_guest_matched_varying_multiply_one_readback
+            NAME affogato_vulkan_guest_matched_varying_multiply_half_readback
             COMMAND affogato_frontend
-                --gx2-guest-triangle-matched-varying-multiply-one-smoke-test
+                --gx2-guest-triangle-matched-varying-multiply-half-smoke-test
         )
     endif()
 

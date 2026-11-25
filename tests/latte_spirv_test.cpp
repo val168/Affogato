@@ -730,7 +730,7 @@ int main(int argc, char* argv[])
     {
         operation.opcode = affogato::gpu::latte_alu_op2_add_float_opcode;
         operation.source1_selector =
-            affogato::gpu::latte_alu_source_zero_selector;
+            affogato::gpu::latte_alu_source_half_float_selector;
         operation.source1_channel = operation.destination_component;
     }
     const std::vector<std::uint32_t> matched_add_module =
@@ -749,7 +749,7 @@ int main(int argc, char* argv[])
         operation.opcode =
             affogato::gpu::latte_alu_op2_multiply_ieee_opcode;
         operation.source1_selector =
-            affogato::gpu::latte_alu_source_one_float_selector;
+            affogato::gpu::latte_alu_source_half_float_selector;
         operation.source1_channel = operation.destination_component;
     }
     const std::vector<std::uint32_t> matched_multiply_module =
