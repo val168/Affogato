@@ -303,9 +303,15 @@ without literal operands. It rejects OP3 encodings, literal selectors, and an
 unterminated final group. This does not parse literal payload slots or execute
 groups. The pass-through fixture contains one four-slot group and no literals.
 
-Next implementation work should add semantic execution for the verified
-no-literal MOV group with independently expected guest-register and PV state,
-after resolving the fixture's exact unit assignment. The pass-through shader
-alone does not establish complete shader decoding. Do not start SPIR-V emission
-until opcode semantics, slot grouping, and expected architectural outputs have
-deterministic tests.
+`execute_latte_alu_op2_move_vector_group()` supports only a four-slot MOV group
+in X/Y/Z/W destination-component order, with the already supported absolute
+GPR sources and no unsupported modifiers. It gathers all sources before
+updating destination lanes and returns the resulting four-lane PV value. Tests
+cover bit-preserving values, same-group source/destination overlap, and
+rejection without partial register writes. This subset is based on R700-family
+group semantics and the assembled fixture; it is not independently verified
+against Latte hardware. It does not model PS, constants, literals, other
+groups, or any other opcode. The pass-through shader still does not establish
+complete shader decoding. Do not start SPIR-V emission until broader opcode
+semantics, slot grouping, and expected architectural outputs have deterministic
+tests.

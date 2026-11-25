@@ -389,3 +389,14 @@ ending with an unterminated group. Tests confirm the assembled MOV fixture is
 one four-slot group and cover those unsupported cases. It does not parse
 literal payload slots or execute groups. Debug and Release builds succeeded;
 CTest passed 2/2 in both configurations. `git diff --check` is clean.
+
+## Latte four-lane MOV group subset (2026-11-25)
+
+Added `execute_latte_alu_op2_move_vector_group()` for exactly four ordered
+X/Y/Z/W MOV operations using supported absolute GPR component reads. It
+collects source values before writing any destination lane and returns the
+four-lane vector result. Tests cover raw bit preservation, same-group
+source/destination overlap, and rejection without partial writes. The behavior
+is based on R700-family group semantics and the assembled fixture, not direct
+Latte hardware validation. The helper does not implement PS, constants, literal
+operands, or general shader execution.

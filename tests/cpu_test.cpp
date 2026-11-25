@@ -31953,6 +31953,7 @@ void latte_control_flow_decoder_tests()
     using affogato::gpu::decode_latte_alu_op2_groups;
     using affogato::gpu::decode_latte_control_flow;
     using affogato::gpu::evaluate_latte_alu_move_value;
+    using affogato::gpu::execute_latte_alu_op2_move_vector_group;
     using affogato::gpu::LatteShaderRegister;
 
     // Captured with read32_be() from the assembled GFD pass-through vertex
@@ -32060,6 +32061,55 @@ void latte_control_flow_decoder_tests()
     assert(alu_groups[0U].instructions.size() == 4U);
     assert(alu_groups[0U].instructions.front() == first_move);
     assert(alu_groups[0U].instructions.back() == final_move);
+
+    std::array<LatteShaderRegister, 8U> shader_registers{};
+    shader_registers[1U] = {
+        0x3FA00000U,
+        0xFFC12345U,
+        0x80000000U,
+        0x7F800000U};
+    shader_registers[3U].fill(0xDEADBEEFU);
+
+    const auto previous_vector = execute_latte_alu_op2_move_vector_group(
+        alu_groups[0U], shader_registers);
+    assert((previous_vector == shader_registers[1U]));
+    assert((shader_registers[3U] == shader_registers[1U]));
+
+    auto parallel_move_group = alu_groups[0U];
+    for (std::size_t component = 0U;
+         component < parallel_move_group.instructions.size();
+         ++component)
+    {
+        parallel_move_group.instructions[component].destination_gpr = 1U;
+        parallel_move_group.instructions[component].source0_channel =
+            static_cast<std::uint8_t>((component + 1U) % 4U);
+    }
+
+    const LatteShaderRegister expected_rotated_vector{
+        0xFFC12345U,
+        0x80000000U,
+        0x7F800000U,
+        0x3FA00000U};
+    const auto rotated_vector = execute_latte_alu_op2_move_vector_group(
+        parallel_move_group, shader_registers);
+    assert((rotated_vector == expected_rotated_vector));
+    assert((shader_registers[1U] == expected_rotated_vector));
+
+    auto unsupported_move_group = alu_groups[0U];
+    unsupported_move_group.instructions.back().source0_selector = 253U;
+    const auto registers_before_unsupported_group = shader_registers;
+    bool rejected_unsupported_move_group = false;
+    try
+    {
+        static_cast<void>(execute_latte_alu_op2_move_vector_group(
+            unsupported_move_group, shader_registers));
+    }
+    catch (const std::runtime_error&)
+    {
+        rejected_unsupported_move_group = true;
+    }
+    assert(rejected_unsupported_move_group);
+    assert(shader_registers == registers_before_unsupported_group);
 
     bool rejected_literal_alu_operand = false;
     try

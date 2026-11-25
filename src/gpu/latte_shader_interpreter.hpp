@@ -67,4 +67,51 @@ using LatteShaderRegister =
                          [instruction.source0_channel];
 }
 
+// Execute the fixture-verified X/Y/Z/W MOV group. Source values are collected
+// before any destination lane is changed, matching parallel group execution.
+// The returned vector is the group's ALU.[X,Y,Z,W] result (PV).
+[[nodiscard]] inline LatteShaderRegister
+execute_latte_alu_op2_move_vector_group(
+    const LatteAluOp2InstructionGroup& group,
+    std::span<LatteShaderRegister> guest_registers)
+{
+    if (group.instructions.size() != latte_shader_register_component_count)
+    {
+        throw std::runtime_error(
+            "Latte MOV group must contain exactly four vector instructions");
+    }
+
+    LatteShaderRegister previous_vector{};
+
+    for (std::size_t component = 0U;
+         component < group.instructions.size();
+         ++component)
+    {
+        const auto& instruction = group.instructions[component];
+        if (instruction.opcode != latte_alu_op2_move_opcode ||
+            instruction.destination_component != component ||
+            instruction.last_in_group !=
+                (component + 1U == group.instructions.size()))
+        {
+            throw std::runtime_error(
+                "Latte MOV group does not match the supported X/Y/Z/W layout");
+        }
+
+        previous_vector[component] = evaluate_latte_alu_move_value(
+            instruction,
+            std::span<const LatteShaderRegister>(guest_registers));
+    }
+
+    for (std::size_t component = 0U;
+         component < group.instructions.size();
+         ++component)
+    {
+        const auto& instruction = group.instructions[component];
+        guest_registers[instruction.destination_gpr][component] =
+            previous_vector[component];
+    }
+
+    return previous_vector;
+}
+
 } // namespace affogato::gpu
