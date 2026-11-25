@@ -15,6 +15,14 @@ option and provides no evidence of WWHD rendering. The object's intended owner
 and initialization path remain unidentified; no callback or successful
 behavior should be fabricated to bypass it.
 
+The existing guest-memory write watch on `0x07E4F670` observed two writes,
+both storing zero: one at CIA `0x02785D14` from `r30`, and another at
+`0x02785EC4` from `r3` after guest helper `0x027538C0` returned. That helper
+calls `coreinit::OSLockMutex`, but the current trace does not establish why its
+caller stores a null result into the field or what the field represents. This
+rules out a never-written field for this run, but does not identify the missing
+initialization behavior.
+
 ## Frontend Latte vertex-subset diagnostic mode (2026-11-25)
 
 The game-launch UI now offers an explicit experimental mode that routes normal
