@@ -13,8 +13,14 @@ sequence and `spirv-val` accepts both modules. Debug and Release builds passed;
 CTest passed 13/13 in both. Separate Vulkan smoke modes now submit
 `MAX_DX10(x, x)` and `MIN_DX10(x, x)` guest shaders and verify guest target and
 scanout readback. These identity comparisons keep the test geometry fixed;
-non-identity comparison outputs and Latte hardware behavior remain
-unverified. See
+additional clamping modes render `MAX_DX10(x, 0)` and `MIN_DX10(x, 0)` through
+the generated vertex module and assert red/background pixels at positions that
+distinguish the transformed output from a pass-through. Debug and Release
+CTest pass 15/15 with those checks. This validates SPIR-V and the controlled
+Vulkan path only; Latte hardware behavior and arbitrary guest shader programs
+remain unverified. The guest color-buffer diagnostic readback still uses
+CPU-decoded geometry and the diagnostic host pipeline; the shader-result
+assertion uses the separate Vulkan swapchain draw. See
 [`research/12_latte_shader_isa.md`](research/12_latte_shader_isa.md).
 
 ## Controlled Vulkan run for Latte MUL_IEEE (2026-11-25)

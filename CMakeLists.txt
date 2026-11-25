@@ -344,6 +344,16 @@ if(BUILD_TESTING)
             COMMAND affogato_frontend
                 --gx2-guest-triangle-minimum-spirv-smoke-test
         )
+        add_test(
+            NAME affogato_vulkan_guest_maximum_zero_readback
+            COMMAND affogato_frontend
+                --gx2-guest-triangle-maximum-zero-spirv-smoke-test
+        )
+        add_test(
+            NAME affogato_vulkan_guest_minimum_zero_readback
+            COMMAND affogato_frontend
+                --gx2-guest-triangle-minimum-zero-spirv-smoke-test
+        )
     endif()
 
     add_executable(affogato_recompiler_benchmark

@@ -1919,7 +1919,9 @@ enum class GuestTriangleShader
     spirv_add_zero,
     spirv_multiply_one,
     spirv_maximum_self,
-    spirv_minimum_self
+    spirv_minimum_self,
+    spirv_maximum_zero,
+    spirv_minimum_zero
 };
 
 int run_gx2_guest_triangle_test(
@@ -2103,6 +2105,16 @@ int run_gx2_guest_triangle_test(
             operation_opcode =
                 affogato::gpu::latte_alu_op2_minimum_dx10_opcode;
             second_operand_selector = guest_position_gpr_selector;
+        }
+        else if (shader == GuestTriangleShader::spirv_maximum_zero)
+        {
+            operation_opcode =
+                affogato::gpu::latte_alu_op2_maximum_dx10_opcode;
+        }
+        else if (shader == GuestTriangleShader::spirv_minimum_zero)
+        {
+            operation_opcode =
+                affogato::gpu::latte_alu_op2_minimum_dx10_opcode;
         }
         for (std::uint32_t component = 0U; component < 4U; ++component)
         {
@@ -2588,10 +2600,18 @@ int run_gx2_guest_triangle_test(
         color_buffer_image_address +
             static_cast<std::uint32_t>(color_sample_offset),
         diagnostic_pixel);
-    if (diagnostic_pixel[0U] < 200U || diagnostic_pixel[2U] > 40U)
+    const bool has_diagnostic_color =
+        diagnostic_pixel[0U] >= 200U && diagnostic_pixel[2U] <= 40U;
+    if (!has_diagnostic_color)
     {
         throw std::runtime_error(
-            "Vulkan guest color-buffer readback omitted the diagnostic draw pixels");
+            "Vulkan guest color-buffer pixel (" +
+            std::to_string(color_sample_x) + ", " +
+            std::to_string(color_sample_y) + ") was (" +
+            std::to_string(diagnostic_pixel[0U]) + ", " +
+            std::to_string(diagnostic_pixel[1U]) + ", " +
+            std::to_string(diagnostic_pixel[2U]) + ", " +
+            std::to_string(diagnostic_pixel[3U]) + ")");
     }
 
     invoke("GX2CopyColorBufferToScanBuffer", std::array<std::uint32_t, 2U>{
@@ -2619,6 +2639,47 @@ int run_gx2_guest_triangle_test(
         throw std::runtime_error(
             "GX2 color-buffer copy did not produce readable RGBA8 scanout pixels");
     }
+    const bool verify_clamped_shader_output =
+        shader == GuestTriangleShader::spirv_maximum_zero ||
+        shader == GuestTriangleShader::spirv_minimum_zero;
+    if (verify_clamped_shader_output)
+    {
+        renderer.render_frame();
+        const auto& shader_frame = renderer.frame_readback();
+        if (!shader_frame || shader_frame->width == 0U ||
+            shader_frame->height == 0U)
+        {
+            throw std::runtime_error(
+                "Vulkan Latte shader output readback is unavailable");
+        }
+
+        std::uint32_t shader_sample_x = (shader_frame->width * 70U) / 100U;
+        std::uint32_t shader_sample_y =
+            (shader_frame->height * 7U) / 12U;
+        if (shader == GuestTriangleShader::spirv_minimum_zero)
+        {
+            shader_sample_x = (shader_frame->width * 60U) / 100U;
+            shader_sample_y = (shader_frame->height * 23U) / 40U;
+        }
+        const std::size_t shader_sample_offset =
+            (static_cast<std::size_t>(shader_sample_y) * shader_frame->width +
+             shader_sample_x) * 4U;
+        if (shader_frame->pixels.size() < shader_sample_offset + 4U)
+        {
+            throw std::runtime_error(
+                "Vulkan Latte shader output readback is smaller than the expected sample");
+        }
+        const bool shader_sample_is_red =
+            shader_frame->pixels[shader_sample_offset] >= 200U &&
+            shader_frame->pixels[shader_sample_offset + 2U] <= 40U;
+        const bool expect_red =
+            shader == GuestTriangleShader::spirv_maximum_zero;
+        if (shader_sample_is_red != expect_red)
+        {
+            throw std::runtime_error(
+                "Vulkan Latte shader output pixel did not match its clamp result");
+        }
+    }
     renderer.consume_guest_commands(
         scanout_commands,
         affogato::gpu::vulkan::GuestDrawPolicy::capture_only);
@@ -2636,16 +2697,22 @@ int run_gx2_guest_triangle_test(
     {
         throw std::runtime_error("Vulkan guest triangle frame readback is unavailable");
     }
-    const std::uint32_t sample_x = rendered_frame->width / 2U;
-    const std::uint32_t sample_y = (rendered_frame->height * 5U) / 12U;
+    std::uint32_t sample_x = rendered_frame->width / 2U;
+    std::uint32_t sample_y = (rendered_frame->height * 5U) / 12U;
     const std::size_t sample_offset =
         (static_cast<std::size_t>(sample_y) * rendered_frame->width + sample_x) * 4U;
-    if (rendered_frame->pixels.size() < sample_offset + 4U ||
-        rendered_frame->pixels[sample_offset] < 200U ||
-        rendered_frame->pixels[sample_offset + 2U] > 40U)
+    if (rendered_frame->pixels.size() < sample_offset + 4U)
     {
         throw std::runtime_error(
-            "Vulkan guest triangle readback did not contain the diagnostic fragment color");
+            "Vulkan guest triangle readback is smaller than the expected shader sample");
+    }
+    const bool presented_diagnostic_color =
+        rendered_frame->pixels[sample_offset] >= 200U &&
+        rendered_frame->pixels[sample_offset + 2U] <= 40U;
+    if (!presented_diagnostic_color)
+    {
+        throw std::runtime_error(
+            "Vulkan guest triangle readback did not match the expected shader result");
     }
     while (visible_window && !renderer.should_close())
     {
@@ -2673,6 +2740,16 @@ int run_gx2_guest_triangle_test(
     {
         shader_subset_description =
             "the bounded MOV/MIN_DX10-to-position SPIR-V vertex subset";
+    }
+    if (shader == GuestTriangleShader::spirv_maximum_zero)
+    {
+        shader_subset_description =
+            "the bounded MOV/MAX_DX10-clamp-to-position SPIR-V vertex subset";
+    }
+    if (shader == GuestTriangleShader::spirv_minimum_zero)
+    {
+        shader_subset_description =
+            "the bounded MOV/MIN_DX10-clamp-to-position SPIR-V vertex subset";
     }
     std::cout << "GX2 float32/float16/UNORM8x4 triangle-list, indexed, strip, and fan "
               << "geometry, "
@@ -2750,6 +2827,22 @@ int main(int argc, char* argv[])
                     false,
                     GuestTriangleShader::spirv_minimum_self);
             }
+            if (std::string_view(argv[1]) ==
+                    "--gx2-guest-triangle-maximum-zero-spirv-smoke-test" &&
+                argc == 2)
+            {
+                return run_gx2_guest_triangle_test(
+                    false,
+                    GuestTriangleShader::spirv_maximum_zero);
+            }
+            if (std::string_view(argv[1]) ==
+                    "--gx2-guest-triangle-minimum-zero-spirv-smoke-test" &&
+                argc == 2)
+            {
+                return run_gx2_guest_triangle_test(
+                    false,
+                    GuestTriangleShader::spirv_minimum_zero);
+            }
             if (std::string_view(argv[1]) == "--gx2-guest-triangle-display-test" &&
                 argc == 2)
             {
@@ -2766,6 +2859,8 @@ int main(int argc, char* argv[])
                          "       AffogatoFrontend.exe --gx2-guest-triangle-multiply-spirv-smoke-test\n"
                          "       AffogatoFrontend.exe --gx2-guest-triangle-maximum-spirv-smoke-test\n"
                          "       AffogatoFrontend.exe --gx2-guest-triangle-minimum-spirv-smoke-test\n"
+                         "       AffogatoFrontend.exe --gx2-guest-triangle-maximum-zero-spirv-smoke-test\n"
+                         "       AffogatoFrontend.exe --gx2-guest-triangle-minimum-zero-spirv-smoke-test\n"
                          "       AffogatoFrontend.exe --gx2-guest-triangle-display-test\n";
             return 2;
         }
