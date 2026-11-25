@@ -978,14 +978,16 @@ void launch_game(
     affogato::ExecutionMode execution_mode,
     bool capture_guest_draw_vertex_data,
     bool synchronize_draw_capture,
-    bool use_latte_vertex_shader_subset)
+    bool use_latte_vertex_shader_subset,
+    bool use_latte_matched_shader_subset)
 {
     if (worker.running.exchange(true))
     {
         return;
     }
     capture_guest_draw_vertex_data =
-        capture_guest_draw_vertex_data || use_latte_vertex_shader_subset;
+        capture_guest_draw_vertex_data || use_latte_vertex_shader_subset ||
+        use_latte_matched_shader_subset;
     if (thread.joinable())
     {
         thread.request_stop();
@@ -1344,6 +1346,7 @@ int run_frontend()
     bool use_recompiler = false;
     bool use_diagnostic_guest_draws = false;
     bool use_latte_vertex_shader_subset = false;
+    bool use_latte_matched_shader_subset = false;
     bool done = false;
     std::uint64_t shown_guest_clear_sequence = 0U;
     std::uint64_t shown_guest_scanout_sequence = 0U;
@@ -1500,11 +1503,14 @@ int run_frontend()
                             use_recompiler ? affogato::ExecutionMode::recompiler
                                            : affogato::ExecutionMode::interpreter,
                             use_diagnostic_guest_draws ||
-                                use_latte_vertex_shader_subset,
+                                use_latte_vertex_shader_subset ||
+                                use_latte_matched_shader_subset,
                             (use_diagnostic_guest_draws ||
-                             use_latte_vertex_shader_subset) &&
+                             use_latte_vertex_shader_subset ||
+                             use_latte_matched_shader_subset) &&
                                 vulkan_output.has_value(),
-                            use_latte_vertex_shader_subset);
+                            use_latte_vertex_shader_subset,
+                            use_latte_matched_shader_subset);
                     }
                 }
                 ImGui::SameLine(260);
@@ -1533,11 +1539,14 @@ int run_frontend()
                                 use_recompiler ? affogato::ExecutionMode::recompiler
                                                : affogato::ExecutionMode::interpreter,
                                 use_diagnostic_guest_draws ||
-                                    use_latte_vertex_shader_subset,
+                                    use_latte_vertex_shader_subset ||
+                                    use_latte_matched_shader_subset,
                                 (use_diagnostic_guest_draws ||
-                                 use_latte_vertex_shader_subset) &&
+                                 use_latte_vertex_shader_subset ||
+                                 use_latte_matched_shader_subset) &&
                                     vulkan_output.has_value(),
-                                use_latte_vertex_shader_subset);
+                                use_latte_vertex_shader_subset,
+                                use_latte_matched_shader_subset);
                         }
                     }
                     ImGui::TextWrapped("%s", path_utf8(games[i].rpx_path).c_str());
@@ -1561,11 +1570,14 @@ int run_frontend()
                     use_recompiler ? affogato::ExecutionMode::recompiler
                                    : affogato::ExecutionMode::interpreter,
                     use_diagnostic_guest_draws ||
-                        use_latte_vertex_shader_subset,
+                        use_latte_vertex_shader_subset ||
+                        use_latte_matched_shader_subset,
                     (use_diagnostic_guest_draws ||
-                     use_latte_vertex_shader_subset) &&
+                     use_latte_vertex_shader_subset ||
+                     use_latte_matched_shader_subset) &&
                         vulkan_output.has_value(),
-                    use_latte_vertex_shader_subset);
+                    use_latte_vertex_shader_subset,
+                    use_latte_matched_shader_subset);
             }
             ImGui::EndDisabled();
         }
@@ -1578,6 +1590,7 @@ int run_frontend()
             if (use_diagnostic_guest_draws)
             {
                 use_latte_vertex_shader_subset = false;
+                use_latte_matched_shader_subset = false;
             }
             vulkan_output->clear_guest_diagnostic_draws();
         }
@@ -1588,6 +1601,18 @@ int run_frontend()
             if (use_latte_vertex_shader_subset)
             {
                 use_diagnostic_guest_draws = false;
+                use_latte_matched_shader_subset = false;
+            }
+            vulkan_output->clear_guest_diagnostic_draws();
+        }
+        if (ImGui::Checkbox(
+                "Experimental Latte vertex/fragment match (diagnostic target)",
+                &use_latte_matched_shader_subset) && vulkan_output)
+        {
+            if (use_latte_matched_shader_subset)
+            {
+                use_diagnostic_guest_draws = false;
+                use_latte_vertex_shader_subset = false;
             }
             vulkan_output->clear_guest_diagnostic_draws();
         }
@@ -1670,6 +1695,11 @@ int run_frontend()
             {
                 draw_policy = affogato::gpu::vulkan::GuestDrawPolicy::
                     diagnostic_latte_vertex_spirv_position_base_zero;
+            }
+            if (use_latte_matched_shader_subset)
+            {
+                draw_policy = affogato::gpu::vulkan::GuestDrawPolicy::
+                    diagnostic_latte_vertex_fragment_matched_move_base_zero;
             }
             try
             {

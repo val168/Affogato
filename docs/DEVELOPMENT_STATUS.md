@@ -13,6 +13,17 @@ appears in the next batch. This bounds retained snapshot contents to the
 current batch; it does not change which draw policies execute or make Latte
 draw execution general-purpose.
 
+## Opt-in matched guest vertex/fragment subset (2026-11-25)
+
+The game library now exposes the existing matched-parameter vertex/fragment
+SPIR-V diagnostic policy as a separate option from host-diagnostic and
+vertex-only modes. Selecting it enables draw-time vertex and color-buffer
+capture, draw-boundary synchronization, and normal captured-command dispatch
+through the matched shader policy. It runs only when explicitly selected and
+still requires the narrow supported fetch, shader-interface, and operation
+subsets. Output is a diagnostic color-buffer path; ordinary Latte pipeline
+state, unsupported guest shaders, and WWHD graphics are not thereby supported.
+
 ## Matched varying and guest OP2 arithmetic through Vulkan readback (2026-11-25)
 
 The new `--gx2-guest-triangle-matched-varying-move-smoke-test` runs a controlled
