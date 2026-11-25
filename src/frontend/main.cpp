@@ -1804,7 +1804,9 @@ int run_vulkan_texture_upload_smoke_test()
     return 0;
 }
 
-int run_gx2_guest_triangle_test(bool visible_window = false)
+int run_gx2_guest_triangle_test(
+    bool visible_window = false,
+    bool use_latte_spirv = false)
 {
     constexpr std::uint32_t vertex_buffer_address = 0x10000U;
     constexpr std::uint32_t index_buffer_address = 0x4000U;
@@ -2336,8 +2338,11 @@ int run_gx2_guest_triangle_test(bool visible_window = false)
     affogato::gpu::vulkan::VulkanRenderer renderer(visible_window);
     renderer.consume_guest_commands(
         commands,
-        affogato::gpu::vulkan::GuestDrawPolicy::
-            diagnostic_latte_vertex_position_base_zero);
+        use_latte_spirv
+            ? affogato::gpu::vulkan::GuestDrawPolicy::
+                diagnostic_latte_vertex_spirv_position_base_zero
+            : affogato::gpu::vulkan::GuestDrawPolicy::
+                diagnostic_latte_vertex_position_base_zero);
     renderer.set_guest_clear_color({0.08F, 0.75F, 0.2F, 1.0F});
     renderer.render_frame();
     while (visible_window && !renderer.should_close())
@@ -2348,10 +2353,14 @@ int run_gx2_guest_triangle_test(bool visible_window = false)
     std::cout << "GX2 float32/float16/UNORM8x4 triangle-list, indexed, strip, and fan "
               << "geometry, "
               << "including unpredicated PM4 auto-index, indexed, and immediate-index "
-              << "draws used captured guest vertex input and the supported CPU "
-              << "MOV/export shader subset, then the fixed diagnostic Vulkan shader "
-              << "on " << renderer.device_name()
-              << ". General Latte shader translation is not implemented.\n";
+              << "draws used captured guest vertex input and "
+              << (use_latte_spirv
+                    ? "the bounded MOV-to-position SPIR-V vertex subset"
+                    : "the supported CPU MOV/export shader subset")
+              << ", then the fixed diagnostic fragment shader on "
+              << renderer.device_name()
+              << ". General Latte shader translation and guest render-target writes "
+              << "remain unsupported.\n";
     return 0;
 }
 
@@ -2386,6 +2395,12 @@ int main(int argc, char* argv[])
             {
                 return run_gx2_guest_triangle_test();
             }
+            if (std::string_view(argv[1]) ==
+                    "--gx2-guest-triangle-spirv-smoke-test" &&
+                argc == 2)
+            {
+                return run_gx2_guest_triangle_test(false, true);
+            }
             if (std::string_view(argv[1]) == "--gx2-guest-triangle-display-test" &&
                 argc == 2)
             {
@@ -2398,6 +2413,7 @@ int main(int argc, char* argv[])
                          "       AffogatoFrontend.exe --gx2-guest-scanout-smoke-test\n"
                          "       AffogatoFrontend.exe --gx2-guest-scanout-display-test\n"
                          "       AffogatoFrontend.exe --gx2-guest-triangle-smoke-test\n"
+                         "       AffogatoFrontend.exe --gx2-guest-triangle-spirv-smoke-test\n"
                          "       AffogatoFrontend.exe --gx2-guest-triangle-display-test\n";
             return 2;
         }

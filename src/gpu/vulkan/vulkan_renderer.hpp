@@ -28,6 +28,7 @@ enum class GuestDrawPolicy
     capture_only,
     diagnostic_float2_position,
     diagnostic_latte_vertex_position_base_zero,
+    diagnostic_latte_vertex_spirv_position_base_zero,
 };
 
 class VulkanRenderer
@@ -104,6 +105,16 @@ private:
     void create_image_views();
     void create_render_pass();
     void create_diagnostic_pipeline();
+    [[nodiscard]] VkShaderModule create_shader_module(
+        std::span<const std::uint32_t> code,
+        const char* operation) const;
+    [[nodiscard]] VkPipeline create_diagnostic_graphics_pipeline(
+        VkShaderModule vertex_module,
+        VkShaderModule fragment_module) const;
+    [[nodiscard]] VkPipeline create_latte_vertex_pipeline(
+        std::span<const std::uint32_t> vertex_code) const;
+    void set_latte_vertex_pipeline(
+        std::span<const std::uint32_t> vertex_code);
     void create_framebuffers();
     void create_command_resources();
     void create_synchronization();
@@ -138,6 +149,8 @@ private:
     VkRenderPass render_pass_{};
     VkPipelineLayout diagnostic_pipeline_layout_{};
     VkPipeline diagnostic_pipeline_{};
+    VkPipeline latte_vertex_pipeline_{};
+    std::vector<std::uint32_t> latte_vertex_shader_code_;
     std::vector<VkFramebuffer> framebuffers_;
     VkCommandPool command_pool_{};
     std::array<VkCommandBuffer, frames_in_flight> command_buffers_{};
@@ -154,6 +167,7 @@ private:
     std::uint32_t diagnostic_vertex_count_{};
     std::vector<DiagnosticDrawRange> diagnostic_draw_ranges_;
     bool diagnostic_draw_policy_active_{};
+    bool diagnostic_draw_uses_latte_vertex_pipeline_{};
     std::vector<std::uint8_t> scaled_scanout_pixels_;
     bool supports_swapchain_transfer_dst_{};
     bool guest_scanout_dirty_{};

@@ -717,9 +717,10 @@ other callers. `latte_vertex_shader_subset.hpp` connects captured draw-time
 fetch inputs, semantic registers, shader words, and vertex constants for one
 selected vertex. `Gx2RegisterState::draw_snapshot()` provides a borrowed view
 over one draw's captured state. The controlled diagnostic path calls this CPU
-subset. A bounded MOV-to-position module generator now exists, but there is
-no shader-module cache or guest shader pipeline in `VulkanRenderer`. The IR
-currently represents only the existing
+subset. A bounded MOV-to-position module generator now exists. An explicit
+diagnostic policy creates a Vulkan pipeline from it and submits controlled
+guest triangle draws; there is no normal guest shader cache or renderer path.
+The IR currently represents only the existing
 supported subset; it does not establish broader Latte shader coverage or
 independently verified hardware semantics.
 
@@ -748,9 +749,13 @@ negate modifiers; when the SDK tool is available, it runs
 `spirv-val --target-env vulkan1.0` on both. `spirv-dis` confirms the input
 load, component bitcasts, built-in position store, and modifier bitwise
 operations. This verifies
-module validity and encoding of this narrow pass-through shader, not Vulkan
-draw execution or CPU-versus-GPU output equivalence. The module is not yet
-connected to `VulkanRenderer`.
+module validity and encoding of this narrow pass-through shader. The explicit
+`--gx2-guest-triangle-spirv-smoke-test` then creates a Vulkan graphics pipeline
+from the generated module and submits captured guest draw ranges, using the
+fixed diagnostic fragment shader. The Debug run enables the Khronos validation
+layer when installed and emitted no validation messages. This is pipeline and
+draw-submission evidence, not pixel readback, visible-window verification, or
+CPU-versus-GPU output equivalence; normal guest draws remain capture-only.
 
 The [Khronos SPIR-V specification](https://registry.khronos.org/SPIR-V/specs/unified1/SPIRV.html)
 defines module header and word-count encoding, logical instruction ordering,

@@ -1,5 +1,19 @@
 # Affogato Development Status
 
+## Diagnostic Vulkan draw using the Latte MOV vertex subset (2026-11-25)
+
+An opt-in `--gx2-guest-triangle-spirv-smoke-test` now takes captured guest
+vertex-fetch results, lowers the draw-time vertex shader IR to the bounded
+SPIR-V subset, builds a Vulkan graphics pipeline from that module, and submits
+the captured triangle-list, strip, and fan draw ranges. The fixed diagnostic
+fragment shader is still used. Debug and Release builds passed, CTest passed
+5/5 in both configurations, and the hidden smoke passed in both; the Debug
+renderer enables `VK_LAYER_KHRONOS_validation` when installed, and no
+validation messages were emitted. This verifies Vulkan pipeline creation and
+draw submission for the supported guest MOV vertex shader, not pixel readback,
+visible-window output, arbitrary shaders, guest render-target writes, or
+WWHD. See [`research/12_latte_shader_isa.md`](research/12_latte_shader_isa.md).
+
 ## Validated SPIR-V vertex MOV subset (2026-11-25)
 
 `emit_latte_spirv_vertex_position_mov_subset()` lowers the shared typed IR's
@@ -10,9 +24,9 @@ sign-bit modifiers. Other OP2 operations, input interfaces, and export forms
 fail explicitly. A CPU-only CTest checks generation and unsupported-op
 rejection; when `spirv-val` is available, CTest validates both the plain and
 modifier-bearing modules. Debug and Release builds and CTest passed 5/5 in
-each configuration. This
-module is not yet used by the renderer, and no Vulkan draw or guest
-render-target output has been verified. See
+each configuration. The explicit diagnostic route now consumes this module
+for Vulkan vertex processing, while normal guest draws remain capture-only.
+No pixel readback or guest render-target output has been verified. See
 [`research/12_latte_shader_isa.md`](research/12_latte_shader_isa.md).
 
 ## Shared typed IR for the bounded Latte CPU shader subset (2026-11-25)

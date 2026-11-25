@@ -2,6 +2,7 @@
 
 #include "gpu/vulkan/diagnostic_shader_spirv.hpp"
 #include "gpu/latte_draw.hpp"
+#include "gpu/latte_spirv_vertex_subset.hpp"
 #include "gpu/latte_vertex_fetch.hpp"
 #include "gpu/latte_vertex_shader_subset.hpp"
 
@@ -121,6 +122,48 @@ VkDebugUtilsMessengerCreateInfoEXT debug_messenger_info()
         VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
     info.pfnUserCallback = validation_callback;
     return info;
+}
+
+std::vector<DiagnosticVertex> assemble_diagnostic_triangles(
+    std::vector<DiagnosticVertex> source_vertices,
+    std::uint32_t primitive_mode)
+{
+    constexpr std::uint32_t triangle_list_mode = 4U;
+    constexpr std::uint32_t triangle_fan_mode = 5U;
+
+    if (primitive_mode == triangle_list_mode)
+    {
+        return source_vertices;
+    }
+    if (source_vertices.size() < 3U)
+    {
+        throw std::runtime_error(
+            "Vulkan diagnostic triangle assembly requires at least three vertices");
+    }
+
+    const std::size_t triangle_count = source_vertices.size() - 2U;
+    std::vector<DiagnosticVertex> triangle_vertices;
+    triangle_vertices.reserve(triangle_count * 3U);
+    for (std::size_t triangle_index = 0U;
+         triangle_index < triangle_count;
+         ++triangle_index)
+    {
+        if (primitive_mode == triangle_fan_mode)
+        {
+            triangle_vertices.push_back(source_vertices[0U]);
+            triangle_vertices.push_back(source_vertices[triangle_index + 1U]);
+            triangle_vertices.push_back(source_vertices[triangle_index + 2U]);
+            continue;
+        }
+
+        const bool reverse_winding = triangle_index % 2U != 0U;
+        triangle_vertices.push_back(
+            source_vertices[triangle_index + (reverse_winding ? 1U : 0U)]);
+        triangle_vertices.push_back(
+            source_vertices[triangle_index + (reverse_winding ? 0U : 1U)]);
+        triangle_vertices.push_back(source_vertices[triangle_index + 2U]);
+    }
+    return triangle_vertices;
 }
 
 std::vector<DiagnosticVertex> decode_diagnostic_float2_draw(
@@ -262,34 +305,9 @@ std::vector<DiagnosticVertex> decode_diagnostic_float2_draw(
         source_vertices[index].y = std::bit_cast<float>(*decoded_attribute[1U]);
     }
 
-    if (triangle_list)
-    {
-        return source_vertices;
-    }
-
-    const std::size_t triangle_count = source_vertices.size() - 2U;
-    std::vector<DiagnosticVertex> triangle_vertices;
-    triangle_vertices.reserve(triangle_count * 3U);
-    for (std::size_t triangle_index = 0U;
-         triangle_index < triangle_count;
-         ++triangle_index)
-    {
-        if (triangle_fan)
-        {
-            triangle_vertices.push_back(source_vertices[0U]);
-            triangle_vertices.push_back(source_vertices[triangle_index + 1U]);
-            triangle_vertices.push_back(source_vertices[triangle_index + 2U]);
-            continue;
-        }
-
-        const bool reverse_winding = triangle_index % 2U != 0U;
-        triangle_vertices.push_back(
-            source_vertices[triangle_index + (reverse_winding ? 1U : 0U)]);
-        triangle_vertices.push_back(
-            source_vertices[triangle_index + (reverse_winding ? 0U : 1U)]);
-        triangle_vertices.push_back(source_vertices[triangle_index + 2U]);
-    }
-    return triangle_vertices;
+    return assemble_diagnostic_triangles(
+        std::move(source_vertices),
+        draw.primitive_mode);
 }
 
 std::vector<DiagnosticVertex> decode_diagnostic_latte_vertex_shader_draw(
@@ -380,34 +398,113 @@ std::vector<DiagnosticVertex> decode_diagnostic_latte_vertex_shader_draw(
         source_vertices.push_back({x, y});
     }
 
-    if (triangle_list)
+    return assemble_diagnostic_triangles(
+        std::move(source_vertices),
+        draw.primitive_mode);
+}
+
+std::vector<DiagnosticVertex> decode_diagnostic_latte_spirv_vertex_draw(
+    const Gx2DrawSnapshotView& draw_snapshot,
+    std::vector<std::uint32_t>& vertex_shader_code)
+{
+    constexpr std::uint32_t gx2_primitive_mode_triangles = 4U;
+    constexpr std::uint32_t gx2_primitive_mode_triangle_fan = 5U;
+    constexpr std::uint32_t gx2_primitive_mode_triangle_strip = 6U;
+    constexpr std::uint32_t vertex_shader_gpr_base = 0U;
+    constexpr std::uint8_t vertex_input_gpr = 1U;
+    constexpr std::size_t latte_vertex_gpr_count = 128U;
+    constexpr std::size_t vertex_shader_stage_index =
+        static_cast<std::size_t>(cpu::espresso::Gx2ProgramStage::vertex);
+
+    if (!draw_snapshot.command.draw_call || !draw_snapshot.fetch_shader)
     {
-        return source_vertices;
+        throw std::runtime_error(
+            "Vulkan Latte SPIR-V draw lacks captured draw or fetch state");
+    }
+    const cpu::espresso::Gx2DrawCall& draw =
+        *draw_snapshot.command.draw_call;
+    const bool triangle_list =
+        draw.primitive_mode == gx2_primitive_mode_triangles;
+    const bool triangle_strip =
+        draw.primitive_mode == gx2_primitive_mode_triangle_strip;
+    const bool triangle_fan =
+        draw.primitive_mode == gx2_primitive_mode_triangle_fan;
+    if ((!triangle_list && !triangle_strip && !triangle_fan) ||
+        draw.instance_count != 1U || draw.base_instance != 0U ||
+        draw.element_count == 0U ||
+        (triangle_list && draw.element_count % 3U != 0U) ||
+        ((triangle_strip || triangle_fan) && draw.element_count < 3U))
+    {
+        throw std::runtime_error(
+            "Vulkan Latte SPIR-V diagnostic requires a supported triangle draw");
     }
 
-    const std::size_t triangle_count = source_vertices.size() - 2U;
-    std::vector<DiagnosticVertex> triangle_vertices;
-    triangle_vertices.reserve(triangle_count * 3U);
-    for (std::size_t triangle_index = 0U;
-         triangle_index < triangle_count;
-         ++triangle_index)
+    const auto& vertex_shader =
+        draw_snapshot.program_shaders[vertex_shader_stage_index];
+    if (!vertex_shader.has_value() ||
+        vertex_shader->stage != cpu::espresso::Gx2ProgramStage::vertex)
     {
-        if (triangle_fan)
+        throw std::runtime_error(
+            "Vulkan Latte SPIR-V draw lacks a captured vertex shader");
+    }
+    const LatteShaderIrProgram shader_ir = decode_latte_shader_ir_subset(
+        vertex_shader->program_words,
+        true);
+    const std::vector<std::uint32_t> decoded_shader_code =
+        emit_latte_spirv_vertex_position_mov_subset(
+            shader_ir,
+            {vertex_input_gpr, 0U});
+    if (!vertex_shader_code.empty() &&
+        vertex_shader_code != decoded_shader_code)
+    {
+        throw std::runtime_error(
+            "Vulkan Latte SPIR-V diagnostic batch contains different vertex shaders");
+    }
+    vertex_shader_code = decoded_shader_code;
+
+    const std::optional<std::array<std::uint32_t,
+        latte_vertex_semantic_entry_count>> semantic_table =
+        capture_latte_vertex_semantic_table(draw_snapshot.registers);
+    if (!semantic_table.has_value())
+    {
+        throw std::runtime_error(
+            "Vulkan Latte SPIR-V diagnostic requires a complete semantic table");
+    }
+    const std::vector<LatteVertexAttribute> attributes =
+        decode_latte_vertex_fetch_shader(*draw_snapshot.fetch_shader);
+    const std::vector<std::uint32_t> vertex_indices =
+        decode_latte_draw_vertex_indices(draw_snapshot.command);
+    std::vector<DiagnosticVertex> source_vertices;
+    source_vertices.reserve(vertex_indices.size());
+    std::array<LatteShaderRegister, latte_vertex_gpr_count> shader_registers{};
+
+    for (const std::uint32_t vertex_index : vertex_indices)
+    {
+        shader_registers.fill({});
+        static_cast<void>(apply_latte_vertex_shader_inputs(
+            attributes,
+            draw_snapshot.command.draw_vertex_data,
+            *semantic_table,
+            vertex_shader_gpr_base,
+            vertex_index,
+            shader_registers));
+
+        const LatteShaderRegister& input_register =
+            shader_registers[vertex_input_gpr];
+        const float x = std::bit_cast<float>(input_register[0U]);
+        const float y = std::bit_cast<float>(input_register[1U]);
+        if (!std::isfinite(x) || !std::isfinite(y) ||
+            x < -1.0F || x > 1.0F || y < -1.0F || y > 1.0F)
         {
-            triangle_vertices.push_back(source_vertices[0U]);
-            triangle_vertices.push_back(source_vertices[triangle_index + 1U]);
-            triangle_vertices.push_back(source_vertices[triangle_index + 2U]);
-            continue;
+            throw std::runtime_error(
+                "Vulkan Latte SPIR-V diagnostic input is outside finite clip-space XY bounds");
         }
-
-        const bool reverse_winding = triangle_index % 2U != 0U;
-        triangle_vertices.push_back(
-            source_vertices[triangle_index + (reverse_winding ? 1U : 0U)]);
-        triangle_vertices.push_back(
-            source_vertices[triangle_index + (reverse_winding ? 0U : 1U)]);
-        triangle_vertices.push_back(source_vertices[triangle_index + 2U]);
+        source_vertices.push_back({x, y});
     }
-    return triangle_vertices;
+
+    return assemble_diagnostic_triangles(
+        std::move(source_vertices),
+        draw.primitive_mode);
 }
 
 }
@@ -564,6 +661,7 @@ void VulkanRenderer::clear_guest_diagnostic_draws() noexcept
     diagnostic_vertex_count_ = 0U;
     diagnostic_draw_ranges_.clear();
     diagnostic_draw_policy_active_ = false;
+    diagnostic_draw_uses_latte_vertex_pipeline_ = false;
 }
 
 bool VulkanRenderer::set_guest_scanout(Rgba8TextureStaging scanout)
@@ -599,11 +697,13 @@ void VulkanRenderer::consume_guest_commands(
     if (draw_policy == GuestDrawPolicy::capture_only)
     {
         diagnostic_draw_policy_active_ = false;
+        diagnostic_draw_uses_latte_vertex_pipeline_ = false;
         return;
     }
 
     std::vector<DiagnosticVertex> diagnostic_vertices;
     std::vector<DiagnosticDrawRange> diagnostic_draw_ranges;
+    std::vector<std::uint32_t> translated_vertex_shader_code;
     std::size_t draw_index = first_draw_index;
     for (const cpu::espresso::Gx2Command& command : commands)
     {
@@ -631,6 +731,13 @@ void VulkanRenderer::consume_guest_commands(
             draw_vertices = decode_diagnostic_latte_vertex_shader_draw(
                 *draw_snapshot);
         }
+        else if (draw_policy == GuestDrawPolicy::
+                     diagnostic_latte_vertex_spirv_position_base_zero)
+        {
+            draw_vertices = decode_diagnostic_latte_spirv_vertex_draw(
+                *draw_snapshot,
+                translated_vertex_shader_code);
+        }
         else
         {
             throw std::invalid_argument(
@@ -653,11 +760,21 @@ void VulkanRenderer::consume_guest_commands(
     }
     if (diagnostic_draw_ranges.empty())
     {
+        diagnostic_draw_policy_active_ = false;
+        diagnostic_draw_uses_latte_vertex_pipeline_ = false;
         return;
+    }
+    if (draw_policy == GuestDrawPolicy::
+            diagnostic_latte_vertex_spirv_position_base_zero)
+    {
+        set_latte_vertex_pipeline(translated_vertex_shader_code);
     }
     set_guest_diagnostic_vertices(diagnostic_vertices);
     diagnostic_draw_ranges_ = std::move(diagnostic_draw_ranges);
     diagnostic_draw_policy_active_ = true;
+    diagnostic_draw_uses_latte_vertex_pipeline_ =
+        draw_policy == GuestDrawPolicy::
+            diagnostic_latte_vertex_spirv_position_base_zero;
 }
 
 std::uint32_t VulkanRenderer::find_memory_type(
@@ -1393,15 +1510,11 @@ void VulkanRenderer::create_render_pass()
 
 void VulkanRenderer::create_diagnostic_pipeline()
 {
-    const auto create_shader_module = [this](const auto& code, const char* operation) {
-        VkShaderModuleCreateInfo create_info = make_info<VkShaderModuleCreateInfo>(
-            VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO);
-        create_info.codeSize = code.size() * sizeof(code.front());
-        create_info.pCode = code.data();
-        VkShaderModule module = VK_NULL_HANDLE;
-        check(vkCreateShaderModule(device_, &create_info, nullptr, &module), operation);
-        return module;
-    };
+    VkPipelineLayoutCreateInfo layout_info = make_info<VkPipelineLayoutCreateInfo>(
+        VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO);
+    check(vkCreatePipelineLayout(
+        device_, &layout_info, nullptr, &diagnostic_pipeline_layout_),
+        "vkCreatePipelineLayout(guest diagnostic)");
 
     const VkShaderModule vertex_module = create_shader_module(
         detail::diagnostic_vertex_shader_spirv,
@@ -1412,105 +1525,9 @@ void VulkanRenderer::create_diagnostic_pipeline()
         fragment_module = create_shader_module(
             detail::diagnostic_fragment_shader_spirv,
             "vkCreateShaderModule(guest diagnostic fragment)");
-
-        const VkPipelineShaderStageCreateInfo shader_stages[] = {
-            [&] {
-                auto info = make_info<VkPipelineShaderStageCreateInfo>(
-                    VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO);
-                info.stage = VK_SHADER_STAGE_VERTEX_BIT;
-                info.module = vertex_module;
-                info.pName = "main";
-                return info;
-            }(),
-            [&] {
-                auto info = make_info<VkPipelineShaderStageCreateInfo>(
-                    VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO);
-                info.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
-                info.module = fragment_module;
-                info.pName = "main";
-                return info;
-            }()};
-
-        const VkVertexInputBindingDescription binding{
-            0U, sizeof(DiagnosticVertex), VK_VERTEX_INPUT_RATE_VERTEX};
-        const VkVertexInputAttributeDescription attribute{
-            0U, 0U, VK_FORMAT_R32G32_SFLOAT,
-            static_cast<std::uint32_t>(offsetof(DiagnosticVertex, x))};
-        VkPipelineVertexInputStateCreateInfo vertex_input =
-            make_info<VkPipelineVertexInputStateCreateInfo>(
-                VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO);
-        vertex_input.vertexBindingDescriptionCount = 1U;
-        vertex_input.pVertexBindingDescriptions = &binding;
-        vertex_input.vertexAttributeDescriptionCount = 1U;
-        vertex_input.pVertexAttributeDescriptions = &attribute;
-
-        VkPipelineInputAssemblyStateCreateInfo input_assembly =
-            make_info<VkPipelineInputAssemblyStateCreateInfo>(
-                VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO);
-        input_assembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
-
-        VkPipelineViewportStateCreateInfo viewport =
-            make_info<VkPipelineViewportStateCreateInfo>(
-                VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO);
-        viewport.viewportCount = 1U;
-        viewport.scissorCount = 1U;
-
-        VkPipelineRasterizationStateCreateInfo rasterization =
-            make_info<VkPipelineRasterizationStateCreateInfo>(
-                VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO);
-        rasterization.polygonMode = VK_POLYGON_MODE_FILL;
-        rasterization.cullMode = VK_CULL_MODE_NONE;
-        rasterization.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
-        rasterization.lineWidth = 1.0F;
-
-        VkPipelineMultisampleStateCreateInfo multisample =
-            make_info<VkPipelineMultisampleStateCreateInfo>(
-                VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO);
-        multisample.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
-
-        VkPipelineColorBlendAttachmentState color_attachment{};
-        color_attachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT |
-            VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT |
-            VK_COLOR_COMPONENT_A_BIT;
-        VkPipelineColorBlendStateCreateInfo color_blend =
-            make_info<VkPipelineColorBlendStateCreateInfo>(
-                VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO);
-        color_blend.attachmentCount = 1U;
-        color_blend.pAttachments = &color_attachment;
-
-        const VkDynamicState dynamic_states[]{
-            VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
-        VkPipelineDynamicStateCreateInfo dynamic_state =
-            make_info<VkPipelineDynamicStateCreateInfo>(
-                VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO);
-        dynamic_state.dynamicStateCount = 2U;
-        dynamic_state.pDynamicStates = dynamic_states;
-
-        VkPipelineLayoutCreateInfo layout_info = make_info<VkPipelineLayoutCreateInfo>(
-            VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO);
-        check(vkCreatePipelineLayout(
-            device_, &layout_info, nullptr, &diagnostic_pipeline_layout_),
-            "vkCreatePipelineLayout(guest diagnostic)");
-
-        VkGraphicsPipelineCreateInfo pipeline_info =
-            make_info<VkGraphicsPipelineCreateInfo>(
-                VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO);
-        pipeline_info.stageCount = 2U;
-        pipeline_info.pStages = shader_stages;
-        pipeline_info.pVertexInputState = &vertex_input;
-        pipeline_info.pInputAssemblyState = &input_assembly;
-        pipeline_info.pViewportState = &viewport;
-        pipeline_info.pRasterizationState = &rasterization;
-        pipeline_info.pMultisampleState = &multisample;
-        pipeline_info.pColorBlendState = &color_blend;
-        pipeline_info.pDynamicState = &dynamic_state;
-        pipeline_info.layout = diagnostic_pipeline_layout_;
-        pipeline_info.renderPass = render_pass_;
-        pipeline_info.subpass = 0U;
-        check(vkCreateGraphicsPipelines(
-            device_, VK_NULL_HANDLE, 1U, &pipeline_info, nullptr,
-            &diagnostic_pipeline_),
-            "vkCreateGraphicsPipelines(guest diagnostic)");
+        diagnostic_pipeline_ = create_diagnostic_graphics_pipeline(
+            vertex_module,
+            fragment_module);
     }
     catch (...)
     {
@@ -1523,6 +1540,176 @@ void VulkanRenderer::create_diagnostic_pipeline()
     }
     vkDestroyShaderModule(device_, vertex_module, nullptr);
     vkDestroyShaderModule(device_, fragment_module, nullptr);
+}
+
+VkShaderModule VulkanRenderer::create_shader_module(
+    std::span<const std::uint32_t> code,
+    const char* operation) const
+{
+    if (code.empty())
+    {
+        throw std::invalid_argument("Vulkan shader module cannot be empty");
+    }
+
+    VkShaderModuleCreateInfo create_info = make_info<VkShaderModuleCreateInfo>(
+        VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO);
+    create_info.codeSize = code.size_bytes();
+    create_info.pCode = code.data();
+    VkShaderModule module = VK_NULL_HANDLE;
+    check(vkCreateShaderModule(device_, &create_info, nullptr, &module), operation);
+    return module;
+}
+
+VkPipeline VulkanRenderer::create_diagnostic_graphics_pipeline(
+    VkShaderModule vertex_module,
+    VkShaderModule fragment_module) const
+{
+    const VkPipelineShaderStageCreateInfo shader_stages[] = {
+        [&] {
+            auto info = make_info<VkPipelineShaderStageCreateInfo>(
+                VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO);
+            info.stage = VK_SHADER_STAGE_VERTEX_BIT;
+            info.module = vertex_module;
+            info.pName = "main";
+            return info;
+        }(),
+        [&] {
+            auto info = make_info<VkPipelineShaderStageCreateInfo>(
+                VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO);
+            info.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+            info.module = fragment_module;
+            info.pName = "main";
+            return info;
+        }()};
+
+    const VkVertexInputBindingDescription binding{
+        0U, sizeof(DiagnosticVertex), VK_VERTEX_INPUT_RATE_VERTEX};
+    const VkVertexInputAttributeDescription attribute{
+        0U, 0U, VK_FORMAT_R32G32_SFLOAT,
+        static_cast<std::uint32_t>(offsetof(DiagnosticVertex, x))};
+    VkPipelineVertexInputStateCreateInfo vertex_input =
+        make_info<VkPipelineVertexInputStateCreateInfo>(
+            VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO);
+    vertex_input.vertexBindingDescriptionCount = 1U;
+    vertex_input.pVertexBindingDescriptions = &binding;
+    vertex_input.vertexAttributeDescriptionCount = 1U;
+    vertex_input.pVertexAttributeDescriptions = &attribute;
+
+    VkPipelineInputAssemblyStateCreateInfo input_assembly =
+        make_info<VkPipelineInputAssemblyStateCreateInfo>(
+            VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO);
+    input_assembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+
+    VkPipelineViewportStateCreateInfo viewport =
+        make_info<VkPipelineViewportStateCreateInfo>(
+            VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO);
+    viewport.viewportCount = 1U;
+    viewport.scissorCount = 1U;
+
+    VkPipelineRasterizationStateCreateInfo rasterization =
+        make_info<VkPipelineRasterizationStateCreateInfo>(
+            VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO);
+    rasterization.polygonMode = VK_POLYGON_MODE_FILL;
+    rasterization.cullMode = VK_CULL_MODE_NONE;
+    rasterization.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+    rasterization.lineWidth = 1.0F;
+
+    VkPipelineMultisampleStateCreateInfo multisample =
+        make_info<VkPipelineMultisampleStateCreateInfo>(
+            VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO);
+    multisample.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+    VkPipelineColorBlendAttachmentState color_attachment{};
+    color_attachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT |
+        VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT |
+        VK_COLOR_COMPONENT_A_BIT;
+    VkPipelineColorBlendStateCreateInfo color_blend =
+        make_info<VkPipelineColorBlendStateCreateInfo>(
+            VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO);
+    color_blend.attachmentCount = 1U;
+    color_blend.pAttachments = &color_attachment;
+
+    const VkDynamicState dynamic_states[]{
+        VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+    VkPipelineDynamicStateCreateInfo dynamic_state =
+        make_info<VkPipelineDynamicStateCreateInfo>(
+            VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO);
+    dynamic_state.dynamicStateCount = 2U;
+    dynamic_state.pDynamicStates = dynamic_states;
+
+    VkGraphicsPipelineCreateInfo pipeline_info =
+        make_info<VkGraphicsPipelineCreateInfo>(
+            VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO);
+    pipeline_info.stageCount = 2U;
+    pipeline_info.pStages = shader_stages;
+    pipeline_info.pVertexInputState = &vertex_input;
+    pipeline_info.pInputAssemblyState = &input_assembly;
+    pipeline_info.pViewportState = &viewport;
+    pipeline_info.pRasterizationState = &rasterization;
+    pipeline_info.pMultisampleState = &multisample;
+    pipeline_info.pColorBlendState = &color_blend;
+    pipeline_info.pDynamicState = &dynamic_state;
+    pipeline_info.layout = diagnostic_pipeline_layout_;
+    pipeline_info.renderPass = render_pass_;
+    pipeline_info.subpass = 0U;
+
+    VkPipeline pipeline = VK_NULL_HANDLE;
+    check(vkCreateGraphicsPipelines(
+        device_, VK_NULL_HANDLE, 1U, &pipeline_info, nullptr, &pipeline),
+        "vkCreateGraphicsPipelines(guest diagnostic)");
+    return pipeline;
+}
+
+VkPipeline VulkanRenderer::create_latte_vertex_pipeline(
+    std::span<const std::uint32_t> vertex_code) const
+{
+    const VkShaderModule vertex_module = create_shader_module(
+        vertex_code,
+        "vkCreateShaderModule(Latte vertex subset)");
+    VkShaderModule fragment_module = VK_NULL_HANDLE;
+    try
+    {
+        fragment_module = create_shader_module(
+            detail::diagnostic_fragment_shader_spirv,
+            "vkCreateShaderModule(diagnostic fragment)");
+        const VkPipeline pipeline = create_diagnostic_graphics_pipeline(
+            vertex_module,
+            fragment_module);
+        vkDestroyShaderModule(device_, vertex_module, nullptr);
+        vkDestroyShaderModule(device_, fragment_module, nullptr);
+        return pipeline;
+    }
+    catch (...)
+    {
+        vkDestroyShaderModule(device_, vertex_module, nullptr);
+        if (fragment_module != VK_NULL_HANDLE)
+        {
+            vkDestroyShaderModule(device_, fragment_module, nullptr);
+        }
+        throw;
+    }
+}
+
+void VulkanRenderer::set_latte_vertex_pipeline(
+    std::span<const std::uint32_t> vertex_code)
+{
+    if (std::ranges::equal(latte_vertex_shader_code_, vertex_code))
+    {
+        return;
+    }
+
+    if (latte_vertex_pipeline_ != VK_NULL_HANDLE)
+    {
+        check(vkDeviceWaitIdle(device_),
+            "vkDeviceWaitIdle(Latte diagnostic pipeline replacement)");
+    }
+    const VkPipeline new_pipeline = create_latte_vertex_pipeline(vertex_code);
+    if (latte_vertex_pipeline_ != VK_NULL_HANDLE)
+    {
+        vkDestroyPipeline(device_, latte_vertex_pipeline_, nullptr);
+    }
+    latte_vertex_pipeline_ = new_pipeline;
+    latte_vertex_shader_code_.assign(vertex_code.begin(), vertex_code.end());
 }
 
 void VulkanRenderer::create_framebuffers()
@@ -1782,7 +1969,9 @@ void VulkanRenderer::render_frame()
             const VkDeviceSize vertex_offset = 0U;
             vkCmdBindPipeline(
                 command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                diagnostic_pipeline_);
+                diagnostic_draw_uses_latte_vertex_pipeline_
+                    ? latte_vertex_pipeline_
+                    : diagnostic_pipeline_);
             vkCmdBindVertexBuffers(
                 command_buffer, 0U, 1U, &diagnostic_vertex_buffer_, &vertex_offset);
             vkCmdSetViewport(command_buffer, 0U, 1U, &viewport);
@@ -1856,6 +2045,11 @@ void VulkanRenderer::recreate_swapchain()
     create_image_views();
     create_render_pass();
     create_diagnostic_pipeline();
+    if (!latte_vertex_shader_code_.empty())
+    {
+        latte_vertex_pipeline_ = create_latte_vertex_pipeline(
+            latte_vertex_shader_code_);
+    }
     create_framebuffers();
 }
 
@@ -1877,6 +2071,11 @@ void VulkanRenderer::destroy_swapchain() noexcept
     {
         vkDestroyPipeline(device_, diagnostic_pipeline_, nullptr);
         diagnostic_pipeline_ = VK_NULL_HANDLE;
+    }
+    if (latte_vertex_pipeline_ != VK_NULL_HANDLE)
+    {
+        vkDestroyPipeline(device_, latte_vertex_pipeline_, nullptr);
+        latte_vertex_pipeline_ = VK_NULL_HANDLE;
     }
     if (diagnostic_pipeline_layout_ != VK_NULL_HANDLE)
     {
