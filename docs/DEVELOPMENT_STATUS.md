@@ -570,9 +570,13 @@ That HLE now queues the semantic-clear register and declared table writes from
 descriptor offsets `0x3C`, `0x40`, and `0x44`; it rejects counts above the
 32-entry Latte table. Regression coverage checks the emitted command sequence
 and extracts the table from a subsequent draw snapshot. This is reference
-cross-checking, not Wii U hardware verification. The resolver is still not
-connected to shader invocation inputs, and arbitrary guest fetch programs are
-not decoded or executed.
+cross-checking, not Wii U hardware verification. A per-attribute decoder now
+combines the semantic table, caller-supplied resolved vertex index and
+`VS_GPR_BASE`, and an immutable draw-time vertex-buffer snapshot into one
+destination GPR input. It rejects missing or invalid snapshots and returns
+masked channels as unwritten. It does not assemble multiple attributes into a
+complete invocation, model system-generated inputs, or decode arbitrary guest
+fetch programs.
 
 ## Bounded Latte floating-point OP2 operations (2026-11-25)
 
@@ -598,5 +602,12 @@ uses the existing endian-aware component decoder. Tests cover source
 reordering, constants, masked channels, reserved selectors, and truncated
 guest data. The selector behavior is documented in AMD's R700 ISA manual,
 Chapter 5, and remains an AMD-family reference rather than Wii U hardware
-verification. This helper does not yet assemble a complete shader input GPR or
-execute Latte fetch clauses.
+verification. Arbitrary Latte fetch clauses are not executed.
+`decode_latte_vertex_shader_input()`
+now combines one decoded attribute with its draw-time snapshot and semantic
+table, returning a destination GPR and optional component values. The caller
+supplies the resolved vertex index and `VS_GPR_BASE`. Tests cover semantic
+lookup, snapshot bounds, component selection, and absent semantics. Debug and
+Release builds and both CTest suites passed 2/2. The existing diagnostic
+Vulkan smoke test still passes; its pixels use the fixed diagnostic host
+shader, not a guest Latte shader.

@@ -31833,6 +31833,7 @@ void latte_vertex_fetch_decoder_tests()
     using affogato::gpu::decode_latte_vertex_fetch_shader;
     using affogato::gpu::decode_latte_vertex_component;
     using affogato::gpu::decode_latte_vertex_attribute_vector;
+    using affogato::gpu::decode_latte_vertex_shader_input;
     using affogato::gpu::capture_latte_vertex_semantic_table;
     using affogato::gpu::resolve_latte_vertex_input_gpr;
 
@@ -32062,6 +32063,67 @@ void latte_vertex_fetch_decoder_tests()
         rejected_truncated_vertex_attribute = true;
     }
     assert(rejected_truncated_vertex_attribute);
+
+    affogato::gpu::LatteVertexAttribute semantic_float_attribute{};
+    semantic_float_attribute.semantic_id = 7U;
+    semantic_float_attribute.buffer_index = 1U;
+    semantic_float_attribute.byte_size = 2U * sizeof(std::uint32_t);
+    semantic_float_attribute.component_count = 2U;
+    semantic_float_attribute.component_size_bytes = sizeof(std::uint32_t);
+    semantic_float_attribute.data_format = 0x0DU;
+    semantic_float_attribute.selectors = {1U, 0U, 4U, 7U};
+
+    std::array<std::uint32_t, 32U> input_semantic_table{};
+    input_semantic_table.fill(0xFFFFFFFFU);
+    input_semantic_table[3U] = 0xA5000007U;
+
+    affogato::cpu::espresso::Gx2VertexBufferSnapshot input_vertex_buffer{};
+    input_vertex_buffer.binding = {1U, 16U, 8U, 0x1000U};
+    input_vertex_buffer.byte_offset = 8U;
+    input_vertex_buffer.is_valid = true;
+    input_vertex_buffer.bytes = {
+        0x3FU, 0xC0U, 0x00U, 0x00U,
+        0xC0U, 0x00U, 0x00U, 0x00U};
+    const std::array<affogato::cpu::espresso::Gx2VertexBufferSnapshot, 1U>
+        input_vertex_buffers{input_vertex_buffer};
+
+    const auto shader_input = decode_latte_vertex_shader_input(
+        semantic_float_attribute,
+        input_vertex_buffers,
+        input_semantic_table,
+        4U,
+        1U);
+    assert(shader_input.has_value());
+    assert(shader_input->destination_gpr == 8U);
+    assert(shader_input->components[0U] == 0xC0000000U);
+    assert(shader_input->components[1U] == 0x3FC00000U);
+    assert(shader_input->components[2U] == 0U);
+    assert(!shader_input->components[3U].has_value());
+
+    input_semantic_table.fill(0xFFFFFFFFU);
+    assert(!decode_latte_vertex_shader_input(
+        semantic_float_attribute,
+        {},
+        input_semantic_table,
+        0U,
+        1U).has_value());
+
+    input_semantic_table[3U] = 7U;
+    bool rejected_vertex_outside_snapshot = false;
+    try
+    {
+        static_cast<void>(decode_latte_vertex_shader_input(
+            semantic_float_attribute,
+            input_vertex_buffers,
+            input_semantic_table,
+            0U,
+            2U));
+    }
+    catch (const std::runtime_error&)
+    {
+        rejected_vertex_outside_snapshot = true;
+    }
+    assert(rejected_vertex_outside_snapshot);
 
     affogato::cpu::espresso::Gx2FetchShaderBinding float16_fetch_shader{};
     float16_fetch_shader.program_size = 16U;

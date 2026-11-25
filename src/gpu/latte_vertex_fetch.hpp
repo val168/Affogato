@@ -34,6 +34,14 @@ struct LatteVertexAttribute
     bool operator==(const LatteVertexAttribute&) const = default;
 };
 
+struct LatteVertexShaderInput
+{
+    std::uint32_t destination_gpr{};
+    std::array<std::optional<std::uint32_t>, 4U> components{};
+
+    bool operator==(const LatteVertexShaderInput&) const = default;
+};
+
 inline constexpr std::size_t latte_vertex_semantic_entry_count = 32U;
 inline constexpr std::uint32_t latte_vertex_semantic_register_base =
     0x00028380U;
@@ -436,6 +444,83 @@ decode_latte_vertex_attribute_vector(
     }
 
     return result;
+}
+
+[[nodiscard]] inline std::optional<LatteVertexShaderInput>
+decode_latte_vertex_shader_input(
+    const LatteVertexAttribute& attribute,
+    std::span<const cpu::espresso::Gx2VertexBufferSnapshot> vertex_buffers,
+    std::span<const std::uint32_t> semantic_table,
+    std::uint32_t vertex_shader_gpr_base,
+    std::uint32_t vertex_index)
+{
+    if (attribute.semantic_id > std::numeric_limits<std::uint8_t>::max())
+    {
+        throw std::runtime_error(
+            "Latte vertex attribute semantic ID exceeds the supported 8-bit table range");
+    }
+
+    const std::optional<std::uint32_t> destination_gpr =
+        resolve_latte_vertex_input_gpr(
+            static_cast<std::uint8_t>(attribute.semantic_id),
+            semantic_table,
+            vertex_shader_gpr_base);
+    if (!destination_gpr.has_value())
+    {
+        return std::nullopt;
+    }
+
+    const auto vertex_buffer = std::ranges::find_if(
+        vertex_buffers,
+        [&attribute](
+            const cpu::espresso::Gx2VertexBufferSnapshot& snapshot)
+        {
+            return snapshot.binding.index == attribute.buffer_index;
+        });
+    if (vertex_buffer == vertex_buffers.end())
+    {
+        throw std::runtime_error(
+            "Latte vertex attribute has no draw-time snapshot for its buffer slot");
+    }
+
+    const cpu::espresso::Gx2VertexBufferBinding& binding =
+        vertex_buffer->binding;
+    if (!vertex_buffer->is_valid || binding.stride == 0U ||
+        attribute.byte_offset > binding.stride ||
+        attribute.byte_size > binding.stride - attribute.byte_offset)
+    {
+        throw std::runtime_error(
+            "Latte vertex attribute has an invalid draw-time buffer snapshot or stride");
+    }
+
+    const std::uint64_t vertex_byte_offset =
+        static_cast<std::uint64_t>(vertex_index) * binding.stride;
+    if (vertex_byte_offset < vertex_buffer->byte_offset ||
+        vertex_byte_offset > binding.size ||
+        attribute.byte_offset > binding.size - vertex_byte_offset ||
+        attribute.byte_size > binding.size - vertex_byte_offset -
+            attribute.byte_offset)
+    {
+        throw std::runtime_error(
+            "Latte vertex index or attribute exceeds the guest vertex-buffer binding");
+    }
+
+    const std::uint64_t captured_vertex_offset =
+        vertex_byte_offset - vertex_buffer->byte_offset;
+    if (captured_vertex_offset > vertex_buffer->bytes.size() ||
+        binding.stride > vertex_buffer->bytes.size() - captured_vertex_offset)
+    {
+        throw std::runtime_error(
+            "Latte vertex index exceeds its immutable draw-time snapshot");
+    }
+
+    const std::span<const std::uint8_t> captured_bytes(vertex_buffer->bytes);
+    const auto components = decode_latte_vertex_attribute_vector(
+        captured_bytes.subspan(
+            static_cast<std::size_t>(captured_vertex_offset),
+            binding.stride),
+        attribute);
+    return LatteVertexShaderInput{*destination_gpr, components};
 }
 
 }
