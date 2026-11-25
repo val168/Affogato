@@ -425,6 +425,92 @@ private:
         destination.insert(destination.end(), section.begin(), section.end());
     }
 
+    [[nodiscard]] std::uint32_t emit_integer_comparison(
+        const LatteAluOp2Instruction& operation,
+        std::uint32_t source0_id,
+        std::uint32_t source1_id)
+    {
+        std::uint32_t comparison_source0_id = source0_id;
+        std::uint32_t comparison_source1_id = source1_id;
+        std::uint16_t comparison_opcode = 0U;
+        bool returns_selected_operand = false;
+        switch (operation.opcode)
+        {
+        case latte_alu_op2_maximum_signed_integer_opcode:
+        case latte_alu_op2_minimum_signed_integer_opcode:
+        case latte_alu_op2_set_greater_integer_opcode:
+        case latte_alu_op2_set_greater_equal_integer_opcode:
+            comparison_source0_id = allocate_id();
+            append_instruction(function_body_, 124U, {
+                int_type_id_, comparison_source0_id, source0_id});
+            comparison_source1_id = allocate_id();
+            append_instruction(function_body_, 124U, {
+                int_type_id_, comparison_source1_id, source1_id});
+            break;
+        default:
+            break;
+        }
+
+        switch (operation.opcode)
+        {
+        case latte_alu_op2_maximum_signed_integer_opcode:
+        case latte_alu_op2_maximum_unsigned_integer_opcode:
+            comparison_opcode = operation.opcode ==
+                    latte_alu_op2_maximum_signed_integer_opcode
+                ? 175U
+                : 174U;
+            returns_selected_operand = true;
+            break;
+        case latte_alu_op2_minimum_signed_integer_opcode:
+        case latte_alu_op2_minimum_unsigned_integer_opcode:
+            comparison_opcode = operation.opcode ==
+                    latte_alu_op2_minimum_signed_integer_opcode
+                ? 179U
+                : 178U;
+            returns_selected_operand = true;
+            break;
+        case latte_alu_op2_set_equal_integer_opcode:
+            comparison_opcode = 170U;
+            break;
+        case latte_alu_op2_set_not_equal_integer_opcode:
+            comparison_opcode = 171U;
+            break;
+        case latte_alu_op2_set_greater_integer_opcode:
+            comparison_opcode = 173U;
+            break;
+        case latte_alu_op2_set_greater_equal_integer_opcode:
+            comparison_opcode = 175U;
+            break;
+        case latte_alu_op2_set_greater_unsigned_opcode:
+            comparison_opcode = 172U;
+            break;
+        case latte_alu_op2_set_greater_equal_unsigned_opcode:
+            comparison_opcode = 174U;
+            break;
+        default:
+            throw std::runtime_error(
+                "Latte fragment SPIR-V subset received an unsupported integer comparison");
+        }
+
+        const std::uint32_t comparison_id = allocate_id();
+        append_instruction(function_body_, comparison_opcode, {
+            bool_type_id_, comparison_id,
+            comparison_source0_id, comparison_source1_id});
+        const std::uint32_t result_id = allocate_id();
+        if (returns_selected_operand)
+        {
+            append_instruction(function_body_, 169U, {
+                uint_type_id_, result_id, comparison_id,
+                source0_id, source1_id});
+            return result_id;
+        }
+
+        append_instruction(function_body_, 169U, {
+            uint_type_id_, result_id, comparison_id,
+            constant(0xFFFFFFFFU), constant(0U)});
+        return result_id;
+    }
+
     void create_module_declarations(std::size_t input_location)
     {
         void_type_id_ = allocate_id();
@@ -432,6 +518,7 @@ private:
         float_type_id_ = allocate_id();
         uint_type_id_ = allocate_id();
         bool_type_id_ = allocate_id();
+        int_type_id_ = allocate_id();
         vector_type_id_ = allocate_id();
         input_pointer_type_id_ = allocate_id();
         output_pointer_type_id_ = allocate_id();
@@ -456,6 +543,7 @@ private:
             function_type_id_, void_type_id_});
         append_instruction(types_, 22U, {float_type_id_, 32U});
         append_instruction(types_, 21U, {uint_type_id_, 32U, 0U});
+        append_instruction(types_, 21U, {int_type_id_, 32U, 1U});
         append_instruction(types_, 20U, {bool_type_id_});
         append_instruction(types_, 23U, {
             vector_type_id_, float_type_id_, 4U});
@@ -588,7 +676,17 @@ private:
                     operation.opcode == latte_alu_op2_xor_integer_opcode ||
                     operation.opcode == latte_alu_op2_not_integer_opcode ||
                     operation.opcode == latte_alu_op2_add_integer_opcode ||
-                    operation.opcode == latte_alu_op2_subtract_integer_opcode;
+                    operation.opcode == latte_alu_op2_subtract_integer_opcode ||
+                    operation.opcode == latte_alu_op2_maximum_signed_integer_opcode ||
+                    operation.opcode == latte_alu_op2_minimum_signed_integer_opcode ||
+                    operation.opcode == latte_alu_op2_maximum_unsigned_integer_opcode ||
+                    operation.opcode == latte_alu_op2_minimum_unsigned_integer_opcode ||
+                    operation.opcode == latte_alu_op2_set_equal_integer_opcode ||
+                    operation.opcode == latte_alu_op2_set_not_equal_integer_opcode ||
+                    operation.opcode == latte_alu_op2_set_greater_integer_opcode ||
+                    operation.opcode == latte_alu_op2_set_greater_equal_integer_opcode ||
+                    operation.opcode == latte_alu_op2_set_greater_unsigned_opcode ||
+                    operation.opcode == latte_alu_op2_set_greater_equal_unsigned_opcode;
                 const bool supported_opcode =
                     operation.opcode == latte_alu_op2_move_opcode ||
                     operation.opcode == latte_alu_op2_add_float_opcode ||
@@ -654,6 +752,20 @@ private:
                         case latte_alu_op2_xor_integer_opcode:
                             spirv_opcode = 198U;
                             break;
+                        case latte_alu_op2_maximum_signed_integer_opcode:
+                        case latte_alu_op2_minimum_signed_integer_opcode:
+                        case latte_alu_op2_maximum_unsigned_integer_opcode:
+                        case latte_alu_op2_minimum_unsigned_integer_opcode:
+                        case latte_alu_op2_set_equal_integer_opcode:
+                        case latte_alu_op2_set_not_equal_integer_opcode:
+                        case latte_alu_op2_set_greater_integer_opcode:
+                        case latte_alu_op2_set_greater_equal_integer_opcode:
+                        case latte_alu_op2_set_greater_unsigned_opcode:
+                        case latte_alu_op2_set_greater_equal_unsigned_opcode:
+                            lane_values[lane] = emit_integer_comparison(
+                                operation, source0_value, source1_value);
+                            destination_gprs[lane] = operation.destination_gpr;
+                            continue;
                         default:
                             throw std::runtime_error(
                                 "Latte fragment SPIR-V subset received an unsupported integer operation");
@@ -803,6 +915,7 @@ private:
     std::uint32_t float_type_id_{};
     std::uint32_t uint_type_id_{};
     std::uint32_t bool_type_id_{};
+    std::uint32_t int_type_id_{};
     std::uint32_t vector_type_id_{};
     std::uint32_t input_pointer_type_id_{};
     std::uint32_t output_pointer_type_id_{};

@@ -1976,7 +1976,9 @@ enum class GuestTriangleShader
     spirv_matched_varying_maximum_half,
     spirv_matched_varying_minimum_half,
     spirv_matched_varying_add_negative_half,
-    spirv_matched_varying_xor_zero
+    spirv_matched_varying_xor_zero,
+    spirv_matched_varying_maximum_signed_integer_half,
+    spirv_matched_varying_minimum_unsigned_integer_half
 };
 
 [[nodiscard]] bool contains_expected_interpolated_pixels(
@@ -1997,12 +1999,16 @@ enum class GuestTriangleShader
     const bool is_add_half =
         shader == GuestTriangleShader::spirv_matched_varying_add_half;
     const bool is_maximum_half =
-        shader == GuestTriangleShader::spirv_matched_varying_maximum_half;
+        shader == GuestTriangleShader::spirv_matched_varying_maximum_half ||
+        shader == GuestTriangleShader::
+            spirv_matched_varying_maximum_signed_integer_half;
     const bool is_add_negative_half =
         shader == GuestTriangleShader::spirv_matched_varying_add_negative_half;
     const bool is_multiply_or_minimum_half =
         shader == GuestTriangleShader::spirv_matched_varying_multiply_half ||
         shader == GuestTriangleShader::spirv_matched_varying_minimum_half ||
+        shader == GuestTriangleShader::
+            spirv_matched_varying_minimum_unsigned_integer_half ||
         shader == GuestTriangleShader::spirv_matched_varying_add_negative_half;
     const bool has_half_added_color =
         is_add_half || is_maximum_half || is_add_negative_half;
@@ -2055,7 +2061,11 @@ int run_gx2_guest_triangle_test(
         shader == GuestTriangleShader::spirv_matched_varying_maximum_half ||
         shader == GuestTriangleShader::spirv_matched_varying_minimum_half ||
         shader == GuestTriangleShader::spirv_matched_varying_add_negative_half ||
-        shader == GuestTriangleShader::spirv_matched_varying_xor_zero;
+        shader == GuestTriangleShader::spirv_matched_varying_xor_zero ||
+        shader == GuestTriangleShader::
+            spirv_matched_varying_maximum_signed_integer_half ||
+        shader == GuestTriangleShader::
+            spirv_matched_varying_minimum_unsigned_integer_half;
     const bool use_varying_passthrough =
         shader == GuestTriangleShader::spirv_matched_varying_move ||
         shader == GuestTriangleShader::spirv_matched_varying_add_half ||
@@ -2063,7 +2073,11 @@ int run_gx2_guest_triangle_test(
         shader == GuestTriangleShader::spirv_matched_varying_maximum_half ||
         shader == GuestTriangleShader::spirv_matched_varying_minimum_half ||
         shader == GuestTriangleShader::spirv_matched_varying_add_negative_half ||
-        shader == GuestTriangleShader::spirv_matched_varying_xor_zero;
+        shader == GuestTriangleShader::spirv_matched_varying_xor_zero ||
+        shader == GuestTriangleShader::
+            spirv_matched_varying_maximum_signed_integer_half ||
+        shader == GuestTriangleShader::
+            spirv_matched_varying_minimum_unsigned_integer_half;
     constexpr std::uint32_t vertex_buffer_address = 0x10000U;
     constexpr std::uint32_t index_buffer_address = 0x4000U;
     constexpr std::uint32_t big_endian_index_buffer_address = 0x5000U;
@@ -2529,6 +2543,22 @@ int run_gx2_guest_triangle_test(
                     affogato::gpu::latte_alu_source_half_float_selector);
                 pixel_opcode =
                     affogato::gpu::latte_alu_op2_minimum_dx10_opcode;
+            }
+            else if (shader == GuestTriangleShader::
+                         spirv_matched_varying_maximum_signed_integer_half)
+            {
+                source1_encoding = static_cast<std::uint32_t>(
+                    affogato::gpu::latte_alu_source_half_float_selector);
+                pixel_opcode = affogato::gpu::
+                    latte_alu_op2_maximum_signed_integer_opcode;
+            }
+            else if (shader == GuestTriangleShader::
+                         spirv_matched_varying_minimum_unsigned_integer_half)
+            {
+                source1_encoding = static_cast<std::uint32_t>(
+                    affogato::gpu::latte_alu_source_half_float_selector);
+                pixel_opcode = affogato::gpu::
+                    latte_alu_op2_minimum_unsigned_integer_opcode;
             }
             const std::uint32_t source1_modifier_encoding =
                 shader ==
@@ -3640,6 +3670,24 @@ int main(int argc, char* argv[])
                 return run_gx2_guest_triangle_test(
                     false,
                     GuestTriangleShader::spirv_matched_varying_xor_zero);
+            }
+            if (std::string_view(argv[1]) ==
+                    "--gx2-guest-triangle-matched-varying-signed-max-readback-test" &&
+                argc == 2)
+            {
+                return run_gx2_guest_triangle_test(
+                    false,
+                    GuestTriangleShader::
+                        spirv_matched_varying_maximum_signed_integer_half);
+            }
+            if (std::string_view(argv[1]) ==
+                    "--gx2-guest-triangle-matched-varying-unsigned-min-readback-test" &&
+                argc == 2)
+            {
+                return run_gx2_guest_triangle_test(
+                    false,
+                    GuestTriangleShader::
+                        spirv_matched_varying_minimum_unsigned_integer_half);
             }
             if (std::string_view(argv[1]) == "--gx2-guest-triangle-display-test" &&
                 argc == 2)

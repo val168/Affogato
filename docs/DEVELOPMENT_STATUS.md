@@ -24,11 +24,18 @@ inputs are nonnegative, so its visible effect is not isolated. These are
 bounded fixtures, not general Latte arithmetic coverage or independent
 hardware conformance.
 
-The matched fragment subset now also emits 32-bit `ADD_INT`, `SUB_INT`,
-`AND_INT`, `OR_INT`, `XOR_INT`, and `NOT_INT`. Deterministic modules pass
-`spirv-val`; a controlled guest `XOR_INT` with zero preserves the interpolated
-varying through Vulkan readback. Integer comparisons, shifts, conversions, and
-other fragment-shader families are still unsupported.
+The matched fragment subset emits 32-bit `ADD_INT`, `SUB_INT`, `AND_INT`,
+`OR_INT`, `XOR_INT`, and `NOT_INT`. Deterministic modules pass `spirv-val`; a
+controlled guest `XOR_INT` with zero preserves the interpolated varying
+through Vulkan readback. Shift and conversion operations remain unsupported.
+
+The integer subset now also includes signed and unsigned min/max plus equality,
+inequality, and signed/unsigned greater-than comparisons. A generated fixture
+containing all comparison and selection forms passes `spirv-val`. Controlled
+guest shaders verify signed maximum and unsigned minimum output through Vulkan
+framebuffer readback. The comparison result-mask operations are structurally
+validated; broader value-by-value fragment comparison coverage remains future
+work.
 
 ## Fragment varying interface fixture (2026-11-25)
 

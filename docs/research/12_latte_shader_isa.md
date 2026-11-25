@@ -163,19 +163,24 @@ The same bounded matched-input emitter now lowers `ADD_INT`, `SUB_INT`,
 `AND_INT`, `OR_INT`, `XOR_INT`, and `NOT_INT` as 32-bit operations on raw GPR
 bits. It uses SPIR-V integer arithmetic/bitwise instructions and preserves the
 result bits until the pixel export bitcasts them to the output float vector.
-Integer source absolute/negate modifiers remain rejected. The R700 manual's
-chapter 9 describes `ADD_INT` as integer addition over signed or unsigned
-operands and `AND_INT` as bitwise AND; this is related-family evidence, not
-direct Latte conformance. Opcode values match Affogato's CPU shader subset and
-the already-tested vertex SPIR-V subset in
+It also lowers signed/unsigned integer min/max and signed/unsigned integer
+equality, inequality, and greater-than comparisons. Comparison results become
+the Latte all-bits-set or zero mask, while min/max select the original 32-bit
+operand. Signed operations bitcast the operand bits to signed SPIR-V integers
+for comparison. Integer source absolute/negate modifiers remain rejected. The
+R700 manual's chapter 9 describes `ADD_INT` as integer addition over signed or
+unsigned operands and `AND_INT` as bitwise AND; this is related-family
+evidence, not direct Latte conformance. Opcode values and reference semantics
+match Affogato's CPU shader subset and the vertex SPIR-V subset in
 `latte_shader_interpreter.hpp` and `latte_spirv_vertex_subset.hpp`.
 
 `latte_spirv_test.cpp` emits and validates mixed arithmetic/bitwise and
-XOR/NOT matched-input modules. A controlled guest shader runs `XOR_INT` with
-the zero selector and checks that the interpolated varying survives Vulkan
-readback unchanged. This verifies only the listed encodings and this tested
-identity case; integer comparison, min/max, shift, conversion, and broader
-shader control flow are outside this fragment subset.
+XOR/NOT and integer comparison matched-input modules. Controlled guest shaders
+exercise `XOR_INT` with zero, signed maximum with the half-float selector, and
+unsigned minimum with the half-float selector through Vulkan framebuffer
+readback. The full comparison module passes SPIR-V validation; comparisons do
+not yet have dedicated output-mask readback cases. Shift, conversion, and
+broader shader control flow remain outside this fragment subset.
 
 ## Evidence categories
 
@@ -523,7 +528,7 @@ arbitrary guest fetch programs or claiming Latte hardware verification.
 | Fetch-shader parsing and semantic linkage | Narrow CPU subset | `latte_vertex_fetch.hpp` recognizes Affogato-generated semantic VTX records, decodes supported formats, applies destination selectors (component swizzles, 0.0, 1.0, and masked writes), extracts a complete correctly typed 32-entry `SQ_VTX_SEMANTIC` table from a draw snapshot, and maps attributes plus immutable vertex snapshots into a caller-provided register file at an explicit vertex index and `VS_GPR_BASE + 1 + table index`. `execute_latte_vertex_shader_subset()` passes this input file to the supported CPU shader subset in one deterministic test path. Writes are validated transactionally. AMD references differ on semantic-field width (R6xx: 8; R700 ISA Chapter 5: 9, while its Chapter 9 semantic-format table says 8); Latte applicability remains unresolved. Arbitrary guest fetch programs are not executed, normal draw dispatch is not connected, and system-generated inputs remain unsupported. No Wii U hardware verification. |
 | Latte shader control-flow decoding | Partial | `latte_shader_decoder.hpp` decodes fixture-verified `CALL_FS`, `EXPORT`, `EXPORT_DONE`, and `ALU` clause headers, including EOP, bounded clause ranges, normal export metadata, and `CALL_FS` address/pop/condition/nesting fields. The generic straight-line executor rejects calls. A vertex-specific path accepts one leading canonical call only after separately processing the captured HLE fetch subset. Other call forms, branches, and loops remain unsupported; exports are typed values and are not connected to stage outputs. This behavior is not Wii U hardware-verified. |
 | Latte ALU decoding/execution | Experimental subset | OP2/OP3 fields and LAST-delimited no-literal groups are decoded. The CPU clause/program subset executes homogeneous groups and mixed four-lane X/Y/Z/W groups for supported OP2 operations plus floating CMOVE/CMOVGT/CMOVGE and integer CMOVE_INT/CMOVGT_INT/CMOVGE_INT OP3 operations. Sources are read from the pre-group state, writes commit by group, PV forwards between groups, and clause state commits transactionally. Integer conditions use raw-zero equality and signed comparisons; integer source negation is rejected. ALU.Trans/PS, kcache/literal reads in the shader IR, other opcodes, relative addressing, general control flow, normal draw integration, and Latte-hardware validation remain absent. |
-| Vertex/pixel shader translation | Experimental vertex subset | `latte_spirv_vertex_subset.hpp` emits SPIR-V for no-literal OP2 MOV, binary32 ADD, IEEE binary32 multiply, DX10 min/max, and integer bitwise/arithmetic/min-max/comparison operations, plus floating and integer OP3 conditional moves and mixed OP2/OP3 four-lane groups, followed by one identity position export. Generated mixed-group and integer-ALU modules pass `spirv-val`; controlled GX2 guest-word fixtures execute mixed OP2/OP3, `SETGT_INT`, and an integer AND/ADD/SUB/OR position-preservation program through Vulkan and confirm red framebuffer pixels using the diagnostic fragment shader. Pixel shader translation, general interfaces, constants, textures, normal draw integration, and direct Latte hardware validation remain missing. |
+| Vertex/pixel shader translation | Experimental vertex subset and matched fragment OP2 subset | `latte_spirv_vertex_subset.hpp` emits SPIR-V for no-literal OP2 MOV, binary32 ADD, IEEE binary32 multiply, DX10 min/max, integer bitwise/arithmetic/min-max/comparison operations, floating and integer OP3 conditional moves, and mixed OP2/OP3 four-lane groups, followed by one identity position export. The bounded matched-input fragment emitter supports float MOV/ADD/MUL/DX10 min/max and the documented integer OP2 arithmetic/logic/min-max/comparison subset. Generated mixed-group, integer-ALU, and fragment comparison modules pass `spirv-val`; controlled guest fragment fixtures exercise float operations, `XOR_INT`, signed maximum, and unsigned minimum through Vulkan readback. Fragment comparisons are only structurally validated. Arbitrary fragment inputs, constants, textures, general stage interfaces, normal game shader selection, and direct Latte hardware validation remain missing. |
 | Guest shader integration with Vulkan draws | Missing | Shader modules, pipeline cache, descriptor binding, render-target path |
 | WWHD shader requirements | Unknown in Affogato | Existing recorded WWHD runs stop before a guest draw is captured |
 

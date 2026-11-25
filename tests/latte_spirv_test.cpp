@@ -858,6 +858,44 @@ int main(int argc, char* argv[])
     assert(module_contains_opcode(matched_integer_logic_module, 198U));
     assert(module_contains_opcode(matched_integer_logic_module, 200U));
 
+    auto matched_integer_comparison_program = matched_move_program;
+    auto& matched_integer_comparison_clause = std::get<
+        affogato::gpu::LatteShaderIrAluClause>(
+            matched_integer_comparison_program.instructions[0U]);
+    constexpr std::array<std::uint16_t, 10U> integer_comparison_opcodes{
+        affogato::gpu::latte_alu_op2_maximum_signed_integer_opcode,
+        affogato::gpu::latte_alu_op2_minimum_signed_integer_opcode,
+        affogato::gpu::latte_alu_op2_maximum_unsigned_integer_opcode,
+        affogato::gpu::latte_alu_op2_minimum_unsigned_integer_opcode,
+        affogato::gpu::latte_alu_op2_set_equal_integer_opcode,
+        affogato::gpu::latte_alu_op2_set_not_equal_integer_opcode,
+        affogato::gpu::latte_alu_op2_set_greater_integer_opcode,
+        affogato::gpu::latte_alu_op2_set_greater_equal_integer_opcode,
+        affogato::gpu::latte_alu_op2_set_greater_unsigned_opcode,
+        affogato::gpu::latte_alu_op2_set_greater_equal_unsigned_opcode};
+    for (const std::uint16_t opcode : integer_comparison_opcodes)
+    {
+        auto group = matched_integer_comparison_clause.groups[0U];
+        for (auto& operation : group.instructions)
+        {
+            operation.opcode = opcode;
+            operation.source1_selector =
+                affogato::gpu::latte_alu_source_half_float_selector;
+            operation.source1_channel = operation.destination_component;
+        }
+        matched_integer_comparison_clause.groups.push_back(std::move(group));
+    }
+    const std::vector<std::uint32_t> matched_integer_comparison_module =
+        affogato::gpu::emit_latte_spirv_fragment_matched_alu_subset(
+            matched_integer_comparison_program,
+            matched_varying_input);
+    for (const std::uint16_t opcode : {
+             170U, 171U, 172U, 173U, 174U, 175U, 178U, 179U})
+    {
+        assert(module_contains_opcode(
+            matched_integer_comparison_module, opcode));
+    }
+
     auto unsupported_matched_move_program = matched_move_program;
     auto& unsupported_matched_move_clause = std::get<
         affogato::gpu::LatteShaderIrAluClause>(
@@ -970,7 +1008,7 @@ int main(int argc, char* argv[])
     }
     assert(rejected_nonzero_mrt);
 
-    if (argc == 23 && std::string_view(argv[1]) == "--write-modules")
+    if (argc == 24 && std::string_view(argv[1]) == "--write-modules")
     {
         write_module(argv[2], module);
         write_module(argv[3], modified_module);
@@ -993,6 +1031,7 @@ int main(int argc, char* argv[])
         write_module(argv[20], matched_minimum_module);
         write_module(argv[21], matched_integer_arithmetic_module);
         write_module(argv[22], matched_integer_logic_module);
+        write_module(argv[23], matched_integer_comparison_module);
     }
     return 0;
 }
