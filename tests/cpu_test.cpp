@@ -14,6 +14,7 @@
 #include "cpu_state_test.hpp"
 #include "emulator.hpp"
 #include "gpu/gx2_register_state.hpp"
+#include "gpu/latte_shader_decoder.hpp"
 #include "gpu/latte_surface_staging.hpp"
 #include "gpu/latte_vertex_fetch.hpp"
 #include "gpu/latte_texture_staging.hpp"
@@ -31943,6 +31944,78 @@ void latte_vertex_fetch_decoder_tests()
     assert(rejected_unsupported_format);
 }
 
+void latte_control_flow_decoder_tests()
+{
+    using affogato::gpu::LatteControlFlowOpcode;
+    using affogato::gpu::decode_latte_control_flow;
+
+    // Captured with read32_be() from the assembled GFD pass-through vertex
+    // shader. The source has CALL_FS, two EXP_DONE records, then EOP.
+    constexpr std::array<std::uint32_t, 6U> captured_guest_words{
+        0x00000000U,
+        0x00008009U,
+        0x3CA00000U,
+        0x88060094U,
+        0x00400100U,
+        0x88062014U};
+
+    const auto records = decode_latte_control_flow(captured_guest_words);
+    assert(records.size() == 3U);
+    assert(records[0U].word_offset == 0U);
+    assert(records[0U].word0 == 0x00000000U);
+    assert(records[0U].word1 == 0x09800000U);
+    assert(records[0U].opcode == LatteControlFlowOpcode::call_fetch_shader);
+    assert(!records[0U].end_of_program);
+    assert(records[1U].word_offset == 2U);
+    assert(records[1U].word0 == 0x0000A03CU);
+    assert(records[1U].word1 == 0x94000688U);
+    assert(records[1U].opcode == LatteControlFlowOpcode::export_done);
+    assert(!records[1U].end_of_program);
+    assert(records[2U].word_offset == 4U);
+    assert(records[2U].word0 == 0x00014000U);
+    assert(records[2U].word1 == 0x14200688U);
+    assert(records[2U].opcode == LatteControlFlowOpcode::export_done);
+    assert(records[2U].end_of_program);
+
+    bool rejected_incomplete_record = false;
+    try
+    {
+        constexpr std::array<std::uint32_t, 1U> incomplete_program{0U};
+        static_cast<void>(decode_latte_control_flow(incomplete_program));
+    }
+    catch (const std::runtime_error&)
+    {
+        rejected_incomplete_record = true;
+    }
+    assert(rejected_incomplete_record);
+
+    bool rejected_unknown_opcode = false;
+    try
+    {
+        constexpr std::array<std::uint32_t, 2U> unknown_program{
+            0U, std::byteswap(0x01000000U)};
+        static_cast<void>(decode_latte_control_flow(unknown_program));
+    }
+    catch (const std::runtime_error&)
+    {
+        rejected_unknown_opcode = true;
+    }
+    assert(rejected_unknown_opcode);
+
+    bool rejected_missing_end_marker = false;
+    try
+    {
+        constexpr std::array<std::uint32_t, 2U> unterminated_program{
+            0U, std::byteswap(0x09800000U)};
+        static_cast<void>(decode_latte_control_flow(unterminated_program));
+    }
+    catch (const std::runtime_error&)
+    {
+        rejected_missing_end_marker = true;
+    }
+    assert(rejected_missing_end_marker);
+}
+
 void gx2_register_state_tests()
 {
     using affogato::gpu::Gx2DrawShaderResources;
@@ -42439,6 +42512,7 @@ int main(int argc, char* argv[])
     gx2_draw_done_hle_tests();
     gx2_draw_ex_hle_tests();
     latte_vertex_fetch_decoder_tests();
+    latte_control_flow_decoder_tests();
     gx2_gpu_time_to_cpu_time_hle_tests();
     gx2_set_gpu_fence_hle_tests();
     gx2_wait_for_vsync_hle_tests();

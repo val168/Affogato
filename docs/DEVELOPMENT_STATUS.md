@@ -77,7 +77,7 @@ to initialize, so no claim is made about the triangle's visible output.
 
 ## Documentation-driven subsystem audit (2026-11-24)
 
-The first coverage pass is recorded in [`research/14_subsystem_coverage.md`](research/14_subsystem_coverage.md), with the detailed graphics source audit in [`research/11_graphics.md`](research/11_graphics.md). The audit distinguishes verified behavior from partial capture and missing execution. In particular, GX2 draw state and input bytes are captured for the opt-in diagnostic route, but there is no raw Latte command processor, Latte shader decoder/translator, guest draw render-target write, general tiled surface addressing, or GPU/guest-memory coherence model.
+The first coverage pass is recorded in [`research/14_subsystem_coverage.md`](research/14_subsystem_coverage.md), with the detailed graphics source audit in [`research/11_graphics.md`](research/11_graphics.md). The audit distinguishes verified behavior from partial capture and missing execution. In particular, GX2 draw state and input bytes are captured for the opt-in diagnostic route; a narrow non-executing Latte control-flow record decoder exists, but there is no raw Latte command processor, shader translator, guest draw render-target write, general tiled surface addressing, or GPU/guest-memory coherence model.
 
 `Gx2RegisterState::draw_snapshot()` now gives a draw index a typed, non-owning view over its captured command, vertex bindings, shader bindings/resources, render targets, and raw register words. The diagnostic renderer uses this accessor instead of indexing the fetch-shader snapshot independently. A later `apply()` may invalidate the borrowed view; it is intended for bounded consumption after a command batch is applied, not as cross-thread ownership. Debug and Release builds and CTest passed 2/2 in both configurations; the hidden guest-triangle Vulkan smoke test passed with diagnostic host shaders.
 
@@ -325,11 +325,23 @@ execution or guest render-target writes.
 
 Updated [`docs/research/12_latte_shader_isa.md`](research/12_latte_shader_isa.md)
 with structural facts from AMD's R700-family manual and explicit limits on
-applying them to Latte. Shader program capture currently stores checked guest
-memory words via `read32_be()` and snapshots them with draw state; it does not
-establish the GPU microcode dword order. No `latte-assembler` or devkitPPC tool
-is installed in the configured environment. A temporary copy of the published
-Decaf Windows release assembler produced the guide's pass-through GSH fixture;
-its raw shader block is now recorded in the research notes. This makes a
-fixture-level byte-order test possible, but the file bytes alone do not prove
-the mapping to decoder fields. No shader execution capability was added.
+applying them to Latte. Shader capture stores checked guest words via
+`read32_be()` and snapshots them with draw state. The published Decaf assembler
+produced the guide's pass-through GSH fixture. Its 24-byte program block
+decodes as three `word0`/`word1` pairs when interpreted little-endian, matching
+Cemu's legacy parser (`word1[29:23]` opcode, EOP at bit 21). Affogato's
+`read32_be()` snapshot values convert to those fixture words with
+`std::byteswap` per DWORD. This establishes the capture conversion for the
+controlled fixture; no shader execution capability was added.
+
+## Latte control-flow record subset (2026-11-25)
+
+Added [`src/gpu/latte_shader_decoder.hpp`](../src/gpu/latte_shader_decoder.hpp)
+with a structural decoder for fixture-verified `CALL_FS`, `EXPORT`, and
+`EXPORT_DONE` records. It converts captured big-endian CPU words to Latte
+DWORDs, records word offsets and raw fields, and stops at EOP. Incomplete pairs,
+unknown opcodes, and missing EOP fail explicitly. Tests use the assembled
+pass-through GSH word sequence and cover those malformed cases. Debug and
+Release builds succeeded; CTest passed 2/2 in both configurations. This does
+not execute the shader, decode ALU clauses, generate SPIR-V, or render through
+guest shaders.

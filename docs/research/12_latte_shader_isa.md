@@ -6,10 +6,11 @@ Latte shaders are guest programs associated with GX2 vertex, geometry, and
 pixel stages. Affogato currently captures the stage descriptors and bounded
 program words when `GX2SetVertexShader`, `GX2SetGeometryShader`, or
 `GX2SetPixelShader` runs. `Gx2RegisterState::apply()` snapshots those bindings
-at each draw. This preserves evidence for a later translator; no instruction
-decoder, shader IR, guest shader executor, or SPIR-V generator exists in the
-repository. The diagnostic Vulkan triangle uses fixed host shaders and does
-not execute these captured guest programs.
+at each draw. A small structural control-flow record decoder now recognizes
+only the fixture-verified `CALL_FS`, `EXPORT`, and `EXPORT_DONE` subset; there
+is no ALU decoder, shader IR, guest shader executor, or SPIR-V generator. The
+diagnostic Vulkan triangle uses fixed host shaders and does not execute these
+captured guest programs.
 
 Relevant local implementation:
 
@@ -25,6 +26,10 @@ Relevant local implementation:
 - `src/gpu/latte_vertex_fetch.hpp` decodes a narrow, Affogato-generated fetch
   program subset for diagnostic host vertices. It is separate from the
   guest vertex/pixel shader ISA.
+- `src/gpu/latte_shader_decoder.hpp` converts the captured big-endian words
+  to the little-endian Latte DWORD values represented in GFD shader code, then
+  decodes a narrow structural control-flow subset. It does not execute records
+  or decode ALU clauses.
 
 ## Evidence categories
 
@@ -125,9 +130,27 @@ real shader fixtures before implementation.
   in a `VertexShaderProgram` GFD block (Decaf's `src/libgfd/src/gfd_read.cpp`
   copies that block as raw bytes). This supplies a reproducible source-to-GSH
   fixture without adding a build dependency or copying third-party code.
-  The inspected raw block begins `00 00 80 09 3C A0 00 00 88 06 00 94 ...`.
-  That observation is a generated-file fact; it does not by itself prove how
-  Affogato's captured `read32_be()` words map to Cemu's typed CF fields.
+  The inspected program block starts with 24 bytes:
+  `00 00 00 00 00 00 80 09 3C A0 00 00 88 06 00 94 00 40 01 00 88 06 20 14`.
+  Decaf's `assembler_cf.cpp` sets `CALL_FS` in `inst.word1`, and `gfd.cpp`
+  copies the `ControlFlowInst` array into the binary. Interpreting consecutive
+  DWORDs as little-endian values yields three pairs:
+  `(word0=0x00000000, word1=0x09800000)`,
+  `(word0=0x0000A03C, word1=0x94000688)`, and
+  `(word0=0x00014000, word1=0x14200688)`. Cemu's
+  `LatteDecompiler.cpp` reads a `uint32` from offsets +0/+4 as `cfWord0` and
+  `cfWord1`, extracts the opcode from bits 29:23, and checks end-of-program at
+  bit 21. These pairs decode to `CALL_FS` (0x13), `EXPORT_DONE` (0x28), and
+  `EXPORT_DONE` (0x28, EOP set), matching the assembly source. The pairing and
+  field order are therefore cross-checked between the generated fixture and
+  Cemu's parser.
+
+  Affogato's `read32_be()` capture produces the corresponding values
+  `0x00000000, 0x00008009, 0x3CA00000, 0x88060094, 0x00400100, 0x88062014`.
+  To obtain the fixture's decoder DWORDs, each captured word must be byte-swapped
+  with `std::byteswap`; the resulting sequence matches the pairs above. This
+  resolves the captured-word conversion for this controlled GSH fixture. It
+  does not establish every Latte CF opcode or family-specific semantic.
 - The [Decaf Wii U tests](https://github.com/decaf-emu/wiiu-tests) include
   shader-oriented guest tests, but their README requires `latte-assembler`,
   AMD GPU ShaderAnalyzer, and devkitPro with WUT. The repository is GPL-3.0.
@@ -145,7 +168,7 @@ real shader fixtures before implementation.
 | --- | --- | --- |
 | GX2 vertex/pixel/geometry descriptor capture | Implemented and tested as capture | HLE descriptor/program range checks and draw-time state snapshots |
 | Fetch-shader parsing | Narrow diagnostic subset | `latte_vertex_fetch.hpp`; generated VTX programs only |
-| Latte shader control-flow decoding | Missing | CF encoding and clause termination need verified fixtures |
+| Latte shader control-flow decoding | Partial | `latte_shader_decoder.hpp` decodes fixture-verified `CALL_FS`, `EXPORT`, and `EXPORT_DONE` records, including EOP; unknown opcodes and malformed streams fail explicitly. No branch, loop, clause execution, or ALU-header decoding yet. |
 | Latte ALU decoding/execution | Missing | VLIW slot, writeback, predicate, and PV/PS semantics |
 | Vertex/pixel shader translation | Missing | Stage interfaces, exports, constants, textures, and SPIR-V backend |
 | Guest shader integration with Vulkan draws | Missing | Shader modules, pipeline cache, descriptor binding, render-target path |
@@ -203,23 +226,22 @@ snapshot/coherence requirements.
   guest workloads.
 - Which shader families an available WUT test actually emits and whether the
   current toolchain can build and run that test in this environment.
-- How the assembled GSH instruction bytes map through the Wii U guest-memory
-  representation and Affogato's captured big-endian words to the typed CF
-  fields used by reference implementations. This must be proven with a
-  fixture-level decoder test before adopting the candidate word order.
+- Whether real game shader loading yields the same byte representation as the
+  controlled GSH fixture, and which CF encodings or semantics differ from the
+  R700-family reference.
 - Whether the R700 ALU clause address and count interpretation applies without
   Latte-specific adjustment to shader words captured by Affogato.
 
-The next shader milestone is a non-executing control-flow record decoder using
-the assembled pass-through shader as its first byte-order fixture. Test raw
-GSH bytes, Affogato-captured words, and decoded fields as separate stages. Add
-ALU clause address/count fixtures before decoding ALU headers. The decoder
-should preserve raw words and reject unknown CF opcodes; it should not execute
-clauses, infer omitted slot behavior, or generate SPIR-V.
+The non-executing CF record decoder currently supports the pass-through
+fixture's `CALL_FS` and export records. Tests cover the Affogato-captured guest
+words, byte-swapped field words, opcode fields, EOP, incomplete records,
+unsupported opcodes, and missing EOP. Next, extend structural decoding to
+ALU-clause headers after adding an assembled ALU fixture for address/count
+fields. Do not execute clauses, infer omitted slot behavior, or generate
+SPIR-V in that step.
 
-Next implementation work should begin with a source-backed decoder
-specification and fixtures for a small, fully understood instruction family.
-The introductory pass-through shader is a candidate for end-to-end fixtures
-once a suitable assembler is available; it alone does not establish a decoder
-specification. Do not start SPIR-V emission until decoding, slot grouping, and
-expected architectural outputs have deterministic tests.
+Next implementation work can begin with the verified fixture conversion and a
+source-backed decoder for this small CF subset. The pass-through shader alone
+does not establish complete shader decoding. Do not start SPIR-V emission until
+decoding, slot grouping, and expected architectural outputs have deterministic
+tests.
