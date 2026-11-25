@@ -717,8 +717,9 @@ other callers. `latte_vertex_shader_subset.hpp` connects captured draw-time
 fetch inputs, semantic registers, shader words, and vertex constants for one
 selected vertex. `Gx2RegisterState::draw_snapshot()` provides a borrowed view
 over one draw's captured state. The controlled diagnostic path calls this CPU
-subset, but there is no SPIR-V generator, shader-module cache, or guest shader
-pipeline in `VulkanRenderer`. The IR currently represents only the existing
+subset. A bounded MOV-to-position module generator now exists, but there is
+no shader-module cache or guest shader pipeline in `VulkanRenderer`. The IR
+currently represents only the existing
 supported subset; it does not establish broader Latte shader coverage or
 independently verified hardware semantics.
 
@@ -729,6 +730,33 @@ link those shader compiler libraries. The diagnostic vertex/fragment SPIR-V
 is embedded in `src/gpu/vulkan/diagnostic_shader_spirv.hpp`. This establishes
 local validation tools; it does not establish a portable runtime compiler
 dependency.
+
+### Bounded SPIR-V vertex emitter
+
+`latte_spirv_vertex_subset.hpp` lowers the shared IR for a single
+`float32x4` input mapped to a caller-selected guest GPR and Vulkan location,
+unpredicated four-lane OP2 MOV groups, and one completed identity `POSITION`
+export at array base `0x3c`. MOV reads initialized absolute GPRs or supported
+inline constants/PV; source absolute and negate are emitted as 32-bit
+sign/magnitude bit operations so NaN payloads and signed zero are preserved.
+The generator does not yet handle arithmetic, ALU constant-file reads,
+additional inputs, parameter exports, pixel shaders, or guest control flow.
+
+The modules use SPIR-V 1.0 and the Vulkan GLSL450 memory model. A CPU-only
+CTest generates a plain pass-through module and one with source absolute and
+negate modifiers; when the SDK tool is available, it runs
+`spirv-val --target-env vulkan1.0` on both. `spirv-dis` confirms the input
+load, component bitcasts, built-in position store, and modifier bitwise
+operations. This verifies
+module validity and encoding of this narrow pass-through shader, not Vulkan
+draw execution or CPU-versus-GPU output equivalence. The module is not yet
+connected to `VulkanRenderer`.
+
+The [Khronos SPIR-V specification](https://registry.khronos.org/SPIR-V/specs/unified1/SPIRV.html)
+defines module header and word-count encoding, logical instruction ordering,
+entry-point interface declarations, and integer bitwise operations used by
+the emitter. The Affogato generator is independently implemented; no
+third-party code was copied.
 
 ### Reference implementation findings
 
@@ -770,10 +798,12 @@ The translator must reuse the current decoder and its explicit rejection
 behavior rather than create a second opcode parser. `LatteShaderIrProgram` is
 now the initial boundary between bytecode decoding and backends, but its
 variant currently covers only OP2 clauses and normal exports. The CPU subset
-remains the semantic reference; future IR additions and SPIR-V lowering must
-reject every operation, control-flow form, source mode, or export they do not
-implement. Supported operations should be added in complete tested families,
-with CPU-versus-SPIR-V output comparisons for deterministic shader fixtures.
+remains the semantic reference. The SPIR-V backend currently lowers only the
+MOV-to-position pass-through subset; future IR additions and SPIR-V lowering
+must reject every operation, control-flow form, source mode, or export they do
+not implement. Supported operations should be added in complete tested
+families, with CPU-versus-SPIR-V output comparisons for deterministic shader
+fixtures.
 
 Translation variants must include all shader-affecting captured state, at
 minimum stage and bytecode, fetch program, vertex semantic linkage, relevant

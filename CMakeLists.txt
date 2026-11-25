@@ -202,6 +202,66 @@ if(BUILD_TESTING)
 
     add_test(NAME affogato_cpu_tests COMMAND affogato_cpu_tests)
 
+    add_executable(affogato_latte_spirv_tests
+        tests/latte_spirv_test.cpp
+    )
+    target_include_directories(affogato_latte_spirv_tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+    set_target_properties(affogato_latte_spirv_tests PROPERTIES
+        CXX_STANDARD 23
+        CXX_STANDARD_REQUIRED YES
+        CXX_EXTENSIONS NO
+    )
+    if(MSVC)
+        target_compile_options(affogato_latte_spirv_tests PRIVATE
+            /W4
+            /permissive-
+            /UNDEBUG
+        )
+    else()
+        target_compile_options(affogato_latte_spirv_tests PRIVATE
+            -Wall
+            -Wextra
+            -Wpedantic
+            -UNDEBUG
+        )
+    endif()
+
+    set(AFFOGATO_LATTE_SPIRV_TEST_MODULE
+        "${CMAKE_CURRENT_BINARY_DIR}/latte_vertex_subset.spv")
+    set(AFFOGATO_LATTE_SPIRV_MODIFIERS_TEST_MODULE
+        "${CMAKE_CURRENT_BINARY_DIR}/latte_vertex_subset_modifiers.spv")
+    add_test(NAME affogato_latte_spirv_tests
+        COMMAND affogato_latte_spirv_tests
+            --write-modules
+            "${AFFOGATO_LATTE_SPIRV_TEST_MODULE}"
+            "${AFFOGATO_LATTE_SPIRV_MODIFIERS_TEST_MODULE}")
+    set_tests_properties(affogato_latte_spirv_tests PROPERTIES
+        FIXTURES_SETUP affogato_latte_spirv_module
+    )
+
+    find_program(AFFOGATO_SPIRV_VAL_EXECUTABLE
+        NAMES spirv-val
+        HINTS "$ENV{VULKAN_SDK}/Bin"
+    )
+    if(AFFOGATO_SPIRV_VAL_EXECUTABLE)
+        add_test(NAME affogato_latte_spirv_validation
+            COMMAND "${AFFOGATO_SPIRV_VAL_EXECUTABLE}"
+                --target-env vulkan1.0
+                "${AFFOGATO_LATTE_SPIRV_TEST_MODULE}")
+        set_tests_properties(affogato_latte_spirv_validation PROPERTIES
+            FIXTURES_REQUIRED affogato_latte_spirv_module
+        )
+        add_test(NAME affogato_latte_spirv_modifier_validation
+            COMMAND "${AFFOGATO_SPIRV_VAL_EXECUTABLE}"
+                --target-env vulkan1.0
+                "${AFFOGATO_LATTE_SPIRV_MODIFIERS_TEST_MODULE}")
+        set_tests_properties(affogato_latte_spirv_modifier_validation PROPERTIES
+            FIXTURES_REQUIRED affogato_latte_spirv_module
+        )
+    endif()
+
     add_executable(affogato_recompiler_tests
         tests/recompiler_test.cpp
     )

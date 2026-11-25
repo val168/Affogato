@@ -1,5 +1,20 @@
 # Affogato Development Status
 
+## Validated SPIR-V vertex MOV subset (2026-11-25)
+
+`emit_latte_spirv_vertex_position_mov_subset()` lowers the shared typed IR's
+no-literal MOV groups for one mapped `float32x4` vertex input into a
+Vulkan 1.0 vertex module that writes one identity `POSITION` export. It
+preserves MOV's raw binary32 values and supports its source absolute/negate
+sign-bit modifiers. Other OP2 operations, input interfaces, and export forms
+fail explicitly. A CPU-only CTest checks generation and unsupported-op
+rejection; when `spirv-val` is available, CTest validates both the plain and
+modifier-bearing modules. Debug and Release builds and CTest passed 5/5 in
+each configuration. This
+module is not yet used by the renderer, and no Vulkan draw or guest
+render-target output has been verified. See
+[`research/12_latte_shader_isa.md`](research/12_latte_shader_isa.md).
+
 ## Shared typed IR for the bounded Latte CPU shader subset (2026-11-25)
 
 The straight-line shader subset now decodes supported OP2 clauses and normal
