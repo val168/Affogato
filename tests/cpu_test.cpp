@@ -16,6 +16,7 @@
 #include "gpu/gx2_register_state.hpp"
 #include "gpu/latte_draw.hpp"
 #include "gpu/latte_shader_decoder.hpp"
+#include "gpu/latte_shader_interface.hpp"
 #include "gpu/latte_shader_interpreter.hpp"
 #include "gpu/latte_shader_program.hpp"
 #include "gpu/latte_surface_staging.hpp"
@@ -32649,6 +32650,96 @@ void latte_draw_vertex_index_tests()
     assert(rejected_overflowing_range);
 }
 
+void latte_pixel_input_control_decode_tests()
+{
+    using affogato::cpu::espresso::Gx2ProgramShaderBinding;
+    using affogato::cpu::espresso::Gx2ProgramStage;
+    using affogato::gpu::LattePixelInputDefaultValue;
+    using affogato::gpu::LattePixelShaderInputControl;
+    using affogato::gpu::decode_latte_pixel_shader_input_controls;
+
+    constexpr std::uint32_t pixel_shader_input_count = 2U;
+    constexpr std::uint32_t first_control = 5U;
+    Gx2ProgramShaderBinding pixel_shader{};
+    pixel_shader.stage = Gx2ProgramStage::pixel;
+    pixel_shader.descriptor_words.resize(41U);
+    pixel_shader.descriptor_words[4U] = pixel_shader_input_count;
+    pixel_shader.descriptor_words[first_control] =
+        0xFEU |
+        (1U << 8U) |
+        (1U << 10U) |
+        (1U << 11U) |
+        (1U << 12U) |
+        (0xAU << 13U) |
+        (1U << 17U) |
+        (1U << 18U);
+    pixel_shader.descriptor_words[first_control + 1U] = 7U | (3U << 8U);
+
+    const std::vector<LattePixelShaderInputControl> decoded_controls =
+        decode_latte_pixel_shader_input_controls(pixel_shader);
+    assert(decoded_controls.size() == pixel_shader_input_count);
+    assert((decoded_controls[0U] == LattePixelShaderInputControl{
+        0xFEU,
+        LattePixelInputDefaultValue::zero_rgb_one_alpha,
+        0xAU,
+        true,
+        true,
+        true,
+        true,
+        true}));
+    assert((decoded_controls[1U] == LattePixelShaderInputControl{
+        7U,
+        LattePixelInputDefaultValue::one,
+        0U,
+        false,
+        false,
+        false,
+        false,
+        false}));
+
+    bool rejected_non_pixel_shader = false;
+    try
+    {
+        Gx2ProgramShaderBinding vertex_shader = pixel_shader;
+        vertex_shader.stage = Gx2ProgramStage::vertex;
+        static_cast<void>(
+            decode_latte_pixel_shader_input_controls(vertex_shader));
+    }
+    catch (const std::invalid_argument&)
+    {
+        rejected_non_pixel_shader = true;
+    }
+    assert(rejected_non_pixel_shader);
+
+    bool rejected_truncated_descriptor = false;
+    try
+    {
+        Gx2ProgramShaderBinding truncated_shader = pixel_shader;
+        truncated_shader.descriptor_words.resize(40U);
+        static_cast<void>(
+            decode_latte_pixel_shader_input_controls(truncated_shader));
+    }
+    catch (const std::invalid_argument&)
+    {
+        rejected_truncated_descriptor = true;
+    }
+    assert(rejected_truncated_descriptor);
+
+    bool rejected_excessive_input_count = false;
+    try
+    {
+        Gx2ProgramShaderBinding excessive_shader = pixel_shader;
+        excessive_shader.descriptor_words[4U] = 33U;
+        static_cast<void>(
+            decode_latte_pixel_shader_input_controls(excessive_shader));
+    }
+    catch (const std::invalid_argument&)
+    {
+        rejected_excessive_input_count = true;
+    }
+    assert(rejected_excessive_input_count);
+}
+
 void latte_control_flow_decoder_tests()
 {
     using affogato::gpu::LatteControlFlowOpcode;
@@ -45344,6 +45435,7 @@ int main(int argc, char* argv[])
     gx2_draw_execution_boundary_tests();
     latte_vertex_fetch_decoder_tests();
     latte_draw_vertex_index_tests();
+    latte_pixel_input_control_decode_tests();
     latte_control_flow_decoder_tests();
     latte_alu_op3_execution_tests();
     gx2_gpu_time_to_cpu_time_hle_tests();

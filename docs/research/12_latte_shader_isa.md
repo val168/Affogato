@@ -1034,3 +1034,33 @@ readback assertion. This does not establish general guest draw execution,
 Latte hardware semantics beyond these bounded encoding assumptions, or WWHD
 rendering. Guest fragment inputs, arbitrary ALU, MRTs beyond target zero,
 interpolation, depth/stencil, textures, and shader variants remain unsupported.
+
+### Pixel input-control descriptor decoding (2026-11-25)
+
+`latte_shader_interface.hpp` decodes the captured `GX2PixelShader` register
+union into its active `SPI_PS_INPUT_CNTL` entries. The 41-word union stores
+`num_spi_ps_input_cntl` at word 4, followed by up to 32 input-control words at
+words 5 through 36. The decoder preserves semantic ID, `DEFAULT_VAL`, flat,
+centroid, linear, cylindrical-wrap, point-sprite, and sample-selection fields.
+It rejects non-pixel stages, truncated register unions, and counts above the
+hardware register capacity. This is descriptor metadata decoding only; it
+does not link stage interfaces, synthesize missing producer outputs, or
+implement interpolation.
+
+The field positions and default vectors follow the AMD [R600/R700 3D
+register reference](https://shop.vgamuseum.info/index.php/f-naq/item/download/1322_c8e1805afa72eccfa594bfe05c47b972),
+`SPI_PS_INPUT_CNTL_[0-31]` (register `0x28644` onward): semantic bits 0–7,
+default value bits 8–9, flat/centroid/linear bits 10–12, cylindrical wrap bits
+13–16, point-sprite bit 17, and sample selection bit 18. The reference defines
+the four default vectors as zero, `(0,0,0,1)`, `(1,1,1,0)`, and one. This is
+related AMD-family documentation, not direct Espresso/Latte conformance.
+WUT's reconstructed [`GX2PixelShader` declaration](https://bot.libretro.com/doxygen/a07094_source.html)
+confirms the 41-word register union, count field, 32-entry array, and field
+names. The raw register locations are decoded from that layout and AMD's
+register map; WUT's C bitfield layout is not used as host bit numbering.
+
+Tests cover field extraction, all selected flags in one control word, stage
+rejection, truncated descriptors, and excessive counts. A subsequent stage
+must resolve semantic linkage against `SPI_VS_OUT_ID`, carry the decoded
+default into unmatched-input handling, choose interpolation qualifiers, and
+verify generated fragment inputs through SPIR-V validation and Vulkan output.
