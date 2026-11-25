@@ -380,3 +380,12 @@ does not write the destination or update previous-vector/previous-scalar state;
 it is not an ALU instruction-group executor. Tests use bit-pattern fixtures
 including NaN, negative zero, and infinity. Debug and Release builds succeeded;
 CTest passed 2/2 in both configurations. `git diff --check` is clean.
+
+## Latte no-literal OP2 group boundaries (2026-11-25)
+
+Added `decode_latte_alu_op2_groups()` to split decoded OP2 slots at the verified
+LAST marker. It rejects OP3 layouts, literal source selectors, and a clause
+ending with an unterminated group. Tests confirm the assembled MOV fixture is
+one four-slot group and cover those unsupported cases. It does not parse
+literal payload slots or execute groups. Debug and Release builds succeeded;
+CTest passed 2/2 in both configurations. `git diff --check` is clean.

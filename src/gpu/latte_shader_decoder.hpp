@@ -6,6 +6,7 @@
 #include <span>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace affogato::gpu
@@ -63,6 +64,14 @@ struct LatteAluOp2Instruction
     bool last_in_group{};
 
     bool operator==(const LatteAluOp2Instruction&) const = default;
+};
+
+struct LatteAluOp2InstructionGroup
+{
+    std::size_t word_offset{};
+    std::vector<LatteAluOp2Instruction> instructions;
+
+    bool operator==(const LatteAluOp2InstructionGroup&) const = default;
 };
 
 // Decode verified control-flow records and the supported ALU-clause header.
@@ -267,6 +276,47 @@ decode_latte_alu_clause_slots(
         ((slot.word1 >> 31U) & 1U) != 0U,
         ((slot.word1 >> 4U) & 1U) != 0U,
         ((slot.word0 >> 31U) & 1U) != 0U};
+}
+
+// Split OP2 slots into LAST-delimited groups when no literal payload is used.
+[[nodiscard]] inline std::vector<LatteAluOp2InstructionGroup>
+decode_latte_alu_op2_groups(std::span<const LatteAluClauseSlot> slots)
+{
+    constexpr std::uint16_t literal_source_selector = 253U;
+
+    std::vector<LatteAluOp2InstructionGroup> groups;
+    LatteAluOp2InstructionGroup current_group;
+
+    for (const auto& slot : slots)
+    {
+        const auto instruction = decode_latte_alu_op2_instruction(slot);
+        if (instruction.source0_selector == literal_source_selector ||
+            instruction.source1_selector == literal_source_selector)
+        {
+            throw std::runtime_error(
+                "Latte ALU group decoding does not support literal operands");
+        }
+
+        if (current_group.instructions.empty())
+        {
+            current_group.word_offset = slot.word_offset;
+        }
+        current_group.instructions.push_back(instruction);
+
+        if (instruction.last_in_group)
+        {
+            groups.push_back(std::move(current_group));
+            current_group = {};
+        }
+    }
+
+    if (!current_group.instructions.empty())
+    {
+        throw std::runtime_error(
+            "Latte ALU clause ends before the final instruction-group marker");
+    }
+
+    return groups;
 }
 
 } // namespace affogato::gpu

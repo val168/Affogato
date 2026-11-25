@@ -31950,6 +31950,7 @@ void latte_control_flow_decoder_tests()
     using affogato::gpu::LatteControlFlowOpcode;
     using affogato::gpu::decode_latte_alu_clause_slots;
     using affogato::gpu::decode_latte_alu_op2_instruction;
+    using affogato::gpu::decode_latte_alu_op2_groups;
     using affogato::gpu::decode_latte_control_flow;
     using affogato::gpu::evaluate_latte_alu_move_value;
     using affogato::gpu::LatteShaderRegister;
@@ -32052,6 +32053,40 @@ void latte_control_flow_decoder_tests()
     assert(final_move.destination_component == 3U);
     assert(final_move.write_mask);
     assert(final_move.last_in_group);
+
+    const auto alu_groups = decode_latte_alu_op2_groups(alu_slots);
+    assert(alu_groups.size() == 1U);
+    assert(alu_groups[0U].word_offset == 64U);
+    assert(alu_groups[0U].instructions.size() == 4U);
+    assert(alu_groups[0U].instructions.front() == first_move);
+    assert(alu_groups[0U].instructions.back() == final_move);
+
+    bool rejected_literal_alu_operand = false;
+    try
+    {
+        auto literal_slots = alu_slots;
+        literal_slots[0U].word0 =
+            (literal_slots[0U].word0 & ~0x1FFU) | 253U;
+        static_cast<void>(decode_latte_alu_op2_groups(literal_slots));
+    }
+    catch (const std::runtime_error&)
+    {
+        rejected_literal_alu_operand = true;
+    }
+    assert(rejected_literal_alu_operand);
+
+    bool rejected_unterminated_alu_group = false;
+    try
+    {
+        auto unterminated_slots = alu_slots;
+        unterminated_slots.back().word0 &= 0x7FFFFFFFU;
+        static_cast<void>(decode_latte_alu_op2_groups(unterminated_slots));
+    }
+    catch (const std::runtime_error&)
+    {
+        rejected_unterminated_alu_group = true;
+    }
+    assert(rejected_unterminated_alu_group);
 
     bool rejected_op3_layout = false;
     try

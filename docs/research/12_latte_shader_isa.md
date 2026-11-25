@@ -184,7 +184,7 @@ real shader fixtures before implementation.
 | GX2 vertex/pixel/geometry descriptor capture | Implemented and tested as capture | HLE descriptor/program range checks and draw-time state snapshots |
 | Fetch-shader parsing | Narrow diagnostic subset | `latte_vertex_fetch.hpp`; generated VTX programs only |
 | Latte shader control-flow decoding | Partial | `latte_shader_decoder.hpp` decodes fixture-verified `CALL_FS`, `EXPORT`, `EXPORT_DONE`, and `ALU` clause headers, including EOP and bounded clause ranges. Unknown opcodes and malformed streams fail explicitly. No branch/loop decoding or clause execution. |
-| Latte ALU decoding/execution | Partial field/value subset | `decode_latte_alu_op2_instruction()` extracts the OP2 layout; `evaluate_latte_alu_move_value()` returns the source bits for one absolute GPR MOV form. No group scheduling, destination writeback, PV/PS update, predicate, or other opcode semantics. |
+| Latte ALU decoding/execution | Partial structural/value subset | OP2 fields and LAST-delimited groups are decoded for no-literal clauses; literal operands and OP3 slots fail explicitly. `evaluate_latte_alu_move_value()` returns source bits for one absolute GPR MOV form. No group execution, destination writeback, PV/PS update, predicate, or other opcode semantics. |
 | Vertex/pixel shader translation | Missing | Stage interfaces, exports, constants, textures, and SPIR-V backend |
 | Guest shader integration with Vulkan draws | Missing | Shader modules, pipeline cache, descriptor binding, render-target path |
 | WWHD shader requirements | Unknown in Affogato | Existing recorded WWHD runs stop before a guest draw is captured |
@@ -298,9 +298,14 @@ confirm these details against Latte-focused sources and fixtures. In
 particular, a group parser must distinguish instruction slots from literal
 payloads before treating each LAST bit as a complete group boundary.
 
-Next implementation work should add semantic execution for a verified ALU
-group representation that preserves instruction/literal slot boundaries,
-followed by independently tested instruction subsets and explicit guest
-register/PV/PS state. The pass-through shader alone does not establish complete
-shader decoding. Do not start SPIR-V emission until opcode semantics, slot
-grouping, and expected architectural outputs have deterministic tests.
+`decode_latte_alu_op2_groups()` now groups OP2-only slots by LAST for clauses
+without literal operands. It rejects OP3 encodings, literal selectors, and an
+unterminated final group. This does not parse literal payload slots or execute
+groups. The pass-through fixture contains one four-slot group and no literals.
+
+Next implementation work should add semantic execution for the verified
+no-literal MOV group with independently expected guest-register and PV state,
+after resolving the fixture's exact unit assignment. The pass-through shader
+alone does not establish complete shader decoding. Do not start SPIR-V emission
+until opcode semantics, slot grouping, and expected architectural outputs have
+deterministic tests.
