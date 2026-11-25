@@ -637,6 +637,8 @@ GX2 draw processing, does not execute general guest fetch programs, and does
 not generate Vulkan shaders. The fixture initially failed because its fetch
 record omitted the documented Float32 endian mode; correcting the fixture made
 Debug CTest pass 2/2. The previous Release build/test and diagnostic GPU smoke
-test passed before this new integration header was added. Release build and
-CTest passed 2/2 for this stage. The GPU smoke test was not rerun after adding
-the CPU-only integration helper.
+test passed after this new integration header was added. Release build and
+CTest passed 2/2 for this stage. The smoke test still uses the diagnostic host
+shader. The visible-window test was not run because the Windows capture tool
+failed during initialization (`failed to write kernel assets`), so no new
+visual verification is claimed.
