@@ -16,6 +16,9 @@ GX2 draw packet construction; no Latte-produced fixture is available. Details
 are in
 [`research/15_latte_command_processor.md`](research/15_latte_command_processor.md).
 This update builds on the implementation pushed through `e69c35d`.
+Reference research confirms that normal Cemu `GX2DrawEx` uses a predicate-bit
+`DRAW_INDEX_AUTO`; predicate evaluation and its reset state remain unsupported,
+so the packet decoder rejects it pending verified semantics.
 
 ## Documentation-driven subsystem audit (2026-11-24)
 

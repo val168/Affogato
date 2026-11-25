@@ -87,6 +87,22 @@ testable state capture, not yet sufficient to accept or execute a normal
 Cemu-shaped draw stream. The PM4 predicate source/state semantics must be
 verified before relaxing that rejection.
 
+AMD's [Evergreen/Cayman guide §9.1.4](https://www.x.org/docs/AMD/old/evergreen_cayman_programming_guide.pdf)
+identifies Type-3 header bit 0 as `PREDICATE` and bit 1 as `SHADER_TYPE`; the
+earlier R6xx/R7xx guide documents bit 0 as predication and treats bits 7:1 as
+reserved for that generation. Decaf's
+[`latte_pm4_commands.h::SetPredication`](https://github.com/decaf-emu/decaf-emu/blob/master/src/libgpu/latte/latte_pm4_commands.h)
+represents the predicate source address and a control word with clear, ZPASS,
+and primitive-count operations. Cemu's
+[`LatteCommandProcessor.cpp::LatteCP_itSetPredication`](https://github.com/cemu-project/Cemu/blob/main/src/Cafe/HW/Latte/Core/LatteCommandProcessor.cpp)
+reads those fields and toggles conditional-render state. This cross-generation and
+reference-emulator evidence establishes that predicate bit 0 cannot generally
+be treated as an unconditional draw. It does not establish Espresso/Latte's
+default predicate value or all query synchronization behavior. Decaf's packet
+dispatch also does not visibly gate on `HeaderType3::predicate` in
+`Pm4Processor::handlePacketType3`, so that code alone is not an independent
+verification of the gate's semantics.
+
 Decaf's GPL-3.0
 [`pm4_processor.cpp`](https://github.com/decaf-emu/decaf-emu/blob/master/src/libgpu/src/pm4_processor.cpp)
 recursively dispatches both indirect-buffer opcodes through a bounded nested
@@ -241,6 +257,9 @@ lists and guest-written command streams remain unsupported.
 - The PM4 predicate source/state semantics used by the predicate-bit draw
   packets emitted by GX2 `GX2DrawEx`; accepting them without modeling the
   predicate can skip or spuriously execute guest work.
+- The default predicate state and when it is reset across display-list and
+  command-buffer boundaries; a missing `SET_PREDICATION` cannot yet be assumed
+  to mean either true or false.
 - Whether context display-list bytes contain native PM4 in all supported GX2
   versions and the exact byte/word order at the guest boundary.
 - Register-write masking, context shadow behavior, and wait/fence side effects
