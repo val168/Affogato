@@ -32,10 +32,11 @@ Relevant local implementation:
   populate shader invocation inputs. This fetch path is separate from the
   guest vertex/pixel shader ISA.
 - `GX2InitFetchShaderEx` in `src/cpu/espresso/gx2_hle.cpp` emits one four-dword
-  record per attribute. Its comments identify word 0 as a semantic fetch but
-  word 1's low seven bits as `VTX_WORD1_GPR.DST_GPR`. AMD documents SEM and GPR
-  as alternative word-1 formats, so this local combination needs bytecode and
-  hardware-family cross-checking before it is used for real shader execution.
+  record per attribute. Word 0 selects the semantic VTX form; under that form,
+  word 1's overlapping low field is a semantic ID, not a direct destination
+  GPR. Affogato decodes it as `semantic_id` for its HLE-generated subset.
+  Arbitrary guest fetch programs and the full Latte field width remain
+  unsupported.
   `GX2SetFetchShader` captures the guest descriptor and program but does not
   itself emit `SQ_VTX_SEMANTIC` register writes. The current HLE therefore does
   not establish a complete fetch-to-VS input path.
@@ -138,19 +139,23 @@ corresponding register writes after the shader binding. Tests verify command
 ordering and that a draw snapshot contains the resulting table. This is
 cross-checked reference behavior, not Wii U hardware verification.
 
-The fetch-shader instruction encoding remains separate and unresolved. The
-R700 ISA describes semantic-ID and direct-GPR word-1 layouts as alternatives.
+For the HLE-generated fetch subset, the overlapping word-1 field is now treated
+as a semantic ID because word 0 selects `VTX_INST_SEMANTIC`. This interpretation
+matches the alternative semantic and direct-GPR word-1 layouts in AMD's R700
+ISA and Decaf's generator, which emits that semantic mode with
+`attrib.location` in the overlapping field. The decoded field is named
+`semantic_id`, and the diagnostic path searches for its position semantic
+explicitly. This resolves the local naming/field interpretation for this
+generated subset; it is not direct Wii U hardware validation.
+
 Decaf's
 [`GX2InitFetchShaderEx`](https://github.com/decaf-emu/decaf-emu/blob/master/src/libdecaf/src/cafe/libraries/gx2/gx2_fetchshader.cpp)
 also emits `VTX_INST_SEMANTIC` in word 0, then sets `attrib.location` through
-the overlapping `SQ_VTX_WORD1_GPR.DST_GPR` field while filling the shared
-format/selector fields. Affogato's generated instruction follows the same
-word pattern. This corroborates the generator layout but does not establish
-whether Latte interprets those low bits as semantic ID, direct GPR, or a
-Latte-specific combination; Decaf's field alias is not itself a hardware
-specification. Affogato's `GX2SetFetchShader` captures bytes but does not
-decode them or populate shader GPRs. A Wii U-produced fixture is still needed
-before relying on the interpretation for arbitrary guest fetch programs.
+the overlapping field while filling shared format/selector fields. This
+corroborates the HLE-generated word pattern. `GX2SetFetchShader` still captures
+guest bytes without executing the fetch program or populating shader GPRs. A
+Wii U-produced fixture is still needed before extending this interpretation to
+arbitrary guest fetch programs or claiming Latte hardware verification.
 
 ### Reference emulator research
 

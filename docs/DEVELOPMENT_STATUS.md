@@ -548,10 +548,12 @@ configurations.
 The HLE audit also found that `GX2InitFetchShaderEx` labels its generated
 word-0 instruction as semantic while its word-1 comment identifies the low
 bits as a direct-GPR destination. AMD's ISA reference treats these as
-alternative layouts. `GX2SetFetchShader` captures the bytes without emitting
-semantic-table writes. Resolve this mismatch against a verified Wii U fetch
-program or cross-checked reference-emulator path before implementing shader
-input population; no behavior had been guessed or changed at that audit point.
+alternative layouts. The word-0 semantic selector means the overlapping
+word-1 field is a semantic ID for this generated instruction form. Decaf's
+generator corroborates that encoding. The decoded field and diagnostic lookup
+now use the name `semantic_id`; this is a correction to the local model and
+does not claim direct Wii U hardware verification. Arbitrary guest fetch
+programs are still not executed and shader input GPRs are not populated.
 
 ## Draw-time Latte semantic-table capture and GX2 population (2026-11-25)
 

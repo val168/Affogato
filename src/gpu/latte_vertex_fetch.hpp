@@ -20,7 +20,7 @@ namespace affogato::gpu
 
 struct LatteVertexAttribute
 {
-    std::uint32_t location{};
+    std::uint32_t semantic_id{};
     std::uint32_t buffer_index{};
     std::uint32_t byte_offset{};
     std::uint32_t byte_size{};
@@ -220,7 +220,9 @@ decode_latte_vertex_fetch_shader(
         }
 
         LatteVertexAttribute attribute{};
-        attribute.location = word1 & 0x7FU;
+        // Word 0 selects semantic mode, so the overlapping word-1 field is
+        // the semantic ID rather than a direct destination GPR.
+        attribute.semantic_id = word1 & 0x7FU;
         attribute.buffer_index = (word0 >> 8U) & 0xFU;
         attribute.byte_offset = word2 & 0xFFFFU;
         attribute.endian_swap = (word2 >> 16U) & 0x7U;

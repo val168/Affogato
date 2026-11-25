@@ -31987,16 +31987,18 @@ void latte_vertex_fetch_decoder_tests()
         const std::uint32_t selector_y = 1U;
         const std::uint32_t selector_z = 4U;
         const std::uint32_t selector_w = 5U;
+        constexpr std::uint32_t semantic_id = 0x25U;
         fetch_shader.program_words = {
             1U | (2U << 8U) | ((byte_size - 1U) << 26U),
-            selector_x << 9U | selector_y << 12U | selector_z << 15U |
-                selector_w << 18U | data_format << 22U | 2U << 28U,
+            semantic_id | selector_x << 9U | selector_y << 12U |
+                selector_z << 15U | selector_w << 18U |
+                data_format << 22U | 2U << 28U,
             12U | (2U << 16U),
             0U};
 
         const auto decoded = decode_latte_vertex_fetch_shader(fetch_shader);
         assert(decoded.size() == 1U);
-        assert(decoded.front().location == 0U);
+        assert(decoded.front().semantic_id == semantic_id);
         assert(decoded.front().buffer_index == 2U);
         assert(decoded.front().byte_offset == 12U);
         assert(decoded.front().byte_size == byte_size);

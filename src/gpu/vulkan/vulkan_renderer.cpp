@@ -128,7 +128,7 @@ std::vector<DiagnosticVertex> decode_diagnostic_float2_draw(
     constexpr std::uint32_t gx2_primitive_mode_triangles = 4U;
     constexpr std::uint32_t gx2_primitive_mode_triangle_fan = 5U;
     constexpr std::uint32_t gx2_primitive_mode_triangle_strip = 6U;
-    constexpr std::uint32_t diagnostic_position_location = 0U;
+    constexpr std::uint32_t diagnostic_position_semantic_id = 0U;
     constexpr std::uint32_t diagnostic_position_components = 2U;
 
     if (!command.draw_call)
@@ -158,7 +158,7 @@ std::vector<DiagnosticVertex> decode_diagnostic_float2_draw(
         attributes,
         [](const LatteVertexAttribute& attribute)
         {
-            return attribute.location == diagnostic_position_location;
+            return attribute.semantic_id == diagnostic_position_semantic_id;
         });
     if (position_attribute == attributes.end() ||
         position_attribute->component_count < diagnostic_position_components ||
