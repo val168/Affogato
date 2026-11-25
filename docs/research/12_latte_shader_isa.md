@@ -105,6 +105,13 @@ real shader fixtures before implementation.
   controlled fixture confirms those offsets and the slot word order for one
   assembled MOV vector group. This supports extracting raw slots, but does not
   establish instruction semantics or all shader byte-order cases.
+  Cemu's current `LatteInstructions.h` recognizes ALU clause variants
+  `0x48`–`0x4B` and `0x4D`–`0x4F`; Affogato deliberately accepts only fixture-
+  verified `0x48`. Its `LatteClauseInstruction_ALU` layout distinguishes OP2
+  from OP3 and identifies the final slot in a group with word0 bit 31. The
+  legacy decompiler lists `MOV` as OP2 opcode `0x019`. These are useful
+  cross-reference points for the next decoder step, not independent Latte
+  hardware verification.
 - Decaf keeps its GPU implementation under
   [`src/libgpu`](https://github.com/decaf-emu/decaf-emu/tree/master/src/libgpu)
   and its GFD raw shader-block reader at
