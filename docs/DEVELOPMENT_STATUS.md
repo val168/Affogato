@@ -1,5 +1,17 @@
 # Affogato Development Status
 
+## Frontend Latte vertex-subset diagnostic mode (2026-11-25)
+
+The game-launch UI now offers an explicit experimental mode that routes normal
+captured GX2 draw snapshots through the existing bounded Latte vertex-SPIR-V
+diagnostic policy. It keeps the existing float2 host-diagnostic mode as a
+separate choice and stays disabled by default. This can probe guest draws whose
+vertex inputs, fetch state, shader subset, and supported render target match the
+current implementation. It still uses a diagnostic fragment shader and CPU
+color-buffer rendering; full game compatibility and normal GPU draw execution
+are not established. Debug and Release builds passed, and both full CTest
+suites passed 27/27. The new option has not yet been run against a game title.
+
 ## Integer OP2 shader Vulkan readback (2026-11-25)
 
 Added a second controlled vertex-shader fixture that applies OP2 `AND_INT`

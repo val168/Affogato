@@ -977,12 +977,15 @@ void launch_game(
     std::jthread& thread,
     affogato::ExecutionMode execution_mode,
     bool capture_guest_draw_vertex_data,
-    bool synchronize_draw_capture)
+    bool synchronize_draw_capture,
+    bool use_latte_vertex_shader_subset)
 {
     if (worker.running.exchange(true))
     {
         return;
     }
+    capture_guest_draw_vertex_data =
+        capture_guest_draw_vertex_data || use_latte_vertex_shader_subset;
     if (thread.joinable())
     {
         thread.request_stop();
@@ -1340,6 +1343,7 @@ int run_frontend()
     bool grid_view = false;
     bool use_recompiler = false;
     bool use_diagnostic_guest_draws = false;
+    bool use_latte_vertex_shader_subset = false;
     bool done = false;
     std::uint64_t shown_guest_clear_sequence = 0U;
     std::uint64_t shown_guest_scanout_sequence = 0U;
@@ -1495,8 +1499,12 @@ int run_frontend()
                         launch_game(games[i].rpx_path, worker, launch_thread,
                             use_recompiler ? affogato::ExecutionMode::recompiler
                                            : affogato::ExecutionMode::interpreter,
-                            use_diagnostic_guest_draws,
-                            use_diagnostic_guest_draws && vulkan_output.has_value());
+                            use_diagnostic_guest_draws ||
+                                use_latte_vertex_shader_subset,
+                            (use_diagnostic_guest_draws ||
+                             use_latte_vertex_shader_subset) &&
+                                vulkan_output.has_value(),
+                            use_latte_vertex_shader_subset);
                     }
                 }
                 ImGui::SameLine(260);
@@ -1524,8 +1532,12 @@ int run_frontend()
                             launch_game(games[i].rpx_path, worker, launch_thread,
                                 use_recompiler ? affogato::ExecutionMode::recompiler
                                                : affogato::ExecutionMode::interpreter,
-                                use_diagnostic_guest_draws,
-                                use_diagnostic_guest_draws && vulkan_output.has_value());
+                                use_diagnostic_guest_draws ||
+                                    use_latte_vertex_shader_subset,
+                                (use_diagnostic_guest_draws ||
+                                 use_latte_vertex_shader_subset) &&
+                                    vulkan_output.has_value(),
+                                use_latte_vertex_shader_subset);
                         }
                     }
                     ImGui::TextWrapped("%s", path_utf8(games[i].rpx_path).c_str());
@@ -1548,8 +1560,12 @@ int run_frontend()
                 launch_game(games[*selected_game].rpx_path, worker, launch_thread,
                     use_recompiler ? affogato::ExecutionMode::recompiler
                                    : affogato::ExecutionMode::interpreter,
-                    use_diagnostic_guest_draws,
-                    use_diagnostic_guest_draws && vulkan_output.has_value());
+                    use_diagnostic_guest_draws ||
+                        use_latte_vertex_shader_subset,
+                    (use_diagnostic_guest_draws ||
+                     use_latte_vertex_shader_subset) &&
+                        vulkan_output.has_value(),
+                    use_latte_vertex_shader_subset);
             }
             ImGui::EndDisabled();
         }
@@ -1559,6 +1575,20 @@ int run_frontend()
                 "Diagnostic GX2 draws (host shader, host window)",
                 &use_diagnostic_guest_draws) && vulkan_output)
         {
+            if (use_diagnostic_guest_draws)
+            {
+                use_latte_vertex_shader_subset = false;
+            }
+            vulkan_output->clear_guest_diagnostic_draws();
+        }
+        if (ImGui::Checkbox(
+                "Experimental Latte vertex subset (diagnostic fragment)",
+                &use_latte_vertex_shader_subset) && vulkan_output)
+        {
+            if (use_latte_vertex_shader_subset)
+            {
+                use_diagnostic_guest_draws = false;
+            }
             vulkan_output->clear_guest_diagnostic_draws();
         }
         ImGui::EndDisabled();
@@ -1629,10 +1659,18 @@ int run_frontend()
                     guest_scanout = std::move(worker.latest_guest_scanout);
                 }
             }
-            const auto draw_policy =
-                use_diagnostic_guest_draws
-                ? affogato::gpu::vulkan::GuestDrawPolicy::diagnostic_float2_position
-                : affogato::gpu::vulkan::GuestDrawPolicy::capture_only;
+            auto draw_policy =
+                affogato::gpu::vulkan::GuestDrawPolicy::capture_only;
+            if (use_diagnostic_guest_draws)
+            {
+                draw_policy = affogato::gpu::vulkan::GuestDrawPolicy::
+                    diagnostic_float2_position;
+            }
+            if (use_latte_vertex_shader_subset)
+            {
+                draw_policy = affogato::gpu::vulkan::GuestDrawPolicy::
+                    diagnostic_latte_vertex_spirv_position_base_zero;
+            }
             try
             {
                 vulkan_output->consume_guest_commands(guest_commands, draw_policy);
