@@ -28617,8 +28617,11 @@ void gx2_set_context_state_hle_tests()
         context_state + resource_area_offset, 0x55667788U);
     core.memory.write32_be(
         context_state + sampler_area_offset, 0x66778899U);
+    core.memory.write32_be(context_state + 0x256U * 4U, 4U);
 
     core.gx2.initialized = true;
+    core.gx2.pm4_draw_state.base_vertex = 0U;
+    core.gx2.pm4_draw_state.instance_count = 1U;
     core.gx2.current_context_state = 0x76543210U;
     core.gx2.context_state_shadowing_enabled = false;
     core.gx2.pending_commands.push_back(
@@ -28669,6 +28672,25 @@ void gx2_set_context_state_hle_tests()
         command_search_begin = found + 1;
     }
     assert(core.gx2.pending_commands.front() == prior_commands.front());
+    assert(core.gx2.pm4_draw_state.primitive_mode == 4U);
+    assert(core.gx2.pm4_draw_state.instance_count == 1U);
+
+    // A later PM4 draw uses the restored context-register shadow values.
+    constexpr std::uint32_t restored_state_draw_address = 0x100U;
+    core.memory.write32_be(restored_state_draw_address, 0xC0012D00U);
+    core.memory.write32_be(restored_state_draw_address + 4U, 3U);
+    core.memory.write32_be(restored_state_draw_address + 8U, 0U);
+    core.state.cia = core.hle.bind_import(
+        "gx2", "GX2DirectCallDisplayList");
+    core.state.lr = return_address;
+    core.state.gpr[3] = restored_state_draw_address;
+    core.state.gpr[4] = 3U * sizeof(std::uint32_t);
+    const RunResult restored_state_draw = core.run(1U);
+    assert(restored_state_draw.reason == StopReason::instruction_limit);
+    assert(core.gx2.pending_commands.back().type == Gx2CommandType::draw);
+    assert((core.gx2.pending_commands.back().draw_call ==
+            std::optional<Gx2DrawCall>{Gx2DrawCall{
+                4U, 3U, false, 0U, 0U, 0U, 1U, 0U, 0U}}));
 
     // Type-2 filler and Type-3 SET_CONTEXT_REG packets are decoded from guest
     // big-endian words and appended in packet order.

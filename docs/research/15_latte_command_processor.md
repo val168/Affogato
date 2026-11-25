@@ -88,7 +88,10 @@ count, and base vertex; indexed packets also require a current `INDEX_TYPE`.
 Affogato now retains this supported draw-register subset across successful
 direct-call lists. A list is decoded against a temporary state copy and does
 not publish register changes if packet or draw-memory validation fails. All
-supported draw kinds currently require a zero draw-initiator
+zero-length `GX2SetContextState` restores also feed restored values for these
+register addresses into the same subset. Other context fields are not inferred
+as draw state; only the recognized draw-register addresses update this cache.
+All supported draw kinds currently require a zero draw-initiator
 word. Indexed packets must satisfy `count <= MAX_SIZE`, use an index type
 already understood by the existing draw snapshot path, and specify a
 low-32-bit physical address inside Affogato's flat guest-memory backing. The
@@ -268,7 +271,9 @@ verified against a Latte fixture or Wii U behavior.
   rejection. The direct-call test also verifies an ordered unpredicated
   `DRAW_INDEX_AUTO`, `DRAW_INDEX_2`, and 32-bit `DRAW_INDEX_IMMD`, draw-time
   guest-byte capture, state reuse across list calls, and rollback of register
-  state when a later draw validation fails. It also covers immediate-payload
+  state when a later draw validation fails. Context-state tests verify that a
+  restored primitive register is used by a later draw. They also cover
+  immediate-payload
   count and index-width rejection, maximum count, physical-range, and
   nonzero-base-vertex rejection,
   malformed-payload and missing-state atomicity, unsupported-opcode atomicity,

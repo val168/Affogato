@@ -925,6 +925,38 @@ std::vector<Gx2Command> read_gx2_context_restore_commands(
     return commands;
 }
 
+void update_gx2_pm4_draw_state(
+    Gx2Pm4DrawState& draw_state,
+    std::uint32_t register_address,
+    std::uint32_t value)
+{
+    if (register_address == affogato::gpu::
+            latte_vgt_primitive_type_register_address)
+    {
+        draw_state.primitive_mode = value;
+    }
+    else if (register_address == affogato::gpu::
+                 latte_vgt_dma_num_instances_register_address)
+    {
+        draw_state.instance_count = value;
+    }
+    else if (register_address == affogato::gpu::
+                 latte_vgt_dma_index_type_register_address)
+    {
+        draw_state.index_type = value;
+    }
+    else if (register_address == affogato::gpu::
+                 latte_sq_vtx_base_vtx_loc_register_address)
+    {
+        draw_state.base_vertex = value;
+    }
+    else if (register_address == affogato::gpu::
+                 latte_sq_vtx_start_inst_loc_register_address)
+    {
+        draw_state.base_instance = value;
+    }
+}
+
 std::vector<Gx2Command> decode_gx2_pm4_display_list_commands(
     std::span<const std::uint8_t> display_list_bytes,
     const char* api_name,
@@ -991,15 +1023,6 @@ std::vector<Gx2Command> decode_gx2_pm4_display_list_commands(
             " at word offset " +
             std::to_string(decoded.error_word_offset));
     }
-
-    constexpr std::uint32_t primitive_type_register =
-        affogato::gpu::latte_vgt_primitive_type_register_address;
-    constexpr std::uint32_t num_instances_register =
-        affogato::gpu::latte_vgt_dma_num_instances_register_address;
-    constexpr std::uint32_t base_vertex_register =
-        affogato::gpu::latte_sq_vtx_base_vtx_loc_register_address;
-    constexpr std::uint32_t base_instance_register =
-        affogato::gpu::latte_sq_vtx_start_inst_loc_register_address;
 
     Gx2Pm4DrawState updated_draw_state = pm4_draw_state;
     std::vector<Gx2Command> commands;
@@ -1153,32 +1176,8 @@ std::vector<Gx2Command> decode_gx2_pm4_display_list_commands(
             command_type,
             write.address,
             write.value});
-
-        if (write.space == affogato::gpu::LatteRegisterSpace::config &&
-            write.address == primitive_type_register)
-        {
-            updated_draw_state.primitive_mode = write.value;
-        }
-        else if (write.space == affogato::gpu::LatteRegisterSpace::context &&
-                 write.address == num_instances_register)
-        {
-            updated_draw_state.instance_count = write.value;
-        }
-        else if (write.space == affogato::gpu::LatteRegisterSpace::context &&
-                 write.address == affogato::gpu::latte_vgt_dma_index_type_register_address)
-        {
-            updated_draw_state.index_type = write.value;
-        }
-        else if (write.space == affogato::gpu::LatteRegisterSpace::control &&
-                 write.address == base_vertex_register)
-        {
-            updated_draw_state.base_vertex = write.value;
-        }
-        else if (write.space == affogato::gpu::LatteRegisterSpace::control &&
-                 write.address == base_instance_register)
-        {
-            updated_draw_state.base_instance = write.value;
-        }
+        update_gx2_pm4_draw_state(
+            updated_draw_state, write.address, write.value);
     }
 
     pm4_draw_state = updated_draw_state;
@@ -5704,6 +5703,13 @@ void register_gx2_hle(HleDispatcher& dispatcher)
             {
                 restore_commands =
                     read_gx2_context_restore_commands(context_bytes);
+                for (const Gx2Command& command : restore_commands)
+                {
+                    update_gx2_pm4_draw_state(
+                        updated_pm4_draw_state,
+                        command.register_address,
+                        command.value);
+                }
             }
             else
             {

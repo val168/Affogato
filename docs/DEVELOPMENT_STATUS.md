@@ -41,6 +41,12 @@ rollback. Debug and Release builds succeeded, and CTest passed 2/2 in each
 configuration. This improves packet-state continuity; it does not add indirect
 buffers, raw ring processing, guest shader execution, or guest render-target
 writes.
+Zero-length `GX2SetContextState` shadow restores now update the same supported
+draw-state subset when they emit one of its register addresses. A regression
+test restores primitive mode, then submits a draw-only direct-call list using
+that value. The saved-context ranges do not contain every draw-state register;
+values absent from the restore stream remain unchanged. Debug and Release
+builds and CTest passed 2/2 in both configurations.
 The packet research is cross-checked against AMD's R6xx/R7xx family guides,
 Cemu, and Decaf; there is still no Latte-produced fixture. References disagree
 on whether `INDEX_TYPE` updates one or two shadow slots and whether a zero
