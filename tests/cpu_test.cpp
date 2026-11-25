@@ -32302,6 +32302,53 @@ void latte_control_flow_decoder_tests()
     assert((integer_arithmetic_result == expected_integer_arithmetic));
     assert((shader_registers[4U] == expected_integer_arithmetic));
 
+    using affogato::gpu::latte_alu_op2_maximum_signed_integer_opcode;
+    using affogato::gpu::latte_alu_op2_maximum_unsigned_integer_opcode;
+    using affogato::gpu::latte_alu_op2_minimum_signed_integer_opcode;
+    using affogato::gpu::latte_alu_op2_minimum_unsigned_integer_opcode;
+    constexpr std::array<std::uint16_t, 4U> integer_minmax_opcodes{
+        latte_alu_op2_maximum_signed_integer_opcode,
+        latte_alu_op2_minimum_signed_integer_opcode,
+        latte_alu_op2_maximum_unsigned_integer_opcode,
+        latte_alu_op2_minimum_unsigned_integer_opcode};
+    auto integer_minmax_slots = alu_slots;
+    for (std::size_t component = 0U;
+         component < integer_minmax_slots.size();
+         ++component)
+    {
+        auto& slot = integer_minmax_slots[component];
+        slot.word0 = (slot.word0 & ~(0x1FFU << 13U)) | (2U << 13U);
+        slot.word0 = (slot.word0 & ~(0x03U << 23U)) |
+            (static_cast<std::uint32_t>(component) << 23U);
+        slot.word1 = (slot.word1 & ~(0x7FFU << 7U)) |
+            (static_cast<std::uint32_t>(integer_minmax_opcodes[component])
+             << 7U);
+        slot.word1 = (slot.word1 & ~(0x7FU << 21U)) | (5U << 21U);
+    }
+    const auto integer_minmax_groups =
+        decode_latte_alu_op2_groups(integer_minmax_slots);
+    assert(integer_minmax_groups.size() == 1U);
+    shader_registers[1U] = {
+        0xFFFFFFFFU,
+        0x80000000U,
+        0xFFFFFFFFU,
+        0x00000005U};
+    shader_registers[2U] = {
+        0x00000000U,
+        0x7FFFFFFFU,
+        0x80000000U,
+        0xFFFFFFFBU};
+    const LatteShaderRegister expected_integer_minmax{
+        0x00000000U,
+        0x80000000U,
+        0xFFFFFFFFU,
+        0x00000005U};
+    const auto integer_minmax_result = execute_latte_alu_op2_vector_group(
+        integer_minmax_groups[0U],
+        shader_registers);
+    assert((integer_minmax_result == expected_integer_minmax));
+    assert((shader_registers[5U] == expected_integer_minmax));
+
     auto move_modifier_slots = alu_slots;
     move_modifier_slots[0U].word1 |= 1U;
     move_modifier_slots[1U].word0 |= 1U << 12U;

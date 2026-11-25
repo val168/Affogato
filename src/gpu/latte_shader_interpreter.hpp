@@ -19,6 +19,14 @@ inline constexpr std::uint16_t latte_alu_op2_xor_integer_opcode = 0x032U;
 inline constexpr std::uint16_t latte_alu_op2_not_integer_opcode = 0x033U;
 inline constexpr std::uint16_t latte_alu_op2_add_integer_opcode = 0x034U;
 inline constexpr std::uint16_t latte_alu_op2_subtract_integer_opcode = 0x035U;
+inline constexpr std::uint16_t latte_alu_op2_maximum_signed_integer_opcode =
+    0x036U;
+inline constexpr std::uint16_t latte_alu_op2_minimum_signed_integer_opcode =
+    0x037U;
+inline constexpr std::uint16_t latte_alu_op2_maximum_unsigned_integer_opcode =
+    0x038U;
+inline constexpr std::uint16_t latte_alu_op2_minimum_unsigned_integer_opcode =
+    0x039U;
 inline constexpr std::uint16_t latte_alu_source_zero_selector = 248U;
 inline constexpr std::uint16_t latte_alu_source_one_float_selector = 249U;
 inline constexpr std::uint16_t latte_alu_source_one_integer_selector = 250U;
@@ -154,7 +162,11 @@ using LatteShaderRegister =
         instruction.opcode != latte_alu_op2_xor_integer_opcode &&
         instruction.opcode != latte_alu_op2_not_integer_opcode &&
         instruction.opcode != latte_alu_op2_add_integer_opcode &&
-        instruction.opcode != latte_alu_op2_subtract_integer_opcode)
+        instruction.opcode != latte_alu_op2_subtract_integer_opcode &&
+        instruction.opcode != latte_alu_op2_maximum_signed_integer_opcode &&
+        instruction.opcode != latte_alu_op2_minimum_signed_integer_opcode &&
+        instruction.opcode != latte_alu_op2_maximum_unsigned_integer_opcode &&
+        instruction.opcode != latte_alu_op2_minimum_unsigned_integer_opcode)
     {
         throw std::runtime_error(
             "Latte integer evaluation received an unsupported opcode");
@@ -199,6 +211,9 @@ using LatteShaderRegister =
         instruction.source1_channel,
         guest_registers,
         incoming_previous_vector);
+    constexpr std::uint32_t signed_order_bias = 0x80000000U;
+    const std::uint32_t signed_order_source0 = source0 ^ signed_order_bias;
+    const std::uint32_t signed_order_source1 = source1 ^ signed_order_bias;
 
     switch (instruction.opcode)
     {
@@ -206,6 +221,14 @@ using LatteShaderRegister =
         return source0 + source1;
     case latte_alu_op2_subtract_integer_opcode:
         return source0 - source1;
+    case latte_alu_op2_maximum_signed_integer_opcode:
+        return signed_order_source0 >= signed_order_source1 ? source0 : source1;
+    case latte_alu_op2_minimum_signed_integer_opcode:
+        return signed_order_source0 <= signed_order_source1 ? source0 : source1;
+    case latte_alu_op2_maximum_unsigned_integer_opcode:
+        return source0 >= source1 ? source0 : source1;
+    case latte_alu_op2_minimum_unsigned_integer_opcode:
+        return source0 <= source1 ? source0 : source1;
     case latte_alu_op2_and_integer_opcode:
         return source0 & source1;
     case latte_alu_op2_or_integer_opcode:
@@ -265,6 +288,10 @@ execute_latte_alu_op2_vector_group(
         case latte_alu_op2_not_integer_opcode:
         case latte_alu_op2_add_integer_opcode:
         case latte_alu_op2_subtract_integer_opcode:
+        case latte_alu_op2_maximum_signed_integer_opcode:
+        case latte_alu_op2_minimum_signed_integer_opcode:
+        case latte_alu_op2_maximum_unsigned_integer_opcode:
+        case latte_alu_op2_minimum_unsigned_integer_opcode:
             group_vector[component] =
                 evaluate_latte_alu_integer_value(
                     instruction,

@@ -426,12 +426,13 @@ verified against Latte hardware.
 
 Added the R700-family inline source selectors `248`–`252` and `NOT_INT` opcode
 `0x033` to the bounded four-lane OP2 path. The decoder records the source
-absolute modifiers at word1 bits 0 and 1; the current raw-bit evaluators reject
-them rather than treating floating-point absolute-value behavior as a no-op.
-Tests check exact constant bit patterns, decode/execute AND, OR, XOR, and NOT
-groups, and verify unsupported modifiers fail before writeback. Debug and
-Release builds succeeded; CTest passed 2/2 in each, and `git diff --check` is
-clean. Behavior is not verified against Latte hardware.
+absolute modifiers at word1 bits 0 and 1. At that stage the raw-bit evaluators
+rejected them pending floating-point semantics; the following MOV-modifier
+checkpoint added the documented source-0 behavior. Tests check exact constant
+bit patterns, decode/execute AND, OR, XOR, and NOT groups, and verify that
+unsupported integer modifiers fail before writeback. Debug and Release builds
+succeeded; CTest passed 2/2 in each, and `git diff --check` is clean. Behavior
+is not verified against Latte hardware.
 
 ## Latte MOV source modifiers (2026-11-25)
 
@@ -449,3 +450,12 @@ unsigned 32-bit arithmetic, preserving the documented wraparound bit behavior
 without signed-overflow undefined behavior. Four-lane group tests cover add
 carry, subtract borrow, and high-bit values. Debug and Release builds and CTest
 passed 2/2 in both configurations; Latte hardware behavior remains unverified.
+
+## Latte integer min/max (2026-11-25)
+
+Added `MAX_INT`, `MIN_INT`, `MAX_UINT`, and `MIN_UINT` OP2 operations
+(`0x036`–`0x039`). Signed comparisons use an order-preserving sign-bit bias on
+the unsigned operands, avoiding host signed-conversion assumptions. Group
+tests exercise values on both sides of the signed boundary and unsigned
+high-bit ordering. Debug and Release builds and CTest passed 2/2 in both
+configurations; Latte hardware behavior remains unverified.
