@@ -32257,6 +32257,51 @@ void latte_control_flow_decoder_tests()
     assert((integer_logic_vector == expected_integer_logic_vector));
     assert((shader_registers[3U] == expected_integer_logic_vector));
 
+    using affogato::gpu::latte_alu_op2_add_integer_opcode;
+    using affogato::gpu::latte_alu_op2_subtract_integer_opcode;
+    constexpr std::array<std::uint16_t, 4U> integer_arithmetic_opcodes{
+        latte_alu_op2_add_integer_opcode,
+        latte_alu_op2_subtract_integer_opcode,
+        latte_alu_op2_add_integer_opcode,
+        latte_alu_op2_subtract_integer_opcode};
+    auto integer_arithmetic_slots = alu_slots;
+    for (std::size_t component = 0U;
+         component < integer_arithmetic_slots.size();
+         ++component)
+    {
+        auto& slot = integer_arithmetic_slots[component];
+        slot.word0 = (slot.word0 & ~(0x1FFU << 13U)) | (2U << 13U);
+        slot.word0 = (slot.word0 & ~(0x03U << 23U)) |
+            (static_cast<std::uint32_t>(component) << 23U);
+        slot.word1 = (slot.word1 & ~(0x7FFU << 7U)) |
+            (static_cast<std::uint32_t>(integer_arithmetic_opcodes[component])
+             << 7U);
+        slot.word1 = (slot.word1 & ~(0x7FU << 21U)) | (4U << 21U);
+    }
+    const auto integer_arithmetic_groups =
+        decode_latte_alu_op2_groups(integer_arithmetic_slots);
+    assert(integer_arithmetic_groups.size() == 1U);
+    shader_registers[1U] = {
+        0xFFFFFFFFU,
+        0x7FFFFFFFU,
+        0x80000000U,
+        0x00000000U};
+    shader_registers[2U] = {
+        0x00000001U,
+        0x00000001U,
+        0x80000000U,
+        0x00000001U};
+    const LatteShaderRegister expected_integer_arithmetic{
+        0x00000000U,
+        0x7FFFFFFEU,
+        0x00000000U,
+        0xFFFFFFFFU};
+    const auto integer_arithmetic_result = execute_latte_alu_op2_vector_group(
+        integer_arithmetic_groups[0U],
+        shader_registers);
+    assert((integer_arithmetic_result == expected_integer_arithmetic));
+    assert((shader_registers[4U] == expected_integer_arithmetic));
+
     auto move_modifier_slots = alu_slots;
     move_modifier_slots[0U].word1 |= 1U;
     move_modifier_slots[1U].word0 |= 1U << 12U;

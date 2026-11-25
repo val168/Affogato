@@ -308,9 +308,10 @@ unterminated final group. This does not parse literal payload slots or execute
 groups. The pass-through fixture contains one four-slot group and no literals.
 
 `execute_latte_alu_op2_vector_group()` supports four ordered X/Y/Z/W slots with
-MOV or integer AND/OR/XOR/NOT, absolute GPR or explicitly supplied previous-PV
-sources, inline constants `248`–`252`, write masks enabled, and no other
-modifiers. The OP2 decoder records `SRC0_ABS` and `SRC1_ABS` from word1 bits 0
+MOV or integer AND/OR/XOR/NOT/ADD_INT/SUB_INT, absolute GPR or explicitly
+supplied previous-PV sources, inline constants `248`–`252`, write masks
+enabled, and no other modifiers. The OP2 decoder records `SRC0_ABS` and
+`SRC1_ABS` from word1 bits 0
 and 1. MOV applies its source absolute and negate flags as binary32 sign-bit
 operations, in that order; the integer logic evaluator rejects both flags.
 This follows the R700 instruction-family semantics and retains all non-sign
@@ -318,8 +319,9 @@ bits, but it has not been checked against Latte hardware. The executor gathers
 all sources before updating destination lanes and returns the resulting vector
 value. A missing PV input is rejected before any destination write. Tests cover
 bit-preserving and modified MOV values, same-group source/destination overlap,
-PV forwarding, inline constant bit patterns, integer logical truth tables, and
-rejection without partial register writes.
+PV forwarding, inline constant bit patterns, integer logical truth tables,
+wrapping integer arithmetic boundaries, and rejection without partial register
+writes.
 The group behavior follows the R700-family reference and the assembled fixture;
 it is not independently verified against Latte hardware. PS, literal and
 constant-file reads, other groups/opcodes, clause execution, shader IR, and
@@ -334,6 +336,14 @@ instructions to `0x030`–`0x033`. Affogato tests those raw opcode fields throug
 its decoder and checks the bitwise results. These references are
 family/implementation evidence; no Latte hardware output has been captured
 for this subset.
+
+The R700 manual documents `ADD_INT` as `src0 + src1` (opcode `0x034`) and
+`SUB_INT` as integer subtraction (opcode `0x035`) in Chapter 9 and the OP2
+opcode table in Chapter 10. Their bounded evaluator uses `std::uint32_t`
+addition/subtraction, giving defined modulo-2^32 behavior independent of signed
+overflow. Tests include carry out, borrow, and high-bit operands. This follows
+the documented signed/unsigned agnostic integer behavior, without Latte
+hardware validation.
 
 The R700 microcode table assigns selectors `248`–`252` to the inline constants
 `0.0`, `1.0`, integer `1`, integer `-1`, and `0.5`; selector `254` is PV and

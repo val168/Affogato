@@ -441,3 +441,11 @@ then negation. The integer logic subset continues to reject these flags. Tests
 cover signed zero, NaN payload preservation, infinity, and combined modifiers.
 Debug and Release builds and CTest passed 2/2 in both configurations; the
 behavior remains unverified on Latte hardware.
+
+## Latte integer ADD/SUB (2026-11-25)
+
+Added R700-family OP2 `ADD_INT` (`0x034`) and `SUB_INT` (`0x035`). They use
+unsigned 32-bit arithmetic, preserving the documented wraparound bit behavior
+without signed-overflow undefined behavior. Four-lane group tests cover add
+carry, subtract borrow, and high-bit values. Debug and Release builds and CTest
+passed 2/2 in both configurations; Latte hardware behavior remains unverified.

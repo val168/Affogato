@@ -17,6 +17,8 @@ inline constexpr std::uint16_t latte_alu_op2_and_integer_opcode = 0x030U;
 inline constexpr std::uint16_t latte_alu_op2_or_integer_opcode = 0x031U;
 inline constexpr std::uint16_t latte_alu_op2_xor_integer_opcode = 0x032U;
 inline constexpr std::uint16_t latte_alu_op2_not_integer_opcode = 0x033U;
+inline constexpr std::uint16_t latte_alu_op2_add_integer_opcode = 0x034U;
+inline constexpr std::uint16_t latte_alu_op2_subtract_integer_opcode = 0x035U;
 inline constexpr std::uint16_t latte_alu_source_zero_selector = 248U;
 inline constexpr std::uint16_t latte_alu_source_one_float_selector = 249U;
 inline constexpr std::uint16_t latte_alu_source_one_integer_selector = 250U;
@@ -140,8 +142,8 @@ using LatteShaderRegister =
     return source_value;
 }
 
-// Evaluate supported GPR, inline-constant, and prior-PV integer logic operands.
-[[nodiscard]] inline std::uint32_t evaluate_latte_alu_integer_logic_value(
+// Evaluate supported GPR, inline-constant, and prior-PV integer operands.
+[[nodiscard]] inline std::uint32_t evaluate_latte_alu_integer_value(
     const LatteAluOp2Instruction& instruction,
     std::span<const LatteShaderRegister> guest_registers,
     const std::optional<LatteShaderRegister>& incoming_previous_vector =
@@ -150,10 +152,12 @@ using LatteShaderRegister =
     if (instruction.opcode != latte_alu_op2_and_integer_opcode &&
         instruction.opcode != latte_alu_op2_or_integer_opcode &&
         instruction.opcode != latte_alu_op2_xor_integer_opcode &&
-        instruction.opcode != latte_alu_op2_not_integer_opcode)
+        instruction.opcode != latte_alu_op2_not_integer_opcode &&
+        instruction.opcode != latte_alu_op2_add_integer_opcode &&
+        instruction.opcode != latte_alu_op2_subtract_integer_opcode)
     {
         throw std::runtime_error(
-            "Latte integer logic evaluation received an unsupported opcode");
+            "Latte integer evaluation received an unsupported opcode");
     }
 
     if (instruction.source0_relative || instruction.source1_relative ||
@@ -198,6 +202,10 @@ using LatteShaderRegister =
 
     switch (instruction.opcode)
     {
+    case latte_alu_op2_add_integer_opcode:
+        return source0 + source1;
+    case latte_alu_op2_subtract_integer_opcode:
+        return source0 - source1;
     case latte_alu_op2_and_integer_opcode:
         return source0 & source1;
     case latte_alu_op2_or_integer_opcode:
@@ -255,8 +263,10 @@ execute_latte_alu_op2_vector_group(
         case latte_alu_op2_or_integer_opcode:
         case latte_alu_op2_xor_integer_opcode:
         case latte_alu_op2_not_integer_opcode:
+        case latte_alu_op2_add_integer_opcode:
+        case latte_alu_op2_subtract_integer_opcode:
             group_vector[component] =
-                evaluate_latte_alu_integer_logic_value(
+                evaluate_latte_alu_integer_value(
                     instruction,
                     read_only_registers,
                     incoming_previous_vector);
