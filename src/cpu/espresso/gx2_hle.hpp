@@ -304,6 +304,17 @@ struct Gx2SamplerBinding
     bool operator==(const Gx2SamplerBinding&) const = default;
 };
 
+struct Gx2Pm4DrawState
+{
+    std::optional<std::uint32_t> primitive_mode;
+    std::optional<std::uint32_t> instance_count;
+    std::optional<std::uint32_t> index_type;
+    std::optional<std::uint32_t> base_vertex;
+    std::uint32_t base_instance{};
+
+    bool operator==(const Gx2Pm4DrawState&) const = default;
+};
+
 struct Gx2RuntimeState
 {
     bool initialized{};
@@ -417,6 +428,7 @@ struct Gx2RuntimeState
     std::uint32_t current_context_state_flags{};
     bool context_state_profiling_enabled{};
     bool context_state_shadow_display_list_requested{};
+    Gx2Pm4DrawState pm4_draw_state;
     std::vector<Gx2Command> pending_commands;
 
     bool operator==(const Gx2RuntimeState&) const = default;

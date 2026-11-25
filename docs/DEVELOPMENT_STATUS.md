@@ -6,10 +6,13 @@
 decoder. It accepts Type-0 writes in supported config/context and
 control-constant windows, Type-2 filler, Type-3 NOP, register-set packets,
 `INDEX_TYPE`, `NUM_INSTANCES`, unpredicated `DRAW_INDEX_AUTO`, and a bounded
-`DRAW_INDEX_2` subset. Draw packets require primitive mode, instance count,
-and base vertex earlier in the same list; indexed packets also require
-`INDEX_TYPE`. Direct-call input is validated and copied from guest memory
-before decoding; malformed or unsupported streams do not append partial
+`DRAW_INDEX_2` and 32-bit `DRAW_INDEX_IMMD` subsets. The supported draw-register
+state (primitive mode, instance count, index type, base vertex, and base
+instance) persists across successful direct-call lists, matching the
+command-processor register-shadow model. Each list is decoded using a
+temporary state copy and commits register changes only after packet and draw
+memory validation succeeds. Direct-call input is validated and copied from
+guest memory before decoding; malformed or unsupported streams do not append partial
 command batches. Indexed draws currently accept only zero-high-byte addresses
 that resolve to a bounded range in flat guest physical backing memory, and
 reject counts greater than `MAX_SIZE`. Indexed draw records carry base vertex
@@ -27,6 +30,17 @@ memory-indexed, and immediate-indexed display-list draws, validating their
 command snapshots and diagnostic Vulkan submission on an NVIDIA GeForce RTX
 5070 Laptop GPU. Its output uses
 host shaders and does not verify Latte shader execution.
+
+## PM4 draw-state persistence (2026-11-25)
+
+The supported draw-register subset is now retained between direct-call display
+lists, so a draw packet can use state written by an earlier list. Invalid
+packets and failed draw-memory validation leave both pending commands and the
+retained subset unchanged. Tests cover cross-list state reuse and failed-list
+rollback. Debug and Release builds succeeded, and CTest passed 2/2 in each
+configuration. This improves packet-state continuity; it does not add indirect
+buffers, raw ring processing, guest shader execution, or guest render-target
+writes.
 The packet research is cross-checked against AMD's R6xx/R7xx family guides,
 Cemu, and Decaf; there is still no Latte-produced fixture. References disagree
 on whether `INDEX_TYPE` updates one or two shadow slots and whether a zero

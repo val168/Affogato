@@ -29179,6 +29179,31 @@ void gx2_direct_call_display_list_hle_tests()
     assert(draw_command.draw_vertex_data[0U].is_valid);
     assert(draw_command.draw_vertex_data[0U].bytes.size() == 24U);
 
+    // PM4 draw setup is register state and survives a later direct-call list.
+    constexpr std::array<std::uint32_t, 3U> stateful_auto_draw_words{
+        0xC0012D00U, 3U, 0U};
+    for (std::size_t index = 0U; index < stateful_auto_draw_words.size(); ++index)
+    {
+        core.memory.write32_be(
+            display_list_address + static_cast<std::uint32_t>(
+                index * sizeof(std::uint32_t)),
+            stateful_auto_draw_words[index]);
+    }
+
+    const std::size_t commands_before_stateful_draw =
+        core.gx2.pending_commands.size();
+    const RunResult stateful_draw = invoke(
+        display_list_address,
+        static_cast<std::uint32_t>(stateful_auto_draw_words.size() *
+                                   sizeof(std::uint32_t)));
+    assert(stateful_draw.reason == StopReason::instruction_limit);
+    assert(core.gx2.pending_commands.size() ==
+           commands_before_stateful_draw + 1U);
+    assert(core.gx2.pending_commands.back().type == Gx2CommandType::draw);
+    assert((core.gx2.pending_commands.back().draw_call ==
+            std::optional<Gx2DrawCall>{Gx2DrawCall{
+                4U, 3U, false, 0U, 0U, 0U, 1U, 0U, 0U}}));
+
     // DRAW_INDEX_2 uses a physical index-buffer address and a bounded count.
     // The supported low 32-bit physical subset maps to flat guest RAM.
     constexpr std::array<std::uint32_t, 16U> indexed_draw_packet_words{
@@ -29285,6 +29310,7 @@ void gx2_direct_call_display_list_hle_tests()
         core.gx2.pending_commands;
     auto mismatched_immediate_draw_words = immediate_indexed_draw_words;
     mismatched_immediate_draw_words[11U] = 2U;
+    mismatched_immediate_draw_words[5U] = 5U;
     for (std::size_t index = 0U;
          index < mismatched_immediate_draw_words.size();
          ++index)
@@ -29294,6 +29320,8 @@ void gx2_direct_call_display_list_hle_tests()
                 index * sizeof(std::uint32_t)),
             mismatched_immediate_draw_words[index]);
     }
+    const Gx2Pm4DrawState draw_state_before_invalid_list =
+        core.gx2.pm4_draw_state;
     const RunResult mismatched_immediate_draw = invoke(
         display_list_address,
         static_cast<std::uint32_t>(mismatched_immediate_draw_words.size() *
@@ -29303,6 +29331,7 @@ void gx2_direct_call_display_list_hle_tests()
                "payload does not match its 32-bit index count") !=
            std::string::npos);
     assert(core.gx2.pending_commands == commands_before_invalid_immediate_draw);
+    assert(core.gx2.pm4_draw_state == draw_state_before_invalid_list);
 
     auto unsupported_immediate_index_type_words = immediate_indexed_draw_words;
     unsupported_immediate_index_type_words[7U] = 4U;
@@ -29374,6 +29403,7 @@ void gx2_direct_call_display_list_hle_tests()
     core.memory.write32_be(display_list_address, 0xC0012D00U);
     core.memory.write32_be(display_list_address + 4U, 3U);
     core.memory.write32_be(display_list_address + 8U, 0U);
+    core.gx2.pm4_draw_state = {};
     const RunResult missing_draw_state = invoke(display_list_address, 12U);
     assert(missing_draw_state.reason == StopReason::hle_error);
     assert(missing_draw_state.detail.find(

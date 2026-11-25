@@ -83,9 +83,12 @@ vertex, `SET_CONFIG_REG` for `VGT_PRIMITIVE_TYPE`, `INDEX_TYPE`,
 reference sequence. Affogato accepts unpredicated `DRAW_INDEX_AUTO` and
 `DRAW_INDEX_2` and 32-bit `DRAW_INDEX_IMMD` packets in
 `GX2DirectCallDisplayList`; predicate-bit Type-3 headers remain rejected. Each
-packet requires primitive mode, instance count, and base vertex earlier in the
-same list; indexed packets also require a preceding `INDEX_TYPE`. All supported
-draw kinds currently require a zero draw-initiator
+draw packet uses the current PM4 register values for primitive mode, instance
+count, and base vertex; indexed packets also require a current `INDEX_TYPE`.
+Affogato now retains this supported draw-register subset across successful
+direct-call lists. A list is decoded against a temporary state copy and does
+not publish register changes if packet or draw-memory validation fails. All
+supported draw kinds currently require a zero draw-initiator
 word. Indexed packets must satisfy `count <= MAX_SIZE`, use an index type
 already understood by the existing draw snapshot path, and specify a
 low-32-bit physical address inside Affogato's flat guest-memory backing. The
@@ -246,10 +249,11 @@ verified against a Latte fixture or Wii U behavior.
   one-word `INDEX_TYPE` / `NUM_INSTANCES` packets into typed register commands;
   `GX2SetContextState` rejects draw packets. `GX2DirectCallDisplayList` also
   captures unpredicated `DRAW_INDEX_AUTO`, `DRAW_INDEX_2`, and 32-bit
-  `DRAW_INDEX_IMMD` packets when their required setup state occurs earlier in
-  the same list. The DMA indexed form accepts low-32-bit addresses within flat
-  guest memory, checks `MAX_SIZE`, and snapshots U16/U32 indices plus referenced
-  vertex bytes at HLE time when diagnostic capture is enabled. The immediate
+  `DRAW_INDEX_IMMD` packets using the supported draw-register state accumulated
+  across successful direct-call lists. The DMA indexed form accepts low-32-bit
+  addresses within flat guest memory, checks `MAX_SIZE`, and snapshots U16/U32
+  indices plus referenced vertex bytes at HLE time when diagnostic capture is
+  enabled. The immediate
   form preserves embedded U32 index bytes from the copied command list and
   snapshots referenced vertex bytes at HLE time. Base vertex is carried
   separately and applied when resolving indexed vertex ranges. It rejects
@@ -263,8 +267,10 @@ verified against a Latte fixture or Wii U behavior.
   Type-3 config/context/control register writes, and range and malformed-list
   rejection. The direct-call test also verifies an ordered unpredicated
   `DRAW_INDEX_AUTO`, `DRAW_INDEX_2`, and 32-bit `DRAW_INDEX_IMMD`, draw-time
-  guest-byte capture, immediate-payload/count and index-width rejection,
-  maximum count, physical-range, and nonzero-base-vertex rejection,
+  guest-byte capture, state reuse across list calls, and rollback of register
+  state when a later draw validation fails. It also covers immediate-payload
+  count and index-width rejection, maximum count, physical-range, and
+  nonzero-base-vertex rejection,
   malformed-payload and missing-state atomicity, unsupported-opcode atomicity,
   alignment and guest-memory errors, and empty-list behavior.
 - `Gx2RegisterState::apply` models writes to `SQ_VTX_SEMANTIC_CLEAR` at
