@@ -138,13 +138,19 @@ corresponding register writes after the shader binding. Tests verify command
 ordering and that a draw snapshot contains the resulting table. This is
 cross-checked reference behavior, not Wii U hardware verification.
 
-The fetch-shader instruction encoding remains separate and unresolved:
-Affogato's `GX2InitFetchShaderEx` generated word 0 is tagged
-`VTX_INST_SEMANTIC`, while its word-1 low bits are described in code as a
-direct-GPR destination. The R700 ISA manual specifies these as alternative
-word-1 layouts. `GX2SetFetchShader` captures the bytes but does not decode them
-or populate shader GPRs. The semantic-table helper therefore does not yet
-establish arbitrary guest fetch behavior or populate guest shader inputs.
+The fetch-shader instruction encoding remains separate and unresolved. The
+R700 ISA describes semantic-ID and direct-GPR word-1 layouts as alternatives.
+Decaf's
+[`GX2InitFetchShaderEx`](https://github.com/decaf-emu/decaf-emu/blob/master/src/libdecaf/src/cafe/libraries/gx2/gx2_fetchshader.cpp)
+also emits `VTX_INST_SEMANTIC` in word 0, then sets `attrib.location` through
+the overlapping `SQ_VTX_WORD1_GPR.DST_GPR` field while filling the shared
+format/selector fields. Affogato's generated instruction follows the same
+word pattern. This corroborates the generator layout but does not establish
+whether Latte interprets those low bits as semantic ID, direct GPR, or a
+Latte-specific combination; Decaf's field alias is not itself a hardware
+specification. Affogato's `GX2SetFetchShader` captures bytes but does not
+decode them or populate shader GPRs. A Wii U-produced fixture is still needed
+before relying on the interpretation for arbitrary guest fetch programs.
 
 ### Reference emulator research
 
