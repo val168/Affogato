@@ -152,6 +152,28 @@ void write_module(const char* path, std::span<const std::uint32_t> module)
     return false;
 }
 
+[[nodiscard]] bool module_contains_decoration(
+    std::span<const std::uint32_t> module,
+    std::uint32_t decoration)
+{
+    for (std::size_t word_offset = 5U; word_offset < module.size();)
+    {
+        const std::uint32_t instruction = module[word_offset];
+        const std::size_t word_count = instruction >> 16U;
+        if (word_count == 0U || word_count > module.size() - word_offset)
+        {
+            return false;
+        }
+        if (static_cast<std::uint16_t>(instruction & 0xFFFFU) == 71U &&
+            word_count >= 3U && module[word_offset + 2U] == decoration)
+        {
+            return true;
+        }
+        word_offset += word_count;
+    }
+    return false;
+}
+
 [[nodiscard]] bool module_contains_constant_bits(
     std::span<const std::uint32_t> module,
     std::uint32_t expected_bits)
@@ -248,7 +270,7 @@ int main(int argc, char* argv[])
     parameter_output_program.instructions.emplace_back(
         affogato::gpu::LatteShaderIrExport{false, parameter_export});
     const std::array<affogato::gpu::LatteSpirvVertexParameterOutput, 1U>
-        parameter_outputs{{{2U, 1U}}};
+        parameter_outputs{{{2U, 1U, true}}};
     const std::vector<std::uint32_t> parameter_output_module =
         affogato::gpu::emit_latte_spirv_vertex_position_subset(
             parameter_output_program,
@@ -258,6 +280,7 @@ int main(int argc, char* argv[])
     assert(module_contains_opcode(parameter_output_module, 71U));
     assert(module_contains_opcode(parameter_output_module, 59U));
     assert(module_contains_opcode(parameter_output_module, 62U));
+    assert(module_contains_decoration(parameter_output_module, 13U));
 
     bool rejected_missing_parameter_export = false;
     try
@@ -744,6 +767,14 @@ int main(int argc, char* argv[])
     assert(module_contains_opcode(matched_move_module, 62U));
     assert(module_contains_location(matched_move_module, 1U));
 
+    auto linear_varying_input = matched_varying_input;
+    linear_varying_input.linear = true;
+    const std::vector<std::uint32_t> linear_fragment_module =
+        affogato::gpu::emit_latte_spirv_fragment_matched_alu_subset(
+            matched_move_program,
+            linear_varying_input);
+    assert(module_contains_decoration(linear_fragment_module, 13U));
+
     const std::array<affogato::gpu::LatteLinkedPixelShaderInput, 2U>
         matched_and_default_inputs{{
             matched_varying_input,
@@ -1090,7 +1121,7 @@ int main(int argc, char* argv[])
     }
     assert(rejected_nonzero_mrt);
 
-    if (argc == 26 && std::string_view(argv[1]) == "--write-modules")
+    if (argc == 27 && std::string_view(argv[1]) == "--write-modules")
     {
         write_module(argv[2], module);
         write_module(argv[3], modified_module);
@@ -1116,6 +1147,7 @@ int main(int argc, char* argv[])
         write_module(argv[23], matched_integer_comparison_module);
         write_module(argv[24], mixed_input_module);
         write_module(argv[25], multiple_varying_module);
+        write_module(argv[26], linear_fragment_module);
     }
     return 0;
 }

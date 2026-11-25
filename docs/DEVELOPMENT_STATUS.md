@@ -1,9 +1,21 @@
 # Affogato Development Status
 
+## Linear interpolation for matched guest inputs (2026-11-25)
+
+The opt-in matched shader path now lowers decoded `SEL_LINEAR` pixel inputs to
+SPIR-V `NoPerspective` decorations on both the corresponding vertex output and
+fragment input. Other non-default modes remain rejected: flat shading needs a
+verified Latte/Vulkan provoking-vertex match, and centroid, sample, and point
+sprite behavior are not implemented. A controlled linear-input guest draw
+passes Vulkan buffer readback, and generated fragment/vertex modules pass
+`spirv-val`. The current fixture uses equal clip-space W values, so it verifies
+stage linkage and execution, not a numerical perspective-versus-linear
+difference.
+
 ## Matched fragment input sets in SPIR-V (2026-11-25)
 
 The matched vertex/fragment diagnostic path now accepts the complete linked
-pixel-input set. Each perspective vertex parameter maps to a fragment input
+pixel-input set. Each vertex parameter maps to a fragment input
 location and corresponding vertex output; inputs without a producer are
 folded from their captured `DEFAULT_VAL` bits into fragment GPR constants.
 Duplicate/out-of-range PS GPR mappings and unsupported interpolation modes

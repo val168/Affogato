@@ -417,11 +417,11 @@ private:
             {
                 if (!linked_input.vertex_export_index.has_value() ||
                     linked_input.flat_shade || linked_input.centroid ||
-                    linked_input.linear || linked_input.point_sprite_texture ||
+                    linked_input.point_sprite_texture ||
                     linked_input.sample)
                 {
                     throw std::invalid_argument(
-                        "Latte fragment SPIR-V subset requires perspective vertex inputs");
+                        "Latte fragment SPIR-V subset does not support this vertex-input mode");
                 }
                 has_vertex_varying = true;
                 continue;
@@ -600,6 +600,11 @@ private:
             append_instruction(annotations_, 71U, {
                 input_variable_id, 30U,
                 static_cast<std::uint32_t>(linked_input.pixel_input_index)});
+            if (linked_input.linear)
+            {
+                append_instruction(annotations_, 71U, {
+                    input_variable_id, 13U});
+            }
             append_instruction(globals_, 59U, {
                 input_pointer_type_id_, input_variable_id, 1U});
         }

@@ -1220,7 +1220,7 @@ fragment `Input` variable whose `Location` is that `SPI_PS_INPUT_CNTL_n` index;
 an unmatched semantic becomes four raw binary32 component constants from its
 captured `DEFAULT_VAL`. This keeps the fragment shader's GPR numbering aligned
 with the input-control index and avoids declaring unmatched Vulkan stage inputs.
-Only perspective matched inputs are accepted: flat, centroid, linear,
+Perspective and decoded linear interpolation are supported. Flat, centroid,
 point-sprite, and sample modes still fail explicitly. Existing selected OP2
 ALU and MRT0 limits are unchanged.
 
@@ -1233,6 +1233,28 @@ an unmatched input's `DEFAULT_VAL`. A second controlled guest draw captures two
 vertex parameter exports and two matched PS inputs, then verifies independent
 red and green gradients from the respective PS GPRs. This is not ordinary
 Latte draw execution or WWHD rendering.
+
+### Linear interpolation qualifier (2026-11-25)
+
+The decoded GX2 `SEL_LINEAR` input-control bit now decorates the matched PS
+input and its corresponding VS output with SPIR-V `NoPerspective`. Vulkan's
+shader specification defines `NoPerspective` as linear interpolation in
+framebuffer space; the AMD [R6xx/R7xx 3D reference](https://www.vgamuseum.info/images/doc/ati/radeonhd2_4x/r6xx_r7xx_3d.pdf)
+describes `SEL_LINEAR` as selecting linear gradients in
+`SPI_PS_INPUT_CNTL_n`. This is AMD-family documentation, not independent
+Espresso confirmation. The emitted VS qualifier documents the matching
+interface; Vulkan applies interpolation at the fragment input.
+
+SPIR-V fixtures for both stages pass `spirv-val`, and a controlled guest draw
+with the decoded `SEL_LINEAR` bit passes the Vulkan color-buffer readback. Its
+vertices have equal clip-space W, so the test verifies descriptor decoding,
+stage linkage, and execution but does not distinguish linear from
+perspective-correct numerical interpolation. Flat shading remains deferred
+until Affogato captures and matches the guest provoking-vertex convention.
+Centroid, sample, and point-sprite inputs also remain unsupported. The Vulkan
+[shader interface and interpolation rules](https://docs.vulkan.org/spec/latest/chapters/shaders.html)
+and [SPIR-V `NoPerspective` decoration](https://registry.khronos.org/SPIR-V/specs/unified1/SPIRV.html)
+were used as backend requirements.
 
 This follows Affogato's decoded `SPI_PS_INPUT_CNTL_n` linkage model and is
 consistent with the issue report for Cemu [#2029](https://github.com/cemu-project/Cemu/issues/2029),

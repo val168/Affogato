@@ -26,6 +26,7 @@ struct LatteSpirvVertexParameterOutput
 {
     std::uint32_t export_index{};
     std::uint32_t location{};
+    bool no_perspective{};
 };
 
 namespace detail
@@ -94,6 +95,11 @@ public:
             entry_point_operands.push_back(variable_id);
             append_instruction(annotations_, 71U, {
                 variable_id, 30U, parameter_output.location});
+            if (parameter_output.no_perspective)
+            {
+                append_instruction(annotations_, 71U, {
+                    variable_id, 13U});
+            }
             append_instruction(globals_, 59U, {
                 output_vector_pointer_type_id_, variable_id, 3U});
         }

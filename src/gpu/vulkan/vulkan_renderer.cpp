@@ -924,7 +924,8 @@ void VulkanRenderer::consume_guest_commands(
                 parameter_outputs.push_back({
                     *linked_input.vertex_export_index,
                     static_cast<std::uint32_t>(
-                        linked_input.pixel_input_index)});
+                        linked_input.pixel_input_index),
+                    linked_input.linear});
             }
             draw_vertices = decode_diagnostic_latte_spirv_vertex_draw(
                 *draw_snapshot,
