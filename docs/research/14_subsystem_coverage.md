@@ -61,7 +61,7 @@ mean the guest behavior is implemented.
 | Feature | Status | Evidence / limitation |
 | --- | --- | --- |
 | GX2 exports and ABI | Partial | `gx2_hle.cpp` registers numerous functions with argument/descriptor handling; callback presence does not establish full behavior for all modes. Compare each path to WUT declarations and tests. |
-| GX2 display-list lifecycle/submission | Partial | `GX2DirectCallDisplayList` validates and copies a guest stream, then queues supported register writes and one bounded draw-packet form. Begin/end recording, queued `GX2CallDisplayList`, copy/query APIs, guest shader execution, and GPU retirement remain missing. |
+| GX2 display-list lifecycle/submission | Partial | `GX2DirectCallDisplayList` and `GX2CallDisplayList` validate/copy one guest stream and queue the supported PM4 subset in order. Nested PM4 indirect-buffer packets, the queued GPU's asynchronous memory visibility, begin/end recording, copy/query APIs, guest shader execution, and GPU retirement remain unsupported. |
 | GX2 initialization/state | Partial | Selected runtime defaults, register shadows, surfaces, shaders and scanout state are modeled; no hardware command processor. |
 | Guest pointer/structure validation | Implemented in tested paths | HLE uses checked guest memory and big-endian field reads for implemented structures; audit must remain function-specific. |
 | Guest threads/synchronization | Partial | Selected coreinit thread/context/mutex/semaphore/event behavior supports a single-core HLE runtime; OS scheduler/interrupt behavior is incomplete. |

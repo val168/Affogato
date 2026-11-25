@@ -277,10 +277,24 @@ range validation, recursion bounds, and command ordering as requirements.
 Since then, `GX2DirectCallDisplayList` has been added for a limited supported
 state-write subset. It copies bytes at call time, validates mapped guest
 memory, rejects unsupported stateful opcodes, and queues decoded register
-updates in order. It does not implement indirect recursion, recording APIs,
-draw execution, or GPU completion. The fixtures are synthetic and
+updates in order. `GX2CallDisplayList` now snapshots and decodes one target
+list through the same ordered path. It does not implement nested indirect
+buffers, recording APIs, guest shader execution, guest render-target writes,
+or GPU completion. The fixtures are synthetic and
 cross-checked against related-family packet definitions; no Latte-produced
 stream or WWHD use of these APIs has been verified.
+
+## Queued GX2 display-list subset (2026-11-25)
+
+Registered `GX2CallDisplayList` using the WUT pointer/size ABI. It copies the
+target guest bytes at the HLE call point, validates and decodes the same bounded
+PM4 subset as `GX2DirectCallDisplayList`, and appends supported commands in
+guest order. Tests verify the queued API consumes prior supported PM4 draw
+state. This is not full Latte indirect-buffer execution: nested IB packets,
+GPU address translation, asynchronous GPU visibility, recording/copy APIs,
+and direct-call flush/completion semantics remain unsupported. Debug and
+Release builds and CTest passed 2/2; the hidden diagnostic triangle smoke test
+passed in both builds using host shaders.
 
 ## PM4 immediate U16 index capture (2026-11-25)
 

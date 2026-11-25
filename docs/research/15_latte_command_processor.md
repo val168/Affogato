@@ -202,7 +202,7 @@ call into a command stream, and submitting a display-list buffer directly.
 Affogato registers `GX2DirectCallDisplayList` for a narrow subset: it validates
 and copies the guest bytes at call time, then queues supported config/context/
 control register writes and unpredicated `DRAW_INDEX_AUTO`, `DRAW_INDEX_2`, and
-32-bit `DRAW_INDEX_IMMD`
+U16/U32 `DRAW_INDEX_IMMD`
 records in guest order. A self-contained auto-draw requires preceding
 `VGT_PRIMITIVE_TYPE`,
 `NUM_INSTANCES`, and base-vertex writes in that list; absent base-instance
@@ -215,17 +215,29 @@ explicitly. This is an ordered command capture path; only the diagnostic policy 
 supported float2 subset, and no guest Latte shader or guest render-target
 behavior is implied.
 `GX2BeginDisplayListEx`,
-`GX2EndDisplayList`, `GX2CallDisplayList` and `GX2CopyDisplayList` remain
-unregistered; queued indirect calls and guest-authored recording therefore
-remain unsupported.
+`GX2CallDisplayList` now shares the bounded parser and appends supported
+commands to the same ordered pending-command queue. It snapshots the target
+guest buffer at HLE call time, validates it through `GuestMemory`, and decodes
+one target list directly rather than constructing a raw
+`INDIRECT_BUFFER_PRIV` packet. This provides a bounded queue-ordering path for
+the supported subset, not Cafe's asynchronous GPU memory visibility or the
+direct-call flush/completion behavior. Snapshotting at the HLE call point is
+Affogato's current ownership policy; it is not a verified claim about when
+Latte hardware observes writes to a queued display-list buffer. PM4
+indirect-buffer packets inside the
+target still fail as unsupported; there is no recursive address translation,
+depth budget, or general raw GPU command processor. `GX2BeginDisplayListEx`,
+`GX2EndDisplayList`, and `GX2CopyDisplayList` remain unregistered, so guest
+recording and copy/query behavior remain unsupported.
 
 For Affogato, a submission implementation must define when raw guest dwords are
 captured and owned across the frontend-thread handoff, validate guest ranges
 and alignment before copying, distinguish direct submission from nested
 indirect calls, bound nesting and total decoded dwords, and preserve submission
-ordering. `GX2CallDisplayList` cannot be treated as successful by decoding only
-its indirect-buffer wrapper: the nested target must be processed. Display-list
-recording APIs also require a guest-memory write-gather model; recording only
+ordering. The current `GX2CallDisplayList` path copies and processes its target
+at HLE call time, but does not process nested indirect-buffer packets or model
+when queued hardware observes later writes to the guest buffer. Display-list
+recording APIs require a guest-memory write-gather model; recording only
 host-side typed commands would miss guest code that patches recorded packet
 payloads in place.
 
@@ -309,12 +321,12 @@ lists and guest-written command streams remain unsupported.
 | Capability | Status | Evidence / dependency |
 | --- | --- | --- |
 | GX2 command-pool registration | Partial and tested | Bounds/alignment/ownership checks in `initialize_gx2` |
-| GX2 display-list API lifecycle and submission | Partial and tested | `GX2DirectCallDisplayList` copies a bounded guest-memory stream and queues only supported config/context/control register writes; recording, queued indirect call, and copy APIs remain missing. |
+| GX2 display-list API lifecycle and submission | Partial and tested | Direct and queued calls snapshot one bounded guest stream and queue the supported register/draw subset in order. Nested PM4 indirect packets, recording, copy/query APIs, asynchronous GPU visibility, and completion semantics remain unsupported. |
 | Typed GX2 HLE event ordering | Partial and tested | `pending_commands`, register shadow and frontend drain |
 | PM4 packet framing | Partial and tested | Type-0 payload lengths, Type-2 filler and Type-3 lengths; Type-1 remains unsupported |
 | PM4 register writes | Partial and tested | Type-0 sequential writes and Type-3 config/context/control register sets are bounded to supported byte windows |
-| Type-3 operations | Partial and tested | `NOP`, register sets, `INDEX_TYPE`, `NUM_INSTANCES`, and self-contained unpredicated `DRAW_INDEX_AUTO`, bounded `DRAW_INDEX_2`, and 32-bit `DRAW_INDEX_IMMD`; predicated draws and other opcodes are rejected |
-| Indirect buffers / nested lists | Missing | Guest bounds, alignment, recursion limit, lifetime and ordering |
+| Type-3 operations | Partial and tested | `NOP`, register sets, `INDEX_TYPE`, `NUM_INSTANCES`, and unpredicated `DRAW_INDEX_AUTO`, bounded `DRAW_INDEX_2`, and U16/U32 `DRAW_INDEX_IMMD`; predicated draws and other opcodes are rejected |
+| Indirect buffers / nested lists | Partial, one-level GX2 API only | `GX2CallDisplayList` snapshots and decodes its one target list at HLE time. Nested PM4 indirect opcodes, GPU physical-address translation, recursion bounds, and asynchronous lifetime are unimplemented. |
 | Context display-list generation/decoding | Partial | generation leaves size zero; empty lists restore the register shadow; bounded Type-0 config/context/control writes, Type-2/Type-3 register sets, `INDEX_TYPE`, and `NUM_INSTANCES` decode into typed writes; GPU packet execution is not implemented |
 | GPU completion and waits | Partial / not renderer-backed | Must follow actual submission, fence, and memory-visibility semantics |
 
@@ -362,9 +374,9 @@ lists and guest-written command streams remain unsupported.
 
 ## Unknowns and next investigation
 
-- The exact GX2/Cafe submission path and PM4/ring-buffer entry points used by
-  relevant titles; Affogato currently has no registered `GX2CallDisplayList`
-  implementation.
+- The exact GX2/Cafe submission paths and raw PM4/ring-buffer entry points used
+  by relevant titles; Affogato's `GX2CallDisplayList` remains a single-target
+  snapshot/decoder, not a hardware-accurate asynchronous queue.
 - Which Type-3 opcodes and custom packets are required by real guest workloads.
 - The PM4 predicate source/state semantics used by the predicate-bit draw
   packets emitted by GX2 `GX2DrawEx`; accepting them without modeling the

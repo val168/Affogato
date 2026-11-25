@@ -29226,6 +29226,25 @@ void gx2_direct_call_display_list_hle_tests()
             std::optional<Gx2DrawCall>{Gx2DrawCall{
                 4U, 3U, false, 0U, 0U, 0U, 1U, 0U, 0U}}));
 
+    const std::uint32_t queued_display_list_import =
+        core.hle.bind_import("gx2", "GX2CallDisplayList");
+    assert(queued_display_list_import != 0U);
+    const std::size_t commands_before_queued_display_list =
+        core.gx2.pending_commands.size();
+    core.state.cia = queued_display_list_import;
+    core.state.gpr[3] = display_list_address;
+    core.state.gpr[4] = static_cast<std::uint32_t>(
+        stateful_auto_draw_words.size() * sizeof(std::uint32_t));
+    core.state.lr = return_address;
+    const RunResult queued_display_list = core.run(1U);
+    assert(queued_display_list.reason == StopReason::instruction_limit);
+    assert(core.gx2.pending_commands.size() ==
+           commands_before_queued_display_list + 1U);
+    assert(core.gx2.pending_commands.back().type == Gx2CommandType::draw);
+    assert((core.gx2.pending_commands.back().draw_call ==
+            std::optional<Gx2DrawCall>{Gx2DrawCall{
+                4U, 3U, false, 0U, 0U, 0U, 1U, 0U, 0U}}));
+
     // DRAW_INDEX_2 uses a physical index-buffer address and a bounded count.
     // The supported low 32-bit physical subset maps to flat guest RAM.
     constexpr std::array<std::uint32_t, 16U> indexed_draw_packet_words{

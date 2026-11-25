@@ -2907,6 +2907,154 @@ void register_gx2_hle(HleDispatcher& dispatcher)
         return snapshots;
     };
 
+    const auto submit_supported_display_list = [
+        capture_non_indexed_vertex_data,
+        capture_indexed_draw_data,
+        capture_indexed_vertex_data](EspressoCore& core, const char* api_name) {
+        const std::string error_prefix =
+            std::string("gx2::") + api_name + ": ";
+        if (!core.gx2.initialized)
+        {
+            throw HleExecutionError(error_prefix + "GX2 has not been initialized");
+        }
+
+        const std::uint32_t display_list_address = core.state.gpr[3];
+        const std::uint32_t display_list_size = core.state.gpr[4];
+        if (display_list_size == 0U)
+        {
+            return;
+        }
+        if (display_list_address == 0U)
+        {
+            throw HleExecutionError(error_prefix + "display-list pointer is null");
+        }
+        if ((display_list_size % sizeof(std::uint32_t)) != 0U)
+        {
+            throw HleExecutionError(
+                error_prefix + "display-list size is not dword-aligned");
+        }
+        if (static_cast<std::uint64_t>(display_list_address) +
+                display_list_size >
+            guest_address_space_end)
+        {
+            throw HleExecutionError(
+                error_prefix + "display-list range wraps the guest address space");
+        }
+
+        try
+        {
+            core.memory.validate_read_range(
+                display_list_address, display_list_size);
+        }
+        catch (const GuestMemoryFault&)
+        {
+            throw HleExecutionError(
+                error_prefix + "display-list is outside mapped guest memory");
+        }
+
+        std::vector<std::uint8_t> display_list_bytes(display_list_size);
+        try
+        {
+            core.memory.read_bytes(display_list_address, display_list_bytes);
+        }
+        catch (const GuestMemoryFault&)
+        {
+            throw HleExecutionError(
+                error_prefix + "display-list is outside mapped guest memory");
+        }
+
+        Gx2Pm4DrawState updated_pm4_draw_state = core.gx2.pm4_draw_state;
+        std::vector<Gx2Command> display_list_commands =
+            decode_gx2_pm4_display_list_commands(
+                display_list_bytes,
+                api_name,
+                updated_pm4_draw_state,
+                true,
+                core.gx2.capture_draw_vertex_data);
+
+        for (Gx2Command& command : display_list_commands)
+        {
+            if (command.type != Gx2CommandType::draw || !command.draw_call)
+            {
+                continue;
+            }
+
+            if (!command.draw_call->indexed)
+            {
+                command.draw_vertex_data = capture_non_indexed_vertex_data(
+                    core, *command.draw_call);
+                continue;
+            }
+
+            std::uint32_t index_size_bytes = 0U;
+            switch (command.draw_call->index_type)
+            {
+            case 0U:
+            case 4U:
+                index_size_bytes = sizeof(std::uint16_t);
+                break;
+            case 1U:
+            case 9U:
+                index_size_bytes = sizeof(std::uint32_t);
+                break;
+            default:
+                throw HleExecutionError(
+                    error_prefix + "DRAW_INDEX_2 uses an unsupported index type");
+            }
+
+            const std::uint64_t physical_address =
+                command.draw_call->element_address;
+            const std::uint64_t byte_count =
+                static_cast<std::uint64_t>(command.draw_call->element_count) *
+                index_size_bytes;
+            if (!command.draw_index_data &&
+                ((physical_address % index_size_bytes) != 0U ||
+                 physical_address > core.memory.size() ||
+                 byte_count > core.memory.size() - physical_address))
+            {
+                throw HleExecutionError(
+                    error_prefix +
+                    "DRAW_INDEX_2 index range is outside flat guest physical "
+                    "memory or is misaligned");
+            }
+
+            if (core.gx2.capture_draw_vertex_data && command.draw_index_data)
+            {
+                command.draw_vertex_data = capture_indexed_vertex_data(
+                    core,
+                    *command.draw_call,
+                    *command.draw_index_data);
+            }
+            else if (core.gx2.capture_draw_vertex_data && byte_count != 0U)
+            {
+                command.draw_index_data = capture_indexed_draw_data(
+                    core, *command.draw_call);
+                if (!command.draw_index_data ||
+                    !command.draw_index_data->is_valid)
+                {
+                    throw HleExecutionError(
+                        error_prefix +
+                        "DRAW_INDEX_2 index data could not be captured");
+                }
+                command.draw_vertex_data = capture_indexed_vertex_data(
+                    core,
+                    *command.draw_call,
+                    *command.draw_index_data);
+            }
+        }
+
+        // The bounded model snapshots guest bytes at HLE time, then appends
+        // decoded records in submission order for the frontend consumer.
+        auto& pending_commands = core.gx2.pending_commands;
+        pending_commands.reserve(
+            pending_commands.size() + display_list_commands.size());
+        for (Gx2Command& command : display_list_commands)
+        {
+            pending_commands.push_back(std::move(command));
+        }
+        core.gx2.pm4_draw_state = updated_pm4_draw_state;
+    };
+
     dispatcher.register_function(
         "gx2",
         "GX2TempGetGPUVersion",
@@ -5763,162 +5911,15 @@ void register_gx2_hle(HleDispatcher& dispatcher)
     dispatcher.register_function(
         "gx2",
         "GX2DirectCallDisplayList",
-        [capture_non_indexed_vertex_data,
-         capture_indexed_draw_data,
-         capture_indexed_vertex_data](EspressoCore& core) {
-            constexpr const char* api_name = "GX2DirectCallDisplayList";
-            if (!core.gx2.initialized)
-            {
-                throw HleExecutionError(
-                    "gx2::GX2DirectCallDisplayList: GX2 has not been initialized");
-            }
+        [submit_supported_display_list](EspressoCore& core) {
+            submit_supported_display_list(core, "GX2DirectCallDisplayList");
+        });
 
-            const std::uint32_t display_list_address = core.state.gpr[3];
-            const std::uint32_t display_list_size = core.state.gpr[4];
-            if (display_list_size == 0U)
-            {
-                return;
-            }
-            if (display_list_address == 0U)
-            {
-                throw HleExecutionError(
-                    "gx2::GX2DirectCallDisplayList: display-list pointer is null");
-            }
-            if ((display_list_size % sizeof(std::uint32_t)) != 0U)
-            {
-                throw HleExecutionError(
-                    "gx2::GX2DirectCallDisplayList: display-list size is not "
-                    "dword-aligned");
-            }
-            if (static_cast<std::uint64_t>(display_list_address) +
-                    display_list_size >
-                guest_address_space_end)
-            {
-                throw HleExecutionError(
-                    "gx2::GX2DirectCallDisplayList: display-list range wraps "
-                    "the guest address space");
-            }
-
-            try
-            {
-                core.memory.validate_read_range(
-                    display_list_address, display_list_size);
-            }
-            catch (const GuestMemoryFault&)
-            {
-                throw HleExecutionError(
-                    "gx2::GX2DirectCallDisplayList: display-list is outside "
-                    "mapped guest memory");
-            }
-
-            std::vector<std::uint8_t> display_list_bytes(display_list_size);
-            try
-            {
-                core.memory.read_bytes(display_list_address, display_list_bytes);
-            }
-            catch (const GuestMemoryFault&)
-            {
-                throw HleExecutionError(
-                    "gx2::GX2DirectCallDisplayList: display-list is outside "
-                    "mapped guest memory");
-            }
-
-            Gx2Pm4DrawState updated_pm4_draw_state =
-                core.gx2.pm4_draw_state;
-            std::vector<Gx2Command> display_list_commands =
-                decode_gx2_pm4_display_list_commands(
-                    display_list_bytes,
-                    api_name,
-                    updated_pm4_draw_state,
-                    true,
-                    core.gx2.capture_draw_vertex_data);
-
-            for (Gx2Command& command : display_list_commands)
-            {
-                if (command.type == Gx2CommandType::draw && command.draw_call)
-                {
-                    if (command.draw_call->indexed)
-                    {
-                        std::uint32_t index_size_bytes = 0U;
-                        switch (command.draw_call->index_type)
-                        {
-                        case 0U:
-                        case 4U:
-                            index_size_bytes = sizeof(std::uint16_t);
-                            break;
-                        case 1U:
-                        case 9U:
-                            index_size_bytes = sizeof(std::uint32_t);
-                            break;
-                        default:
-                            throw HleExecutionError(
-                                "gx2::GX2DirectCallDisplayList: DRAW_INDEX_2 "
-                                "uses an unsupported index type");
-                        }
-
-                        const std::uint64_t physical_address =
-                            command.draw_call->element_address;
-                        const std::uint64_t byte_count =
-                            static_cast<std::uint64_t>(
-                                command.draw_call->element_count) * index_size_bytes;
-                        if (!command.draw_index_data &&
-                            ((physical_address % index_size_bytes) != 0U ||
-                             physical_address > core.memory.size() ||
-                             byte_count > core.memory.size() - physical_address))
-                        {
-                            throw HleExecutionError(
-                                "gx2::GX2DirectCallDisplayList: DRAW_INDEX_2 "
-                                "index range is outside flat guest physical memory "
-                                "or is misaligned");
-                        }
-
-                        if (core.gx2.capture_draw_vertex_data &&
-                            command.draw_index_data)
-                        {
-                            command.draw_vertex_data =
-                                capture_indexed_vertex_data(
-                                    core,
-                                    *command.draw_call,
-                                    *command.draw_index_data);
-                        }
-                        else if (core.gx2.capture_draw_vertex_data &&
-                                 byte_count != 0U)
-                        {
-                            command.draw_index_data = capture_indexed_draw_data(
-                                core, *command.draw_call);
-                            if (!command.draw_index_data ||
-                                !command.draw_index_data->is_valid)
-                            {
-                                throw HleExecutionError(
-                                    "gx2::GX2DirectCallDisplayList: DRAW_INDEX_2 "
-                                    "index data could not be captured");
-                            }
-                            command.draw_vertex_data =
-                                capture_indexed_vertex_data(
-                                    core,
-                                    *command.draw_call,
-                                    *command.draw_index_data);
-                        }
-                    }
-                    else
-                    {
-                        command.draw_vertex_data = capture_non_indexed_vertex_data(
-                            core, *command.draw_call);
-                    }
-                }
-            }
-
-            // The frontend consumes the copied, decoded register commands in
-            // guest order, including supported unpredicated PM4 draw packets.
-            // Predicated draws and unsupported address modes remain errors.
-            auto& pending_commands = core.gx2.pending_commands;
-            pending_commands.reserve(
-                pending_commands.size() + display_list_commands.size());
-            for (Gx2Command& command : display_list_commands)
-            {
-                pending_commands.push_back(std::move(command));
-            }
-            core.gx2.pm4_draw_state = updated_pm4_draw_state;
+    dispatcher.register_function(
+        "gx2",
+        "GX2CallDisplayList",
+        [submit_supported_display_list](EspressoCore& core) {
+            submit_supported_display_list(core, "GX2CallDisplayList");
         });
 
     dispatcher.register_function(
