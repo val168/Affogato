@@ -271,6 +271,10 @@ if(BUILD_TESTING)
         "${CMAKE_CURRENT_BINARY_DIR}/latte_fragment_matched_maximum.spv")
     set(AFFOGATO_LATTE_SPIRV_FRAGMENT_MATCHED_MINIMUM_TEST_MODULE
         "${CMAKE_CURRENT_BINARY_DIR}/latte_fragment_matched_minimum.spv")
+    set(AFFOGATO_LATTE_SPIRV_FRAGMENT_MATCHED_INTEGER_ARITHMETIC_TEST_MODULE
+        "${CMAKE_CURRENT_BINARY_DIR}/latte_fragment_matched_integer_arithmetic.spv")
+    set(AFFOGATO_LATTE_SPIRV_FRAGMENT_MATCHED_INTEGER_LOGIC_TEST_MODULE
+        "${CMAKE_CURRENT_BINARY_DIR}/latte_fragment_matched_integer_logic.spv")
     add_test(NAME affogato_latte_spirv_tests
         COMMAND affogato_latte_spirv_tests
             --write-modules
@@ -292,7 +296,9 @@ if(BUILD_TESTING)
             "${AFFOGATO_LATTE_SPIRV_FRAGMENT_MATCHED_ADD_TEST_MODULE}"
             "${AFFOGATO_LATTE_SPIRV_FRAGMENT_MATCHED_MULTIPLY_TEST_MODULE}"
             "${AFFOGATO_LATTE_SPIRV_FRAGMENT_MATCHED_MAXIMUM_TEST_MODULE}"
-            "${AFFOGATO_LATTE_SPIRV_FRAGMENT_MATCHED_MINIMUM_TEST_MODULE}")
+            "${AFFOGATO_LATTE_SPIRV_FRAGMENT_MATCHED_MINIMUM_TEST_MODULE}"
+            "${AFFOGATO_LATTE_SPIRV_FRAGMENT_MATCHED_INTEGER_ARITHMETIC_TEST_MODULE}"
+            "${AFFOGATO_LATTE_SPIRV_FRAGMENT_MATCHED_INTEGER_LOGIC_TEST_MODULE}")
     set_tests_properties(affogato_latte_spirv_tests PROPERTIES
         FIXTURES_SETUP affogato_latte_spirv_module
     )
@@ -363,6 +369,24 @@ if(BUILD_TESTING)
                 "${AFFOGATO_LATTE_SPIRV_FRAGMENT_MATCHED_MINIMUM_TEST_MODULE}")
         set_tests_properties(
             affogato_latte_spirv_fragment_matched_minimum_validation PROPERTIES
+            FIXTURES_REQUIRED affogato_latte_spirv_module
+        )
+        add_test(
+            NAME affogato_latte_spirv_fragment_matched_integer_arithmetic_validation
+            COMMAND "${AFFOGATO_SPIRV_VAL_EXECUTABLE}"
+                --target-env vulkan1.0
+                "${AFFOGATO_LATTE_SPIRV_FRAGMENT_MATCHED_INTEGER_ARITHMETIC_TEST_MODULE}")
+        set_tests_properties(
+            affogato_latte_spirv_fragment_matched_integer_arithmetic_validation PROPERTIES
+            FIXTURES_REQUIRED affogato_latte_spirv_module
+        )
+        add_test(
+            NAME affogato_latte_spirv_fragment_matched_integer_logic_validation
+            COMMAND "${AFFOGATO_SPIRV_VAL_EXECUTABLE}"
+                --target-env vulkan1.0
+                "${AFFOGATO_LATTE_SPIRV_FRAGMENT_MATCHED_INTEGER_LOGIC_TEST_MODULE}")
+        set_tests_properties(
+            affogato_latte_spirv_fragment_matched_integer_logic_validation PROPERTIES
             FIXTURES_REQUIRED affogato_latte_spirv_module
         )
         add_test(NAME affogato_latte_spirv_modifier_validation
@@ -571,6 +595,11 @@ if(BUILD_TESTING)
             NAME affogato_vulkan_guest_matched_varying_add_negative_half_readback
             COMMAND affogato_frontend
                 --gx2-guest-triangle-matched-varying-add-negative-half-smoke-test
+        )
+        add_test(
+            NAME affogato_vulkan_guest_matched_varying_xor_zero_readback
+            COMMAND affogato_frontend
+                --gx2-guest-triangle-matched-varying-xor-zero-smoke-test
         )
     endif()
 

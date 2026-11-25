@@ -24,16 +24,21 @@ inputs are nonnegative, so its visible effect is not isolated. These are
 bounded fixtures, not general Latte arithmetic coverage or independent
 hardware conformance.
 
+The matched fragment subset now also emits 32-bit `ADD_INT`, `SUB_INT`,
+`AND_INT`, `OR_INT`, `XOR_INT`, and `NOT_INT`. Deterministic modules pass
+`spirv-val`; a controlled guest `XOR_INT` with zero preserves the interpolated
+varying through Vulkan readback. Integer comparisons, shifts, conversions, and
+other fragment-shader families are still unsupported.
+
 ## Fragment varying interface fixture (2026-11-25)
 
 An explicit fragment passthrough module remains as an interface fixture and
 accepts only the default perspective interpolation mode; flat, no-perspective,
 centroid, sample, and point-sprite inputs fail explicitly. The matched-input
-module consumes one linked `float4`, executes supported
-four-lane guest MOV, float ADD, IEEE MUL, MAX_DX10, or MIN_DX10 groups, and
-applies the guest MRT0 swizzle. Each generated module has a `spirv-val` fixture.
-The guest integration tests verify these operation cases through Vulkan
-readback.
+module consumes one linked `float4`, executes supported four-lane guest MOV,
+float ADD, IEEE MUL, MAX_DX10, MIN_DX10, or selected integer OP2 groups, and
+applies the guest MRT0 swizzle. Generated modules have `spirv-val` fixtures.
+The guest integration tests verify selected cases through Vulkan readback.
 
 ## Vertex shader parameter exports to SPIR-V (2026-11-25)
 

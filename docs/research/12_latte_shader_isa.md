@@ -157,6 +157,26 @@ operations for the fixtures, not independent Latte hardware conformance.
 Other guest pixel operations, other interpolation modes, ordinary game draw
 selection, and WWHD output remain unsupported.
 
+### Matched fragment integer OP2 subset
+
+The same bounded matched-input emitter now lowers `ADD_INT`, `SUB_INT`,
+`AND_INT`, `OR_INT`, `XOR_INT`, and `NOT_INT` as 32-bit operations on raw GPR
+bits. It uses SPIR-V integer arithmetic/bitwise instructions and preserves the
+result bits until the pixel export bitcasts them to the output float vector.
+Integer source absolute/negate modifiers remain rejected. The R700 manual's
+chapter 9 describes `ADD_INT` as integer addition over signed or unsigned
+operands and `AND_INT` as bitwise AND; this is related-family evidence, not
+direct Latte conformance. Opcode values match Affogato's CPU shader subset and
+the already-tested vertex SPIR-V subset in
+`latte_shader_interpreter.hpp` and `latte_spirv_vertex_subset.hpp`.
+
+`latte_spirv_test.cpp` emits and validates mixed arithmetic/bitwise and
+XOR/NOT matched-input modules. A controlled guest shader runs `XOR_INT` with
+the zero selector and checks that the interpolated varying survives Vulkan
+readback unchanged. This verifies only the listed encodings and this tested
+identity case; integer comparison, min/max, shift, conversion, and broader
+shader control flow are outside this fragment subset.
+
 ## Evidence categories
 
 ### Documented interfaces

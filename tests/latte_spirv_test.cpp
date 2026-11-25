@@ -802,6 +802,62 @@ int main(int argc, char* argv[])
     assert(module_contains_opcode(matched_minimum_module, 184U));
     assert(module_contains_opcode(matched_minimum_module, 169U));
 
+    auto matched_integer_arithmetic_program = matched_move_program;
+    auto& matched_integer_arithmetic_clause = std::get<
+        affogato::gpu::LatteShaderIrAluClause>(
+            matched_integer_arithmetic_program.instructions[0U]);
+    constexpr std::array<std::uint16_t, 4U> integer_arithmetic_opcodes{
+        affogato::gpu::latte_alu_op2_add_integer_opcode,
+        affogato::gpu::latte_alu_op2_subtract_integer_opcode,
+        affogato::gpu::latte_alu_op2_and_integer_opcode,
+        affogato::gpu::latte_alu_op2_or_integer_opcode};
+    for (std::size_t lane = 0U;
+         lane < matched_integer_arithmetic_clause.groups[0U].instructions.size();
+         ++lane)
+    {
+        auto& operation =
+            matched_integer_arithmetic_clause.groups[0U].instructions[lane];
+        operation.opcode = integer_arithmetic_opcodes[lane];
+        operation.source1_selector =
+            affogato::gpu::latte_alu_source_zero_selector;
+        operation.source1_channel = operation.destination_component;
+    }
+    const std::vector<std::uint32_t> matched_integer_arithmetic_module =
+        affogato::gpu::emit_latte_spirv_fragment_matched_alu_subset(
+            matched_integer_arithmetic_program,
+            matched_varying_input);
+    assert(module_contains_opcode(matched_integer_arithmetic_module, 128U));
+    assert(module_contains_opcode(matched_integer_arithmetic_module, 130U));
+    assert(module_contains_opcode(matched_integer_arithmetic_module, 199U));
+    assert(module_contains_opcode(matched_integer_arithmetic_module, 197U));
+
+    auto matched_integer_logic_program = matched_move_program;
+    auto& matched_integer_logic_clause = std::get<
+        affogato::gpu::LatteShaderIrAluClause>(
+            matched_integer_logic_program.instructions[0U]);
+    constexpr std::array<std::uint16_t, 4U> integer_logic_opcodes{
+        affogato::gpu::latte_alu_op2_xor_integer_opcode,
+        affogato::gpu::latte_alu_op2_not_integer_opcode,
+        affogato::gpu::latte_alu_op2_xor_integer_opcode,
+        affogato::gpu::latte_alu_op2_not_integer_opcode};
+    for (std::size_t lane = 0U;
+         lane < matched_integer_logic_clause.groups[0U].instructions.size();
+         ++lane)
+    {
+        auto& operation =
+            matched_integer_logic_clause.groups[0U].instructions[lane];
+        operation.opcode = integer_logic_opcodes[lane];
+        operation.source1_selector =
+            affogato::gpu::latte_alu_source_zero_selector;
+        operation.source1_channel = operation.destination_component;
+    }
+    const std::vector<std::uint32_t> matched_integer_logic_module =
+        affogato::gpu::emit_latte_spirv_fragment_matched_alu_subset(
+            matched_integer_logic_program,
+            matched_varying_input);
+    assert(module_contains_opcode(matched_integer_logic_module, 198U));
+    assert(module_contains_opcode(matched_integer_logic_module, 200U));
+
     auto unsupported_matched_move_program = matched_move_program;
     auto& unsupported_matched_move_clause = std::get<
         affogato::gpu::LatteShaderIrAluClause>(
@@ -914,7 +970,7 @@ int main(int argc, char* argv[])
     }
     assert(rejected_nonzero_mrt);
 
-    if (argc == 21 && std::string_view(argv[1]) == "--write-modules")
+    if (argc == 23 && std::string_view(argv[1]) == "--write-modules")
     {
         write_module(argv[2], module);
         write_module(argv[3], modified_module);
@@ -935,6 +991,8 @@ int main(int argc, char* argv[])
         write_module(argv[18], matched_multiply_module);
         write_module(argv[19], matched_maximum_module);
         write_module(argv[20], matched_minimum_module);
+        write_module(argv[21], matched_integer_arithmetic_module);
+        write_module(argv[22], matched_integer_logic_module);
     }
     return 0;
 }

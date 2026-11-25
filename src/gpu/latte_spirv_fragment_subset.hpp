@@ -582,12 +582,20 @@ private:
             {
                 const LatteAluOp2Instruction& operation =
                     group.instructions[lane];
+                const bool is_integer_operation =
+                    operation.opcode == latte_alu_op2_and_integer_opcode ||
+                    operation.opcode == latte_alu_op2_or_integer_opcode ||
+                    operation.opcode == latte_alu_op2_xor_integer_opcode ||
+                    operation.opcode == latte_alu_op2_not_integer_opcode ||
+                    operation.opcode == latte_alu_op2_add_integer_opcode ||
+                    operation.opcode == latte_alu_op2_subtract_integer_opcode;
                 const bool supported_opcode =
                     operation.opcode == latte_alu_op2_move_opcode ||
                     operation.opcode == latte_alu_op2_add_float_opcode ||
                     operation.opcode == latte_alu_op2_multiply_ieee_opcode ||
                     operation.opcode == latte_alu_op2_maximum_dx10_opcode ||
-                    operation.opcode == latte_alu_op2_minimum_dx10_opcode;
+                    operation.opcode == latte_alu_op2_minimum_dx10_opcode ||
+                    is_integer_operation;
                 if (!supported_opcode ||
                     operation.destination_component != lane ||
                     operation.last_in_group != (lane == 3U) ||
@@ -600,6 +608,11 @@ private:
                     operation.destination_clamp ||
                     operation.output_modifier != 0U ||
                     operation.index_mode != 0U || !operation.write_mask ||
+                    (is_integer_operation &&
+                     (operation.source0_absolute ||
+                      operation.source0_negate ||
+                      operation.source1_absolute ||
+                      operation.source1_negate)) ||
                     (operation.opcode == latte_alu_op2_move_opcode &&
                      (operation.source1_absolute ||
                       operation.source1_negate)))
@@ -607,10 +620,55 @@ private:
                     throw std::runtime_error(
                         "Latte fragment SPIR-V subset received an unsupported operation or modifier");
                 }
+                const std::uint32_t source0_value = source_value(
+                    operation.source0_selector,
+                    operation.source0_channel);
+                if (is_integer_operation)
+                {
+                    if (operation.opcode == latte_alu_op2_not_integer_opcode)
+                    {
+                        lane_values[lane] = allocate_id();
+                        append_instruction(function_body_, 200U, {
+                            uint_type_id_, lane_values[lane], source0_value});
+                    }
+                    else
+                    {
+                        const std::uint32_t source1_value = source_value(
+                            operation.source1_selector,
+                            operation.source1_channel);
+                        std::uint16_t spirv_opcode = 0U;
+                        switch (operation.opcode)
+                        {
+                        case latte_alu_op2_add_integer_opcode:
+                            spirv_opcode = 128U;
+                            break;
+                        case latte_alu_op2_subtract_integer_opcode:
+                            spirv_opcode = 130U;
+                            break;
+                        case latte_alu_op2_and_integer_opcode:
+                            spirv_opcode = 199U;
+                            break;
+                        case latte_alu_op2_or_integer_opcode:
+                            spirv_opcode = 197U;
+                            break;
+                        case latte_alu_op2_xor_integer_opcode:
+                            spirv_opcode = 198U;
+                            break;
+                        default:
+                            throw std::runtime_error(
+                                "Latte fragment SPIR-V subset received an unsupported integer operation");
+                        }
+                        lane_values[lane] = allocate_id();
+                        append_instruction(function_body_, spirv_opcode, {
+                            uint_type_id_, lane_values[lane],
+                            source0_value, source1_value});
+                    }
+                    destination_gprs[lane] = operation.destination_gpr;
+                    continue;
+                }
+
                 const std::uint32_t source0_id = apply_source_modifiers(
-                    source_value(
-                        operation.source0_selector,
-                        operation.source0_channel),
+                    source0_value,
                     operation.source0_absolute,
                     operation.source0_negate);
                 if (operation.opcode == latte_alu_op2_move_opcode)
