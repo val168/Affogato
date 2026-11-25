@@ -33,6 +33,20 @@ inline constexpr std::uint16_t latte_alu_op2_add_float_opcode = 0x000U;
 inline constexpr std::uint16_t latte_alu_op2_multiply_ieee_opcode = 0x002U;
 inline constexpr std::uint16_t latte_alu_op2_maximum_dx10_opcode = 0x005U;
 inline constexpr std::uint16_t latte_alu_op2_minimum_dx10_opcode = 0x006U;
+inline constexpr std::uint16_t latte_alu_op2_set_equal_float_opcode = 0x008U;
+inline constexpr std::uint16_t latte_alu_op2_set_greater_float_opcode = 0x009U;
+inline constexpr std::uint16_t latte_alu_op2_set_greater_equal_float_opcode =
+    0x00AU;
+inline constexpr std::uint16_t latte_alu_op2_set_not_equal_float_opcode =
+    0x00BU;
+inline constexpr std::uint16_t
+    latte_alu_op2_set_equal_float_dx10_opcode = 0x00CU;
+inline constexpr std::uint16_t
+    latte_alu_op2_set_greater_float_dx10_opcode = 0x00DU;
+inline constexpr std::uint16_t
+    latte_alu_op2_set_greater_equal_float_dx10_opcode = 0x00EU;
+inline constexpr std::uint16_t
+    latte_alu_op2_set_not_equal_float_dx10_opcode = 0x00FU;
 inline constexpr std::uint16_t latte_alu_op2_fraction_opcode = 0x010U;
 inline constexpr std::uint16_t latte_alu_op2_ceiling_opcode = 0x012U;
 inline constexpr std::uint16_t latte_alu_op2_floor_opcode = 0x014U;
@@ -44,6 +58,20 @@ inline constexpr std::uint16_t latte_alu_op2_logical_shift_left_opcode =
     0x072U;
 inline constexpr std::uint32_t latte_binary32_sign_mask = 0x80000000U;
 inline constexpr std::uint32_t latte_binary32_magnitude_mask = 0x7FFFFFFFU;
+
+[[nodiscard]] constexpr bool is_latte_alu_op2_float_comparison_opcode(
+    std::uint16_t opcode) noexcept
+{
+    return opcode >= latte_alu_op2_set_equal_float_opcode &&
+        opcode <= latte_alu_op2_set_not_equal_float_dx10_opcode;
+}
+
+[[nodiscard]] constexpr bool is_latte_alu_op2_integer_result_float_comparison(
+    std::uint16_t opcode) noexcept
+{
+    return opcode >= latte_alu_op2_set_equal_float_dx10_opcode &&
+        opcode <= latte_alu_op2_set_not_equal_float_dx10_opcode;
+}
 inline constexpr std::uint16_t latte_alu_op2_and_integer_opcode = 0x030U;
 inline constexpr std::uint16_t latte_alu_op2_or_integer_opcode = 0x031U;
 inline constexpr std::uint16_t latte_alu_op2_xor_integer_opcode = 0x032U;
@@ -546,6 +574,7 @@ evaluate_latte_normal_export(
         instruction.opcode != latte_alu_op2_multiply_ieee_opcode &&
         instruction.opcode != latte_alu_op2_maximum_dx10_opcode &&
         instruction.opcode != latte_alu_op2_minimum_dx10_opcode &&
+        !is_latte_alu_op2_float_comparison_opcode(instruction.opcode) &&
         instruction.opcode != latte_alu_op2_fraction_opcode &&
         instruction.opcode != latte_alu_op2_ceiling_opcode &&
         instruction.opcode != latte_alu_op2_floor_opcode)
@@ -606,6 +635,8 @@ evaluate_latte_normal_export(
         instruction.opcode == latte_alu_op2_fraction_opcode ||
         instruction.opcode == latte_alu_op2_ceiling_opcode ||
         instruction.opcode == latte_alu_op2_floor_opcode;
+    const bool returns_integer_mask =
+        is_latte_alu_op2_integer_result_float_comparison(instruction.opcode);
     float source1 = 0.0F;
     if (!is_unary_operation)
     {
@@ -621,6 +652,7 @@ evaluate_latte_normal_export(
     }
 
     float result = 0.0F;
+    bool comparison_result = false;
     switch (instruction.opcode)
     {
     case latte_alu_op2_add_float_opcode:
@@ -635,6 +667,22 @@ evaluate_latte_normal_export(
     case latte_alu_op2_minimum_dx10_opcode:
         result = source0 < source1 ? source0 : source1;
         break;
+    case latte_alu_op2_set_equal_float_opcode:
+    case latte_alu_op2_set_equal_float_dx10_opcode:
+        comparison_result = source0 == source1;
+        break;
+    case latte_alu_op2_set_greater_float_opcode:
+    case latte_alu_op2_set_greater_float_dx10_opcode:
+        comparison_result = source0 > source1;
+        break;
+    case latte_alu_op2_set_greater_equal_float_opcode:
+    case latte_alu_op2_set_greater_equal_float_dx10_opcode:
+        comparison_result = source0 >= source1;
+        break;
+    case latte_alu_op2_set_not_equal_float_opcode:
+    case latte_alu_op2_set_not_equal_float_dx10_opcode:
+        comparison_result = source0 != source1;
+        break;
     case latte_alu_op2_fraction_opcode:
         result = source0 - std::floor(source0);
         break;
@@ -647,6 +695,22 @@ evaluate_latte_normal_export(
     default:
         throw std::runtime_error(
             "Latte floating-point evaluation received an unsupported opcode");
+    }
+
+    if (returns_integer_mask)
+    {
+        if (instruction.output_modifier != 0U)
+        {
+            throw std::runtime_error(
+                "Latte integer-result comparison has a nonzero output modifier");
+        }
+
+        return comparison_result ? 0xFFFFFFFFU : 0U;
+    }
+
+    if (is_latte_alu_op2_float_comparison_opcode(instruction.opcode))
+    {
+        result = comparison_result ? 1.0F : 0.0F;
     }
 
     switch (instruction.output_modifier)
@@ -858,6 +922,14 @@ execute_latte_alu_op2_vector_group(
         case latte_alu_op2_multiply_ieee_opcode:
         case latte_alu_op2_maximum_dx10_opcode:
         case latte_alu_op2_minimum_dx10_opcode:
+        case latte_alu_op2_set_equal_float_opcode:
+        case latte_alu_op2_set_greater_float_opcode:
+        case latte_alu_op2_set_greater_equal_float_opcode:
+        case latte_alu_op2_set_not_equal_float_opcode:
+        case latte_alu_op2_set_equal_float_dx10_opcode:
+        case latte_alu_op2_set_greater_float_dx10_opcode:
+        case latte_alu_op2_set_greater_equal_float_dx10_opcode:
+        case latte_alu_op2_set_not_equal_float_dx10_opcode:
         case latte_alu_op2_fraction_opcode:
         case latte_alu_op2_ceiling_opcode:
         case latte_alu_op2_floor_opcode:
@@ -959,6 +1031,14 @@ execute_latte_alu_op2_vector_group(
             case latte_alu_op2_multiply_ieee_opcode:
             case latte_alu_op2_maximum_dx10_opcode:
             case latte_alu_op2_minimum_dx10_opcode:
+            case latte_alu_op2_set_equal_float_opcode:
+            case latte_alu_op2_set_greater_float_opcode:
+            case latte_alu_op2_set_greater_equal_float_opcode:
+            case latte_alu_op2_set_not_equal_float_opcode:
+            case latte_alu_op2_set_equal_float_dx10_opcode:
+            case latte_alu_op2_set_greater_float_dx10_opcode:
+            case latte_alu_op2_set_greater_equal_float_dx10_opcode:
+            case latte_alu_op2_set_not_equal_float_dx10_opcode:
             case latte_alu_op2_fraction_opcode:
             case latte_alu_op2_ceiling_opcode:
             case latte_alu_op2_floor_opcode:

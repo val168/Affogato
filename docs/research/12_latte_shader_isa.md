@@ -1348,6 +1348,35 @@ behavior or Latte hardware execution. The AMD R700 guide is the semantic and
 encoding source; Cemu's Latte decompiler and Decaf's Latte GPU shader code are
 comparison points, and no code was copied from either project.
 
+### Floating-point comparisons (2026-11-25)
+
+The AMD [R700-family ISA guide](https://www.amd.com/system/files/TechDocs/R700-Family_Instruction_Set_Architecture.pdf),
+Chapter 9, lists OP2 `SETE`, `SETGT`, `SETGE`, and `SETNE` at opcodes
+`0x08`-`0x0B`, with `*_DX10` variants at `0x0C`-`0x0F`. The base forms
+produce binary32 `1.0` or `0.0`; the DX10 forms produce the integer mask
+`0xFFFFFFFF` or `0`. Their descriptions compare floating operands, and the
+not-equal form uses the ordinary not-equal predicate, which is true for an
+unordered NaN comparison. This is R700-family documentation, not direct Latte
+silicon confirmation. The R700 guide's ALU instruction list and LLVM's
+[R600 instruction definitions](https://github.com/llvm/llvm-project/blob/main/llvm/lib/Target/AMDGPU/R600Instructions.td)
+were used to cross-check names, opcode sequence, and result types. Searches of
+Cemu's Latte source and Decaf's Latte shader source did not locate a directly
+comparable opcode-level implementation for these eight operations; no code was
+copied.
+
+Affogato's CPU evaluator uses ordered `==`, `>`, and `>=` comparisons and
+unordered `!=`; it returns binary32 `1.0`/`0.0` for the base forms and the
+documented integer masks for the DX10 forms. Both SPIR-V emitters lower the
+predicates to ordered floating comparisons or unordered-not-equal followed by
+an explicit select of the corresponding guest result bits. CPU tests cover
+finite equal/unequal values, signed zero, infinity, and NaN. Generated vertex
+and matched-fragment modules for all eight forms pass `spirv-val`. Four
+controlled matched-fragment guest draws use constant `1.0` and `0.5` operands
+and verify black/white framebuffer readback for the base forms; readback for
+the DX10 integer-mask forms is not yet implemented. The test does not exercise
+game shader execution or establish general Latte conformance. Full Debug and
+Release builds and CTest suites pass at 75/75.
+
 This follows Affogato's decoded `SPI_PS_INPUT_CNTL_n` linkage model and is
 consistent with the issue report for Cemu [#2029](https://github.com/cemu-project/Cemu/issues/2029),
 which describes missing producer semantics as inputs populated from

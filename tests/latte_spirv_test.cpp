@@ -1117,6 +1117,73 @@ int main(int argc, char* argv[])
             matched_varying_input);
     assert(module_contains_opcode(matched_float_rounding_module, 12U));
 
+    constexpr std::array<std::uint16_t, 8U> float_comparison_opcodes{
+        affogato::gpu::latte_alu_op2_set_equal_float_opcode,
+        affogato::gpu::latte_alu_op2_set_greater_float_opcode,
+        affogato::gpu::latte_alu_op2_set_greater_equal_float_opcode,
+        affogato::gpu::latte_alu_op2_set_not_equal_float_opcode,
+        affogato::gpu::latte_alu_op2_set_equal_float_dx10_opcode,
+        affogato::gpu::latte_alu_op2_set_greater_float_dx10_opcode,
+        affogato::gpu::latte_alu_op2_set_greater_equal_float_dx10_opcode,
+        affogato::gpu::latte_alu_op2_set_not_equal_float_dx10_opcode};
+    auto float_comparison_program = add_program;
+    auto& float_comparison_clause = std::get<
+        affogato::gpu::LatteShaderIrAluClause>(
+            float_comparison_program.instructions[0U]);
+    for (auto& operation : float_comparison_clause.groups[0U].instructions)
+    {
+        operation.source1_relative = false;
+    }
+    for (const std::uint16_t opcode : float_comparison_opcodes)
+    {
+        auto group = add_clause.groups[0U];
+        for (auto& operation : group.instructions)
+        {
+            operation.opcode = opcode;
+            operation.source1_selector =
+                affogato::gpu::latte_alu_source_half_float_selector;
+            operation.source1_channel = operation.destination_component;
+            operation.source1_relative = false;
+        }
+        float_comparison_clause.groups.push_back(std::move(group));
+    }
+    const std::vector<std::uint32_t> float_comparison_module =
+        affogato::gpu::emit_latte_spirv_vertex_position_subset(
+            float_comparison_program,
+            {1U, 0U});
+    assert(module_contains_opcode(float_comparison_module, 180U));
+    assert(module_contains_opcode(float_comparison_module, 183U));
+    assert(module_contains_opcode(float_comparison_module, 186U));
+    assert(module_contains_opcode(float_comparison_module, 190U));
+    assert(module_contains_opcode(float_comparison_module, 169U));
+
+    auto matched_float_comparison_program = matched_move_program;
+    auto& matched_float_comparison_clause = std::get<
+        affogato::gpu::LatteShaderIrAluClause>(
+            matched_float_comparison_program.instructions[0U]);
+    for (const std::uint16_t opcode : float_comparison_opcodes)
+    {
+        auto group = matched_float_comparison_clause.groups[0U];
+        for (auto& operation : group.instructions)
+        {
+            operation.opcode = opcode;
+            operation.source1_selector =
+                affogato::gpu::latte_alu_source_half_float_selector;
+            operation.source1_channel = operation.destination_component;
+            operation.source1_relative = false;
+        }
+        matched_float_comparison_clause.groups.push_back(std::move(group));
+    }
+    const std::vector<std::uint32_t> matched_float_comparison_module =
+        affogato::gpu::emit_latte_spirv_fragment_matched_alu_subset(
+            matched_float_comparison_program,
+            matched_varying_input);
+    assert(module_contains_opcode(matched_float_comparison_module, 180U));
+    assert(module_contains_opcode(matched_float_comparison_module, 183U));
+    assert(module_contains_opcode(matched_float_comparison_module, 186U));
+    assert(module_contains_opcode(matched_float_comparison_module, 190U));
+    assert(module_contains_opcode(matched_float_comparison_module, 169U));
+
     auto unsupported_matched_move_program = matched_move_program;
     auto& unsupported_matched_move_clause = std::get<
         affogato::gpu::LatteShaderIrAluClause>(
@@ -1229,7 +1296,7 @@ int main(int argc, char* argv[])
     }
     assert(rejected_nonzero_mrt);
 
-    if (argc == 32 && std::string_view(argv[1]) == "--write-modules")
+    if (argc == 34 && std::string_view(argv[1]) == "--write-modules")
     {
         write_module(argv[2], module);
         write_module(argv[3], modified_module);
@@ -1261,6 +1328,8 @@ int main(int argc, char* argv[])
         write_module(argv[29], matched_integer_shift_module);
         write_module(argv[30], float_rounding_module);
         write_module(argv[31], matched_float_rounding_module);
+        write_module(argv[32], float_comparison_module);
+        write_module(argv[33], matched_float_comparison_module);
     }
     return 0;
 }

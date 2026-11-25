@@ -10,6 +10,7 @@
 #include <optional>
 #include <span>
 #include <stdexcept>
+#include <string>
 #include <unordered_map>
 #include <vector>
 
@@ -532,6 +533,8 @@ private:
             operation.opcode == latte_alu_op2_arithmetic_shift_right_opcode ||
             operation.opcode == latte_alu_op2_logical_shift_right_opcode ||
             operation.opcode == latte_alu_op2_logical_shift_left_opcode;
+        const bool is_float_comparison =
+            is_latte_alu_op2_float_comparison_opcode(operation.opcode);
         if ((operation.opcode != latte_alu_op2_move_opcode &&
              operation.opcode != latte_alu_op2_add_float_opcode &&
              operation.opcode != latte_alu_op2_multiply_ieee_opcode &&
@@ -540,7 +543,7 @@ private:
              operation.opcode != latte_alu_op2_fraction_opcode &&
              operation.opcode != latte_alu_op2_ceiling_opcode &&
              operation.opcode != latte_alu_op2_floor_opcode &&
-             !is_integer_operation) ||
+             !is_integer_operation && !is_float_comparison) ||
             operation.destination_gpr >= registers_.size() ||
             !operation.write_mask || operation.source0_relative ||
             operation.update_execute_mask || operation.update_predicate ||
@@ -558,7 +561,9 @@ private:
               operation.source1_absolute || operation.source1_negate)))
         {
             throw std::runtime_error(
-                "Latte SPIR-V vertex subset received an unsupported ALU operation or modifier");
+                "Latte SPIR-V vertex subset rejected ALU opcode " +
+                std::to_string(operation.opcode) +
+                " or one of its modifiers");
         }
 
         std::uint32_t source0_id = source_value(
@@ -763,6 +768,48 @@ private:
         const std::uint32_t source1_float_id = allocate_id();
         append_instruction(function_body_, 124U, {
             float_type_id_, source1_float_id, source1_id});
+        if (is_float_comparison)
+        {
+            std::uint16_t comparison_opcode = 0U;
+            switch (operation.opcode)
+            {
+            case latte_alu_op2_set_equal_float_opcode:
+            case latte_alu_op2_set_equal_float_dx10_opcode:
+                comparison_opcode = 180U;
+                break;
+            case latte_alu_op2_set_greater_float_opcode:
+            case latte_alu_op2_set_greater_float_dx10_opcode:
+                comparison_opcode = 186U;
+                break;
+            case latte_alu_op2_set_greater_equal_float_opcode:
+            case latte_alu_op2_set_greater_equal_float_dx10_opcode:
+                comparison_opcode = 190U;
+                break;
+            case latte_alu_op2_set_not_equal_float_opcode:
+            case latte_alu_op2_set_not_equal_float_dx10_opcode:
+                comparison_opcode = 183U;
+                break;
+            default:
+                throw std::runtime_error(
+                    "Latte SPIR-V vertex subset received an unsupported floating-point comparison");
+            }
+
+            const std::uint32_t comparison_id = allocate_id();
+            append_instruction(function_body_, comparison_opcode, {
+                bool_type_id_, comparison_id,
+                source0_float_id, source1_float_id});
+            const std::uint32_t result_id = allocate_id();
+            const std::uint32_t true_value_id =
+                is_latte_alu_op2_integer_result_float_comparison(
+                    operation.opcode)
+                ? unsigned_all_bits_set_id_
+                : constant(0x3F800000U);
+            append_instruction(function_body_, 169U, {
+                uint_type_id_, result_id, comparison_id,
+                true_value_id, unsigned_zero_id_});
+            return result_id;
+        }
+
         const std::uint32_t result_float_id = allocate_id();
         if (operation.opcode == latte_alu_op2_add_float_opcode ||
             operation.opcode == latte_alu_op2_multiply_ieee_opcode)

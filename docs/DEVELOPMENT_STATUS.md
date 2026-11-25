@@ -1,6 +1,6 @@
 # Affogato Development Status
 
-## Latte integer shift and floating rounding ALU subsets (2026-11-25)
+## Latte integer shift, rounding, and comparison ALU subsets (2026-11-25)
 
 Affogato's CPU shader evaluator now supports the R700 `ASHR_INT`, `LSHR_INT`,
 and `LSHL_INT` OP2 operations. Counts 0, 1, 31, 32, and 33 are covered with
@@ -27,6 +27,16 @@ Generated vertex and fragment modules pass `spirv-val`; controlled guest draw
 readback checks `FRACT(1.0F)` as black and `CEIL/FLOOR(1.0F)` as white. These
 readbacks verify the selected lowering for constant `1.0F`, not general Latte
 conformance or game shader compatibility.
+
+The CPU evaluator and vertex/matched-fragment SPIR-V emitters also support the
+R700 OP2 floating comparison family: `SETE`, `SETGT`, `SETGE`, `SETNE`, and
+their four `*_DX10` integer-mask forms. CPU cases cover equal, ordered and
+unordered inputs, signed zero, infinity, and NaN; generated vertex and
+fragment modules pass `spirv-val`. Four controlled matched-fragment guest
+draws compare the guest constant `1.0F` with `0.5F` and verify the expected
+black/white framebuffer output for the regular floating-result forms. The
+DX10 integer-mask forms are not included in framebuffer readback. Full Debug
+and Release builds pass, and each complete CTest suite passes 75/75.
 
 ## Interpolation qualifiers for matched guest inputs (2026-11-25)
 

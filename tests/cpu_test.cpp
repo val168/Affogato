@@ -34255,6 +34255,78 @@ void latte_control_flow_decoder_tests()
     assert((float_result == expected_float_vector));
     assert((shader_registers[3U] == expected_float_vector));
 
+    using affogato::gpu::latte_alu_op2_set_equal_float_opcode;
+    using affogato::gpu::latte_alu_op2_set_equal_float_dx10_opcode;
+    using affogato::gpu::latte_alu_op2_set_greater_float_opcode;
+    using affogato::gpu::latte_alu_op2_set_greater_float_dx10_opcode;
+    using affogato::gpu::latte_alu_op2_set_greater_equal_float_opcode;
+    using affogato::gpu::latte_alu_op2_set_greater_equal_float_dx10_opcode;
+    using affogato::gpu::latte_alu_op2_set_not_equal_float_opcode;
+    using affogato::gpu::latte_alu_op2_set_not_equal_float_dx10_opcode;
+    constexpr std::array<std::uint16_t, 8U> float_comparison_opcodes{
+        latte_alu_op2_set_equal_float_opcode,
+        latte_alu_op2_set_greater_float_opcode,
+        latte_alu_op2_set_greater_equal_float_opcode,
+        latte_alu_op2_set_not_equal_float_opcode,
+        latte_alu_op2_set_equal_float_dx10_opcode,
+        latte_alu_op2_set_greater_float_dx10_opcode,
+        latte_alu_op2_set_greater_equal_float_dx10_opcode,
+        latte_alu_op2_set_not_equal_float_dx10_opcode};
+    constexpr std::array<std::array<bool, 4U>, 4U> expected_float_comparisons{{
+        {true, false, true, false},
+        {false, false, false, false},
+        {true, false, true, false},
+        {false, true, false, true}}};
+    constexpr LatteShaderRegister comparison_source0{
+        0x3FC00000U, 0xBFC00000U, 0x80000000U, 0x7F800000U};
+    constexpr LatteShaderRegister comparison_source1{
+        0x3FC00000U, 0xBF800000U, 0x00000000U, 0x7FC00000U};
+    for (std::size_t opcode_index = 0U;
+         opcode_index < float_comparison_opcodes.size();
+         ++opcode_index)
+    {
+        auto comparison_slots = alu_slots;
+        for (std::size_t component = 0U;
+             component < comparison_slots.size();
+             ++component)
+        {
+            auto& slot = comparison_slots[component];
+            slot.word0 = (slot.word0 & ~0x1FFU) | 1U;
+            slot.word0 = (slot.word0 & ~(0x1FFU << 13U)) | (2U << 13U);
+            slot.word0 = (slot.word0 & ~(0x03U << 10U)) |
+                (static_cast<std::uint32_t>(component) << 10U);
+            slot.word0 = (slot.word0 & ~(0x03U << 23U)) |
+                (static_cast<std::uint32_t>(component) << 23U);
+            slot.word1 = (slot.word1 & ~(0x7FFU << 7U)) |
+                (static_cast<std::uint32_t>(
+                    float_comparison_opcodes[opcode_index]) << 7U);
+            slot.word1 = (slot.word1 & ~(0x7FU << 21U)) | (3U << 21U);
+            slot.word1 &= ~(0x03U << 5U);
+        }
+
+        const auto comparison_groups =
+            decode_latte_alu_op2_groups(comparison_slots);
+        std::array<LatteShaderRegister, 8U> comparison_registers{};
+        comparison_registers[1U] = comparison_source0;
+        comparison_registers[2U] = comparison_source1;
+        const LatteShaderRegister comparison_result =
+            execute_latte_alu_op2_vector_group(
+                comparison_groups[0U],
+                comparison_registers);
+        const bool returns_integer_mask = opcode_index >= 4U;
+        for (std::size_t component = 0U;
+             component < comparison_result.size();
+             ++component)
+        {
+            const std::uint32_t expected_value =
+                expected_float_comparisons[opcode_index % 4U][component]
+                ? (returns_integer_mask ? 0xFFFFFFFFU : 0x3F800000U)
+                : 0U;
+            assert(comparison_result[component] == expected_value);
+        }
+        assert((comparison_registers[3U] == comparison_result));
+    }
+
     using affogato::gpu::latte_alu_op2_ceiling_opcode;
     using affogato::gpu::latte_alu_op2_floor_opcode;
     using affogato::gpu::latte_alu_op2_fraction_opcode;

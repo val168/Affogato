@@ -2013,6 +2013,10 @@ enum class GuestTriangleShader
     spirv_matched_varying_fraction,
     spirv_matched_varying_ceiling,
     spirv_matched_varying_floor,
+    spirv_matched_varying_set_equal_float,
+    spirv_matched_varying_set_greater_float,
+    spirv_matched_varying_set_greater_equal_float,
+    spirv_matched_varying_set_not_equal_float,
     spirv_matched_varying_maximum_signed_integer_half,
     spirv_matched_varying_minimum_unsigned_integer_half,
     spirv_matched_varying_default_alpha,
@@ -2042,11 +2046,25 @@ enum class GuestTriangleShader
         shader == GuestTriangleShader::spirv_matched_varying_floor;
 }
 
+[[nodiscard]] bool is_matched_varying_float_comparison(
+    GuestTriangleShader shader)
+{
+    return shader == GuestTriangleShader::
+            spirv_matched_varying_set_equal_float ||
+        shader == GuestTriangleShader::
+            spirv_matched_varying_set_greater_float ||
+        shader == GuestTriangleShader::
+            spirv_matched_varying_set_greater_equal_float ||
+        shader == GuestTriangleShader::
+            spirv_matched_varying_set_not_equal_float;
+}
+
 [[nodiscard]] bool is_matched_varying_alu_output(
     GuestTriangleShader shader)
 {
     return is_matched_varying_integer_shift(shader) ||
-        is_matched_varying_rounding(shader);
+        is_matched_varying_rounding(shader) ||
+        is_matched_varying_float_comparison(shader);
 }
 
 [[nodiscard]] bool contains_expected_matched_alu_pixels(
@@ -2060,7 +2078,13 @@ enum class GuestTriangleShader
         shader == GuestTriangleShader::
             spirv_matched_varying_logical_shift_left ||
         shader == GuestTriangleShader::spirv_matched_varying_ceiling ||
-        shader == GuestTriangleShader::spirv_matched_varying_floor;
+        shader == GuestTriangleShader::spirv_matched_varying_floor ||
+        shader == GuestTriangleShader::
+            spirv_matched_varying_set_greater_float ||
+        shader == GuestTriangleShader::
+            spirv_matched_varying_set_greater_equal_float ||
+        shader == GuestTriangleShader::
+            spirv_matched_varying_set_not_equal_float;
     std::size_t matching_pixel_count = 0U;
 
     for (std::size_t pixel_offset = 0U;
@@ -2254,6 +2278,7 @@ int run_gx2_guest_triangle_test(
         shader == GuestTriangleShader::spirv_matched_varying_xor_zero ||
         is_matched_varying_integer_shift(shader) ||
         is_matched_varying_rounding(shader) ||
+        is_matched_varying_float_comparison(shader) ||
         shader == GuestTriangleShader::
             spirv_matched_varying_maximum_signed_integer_half ||
         shader == GuestTriangleShader::
@@ -2276,6 +2301,7 @@ int run_gx2_guest_triangle_test(
         shader == GuestTriangleShader::spirv_matched_varying_xor_zero ||
         is_matched_varying_integer_shift(shader) ||
         is_matched_varying_rounding(shader) ||
+        is_matched_varying_float_comparison(shader) ||
         shader == GuestTriangleShader::
             spirv_matched_varying_maximum_signed_integer_half ||
         shader == GuestTriangleShader::
@@ -2879,6 +2905,36 @@ int run_gx2_guest_triangle_test(
                 else
                 {
                     pixel_opcode = affogato::gpu::latte_alu_op2_floor_opcode;
+                }
+            }
+            else if (is_matched_varying_float_comparison(shader))
+            {
+                source_selector = affogato::gpu::
+                    latte_alu_source_one_float_selector;
+                source1_encoding = static_cast<std::uint32_t>(
+                    affogato::gpu::latte_alu_source_half_float_selector);
+                if (shader == GuestTriangleShader::
+                        spirv_matched_varying_set_equal_float)
+                {
+                    pixel_opcode = affogato::gpu::
+                        latte_alu_op2_set_equal_float_opcode;
+                }
+                else if (shader == GuestTriangleShader::
+                             spirv_matched_varying_set_greater_float)
+                {
+                    pixel_opcode = affogato::gpu::
+                        latte_alu_op2_set_greater_float_opcode;
+                }
+                else if (shader == GuestTriangleShader::
+                             spirv_matched_varying_set_greater_equal_float)
+                {
+                    pixel_opcode = affogato::gpu::
+                        latte_alu_op2_set_greater_equal_float_opcode;
+                }
+                else
+                {
+                    pixel_opcode = affogato::gpu::
+                        latte_alu_op2_set_not_equal_float_opcode;
                 }
             }
             else if (shader ==
@@ -4119,6 +4175,39 @@ int main(int argc, char* argv[])
                 return run_gx2_guest_triangle_test(
                     false,
                     GuestTriangleShader::spirv_matched_varying_floor);
+            }
+            if (std::string_view(argv[1]) ==
+                    "--gx2-guest-triangle-matched-varying-set-equal-readback-test" &&
+                argc == 2)
+            {
+                return run_gx2_guest_triangle_test(
+                    false,
+                    GuestTriangleShader::spirv_matched_varying_set_equal_float);
+            }
+            if (std::string_view(argv[1]) ==
+                    "--gx2-guest-triangle-matched-varying-set-greater-readback-test" &&
+                argc == 2)
+            {
+                return run_gx2_guest_triangle_test(
+                    false,
+                    GuestTriangleShader::spirv_matched_varying_set_greater_float);
+            }
+            if (std::string_view(argv[1]) ==
+                    "--gx2-guest-triangle-matched-varying-set-ge-readback-test" &&
+                argc == 2)
+            {
+                return run_gx2_guest_triangle_test(
+                    false,
+                    GuestTriangleShader::
+                        spirv_matched_varying_set_greater_equal_float);
+            }
+            if (std::string_view(argv[1]) ==
+                    "--gx2-guest-triangle-matched-varying-set-not-equal-readback-test" &&
+                argc == 2)
+            {
+                return run_gx2_guest_triangle_test(
+                    false,
+                    GuestTriangleShader::spirv_matched_varying_set_not_equal_float);
             }
             if (std::string_view(argv[1]) ==
                     "--gx2-guest-triangle-matched-varying-signed-max-readback-test" &&
