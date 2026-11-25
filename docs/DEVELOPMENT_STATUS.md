@@ -32,6 +32,14 @@ frontend worker/UI acknowledgement and guest-memory writeback remain the next
 required stages; see
 [`research/11_graphics.md`](research/11_graphics.md#guest-draw-guest-memory-and-scanout-ordering).
 
+The explicitly selected diagnostic-draw mode now pauses the worker at each
+captured draw until the UI consumes the batch and returns from its Vulkan frame
+call. The wait is stop-token aware, and launch shutdown requests stop and wakes
+the worker. This behavior is build-checked but has not been visually exercised
+with a game. It only orders host diagnostic submission; it does not guarantee
+GPU completion, handle unsupported game vertex layouts, update the emulated
+color buffer, or fix scanout copies.
+
 ## Diagnostic Vulkan pixel readback for the Latte MOV vertex subset (2026-11-25)
 
 The explicit guest-triangle diagnostic can request swapchain transfer-source

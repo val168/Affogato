@@ -12,6 +12,7 @@
 #include <atomic>
 #include <bit>
 #include <chrono>
+#include <condition_variable>
 #include <cctype>
 #include <cfloat>
 #include <cstdint>
@@ -26,6 +27,7 @@
 #include <span>
 #include <stdexcept>
 #include <sstream>
+#include <stop_token>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -953,6 +955,7 @@ int run_rpx_diagnostic(int argc, char* argv[])
 struct WorkerResult
 {
     std::mutex mutex;
+    std::condition_variable_any draw_boundary_acknowledged;
     std::string message;
     std::string graphics_message;
     std::optional<affogato::cpu::espresso::Gx2ClearColorRequest> latest_guest_clear;
@@ -960,6 +963,8 @@ struct WorkerResult
     std::optional<affogato::gpu::Rgba8TextureStaging> latest_guest_scanout;
     std::uint64_t guest_scanout_sequence{};
     std::vector<affogato::cpu::espresso::Gx2Command> pending_gx2_commands;
+    std::uint64_t draw_boundary_sequence{};
+    std::uint64_t processed_draw_boundary_sequence{};
     std::atomic_bool running{};
 };
 
@@ -968,7 +973,8 @@ void launch_game(
     WorkerResult& worker,
     std::jthread& thread,
     affogato::ExecutionMode execution_mode,
-    bool capture_guest_draw_vertex_data)
+    bool capture_guest_draw_vertex_data,
+    bool synchronize_draw_capture)
 {
     if (worker.running.exchange(true))
     {
@@ -976,6 +982,8 @@ void launch_game(
     }
     if (thread.joinable())
     {
+        thread.request_stop();
+        worker.draw_boundary_acknowledged.notify_all();
         thread.join();
     }
     {
@@ -983,9 +991,16 @@ void launch_game(
         worker.message = "Reading RPX " + path_utf8(path) + " ...";
         worker.graphics_message.clear();
         worker.latest_guest_scanout.reset();
+        worker.draw_boundary_sequence = 0U;
+        worker.processed_draw_boundary_sequence = 0U;
         ++worker.guest_scanout_sequence;
     }
-    thread = std::jthread([path, &worker, execution_mode, capture_guest_draw_vertex_data]
+    thread = std::jthread([
+        path,
+        &worker,
+        execution_mode,
+        capture_guest_draw_vertex_data,
+        synchronize_draw_capture](std::stop_token stop_token)
     {
         std::string message;
         try
@@ -1035,11 +1050,13 @@ void launch_game(
                     std::to_string(file_read_time.count()) + " ms; RPX load: " +
                     std::to_string(rpx_load_time.count()) + " ms.";
             }
-            while (total_steps < rpx_instruction_limit)
+            while (total_steps < rpx_instruction_limit &&
+                   !stop_token.stop_requested())
             {
                 const std::size_t chunk_size = std::min(
                     progress_chunk_size, rpx_instruction_limit - total_steps);
-                run_result = emulator.run(chunk_size, execution_mode);
+                run_result = emulator.run(
+                    chunk_size, execution_mode, synchronize_draw_capture);
                 total_steps += run_result.execution.steps;
                 run_result.execution.steps = total_steps;
                 const auto& gx2 = emulator.core().gx2;
@@ -1051,6 +1068,7 @@ void launch_game(
                     worker.latest_guest_clear = gx2.latest_clear_color;
                     ++worker.guest_clear_sequence;
                 }
+                std::uint64_t draw_boundary_sequence = 0U;
                 if (!run_result.gx2_commands.empty())
                 {
                     if (auto scanout = capture_tv_scanout(
@@ -1065,6 +1083,31 @@ void launch_game(
                         worker.pending_gx2_commands.end(),
                         run_result.gx2_commands.begin(),
                         run_result.gx2_commands.end());
+                    if (run_result.execution.reason ==
+                            affogato::cpu::espresso::StopReason::gx2_draw_captured &&
+                        synchronize_draw_capture)
+                    {
+                        draw_boundary_sequence = ++worker.draw_boundary_sequence;
+                    }
+                }
+                if (draw_boundary_sequence != 0U)
+                {
+                    worker.draw_boundary_acknowledged.notify_all();
+                    std::unique_lock lock(worker.mutex);
+                    const bool acknowledged =
+                        worker.draw_boundary_acknowledged.wait(
+                            lock,
+                            stop_token,
+                            [&worker, draw_boundary_sequence]
+                            {
+                                return worker.processed_draw_boundary_sequence >=
+                                    draw_boundary_sequence;
+                            });
+                    if (!acknowledged)
+                    {
+                        break;
+                    }
+                    continue;
                 }
                 if (run_result.execution.reason !=
                     affogato::cpu::espresso::StopReason::instruction_limit)
@@ -1424,7 +1467,8 @@ int run_frontend()
                         launch_game(games[i].rpx_path, worker, launch_thread,
                             use_recompiler ? affogato::ExecutionMode::recompiler
                                            : affogato::ExecutionMode::interpreter,
-                            use_diagnostic_guest_draws);
+                            use_diagnostic_guest_draws,
+                            use_diagnostic_guest_draws && vulkan_output.has_value());
                     }
                 }
                 ImGui::SameLine(260);
@@ -1452,7 +1496,8 @@ int run_frontend()
                             launch_game(games[i].rpx_path, worker, launch_thread,
                                 use_recompiler ? affogato::ExecutionMode::recompiler
                                                : affogato::ExecutionMode::interpreter,
-                                use_diagnostic_guest_draws);
+                                use_diagnostic_guest_draws,
+                                use_diagnostic_guest_draws && vulkan_output.has_value());
                         }
                     }
                     ImGui::TextWrapped("%s", path_utf8(games[i].rpx_path).c_str());
@@ -1475,7 +1520,8 @@ int run_frontend()
                 launch_game(games[*selected_game].rpx_path, worker, launch_thread,
                     use_recompiler ? affogato::ExecutionMode::recompiler
                                    : affogato::ExecutionMode::interpreter,
-                    use_diagnostic_guest_draws);
+                    use_diagnostic_guest_draws,
+                    use_diagnostic_guest_draws && vulkan_output.has_value());
             }
             ImGui::EndDisabled();
         }
@@ -1531,9 +1577,11 @@ int run_frontend()
         SDL_RenderPresent(renderer);
 
         std::vector<affogato::cpu::espresso::Gx2Command> guest_commands;
+        std::uint64_t draw_boundary_sequence = 0U;
         {
             std::lock_guard lock(worker.mutex);
             guest_commands.swap(worker.pending_gx2_commands);
+            draw_boundary_sequence = worker.draw_boundary_sequence;
         }
         if (vulkan_output)
         {
@@ -1585,6 +1633,24 @@ int run_frontend()
             }
             shown_guest_scanout_sequence = guest_scanout_sequence;
             vulkan_output->render_frame();
+            if (draw_boundary_sequence > 0U)
+            {
+                bool acknowledged_new_boundary = false;
+                {
+                    std::lock_guard lock(worker.mutex);
+                    if (worker.processed_draw_boundary_sequence <
+                        draw_boundary_sequence)
+                    {
+                        worker.processed_draw_boundary_sequence =
+                            draw_boundary_sequence;
+                        acknowledged_new_boundary = true;
+                    }
+                }
+                if (acknowledged_new_boundary)
+                {
+                    worker.draw_boundary_acknowledged.notify_all();
+                }
+            }
         }
     }
 
@@ -1596,6 +1662,8 @@ int run_frontend()
     }
     if (launch_thread.joinable())
     {
+        launch_thread.request_stop();
+        worker.draw_boundary_acknowledged.notify_all();
         launch_thread.join();
     }
     ImGui_ImplSDLRenderer3_Shutdown();

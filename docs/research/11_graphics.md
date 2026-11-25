@@ -214,14 +214,18 @@ this opt-in mode to the interpreter so it can stop at the exact HLE boundary;
 ordinary recompiled execution is unchanged. CPU and recompiler tests verify
 the event, one-step accounting, post-HLE CIA, and captured draw command.
 
-This is only a CPU execution checkpoint. The frontend does not yet request it,
-wait for renderer completion, or write Vulkan render-target data back to guest
-memory. The next step is to connect this event to an acknowledged worker/UI
-handoff while preserving UI-thread ownership of Vulkan and preventing the
-renderer thread from reading mutable guest memory. Bounded render-target
-readback must update guest memory before a dependent HLE copy resumes. A future
-asynchronous path can reduce these synchronization points only after its
-guest-memory visibility rules are explicit.
+This remains only a CPU execution checkpoint. The explicit diagnostic-draw
+frontend mode requests it, pauses the worker, publishes its captured command
+batch, and waits until the UI thread consumes the batch and returns from
+`render_frame()`. The condition-variable wait observes the worker
+`stop_token`; replacing a finished launch or closing the frontend requests stop
+and wakes it. This orders diagnostic swapchain work at the CPU submission level
+only. It does not wait for GPU completion, guarantee every frame was presented,
+execute arbitrary guest draws, or make Vulkan render-target data visible in
+guest memory. The mode is not used during ordinary guest execution. Bounded
+render-target readback must update guest memory before a dependent HLE copy
+resumes. A future asynchronous path can reduce these synchronization points
+only after its guest-memory visibility rules are explicit.
 
 The acceptance test must execute guest PPC calls in order: bind a supported
 color buffer, issue a controlled draw, invoke the GX2 color-buffer-to-scanout
