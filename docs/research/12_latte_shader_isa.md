@@ -1088,6 +1088,12 @@ centroid, linear, point-sprite, and sample flags are preserved for later
 shader-interface lowering. Duplicate/out-of-range active export indices,
 ambiguous matching semantics, incomplete descriptors, and `VS_PER_COMPONENT`
 linking are rejected. Tests cover both duplicate export slots and ambiguous
-semantic matches. The result is linkage metadata only: no fragment SPIR-V
-inputs or interpolated values are emitted yet, and the linker is not connected
-to the CPU shader executor or Vulkan pipeline.
+semantic matches. `resolve_latte_pixel_shader_input_registers()` then maps
+each linked input to pixel GPR `n` for `SPI_PS_INPUT_CNTL_n`, and fills
+unmatched inputs from `DEFAULT_VAL`. The related-family AMD R6xx/R7xx guide,
+section 3.7, explicitly states that input control 0 maps to GPR 0 and that
+each control maps a GPR; this register assignment remains cross-family
+evidence rather than direct Latte validation. The helper accepts already
+interpolated parameter vectors and does not perform interpolation. No
+fragment SPIR-V inputs are emitted, and neither helper is connected to the
+shader executor or Vulkan pipeline.

@@ -146,6 +146,9 @@ struct LatteLinkedPixelShaderInput
     bool operator==(const LatteLinkedPixelShaderInput&) const = default;
 };
 
+using LattePixelShaderInputRegisters =
+    std::array<std::optional<LatteShaderRegister>, 32U>;
+
 [[nodiscard]] inline std::array<std::uint32_t, 4U>
 get_latte_pixel_input_default_bits(LattePixelInputDefaultValue default_value)
 {
@@ -272,6 +275,58 @@ link_latte_pixel_shader_inputs(
     }
 
     return linked_inputs;
+}
+
+// SPI_PS_INPUT_CNTL_n loads the selected input into pixel-shader GPR n.
+// The caller supplies values after raster interpolation; this helper only
+// performs the verified semantic-to-register assignment and DEFAULT_VAL fill.
+[[nodiscard]] inline LattePixelShaderInputRegisters
+resolve_latte_pixel_shader_input_registers(
+    std::span<const LatteLinkedPixelShaderInput> linked_inputs,
+    std::span<const LatteShaderRegister> interpolated_parameter_values)
+{
+    LattePixelShaderInputRegisters input_registers{};
+    for (std::size_t linked_input_index = 0U;
+         linked_input_index < linked_inputs.size();
+         ++linked_input_index)
+    {
+        const LatteLinkedPixelShaderInput& linked_input =
+            linked_inputs[linked_input_index];
+        if (linked_input.pixel_input_index >= input_registers.size())
+        {
+            throw std::invalid_argument(
+                "Latte pixel input index exceeds the input GPR capacity");
+        }
+        if (input_registers[linked_input.pixel_input_index].has_value())
+        {
+            throw std::invalid_argument(
+                "Latte pixel input register is assigned more than once");
+        }
+
+        if (linked_input.source == LattePixelInputSource::default_value)
+        {
+            input_registers[linked_input.pixel_input_index] =
+                linked_input.default_component_bits;
+            continue;
+        }
+        if (linked_input.source != LattePixelInputSource::vertex_parameter)
+        {
+            throw std::invalid_argument(
+                "Latte linked pixel input has an unsupported source kind");
+        }
+
+        if (!linked_input.vertex_export_index.has_value() ||
+            *linked_input.vertex_export_index >=
+                interpolated_parameter_values.size())
+        {
+            throw std::invalid_argument(
+                "Latte linked pixel input has no interpolated vertex parameter value");
+        }
+        input_registers[linked_input.pixel_input_index] =
+            interpolated_parameter_values[*linked_input.vertex_export_index];
+    }
+
+    return input_registers;
 }
 
 [[nodiscard]] inline std::vector<LattePixelShaderInputControl>

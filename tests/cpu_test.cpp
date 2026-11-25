@@ -32747,12 +32747,14 @@ void latte_vertex_output_interface_decode_tests()
     using affogato::gpu::LattePixelInputDefaultValue;
     using affogato::gpu::LattePixelInputSource;
     using affogato::gpu::LattePixelShaderInputControl;
+    using affogato::gpu::LatteShaderRegister;
     using affogato::gpu::LatteExportType;
     using affogato::gpu::LatteShaderExportValue;
     using affogato::gpu::LatteVertexShaderOutputInterface;
     using affogato::gpu::LatteVertexShaderOutputId;
     using affogato::gpu::decode_latte_vertex_shader_output_interface;
     using affogato::gpu::link_latte_pixel_shader_inputs;
+    using affogato::gpu::resolve_latte_pixel_shader_input_registers;
 
     Gx2ProgramShaderBinding vertex_shader{};
     vertex_shader.stage = Gx2ProgramStage::vertex;
@@ -32808,6 +32810,21 @@ void latte_vertex_output_interface_decode_tests()
     assert(linked_inputs[3U].source == LattePixelInputSource::default_value);
     assert(linked_inputs[3U].default_component_bits ==
         (std::array<std::uint32_t, 4U>{
+            0x3F800000U, 0x3F800000U, 0x3F800000U, 0x3F800000U}));
+
+    const std::array<LatteShaderRegister, 3U> interpolated_parameters{{
+        {0x3F000000U, 0x3F800000U, 0x40000000U, 0x3F800000U},
+        {0U, 0U, 0U, 0U},
+        {0x40400000U, 0x40800000U, 0x40A00000U, 0x3F800000U}}};
+    const auto pixel_input_registers = resolve_latte_pixel_shader_input_registers(
+        linked_inputs,
+        interpolated_parameters);
+    assert(pixel_input_registers[0U] == interpolated_parameters[0U]);
+    assert(pixel_input_registers[1U] ==
+        (LatteShaderRegister{0U, 0U, 0U, 0x3F800000U}));
+    assert(pixel_input_registers[2U] == interpolated_parameters[2U]);
+    assert(pixel_input_registers[3U] ==
+        (LatteShaderRegister{
             0x3F800000U, 0x3F800000U, 0x3F800000U, 0x3F800000U}));
 
     bool rejected_non_vertex_shader = false;
@@ -32920,6 +32937,20 @@ void latte_vertex_output_interface_decode_tests()
         rejected_ambiguous_semantic = true;
     }
     assert(rejected_ambiguous_semantic);
+
+    bool rejected_missing_interpolated_value = false;
+    try
+    {
+        static_cast<void>(resolve_latte_pixel_shader_input_registers(
+            std::span<const affogato::gpu::LatteLinkedPixelShaderInput>(
+                linked_inputs.data(), 1U),
+            std::span<const LatteShaderRegister>{}));
+    }
+    catch (const std::invalid_argument&)
+    {
+        rejected_missing_interpolated_value = true;
+    }
+    assert(rejected_missing_interpolated_value);
 }
 
 void latte_control_flow_decoder_tests()
