@@ -75,6 +75,18 @@ documents an implementation distinction:
   caller storage; end pads the output and restores the main-core command-buffer
   state.
 
+Cemu's [`GX2_Draw.cpp`](https://github.com/cemu-project/Cemu/blob/main/src/Cafe/OS/libs/gx2/GX2_Draw.cpp)
+shows the ordinary `GX2DrawEx` packet sequence: `SET_CTL_CONST` for the base
+vertex, `SET_CONFIG_REG` for `VGT_PRIMITIVE_TYPE`, `INDEX_TYPE`,
+`NUM_INSTANCES`, and a predicate-bit `DRAW_INDEX_AUTO`. Its indexed path uses
+`DRAW_INDEX_2` and enables the same predicate bit. This establishes a useful
+reference sequence, but Affogato currently rejects `SET_CTL_CONST`,
+`INDEX_TYPE`, `NUM_INSTANCES`, draw opcodes, and every predicate-bit Type-3
+header. Therefore the newly supported config-write packet is independently
+testable state capture, not yet sufficient to accept or execute a normal
+Cemu-shaped draw stream. The PM4 predicate source/state semantics must be
+verified before relaxing that rejection.
+
 Decaf's GPL-3.0
 [`pm4_processor.cpp`](https://github.com/decaf-emu/decaf-emu/blob/master/src/libgpu/src/pm4_processor.cpp)
 recursively dispatches both indirect-buffer opcodes through a bounded nested
@@ -226,6 +238,9 @@ lists and guest-written command streams remain unsupported.
   relevant titles; Affogato currently has no registered `GX2CallDisplayList`
   implementation.
 - Which Type-3 opcodes and custom packets are required by real guest workloads.
+- The PM4 predicate source/state semantics used by the predicate-bit draw
+  packets emitted by GX2 `GX2DrawEx`; accepting them without modeling the
+  predicate can skip or spuriously execute guest work.
 - Whether context display-list bytes contain native PM4 in all supported GX2
   versions and the exact byte/word order at the guest boundary.
 - Register-write masking, context shadow behavior, and wait/fence side effects
