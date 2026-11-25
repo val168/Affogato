@@ -191,6 +191,59 @@ int main(int argc, char* argv[])
     assert(has_bitcast);
     assert(has_position_store);
 
+    auto parameter_output_program = program;
+    affogato::gpu::LatteExportFields parameter_export{};
+    parameter_export.type = affogato::gpu::LatteExportType::parameter;
+    parameter_export.array_base = 2U;
+    parameter_export.read_write_gpr = 3U;
+    parameter_export.burst_count = 1U;
+    parameter_export.component_selectors = {0U, 1U, 2U, 3U};
+    parameter_output_program.instructions.emplace_back(
+        affogato::gpu::LatteShaderIrExport{true, parameter_export});
+    const std::array<affogato::gpu::LatteSpirvVertexParameterOutput, 1U>
+        parameter_outputs{{{2U, 1U}}};
+    const std::vector<std::uint32_t> parameter_output_module =
+        affogato::gpu::emit_latte_spirv_vertex_position_subset(
+            parameter_output_program,
+            {1U, 0U},
+            parameter_outputs);
+    assert(module_contains_opcode(parameter_output_module, 15U));
+    assert(module_contains_opcode(parameter_output_module, 71U));
+    assert(module_contains_opcode(parameter_output_module, 59U));
+    assert(module_contains_opcode(parameter_output_module, 62U));
+
+    bool rejected_missing_parameter_export = false;
+    try
+    {
+        static_cast<void>(
+            affogato::gpu::emit_latte_spirv_vertex_position_subset(
+                program,
+                {1U, 0U},
+                parameter_outputs));
+    }
+    catch (const std::runtime_error&)
+    {
+        rejected_missing_parameter_export = true;
+    }
+    assert(rejected_missing_parameter_export);
+
+    const std::array<affogato::gpu::LatteSpirvVertexParameterOutput, 2U>
+        duplicate_parameter_outputs{{{2U, 1U}, {2U, 2U}}};
+    bool rejected_duplicate_parameter_export = false;
+    try
+    {
+        static_cast<void>(
+            affogato::gpu::emit_latte_spirv_vertex_position_subset(
+                parameter_output_program,
+                {1U, 0U},
+                duplicate_parameter_outputs));
+    }
+    catch (const std::invalid_argument&)
+    {
+        rejected_duplicate_parameter_export = true;
+    }
+    assert(rejected_duplicate_parameter_export);
+
     auto modified_program = program;
     auto& modified_clause = std::get<
         affogato::gpu::LatteShaderIrAluClause>(
@@ -688,7 +741,7 @@ int main(int argc, char* argv[])
     }
     assert(rejected_nonzero_mrt);
 
-    if (argc == 14 && std::string_view(argv[1]) == "--write-modules")
+    if (argc == 15 && std::string_view(argv[1]) == "--write-modules")
     {
         write_module(argv[2], module);
         write_module(argv[3], modified_module);
@@ -702,6 +755,7 @@ int main(int argc, char* argv[])
         write_module(argv[11], integer_alu_module);
         write_module(argv[12], fragment_module);
         write_module(argv[13], default_input_fragment_module);
+        write_module(argv[14], parameter_output_module);
     }
     return 0;
 }

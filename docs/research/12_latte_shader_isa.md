@@ -99,6 +99,27 @@ Relevant local implementation:
   documented below and is not yet cross-verified against Latte hardware or a
   real game workload.
 
+### Vertex parameter export SPIR-V groundwork (2026-11-25)
+
+`emit_latte_spirv_vertex_position_subset()` can additionally expose selected
+completed, identity-swizzled parameter exports as SPIR-V vertex `Output`
+variables at explicit `Location` values. Each requested guest export index
+must be present, unique, and within the currently supported 32-entry VS
+parameter interface; each output location must also be unique. The emitted
+module includes those variables in `OpEntryPoint` and stores the selected GPR
+vector after the bounded ALU subset executes. A dedicated fixture passes
+`spirv-val` for Vulkan 1.0 and checks missing exports and duplicate requests.
+
+This is an isolated producer-side interface building block. The renderer does
+not yet supply linked export-to-location mappings, the fragment emitter still
+rejects matched varyings, and no interpolation or ordinary guest draw behavior
+is established by this test. The mapping must be driven by the decoded GX2
+semantic linkage, and the consumer side must apply supported interpolation
+qualifiers before a varying can be considered end to end. Vulkan's shader
+interface and interpolation requirements are documented in the
+[Vulkan GLSL variable specification](https://docs.vulkan.org/glsl/latest/chapters/variables.html)
+and [Vulkan rasterization specification](https://docs.vulkan.org/spec/latest/chapters/primsrast.html).
+
 ## Evidence categories
 
 ### Documented interfaces

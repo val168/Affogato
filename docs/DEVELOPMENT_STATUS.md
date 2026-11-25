@@ -1,5 +1,15 @@
 # Affogato Development Status
 
+## Vertex shader parameter exports to SPIR-V (2026-11-25)
+
+The bounded vertex SPIR-V subset now optionally emits selected, completed
+identity-swizzled parameter exports as output vectors at explicit SPIR-V
+locations. Tests validate the module with `spirv-val` and reject absent or
+duplicate export requests. This lays producer-side groundwork for Vulkan stage
+linkage; the renderer does not yet map GX2 semantics to these locations, and
+the fragment stage still cannot consume matched varyings. No new visible or
+ordinary guest draw capability is verified by this change.
+
 ## Pixel shader defaults through controlled Vulkan guest draw (2026-11-25)
 
 The bounded fragment SPIR-V emitter seeds its GPRs from linked GX2 pixel-input

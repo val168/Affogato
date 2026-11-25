@@ -257,6 +257,8 @@ if(BUILD_TESTING)
         "${CMAKE_CURRENT_BINARY_DIR}/latte_fragment_constant_color.spv")
     set(AFFOGATO_LATTE_SPIRV_FRAGMENT_DEFAULT_INPUT_TEST_MODULE
         "${CMAKE_CURRENT_BINARY_DIR}/latte_fragment_default_input.spv")
+    set(AFFOGATO_LATTE_SPIRV_VERTEX_PARAMETER_OUTPUT_TEST_MODULE
+        "${CMAKE_CURRENT_BINARY_DIR}/latte_vertex_parameter_output.spv")
     add_test(NAME affogato_latte_spirv_tests
         COMMAND affogato_latte_spirv_tests
             --write-modules
@@ -271,7 +273,8 @@ if(BUILD_TESTING)
             "${AFFOGATO_LATTE_SPIRV_MIXED_ALU_TEST_MODULE}"
             "${AFFOGATO_LATTE_SPIRV_INTEGER_ALU_TEST_MODULE}"
             "${AFFOGATO_LATTE_SPIRV_FRAGMENT_TEST_MODULE}"
-            "${AFFOGATO_LATTE_SPIRV_FRAGMENT_DEFAULT_INPUT_TEST_MODULE}")
+            "${AFFOGATO_LATTE_SPIRV_FRAGMENT_DEFAULT_INPUT_TEST_MODULE}"
+            "${AFFOGATO_LATTE_SPIRV_VERTEX_PARAMETER_OUTPUT_TEST_MODULE}")
     set_tests_properties(affogato_latte_spirv_tests PROPERTIES
         FIXTURES_SETUP affogato_latte_spirv_module
     )
@@ -286,6 +289,14 @@ if(BUILD_TESTING)
                 --target-env vulkan1.0
                 "${AFFOGATO_LATTE_SPIRV_TEST_MODULE}")
         set_tests_properties(affogato_latte_spirv_validation PROPERTIES
+            FIXTURES_REQUIRED affogato_latte_spirv_module
+        )
+        add_test(NAME affogato_latte_spirv_vertex_parameter_output_validation
+            COMMAND "${AFFOGATO_SPIRV_VAL_EXECUTABLE}"
+                --target-env vulkan1.0
+                "${AFFOGATO_LATTE_SPIRV_VERTEX_PARAMETER_OUTPUT_TEST_MODULE}")
+        set_tests_properties(
+            affogato_latte_spirv_vertex_parameter_output_validation PROPERTIES
             FIXTURES_REQUIRED affogato_latte_spirv_module
         )
         add_test(NAME affogato_latte_spirv_modifier_validation

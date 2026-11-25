@@ -2,11 +2,13 @@
 
 #include "latte_shader_program.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
 #include <initializer_list>
 #include <optional>
+#include <span>
 #include <stdexcept>
 #include <unordered_map>
 #include <vector>
@@ -20,6 +22,12 @@ struct LatteSpirvVertexInput
     std::uint32_t location{};
 };
 
+struct LatteSpirvVertexParameterOutput
+{
+    std::uint32_t export_index{};
+    std::uint32_t location{};
+};
+
 namespace detail
 {
 
@@ -30,8 +38,11 @@ public:
         std::array<std::array<std::optional<std::uint32_t>, 4U>, 128U>;
     using VectorValue = std::array<std::optional<std::uint32_t>, 4U>;
 
-    explicit LatteSpirvVertexSubsetBuilder(LatteSpirvVertexInput vertex_input)
-        : vertex_input_(vertex_input)
+    explicit LatteSpirvVertexSubsetBuilder(
+        LatteSpirvVertexInput vertex_input,
+        std::span<const LatteSpirvVertexParameterOutput> parameter_outputs)
+        : vertex_input_(vertex_input),
+          parameter_outputs_(parameter_outputs.begin(), parameter_outputs.end())
     {
         void_type_id_ = allocate_id();
         function_type_id_ = allocate_id();
@@ -50,9 +61,43 @@ public:
 
         append_instruction(capabilities_, 17U, {1U});
         append_instruction(memory_model_, 14U, {0U, 1U});
-        append_instruction(entry_point_, 15U, {
+        std::vector<std::uint32_t> entry_point_operands{
             0U, function_id_, 0x6E69616DU, 0U,
-            input_variable_id_, output_variable_id_});
+            input_variable_id_, output_variable_id_};
+        parameter_output_variable_ids_.reserve(parameter_outputs_.size());
+        for (std::size_t output_index = 0U;
+             output_index < parameter_outputs_.size();
+             ++output_index)
+        {
+            const LatteSpirvVertexParameterOutput& parameter_output =
+                parameter_outputs_[output_index];
+            if (parameter_output.export_index >= 32U)
+            {
+                throw std::invalid_argument(
+                    "Latte SPIR-V vertex parameter export index exceeds the supported interface");
+            }
+            for (std::size_t previous_index = 0U;
+                 previous_index < output_index;
+                 ++previous_index)
+            {
+                if (parameter_outputs_[previous_index].export_index ==
+                        parameter_output.export_index ||
+                    parameter_outputs_[previous_index].location ==
+                        parameter_output.location)
+                {
+                    throw std::invalid_argument(
+                        "Latte SPIR-V vertex parameter outputs contain a duplicate export or location");
+                }
+            }
+            const std::uint32_t variable_id = allocate_id();
+            parameter_output_variable_ids_.push_back(variable_id);
+            entry_point_operands.push_back(variable_id);
+            append_instruction(annotations_, 71U, {
+                variable_id, 30U, parameter_output.location});
+            append_instruction(globals_, 59U, {
+                output_vector_pointer_type_id_, variable_id, 3U});
+        }
+        append_instruction(entry_point_, 15U, entry_point_operands);
 
         append_instruction(annotations_, 71U, {
             input_variable_id_, 30U, vertex_input_.location});
@@ -112,6 +157,7 @@ public:
         const LatteShaderIrProgram& program)
     {
         std::optional<LatteShaderIrExport> position_export;
+        std::vector<LatteShaderIrExport> parameter_exports;
         for (const LatteShaderIrInstruction& instruction : program.instructions)
         {
             if (const auto* clause =
@@ -123,10 +169,16 @@ public:
 
             const auto& shader_export =
                 std::get<LatteShaderIrExport>(instruction);
-            if (position_export.has_value())
+            if (shader_export.fields.type == LatteExportType::parameter)
+            {
+                parameter_exports.push_back(shader_export);
+                continue;
+            }
+            if (shader_export.fields.type != LatteExportType::position ||
+                position_export.has_value())
             {
                 throw std::runtime_error(
-                    "Latte SPIR-V vertex subset supports one position export");
+                    "Latte SPIR-V vertex subset supports one position export and parameter outputs");
             }
             validate_position_export(shader_export);
             position_export = shader_export;
@@ -136,6 +188,43 @@ public:
         {
             throw std::runtime_error(
                 "Latte SPIR-V vertex subset requires a completed position export");
+        }
+
+        for (std::size_t output_index = 0U;
+             output_index < parameter_outputs_.size();
+             ++output_index)
+        {
+            const LatteSpirvVertexParameterOutput& parameter_output =
+                parameter_outputs_[output_index];
+            const auto is_matching_export =
+                [&parameter_output](const LatteShaderIrExport& shader_export)
+                {
+                    const std::uint64_t export_end =
+                        static_cast<std::uint64_t>(
+                            shader_export.fields.array_base) +
+                        shader_export.fields.burst_count;
+                    return parameter_output.export_index >=
+                            shader_export.fields.array_base &&
+                        parameter_output.export_index < export_end;
+                };
+            const auto export_iterator = std::find_if(
+                parameter_exports.begin(),
+                parameter_exports.end(),
+                is_matching_export);
+            const std::size_t matching_export_count = std::count_if(
+                parameter_exports.begin(),
+                parameter_exports.end(),
+                is_matching_export);
+            if (export_iterator == parameter_exports.end() ||
+                matching_export_count != 1U)
+            {
+                throw std::runtime_error(
+                    "Latte SPIR-V vertex parameter output has no unique matching guest export");
+            }
+            store_parameter(
+                *export_iterator,
+                parameter_output.export_index,
+                parameter_output_variable_ids_[output_index]);
         }
 
         store_position(position_export->fields);
@@ -167,6 +256,22 @@ private:
         std::vector<std::uint32_t>& words,
         std::uint16_t opcode,
         std::initializer_list<std::uint32_t> operands)
+    {
+        const std::size_t word_count = operands.size() + 1U;
+        if (word_count > 0xFFFFU)
+        {
+            throw std::runtime_error(
+                "SPIR-V instruction exceeds the word-count limit");
+        }
+        words.push_back(
+            (static_cast<std::uint32_t>(word_count) << 16U) | opcode);
+        words.insert(words.end(), operands.begin(), operands.end());
+    }
+
+    static void append_instruction(
+        std::vector<std::uint32_t>& words,
+        std::uint16_t opcode,
+        const std::vector<std::uint32_t>& operands)
     {
         const std::size_t word_count = operands.size() + 1U;
         if (word_count > 0xFFFFU)
@@ -790,6 +895,60 @@ private:
         }
     }
 
+    void store_parameter(
+        const LatteShaderIrExport& shader_export,
+        std::uint32_t export_index,
+        std::uint32_t output_variable_id)
+    {
+        constexpr std::array<std::uint8_t, 4U> identity_selectors{
+            0U, 1U, 2U, 3U};
+        const LatteExportFields& fields = shader_export.fields;
+        if (!shader_export.completes_type ||
+            fields.type != LatteExportType::parameter ||
+            fields.burst_count != 1U || fields.read_write_relative ||
+            fields.index_gpr != 0U || fields.uses_buffer_encoding ||
+            fields.component_selectors != identity_selectors ||
+            export_index < fields.array_base ||
+            static_cast<std::uint64_t>(export_index) >=
+                static_cast<std::uint64_t>(fields.array_base) +
+                    fields.burst_count)
+        {
+            throw std::runtime_error(
+                "Latte SPIR-V vertex subset requires completed identity parameter exports");
+        }
+
+        std::array<std::uint32_t, 4U> float_components{};
+        const std::size_t source_gpr =
+            fields.read_write_gpr + (export_index - fields.array_base);
+        if (source_gpr >= registers_.size())
+        {
+            throw std::runtime_error(
+                "Latte SPIR-V parameter export exceeds the shader GPR file");
+        }
+        for (std::size_t component = 0U; component < float_components.size(); ++component)
+        {
+            const auto& register_component =
+                registers_[source_gpr][component];
+            if (!register_component.has_value())
+            {
+                throw std::runtime_error(
+                    "Latte SPIR-V parameter export reads an unwritten GPR component");
+            }
+            float_components[component] = allocate_id();
+            append_instruction(function_body_, 124U, {
+                float_type_id_, float_components[component],
+                *register_component});
+        }
+
+        const std::uint32_t parameter_id = allocate_id();
+        append_instruction(function_body_, 80U, {
+            vector_type_id_, parameter_id,
+            float_components[0U], float_components[1U],
+            float_components[2U], float_components[3U]});
+        append_instruction(function_body_, 62U, {
+            output_variable_id, parameter_id});
+    }
+
     void store_position(const LatteExportFields& position_export)
     {
         std::array<std::uint32_t, 4U> float_components{};
@@ -822,6 +981,8 @@ private:
     }
 
     LatteSpirvVertexInput vertex_input_{};
+    std::vector<LatteSpirvVertexParameterOutput> parameter_outputs_;
+    std::vector<std::uint32_t> parameter_output_variable_ids_;
     std::uint32_t next_id_{1U};
     std::uint32_t void_type_id_{};
     std::uint32_t function_type_id_{};
@@ -860,14 +1021,16 @@ private:
 [[nodiscard]] inline std::vector<std::uint32_t>
 emit_latte_spirv_vertex_position_subset(
     const LatteShaderIrProgram& program,
-    LatteSpirvVertexInput vertex_input)
+    LatteSpirvVertexInput vertex_input,
+    std::span<const LatteSpirvVertexParameterOutput> parameter_outputs = {})
 {
     if (vertex_input.guest_gpr >= 128U)
     {
         throw std::runtime_error(
             "Latte SPIR-V vertex input GPR is outside the guest register file");
     }
-    detail::LatteSpirvVertexSubsetBuilder builder(vertex_input);
+    detail::LatteSpirvVertexSubsetBuilder builder(
+        vertex_input, parameter_outputs);
     return builder.emit(program);
 }
 
