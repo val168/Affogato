@@ -1,5 +1,19 @@
 # Affogato Development Status
 
+## GX2 uniform-register upload capture (2026-11-25)
+
+`GX2SetVertexUniformReg` and `GX2SetPixelUniformReg` validate the selected
+256-vector constant bank and guest source range, then snapshot big-endian
+dwords as ordered Latte ALU-constant register writes. Draw register snapshots
+retain the captured values even if the source guest memory is later changed.
+Invalid ranges and loop-constant selectors fail explicitly without appending a
+partial command batch. Tests cover stage-bank separation, word order, draw-time
+capture, bounds, and unmapped pointers. This is CPU-side state capture only:
+Latte shader constant reads, uniform blocks, loop constants, and Vulkan shader
+binding remain unsupported. Debug build and CTest passed 2/2; Release
+verification is pending. See
+[`research/12_latte_shader_isa.md`](research/12_latte_shader_isa.md).
+
 ## GX2 shader-mode state capture (2026-11-25)
 
 `GX2SetShaderModeEx` now accepts uniform-register and uniform-block modes and

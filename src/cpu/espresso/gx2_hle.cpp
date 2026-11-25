@@ -13,6 +13,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <iterator>
 #include <limits>
 #include <span>
 #include <string>
@@ -86,6 +87,10 @@ constexpr std::uint32_t gx2_shader_mode_uniform_register = 0U;
 constexpr std::uint32_t gx2_shader_mode_uniform_block = 1U;
 constexpr std::uint32_t gx2_shader_mode_max_gpr_count = 0xFFU;
 constexpr std::uint32_t gx2_shader_mode_max_stack_entry_count = 0xFFFU;
+constexpr std::uint32_t gx2_uniform_register_count = 256U;
+constexpr std::uint32_t gx2_uniform_words_per_register = 4U;
+constexpr std::uint32_t gx2_pixel_uniform_register_base = 0x00030000U;
+constexpr std::uint32_t gx2_vertex_uniform_register_base = 0x00031000U;
 static_assert(gx2_context_shadow_state_size == gx2_context_profiling_offset);
 static_assert(gx2_context_display_list_offset +
                   gx2_context_display_list_capacity ==
@@ -227,6 +232,87 @@ constexpr std::uint32_t latte_pipe_interleave_bytes = 256U;
 constexpr std::uint32_t latte_pipe_count = 2U;
 constexpr std::uint32_t latte_bank_count = 4U;
 constexpr std::uint32_t latte_split_size = 2048U;
+
+void append_gx2_uniform_register_write(
+    EspressoCore& core,
+    std::uint32_t register_base,
+    std::uint32_t register_offset,
+    std::uint32_t word_count,
+    std::uint32_t data_address,
+    const char* api_name)
+{
+    if (register_offset >= gx2_uniform_register_count)
+    {
+        throw HleExecutionError(
+            std::string(api_name) + ": uniform register offset is out of range");
+    }
+
+    const std::uint64_t first_word =
+        static_cast<std::uint64_t>(register_offset) *
+        gx2_uniform_words_per_register;
+    const std::uint64_t available_word_count =
+        static_cast<std::uint64_t>(gx2_uniform_register_count) *
+        gx2_uniform_words_per_register - first_word;
+    if (word_count > available_word_count)
+    {
+        throw HleExecutionError(
+            std::string(api_name) +
+            ": uniform data extends past the 256-register constant file");
+    }
+    if (word_count == 0U)
+    {
+        return;
+    }
+    if (data_address == 0U || (data_address & 3U) != 0U)
+    {
+        throw HleExecutionError(
+            std::string(api_name) + ": data pointer is null or misaligned");
+    }
+
+    const std::uint64_t data_size =
+        static_cast<std::uint64_t>(word_count) * sizeof(std::uint32_t);
+    if (static_cast<std::uint64_t>(data_address) + data_size >
+        guest_address_space_end)
+    {
+        throw HleExecutionError(
+            std::string(api_name) + ": data range wraps guest address space");
+    }
+    try
+    {
+        core.memory.validate_read_range(
+            data_address,
+            static_cast<std::size_t>(data_size));
+    }
+    catch (const GuestMemoryFault&)
+    {
+        throw HleExecutionError(
+            std::string(api_name) + ": data range is outside mapped guest memory");
+    }
+
+    std::vector<Gx2Command> uniform_commands;
+    uniform_commands.reserve(word_count);
+    for (std::uint32_t word_index = 0U; word_index < word_count; ++word_index)
+    {
+        const std::uint64_t register_word_offset = first_word + word_index;
+        const std::uint32_t register_address = register_base +
+            static_cast<std::uint32_t>(
+                register_word_offset * sizeof(std::uint32_t));
+        const std::uint32_t guest_word_offset = static_cast<std::uint32_t>(
+            static_cast<std::uint64_t>(word_index) * sizeof(std::uint32_t));
+        const std::uint32_t guest_word_address = data_address + guest_word_offset;
+        uniform_commands.push_back({
+            Gx2CommandType::set_alu_constant,
+            register_address,
+            core.memory.read32_be(guest_word_address)});
+    }
+
+    auto& pending_commands = core.gx2.pending_commands;
+    pending_commands.reserve(pending_commands.size() + uniform_commands.size());
+    pending_commands.insert(
+        pending_commands.end(),
+        std::make_move_iterator(uniform_commands.begin()),
+        std::make_move_iterator(uniform_commands.end()));
+}
 
 Gx2ProgramShaderBinding capture_program_shader(
     EspressoCore& core,
@@ -6382,6 +6468,48 @@ void register_gx2_hle(HleDispatcher& dispatcher)
                 std::nullopt,
                 binding});
             core.gx2.fetch_shader = std::move(binding);
+        });
+
+    dispatcher.register_function(
+        "gx2",
+        "GX2SetVertexUniformReg",
+        [](EspressoCore& core) {
+            constexpr const char* api_name = "gx2::GX2SetVertexUniformReg";
+            const std::uint32_t register_offset = core.state.gpr[3];
+            if ((register_offset >> 16U) != 0U)
+            {
+                throw HleExecutionError(
+                    std::string(api_name) +
+                    ": loop-constant uploads are not implemented");
+            }
+            append_gx2_uniform_register_write(
+                core,
+                gx2_vertex_uniform_register_base,
+                register_offset,
+                core.state.gpr[4],
+                core.state.gpr[5],
+                api_name);
+        });
+
+    dispatcher.register_function(
+        "gx2",
+        "GX2SetPixelUniformReg",
+        [](EspressoCore& core) {
+            constexpr const char* api_name = "gx2::GX2SetPixelUniformReg";
+            const std::uint32_t register_offset = core.state.gpr[3];
+            if ((register_offset >> 16U) != 0U)
+            {
+                throw HleExecutionError(
+                    std::string(api_name) +
+                    ": loop-constant uploads are not implemented");
+            }
+            append_gx2_uniform_register_write(
+                core,
+                gx2_pixel_uniform_register_base,
+                register_offset,
+                core.state.gpr[4],
+                core.state.gpr[5],
+                api_name);
         });
 
     dispatcher.register_function(

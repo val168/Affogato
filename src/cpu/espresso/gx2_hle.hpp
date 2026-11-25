@@ -31,6 +31,7 @@ enum class Gx2CommandType
     set_color_buffer,
     set_depth_buffer,
     set_shader_mode,
+    set_alu_constant,
     draw,
 };
 

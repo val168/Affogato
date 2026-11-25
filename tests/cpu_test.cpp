@@ -33636,6 +33636,145 @@ void latte_control_flow_decoder_tests()
     assert(rejected_missing_end_marker);
 }
 
+void gx2_set_uniform_register_hle_tests()
+{
+    using affogato::gpu::Gx2RegisterState;
+
+    constexpr std::uint32_t return_address = 0x2000U;
+    constexpr std::uint32_t vertex_uniform_register_base = 0x00031000U;
+    constexpr std::uint32_t pixel_uniform_register_base = 0x00030000U;
+    constexpr std::uint32_t vertex_data_address = 0x500U;
+    constexpr std::uint32_t pixel_data_address = 0x600U;
+    constexpr std::uint32_t uniform_data_word_count = 4U;
+    constexpr std::array<std::uint32_t, uniform_data_word_count> uniform_words{
+        0x3F800000U,
+        0xBF000000U,
+        0x40400000U,
+        0xC0800000U};
+
+    EspressoCore core(0x1000U);
+    register_gx2_hle(core.hle);
+    core.gx2.initialized = true;
+    for (std::size_t index = 0U; index < uniform_words.size(); ++index)
+    {
+        core.memory.write32_be(
+            vertex_data_address + static_cast<std::uint32_t>(index * 4U),
+            uniform_words[index]);
+        core.memory.write32_be(
+            pixel_data_address + static_cast<std::uint32_t>(index * 4U),
+            uniform_words[index]);
+    }
+
+    core.state.gpr[3] = 2U;
+    core.state.gpr[4] = uniform_data_word_count;
+    core.state.gpr[5] = vertex_data_address;
+    core.state.lr = return_address;
+    const auto gprs_before = core.state.gpr;
+    core.state.cia = core.hle.bind_import("gx2", "GX2SetVertexUniformReg");
+    const RunResult vertex_result = core.run(1U);
+    assert(vertex_result.reason == StopReason::instruction_limit);
+    assert(core.state.gpr == gprs_before);
+    const std::vector<Gx2Command> vertex_commands = take_gx2_commands(core.gx2);
+    assert(vertex_commands.size() == uniform_data_word_count);
+    for (std::size_t index = 0U; index < uniform_words.size(); ++index)
+    {
+        assert(vertex_commands[index].type == Gx2CommandType::set_alu_constant);
+        assert(vertex_commands[index].register_address ==
+               vertex_uniform_register_base + 8U * 4U +
+                   static_cast<std::uint32_t>(index * 4U));
+        assert(vertex_commands[index].value == uniform_words[index]);
+    }
+
+    Gx2RegisterState register_state;
+    register_state.apply(vertex_commands);
+    core.memory.write32_be(vertex_data_address, 0xDEADBEEFU);
+    Gx2Command draw_command{};
+    draw_command.type = Gx2CommandType::draw;
+    const std::array<Gx2Command, 1U> vertex_draw{draw_command};
+    register_state.apply(vertex_draw);
+
+    core.state.gpr[3] = 0U;
+    core.state.gpr[4] = uniform_data_word_count;
+    core.state.gpr[5] = pixel_data_address;
+    core.state.cia = core.hle.bind_import("gx2", "GX2SetPixelUniformReg");
+    const RunResult pixel_result = core.run(1U);
+    assert(pixel_result.reason == StopReason::instruction_limit);
+    const std::vector<Gx2Command> pixel_commands = take_gx2_commands(core.gx2);
+    assert(pixel_commands.size() == uniform_data_word_count);
+    for (std::size_t index = 0U; index < uniform_words.size(); ++index)
+    {
+        assert(pixel_commands[index].type == Gx2CommandType::set_alu_constant);
+        assert(pixel_commands[index].register_address ==
+               pixel_uniform_register_base + static_cast<std::uint32_t>(index * 4U));
+        assert(pixel_commands[index].value == uniform_words[index]);
+    }
+    std::vector<Gx2Command> pixel_draw(pixel_commands);
+    pixel_draw.push_back(draw_command);
+    register_state.apply(pixel_draw);
+
+    const auto find_register = [](
+        std::span<const affogato::gpu::Gx2RegisterSnapshotEntry> registers,
+        std::uint32_t address)
+        -> std::optional<affogato::gpu::Gx2RegisterSnapshotEntry>
+    {
+        const auto found = std::find_if(
+            registers.begin(),
+            registers.end(),
+            [address](const auto& entry) { return entry.address == address; });
+        if (found == registers.end())
+        {
+            return std::nullopt;
+        }
+        return *found;
+    };
+    const auto vertex_snapshot = register_state.draw_snapshot(0U);
+    const auto pixel_snapshot = register_state.draw_snapshot(1U);
+    assert(vertex_snapshot.has_value());
+    assert(pixel_snapshot.has_value());
+    const auto vertex_constant = find_register(
+        vertex_snapshot->registers,
+        vertex_uniform_register_base + 8U * 4U);
+    const auto pixel_constant = find_register(
+        pixel_snapshot->registers,
+        pixel_uniform_register_base);
+    assert(vertex_constant.has_value());
+    assert(vertex_constant->value == uniform_words[0U]);
+    assert(pixel_constant.has_value());
+    assert(pixel_constant->value == uniform_words[0U]);
+
+    const std::size_t command_count_before_invalid_request =
+        core.gx2.pending_commands.size();
+    core.state.gpr[3] = 255U;
+    core.state.gpr[4] = 5U;
+    core.state.gpr[5] = vertex_data_address;
+    core.state.cia = core.hle.bind_import("gx2", "GX2SetVertexUniformReg");
+    const RunResult overflowing_constant_result = core.run(1U);
+    assert(overflowing_constant_result.reason == StopReason::hle_error);
+    assert(overflowing_constant_result.detail.find(
+               "extends past the 256-register constant file") != std::string::npos);
+    assert(core.gx2.pending_commands.size() == command_count_before_invalid_request);
+
+    core.state.gpr[3] = 0x00010000U;
+    core.state.gpr[4] = uniform_data_word_count;
+    core.state.gpr[5] = vertex_data_address;
+    core.state.cia = core.hle.bind_import("gx2", "GX2SetVertexUniformReg");
+    const RunResult loop_constant_result = core.run(1U);
+    assert(loop_constant_result.reason == StopReason::hle_error);
+    assert(loop_constant_result.detail.find(
+               "loop-constant uploads are not implemented") != std::string::npos);
+    assert(core.gx2.pending_commands.size() == command_count_before_invalid_request);
+
+    core.state.gpr[3] = 0U;
+    core.state.gpr[4] = uniform_data_word_count;
+    core.state.gpr[5] = 0x00000FFCU;
+    core.state.cia = core.hle.bind_import("gx2", "GX2SetPixelUniformReg");
+    const RunResult unmapped_data_result = core.run(1U);
+    assert(unmapped_data_result.reason == StopReason::hle_error);
+    assert(unmapped_data_result.detail.find(
+               "outside mapped guest memory") != std::string::npos);
+    assert(core.gx2.pending_commands.size() == command_count_before_invalid_request);
+}
+
 void gx2_set_shader_mode_ex_hle_tests()
 {
     using affogato::gpu::Gx2RegisterState;
@@ -44334,6 +44473,7 @@ int main(int argc, char* argv[])
     gx2_set_vertex_and_geometry_texture_hle_tests();
     gx2_set_pixel_sampler_hle_tests();
     gx2_set_sampler_border_color_hle_tests();
+    gx2_set_uniform_register_hle_tests();
     gx2_set_shader_mode_ex_hle_tests();
     gx2_register_state_tests();
     latte_texture_staging_tests();

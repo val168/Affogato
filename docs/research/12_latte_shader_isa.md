@@ -130,6 +130,37 @@ Latte traces or hardware fixtures are still needed to confirm this mapping,
 resource allocation policy, and synchronization behavior before these state
 updates can be treated as hardware-verified.
 
+### Uniform-register uploads
+
+WUT declares `GX2SetVertexUniformReg(offset, count, data)` and
+`GX2SetPixelUniformReg(offset, count, data)` with 32-bit word pointers. Decaf's
+[`gx2_shaders.cpp`](https://github.com/decaf-emu/decaf-emu/blob/master/src/libdecaf/src/cafe/libraries/gx2/gx2_shaders.cpp)
+maps vertex uploads to `SQ_ALU_CONSTANT0_256` and pixel uploads to
+`SQ_ALU_CONSTANT0_0`; the R6xx/R7xx register map places those banks at
+`0x31000` and `0x30000`, respectively. Decaf passes `count` words to its
+big-endian ALU-constant packet writer. A Wii U trace records a count of 4 when
+uploading one float4, consistent with dword-count units. The R7xx register
+model lays constant vectors out as four consecutive 32-bit words. These
+references establish the current modeled layout, but not all Latte
+constant-file edge cases.
+
+Affogato validates the 256-vector bank bounds and guest source range, reads
+each dword through guest big-endian access, and appends typed
+`set_alu_constant` writes to the ordered GX2 stream. The vertex bank begins at
+vector 256 in the shared register map; pixel begins at vector 0. Each write is
+retained by `Gx2RegisterState` and draw-time register snapshots. This captures
+guest values but does not yet make the shader interpreter read constant-file
+selectors or bind Vulkan uniforms.
+
+The high 16 bits of Decaf's offset select an `SQ_LOOP_CONST_*` entry, while the
+lower bits select the ordinary constant register location. Affogato currently
+rejects loop-constant uploads explicitly because the per-stage Latte register
+mapping and bounds have not been independently confirmed. Uniform-block
+uploads are also not implemented; they require bounded guest-buffer capture,
+resource descriptors, and draw-time buffer binding. Tests cover stage-bank
+separation, word order, draw snapshots, bounds, unmapped pointers, and the
+explicit loop-constant limitation.
+
 ### Hardware-family references
 
 WiiUBrew's [GX2 hardware page](https://wiiubrew.org/wiki/Hardware/GX2)
