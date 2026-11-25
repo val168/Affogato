@@ -762,12 +762,52 @@ int main(int argc, char* argv[])
             matched_varying_input);
     assert(module_contains_opcode(matched_multiply_module, 133U));
 
+    auto matched_maximum_program = matched_move_program;
+    auto& matched_maximum_clause = std::get<
+        affogato::gpu::LatteShaderIrAluClause>(
+            matched_maximum_program.instructions[0U]);
+    for (affogato::gpu::LatteAluOp2Instruction& operation :
+         matched_maximum_clause.groups[0U].instructions)
+    {
+        operation.opcode =
+            affogato::gpu::latte_alu_op2_maximum_dx10_opcode;
+        operation.source1_selector =
+            affogato::gpu::latte_alu_source_half_float_selector;
+        operation.source1_channel = operation.destination_component;
+    }
+    const std::vector<std::uint32_t> matched_maximum_module =
+        affogato::gpu::emit_latte_spirv_fragment_matched_alu_subset(
+            matched_maximum_program,
+            matched_varying_input);
+    assert(module_contains_opcode(matched_maximum_module, 190U));
+    assert(module_contains_opcode(matched_maximum_module, 169U));
+
+    auto matched_minimum_program = matched_move_program;
+    auto& matched_minimum_clause = std::get<
+        affogato::gpu::LatteShaderIrAluClause>(
+            matched_minimum_program.instructions[0U]);
+    for (affogato::gpu::LatteAluOp2Instruction& operation :
+         matched_minimum_clause.groups[0U].instructions)
+    {
+        operation.opcode =
+            affogato::gpu::latte_alu_op2_minimum_dx10_opcode;
+        operation.source1_selector =
+            affogato::gpu::latte_alu_source_half_float_selector;
+        operation.source1_channel = operation.destination_component;
+    }
+    const std::vector<std::uint32_t> matched_minimum_module =
+        affogato::gpu::emit_latte_spirv_fragment_matched_alu_subset(
+            matched_minimum_program,
+            matched_varying_input);
+    assert(module_contains_opcode(matched_minimum_module, 184U));
+    assert(module_contains_opcode(matched_minimum_module, 169U));
+
     auto unsupported_matched_move_program = matched_move_program;
     auto& unsupported_matched_move_clause = std::get<
         affogato::gpu::LatteShaderIrAluClause>(
             unsupported_matched_move_program.instructions[0U]);
     unsupported_matched_move_clause.groups[0U].instructions[0U].opcode =
-        affogato::gpu::latte_alu_op2_maximum_dx10_opcode;
+        affogato::gpu::latte_alu_op2_add_integer_opcode;
     bool rejected_unsupported_matched_pixel_operation = false;
     try
     {
@@ -874,7 +914,7 @@ int main(int argc, char* argv[])
     }
     assert(rejected_nonzero_mrt);
 
-    if (argc == 19 && std::string_view(argv[1]) == "--write-modules")
+    if (argc == 21 && std::string_view(argv[1]) == "--write-modules")
     {
         write_module(argv[2], module);
         write_module(argv[3], modified_module);
@@ -893,6 +933,8 @@ int main(int argc, char* argv[])
         write_module(argv[16], matched_move_module);
         write_module(argv[17], matched_add_module);
         write_module(argv[18], matched_multiply_module);
+        write_module(argv[19], matched_maximum_module);
+        write_module(argv[20], matched_minimum_module);
     }
     return 0;
 }

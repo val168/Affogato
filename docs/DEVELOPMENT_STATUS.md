@@ -1,6 +1,6 @@
 # Affogato Development Status
 
-## Matched varying and guest MOV/ADD/MUL through Vulkan readback (2026-11-25)
+## Matched varying and guest OP2 arithmetic through Vulkan readback (2026-11-25)
 
 The new `--gx2-guest-triangle-matched-varying-move-smoke-test` runs a controlled
 guest PPC/GX2 setup whose vertex shader exports a parameter with semantic
@@ -12,14 +12,14 @@ deterministic readback verifies a green gradient in the emulated color buffer
 and swapchain frame, and the scanout copy path remains in the test. This
 executes the tested guest MOV subset, while other guest pixel operations,
 ordinary game draw routing, and WWHD rendering remain unsupported.
-The matched fragment emitter also supports float ADD and IEEE MUL. Controlled
-guest shader fixtures execute MOV, ADD-by-0.5, and MUL-by-0.5, each passing
-Vulkan readback for the interpolated gradient. Their generated modules pass
-`spirv-val`. Source absolute-value and sign-bit negate modifiers are also
-emitted and covered by the ADD module's SPIR-V validation, but not yet by a
-Vulkan readback variant. This verifies the bounded operations on these inputs,
-not general Latte arithmetic behavior. Full Debug and Release CTest passed
-39/39 at commit `64358d1`, before modifier support.
+The matched fragment emitter also supports float ADD, IEEE MUL, and the
+DX10-style maximum/minimum forms. Controlled guest shader fixtures execute
+MOV, ADD-by-0.5, MUL-by-0.5, MAX_DX10-by-0.5, and MIN_DX10-by-0.5, with Vulkan
+readback checking each output range and the interpolated green gradient.
+Generated modules pass `spirv-val`. Source absolute-value and sign-bit negate
+modifiers are emitted and covered by SPIR-V validation, but not yet by Vulkan
+readback. These are bounded fixtures, not general Latte arithmetic coverage or
+independent hardware conformance.
 
 ## Fragment varying interface fixture (2026-11-25)
 
@@ -27,9 +27,10 @@ An explicit fragment passthrough module remains as an interface fixture and
 accepts only the default perspective interpolation mode; flat, no-perspective,
 centroid, sample, and point-sprite inputs fail explicitly. The matched-input
 module consumes one linked `float4`, executes supported
-four-lane guest MOV, float ADD, or IEEE MUL groups, and applies the guest MRT0
-swizzle. Each generated module has a `spirv-val` fixture. The guest integration
-tests verify MOV, ADD-by-0.5, and MUL-by-0.5 through Vulkan readback.
+four-lane guest MOV, float ADD, IEEE MUL, MAX_DX10, or MIN_DX10 groups, and
+applies the guest MRT0 swizzle. Each generated module has a `spirv-val` fixture.
+The guest integration tests verify these operation cases through Vulkan
+readback.
 
 ## Vertex shader parameter exports to SPIR-V (2026-11-25)
 

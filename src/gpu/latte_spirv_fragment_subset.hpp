@@ -431,6 +431,7 @@ private:
         function_type_id_ = allocate_id();
         float_type_id_ = allocate_id();
         uint_type_id_ = allocate_id();
+        bool_type_id_ = allocate_id();
         vector_type_id_ = allocate_id();
         input_pointer_type_id_ = allocate_id();
         output_pointer_type_id_ = allocate_id();
@@ -455,6 +456,7 @@ private:
             function_type_id_, void_type_id_});
         append_instruction(types_, 22U, {float_type_id_, 32U});
         append_instruction(types_, 21U, {uint_type_id_, 32U, 0U});
+        append_instruction(types_, 20U, {bool_type_id_});
         append_instruction(types_, 23U, {
             vector_type_id_, float_type_id_, 4U});
         append_instruction(types_, 32U, {
@@ -583,7 +585,9 @@ private:
                 const bool supported_opcode =
                     operation.opcode == latte_alu_op2_move_opcode ||
                     operation.opcode == latte_alu_op2_add_float_opcode ||
-                    operation.opcode == latte_alu_op2_multiply_ieee_opcode;
+                    operation.opcode == latte_alu_op2_multiply_ieee_opcode ||
+                    operation.opcode == latte_alu_op2_maximum_dx10_opcode ||
+                    operation.opcode == latte_alu_op2_minimum_dx10_opcode;
                 if (!supported_opcode ||
                     operation.destination_component != lane ||
                     operation.last_in_group != (lane == 3U) ||
@@ -628,13 +632,32 @@ private:
                     append_instruction(function_body_, 124U, {
                         float_type_id_, source1_float_id, source1_id});
                     const std::uint32_t result_float_id = allocate_id();
-                    const std::uint16_t spirv_opcode =
-                        operation.opcode == latte_alu_op2_add_float_opcode
-                            ? 129U
-                            : 133U;
-                    append_instruction(function_body_, spirv_opcode, {
-                        float_type_id_, result_float_id,
-                        source0_float_id, source1_float_id});
+                    if (operation.opcode == latte_alu_op2_add_float_opcode ||
+                        operation.opcode == latte_alu_op2_multiply_ieee_opcode)
+                    {
+                        const std::uint16_t spirv_opcode =
+                            operation.opcode == latte_alu_op2_add_float_opcode
+                                ? 129U
+                                : 133U;
+                        append_instruction(function_body_, spirv_opcode, {
+                            float_type_id_, result_float_id,
+                            source0_float_id, source1_float_id});
+                    }
+                    else
+                    {
+                        const std::uint32_t comparison_id = allocate_id();
+                        const std::uint16_t comparison_opcode =
+                            operation.opcode ==
+                                    latte_alu_op2_maximum_dx10_opcode
+                                ? 190U
+                                : 184U;
+                        append_instruction(function_body_, comparison_opcode, {
+                            bool_type_id_, comparison_id,
+                            source0_float_id, source1_float_id});
+                        append_instruction(function_body_, 169U, {
+                            float_type_id_, result_float_id, comparison_id,
+                            source0_float_id, source1_float_id});
+                    }
                     lane_values[lane] = allocate_id();
                     append_instruction(function_body_, 124U, {
                         uint_type_id_, lane_values[lane], result_float_id});
@@ -721,6 +744,7 @@ private:
     std::uint32_t function_type_id_{};
     std::uint32_t float_type_id_{};
     std::uint32_t uint_type_id_{};
+    std::uint32_t bool_type_id_{};
     std::uint32_t vector_type_id_{};
     std::uint32_t input_pointer_type_id_{};
     std::uint32_t output_pointer_type_id_{};

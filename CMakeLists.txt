@@ -267,6 +267,10 @@ if(BUILD_TESTING)
         "${CMAKE_CURRENT_BINARY_DIR}/latte_fragment_matched_add.spv")
     set(AFFOGATO_LATTE_SPIRV_FRAGMENT_MATCHED_MULTIPLY_TEST_MODULE
         "${CMAKE_CURRENT_BINARY_DIR}/latte_fragment_matched_multiply.spv")
+    set(AFFOGATO_LATTE_SPIRV_FRAGMENT_MATCHED_MAXIMUM_TEST_MODULE
+        "${CMAKE_CURRENT_BINARY_DIR}/latte_fragment_matched_maximum.spv")
+    set(AFFOGATO_LATTE_SPIRV_FRAGMENT_MATCHED_MINIMUM_TEST_MODULE
+        "${CMAKE_CURRENT_BINARY_DIR}/latte_fragment_matched_minimum.spv")
     add_test(NAME affogato_latte_spirv_tests
         COMMAND affogato_latte_spirv_tests
             --write-modules
@@ -286,7 +290,9 @@ if(BUILD_TESTING)
             "${AFFOGATO_LATTE_SPIRV_FRAGMENT_VARYING_TEST_MODULE}"
             "${AFFOGATO_LATTE_SPIRV_FRAGMENT_MATCHED_MOVE_TEST_MODULE}"
             "${AFFOGATO_LATTE_SPIRV_FRAGMENT_MATCHED_ADD_TEST_MODULE}"
-            "${AFFOGATO_LATTE_SPIRV_FRAGMENT_MATCHED_MULTIPLY_TEST_MODULE}")
+            "${AFFOGATO_LATTE_SPIRV_FRAGMENT_MATCHED_MULTIPLY_TEST_MODULE}"
+            "${AFFOGATO_LATTE_SPIRV_FRAGMENT_MATCHED_MAXIMUM_TEST_MODULE}"
+            "${AFFOGATO_LATTE_SPIRV_FRAGMENT_MATCHED_MINIMUM_TEST_MODULE}")
     set_tests_properties(affogato_latte_spirv_tests PROPERTIES
         FIXTURES_SETUP affogato_latte_spirv_module
     )
@@ -341,6 +347,22 @@ if(BUILD_TESTING)
                 "${AFFOGATO_LATTE_SPIRV_FRAGMENT_MATCHED_MULTIPLY_TEST_MODULE}")
         set_tests_properties(
             affogato_latte_spirv_fragment_matched_multiply_validation PROPERTIES
+            FIXTURES_REQUIRED affogato_latte_spirv_module
+        )
+        add_test(NAME affogato_latte_spirv_fragment_matched_maximum_validation
+            COMMAND "${AFFOGATO_SPIRV_VAL_EXECUTABLE}"
+                --target-env vulkan1.0
+                "${AFFOGATO_LATTE_SPIRV_FRAGMENT_MATCHED_MAXIMUM_TEST_MODULE}")
+        set_tests_properties(
+            affogato_latte_spirv_fragment_matched_maximum_validation PROPERTIES
+            FIXTURES_REQUIRED affogato_latte_spirv_module
+        )
+        add_test(NAME affogato_latte_spirv_fragment_matched_minimum_validation
+            COMMAND "${AFFOGATO_SPIRV_VAL_EXECUTABLE}"
+                --target-env vulkan1.0
+                "${AFFOGATO_LATTE_SPIRV_FRAGMENT_MATCHED_MINIMUM_TEST_MODULE}")
+        set_tests_properties(
+            affogato_latte_spirv_fragment_matched_minimum_validation PROPERTIES
             FIXTURES_REQUIRED affogato_latte_spirv_module
         )
         add_test(NAME affogato_latte_spirv_modifier_validation
@@ -534,6 +556,16 @@ if(BUILD_TESTING)
             NAME affogato_vulkan_guest_matched_varying_multiply_half_readback
             COMMAND affogato_frontend
                 --gx2-guest-triangle-matched-varying-multiply-half-smoke-test
+        )
+        add_test(
+            NAME affogato_vulkan_guest_matched_varying_maximum_half_readback
+            COMMAND affogato_frontend
+                --gx2-guest-triangle-matched-varying-maximum-half-smoke-test
+        )
+        add_test(
+            NAME affogato_vulkan_guest_matched_varying_minimum_half_readback
+            COMMAND affogato_frontend
+                --gx2-guest-triangle-matched-varying-minimum-half-smoke-test
         )
     endif()
 

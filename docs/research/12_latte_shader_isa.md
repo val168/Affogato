@@ -120,17 +120,20 @@ fragment `Input` at the linked pixel-input location, loads its `float4`, and
 writes it to MRT0. It remains a diagnostic interface module and rejects flat,
 no-perspective, centroid, sample, and point-sprite inputs until their GX2
 semantics are mapped. A separate matched-input ALU emitter translates bounded
-guest MOV, ADD, and MUL_IEEE operations instead of substituting this
-passthrough module. The emitter interprets register values as IEEE-754 float32
-for ADD and MUL_IEEE, using SPIR-V `OpFAdd` and `OpFMul`. Source absolute value
-and negation use bitwise magnitude masking and sign-bit flipping, matching the
-CPU reference subset and preserving the other binary32 bits. Relative source
-addressing and destination modifiers remain unsupported. The R700 ISA guide
-describes ADD as floating point addition and distinguishes IEEE `MUL_IEEE`
-from non-IEEE `MUL` around zero operands. This is related GPU-family evidence
-rather than direct Latte conformance; opcode values and modifier ordering match
-Affogato's existing shader interpreter definitions in
-`latte_shader_interpreter.hpp`.
+guest MOV, ADD, MUL_IEEE, MAX_DX10, and MIN_DX10 operations instead of
+substituting this passthrough module. The emitter interprets register values
+as IEEE-754 float32 for arithmetic, using SPIR-V `OpFAdd`, `OpFMul`, ordered
+comparisons, and `OpSelect`. The ordered comparisons select source 1 for
+unordered values, matching Affogato's CPU reference behavior for the DX10
+min/max forms. Source absolute value and negation use bitwise magnitude
+masking and sign-bit flipping, matching the CPU reference subset and
+preserving the other binary32 bits. Relative source addressing and destination
+modifiers remain unsupported. The [R700 ISA guide](https://www.amd.com/system/files/TechDocs/R700-Family_Instruction_Set_Architecture.pdf),
+chapter 9's `ADD`, `MUL_IEEE`, `MAX_DX10`, and `MIN_DX10` descriptions document
+these related-family operations, including the DX10 NaN handling choice. This
+is related GPU-family evidence rather than direct Latte conformance; opcode
+values and modifier ordering match Affogato's existing shader interpreter
+definitions in `latte_shader_interpreter.hpp`.
 
 ### Controlled matched-varying Vulkan integration (2026-11-25)
 
@@ -141,14 +144,15 @@ HLE fixture issues a parameter export at guest array index 0 with semantic
 `pixel_input_index`. The vertex module writes the selected guest GPR vector.
 The captured pixel program contains a four-lane OP2 MOV group from that input
 GPR to the MRT0 export GPR; the bounded fragment emitter translates those MOVs
-to SPIR-V. Deterministic MOV, ADD-by-0.5, and IEEE-MUL-by-0.5 modules
-pass `spirv-val`. Each guest PPC/GX2 fixture also routes the respective program
-through the same matched-input Vulkan pipeline and verifies the interpolated
-green gradient in framebuffer readback; the MOV variant additionally verifies
-the presented frame and scanout copy. This verifies these bounded operations
-for the fixtures, not independent Latte hardware conformance. Other guest
-pixel operations, other interpolation modes, ordinary game draw selection,
-and WWHD output remain unsupported.
+to SPIR-V. Deterministic MOV, ADD-by-0.5, IEEE-MUL-by-0.5, MAX_DX10-by-0.5,
+and MIN_DX10-by-0.5 modules pass `spirv-val`. Each guest PPC/GX2 fixture also
+routes the respective program through the same matched-input Vulkan pipeline
+and verifies the expected transformed color range and interpolated green
+gradient in framebuffer readback; the MOV variant additionally verifies the
+presented frame and scanout copy. This verifies these bounded operations for
+the fixtures, not independent Latte hardware conformance. Other guest pixel
+operations, other interpolation modes, ordinary game draw selection, and
+WWHD output remain unsupported.
 
 ## Evidence categories
 

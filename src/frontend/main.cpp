@@ -1972,7 +1972,9 @@ enum class GuestTriangleShader
     spirv_default_pixel_input,
     spirv_matched_varying_move,
     spirv_matched_varying_add_half,
-    spirv_matched_varying_multiply_half
+    spirv_matched_varying_multiply_half,
+    spirv_matched_varying_maximum_half,
+    spirv_matched_varying_minimum_half
 };
 
 [[nodiscard]] bool contains_expected_interpolated_pixels(
@@ -1992,8 +1994,12 @@ enum class GuestTriangleShader
 
     const bool is_add_half =
         shader == GuestTriangleShader::spirv_matched_varying_add_half;
-    const bool is_multiply_half =
-        shader == GuestTriangleShader::spirv_matched_varying_multiply_half;
+    const bool is_maximum_half =
+        shader == GuestTriangleShader::spirv_matched_varying_maximum_half;
+    const bool is_multiply_or_minimum_half =
+        shader == GuestTriangleShader::spirv_matched_varying_multiply_half ||
+        shader == GuestTriangleShader::spirv_matched_varying_minimum_half;
+    const bool has_half_added_color = is_add_half || is_maximum_half;
 
     for (std::size_t pixel_offset = 0U;
          pixel_offset + bytes_per_pixel <= rgba_pixels.size();
@@ -2003,12 +2009,12 @@ enum class GuestTriangleShader
         const std::uint8_t green = rgba_pixels[pixel_offset + 1U];
         const std::uint8_t blue = rgba_pixels[pixel_offset + 2U];
         const std::uint8_t alpha = rgba_pixels[pixel_offset + 3U];
-        const bool has_expected_red_and_blue = is_add_half
+        const bool has_expected_red_and_blue = has_half_added_color
             ? red >= minimum_add_half_channel &&
                 blue >= minimum_add_half_channel
             : red <= maximum_zero_channel && blue <= maximum_zero_channel;
         const bool has_expected_green = green >= minimum_varying_green;
-        const bool has_expected_alpha = is_multiply_half
+        const bool has_expected_alpha = is_multiply_or_minimum_half
             ? alpha >= minimum_multiply_half_alpha &&
                 alpha <= maximum_multiply_half_alpha
             : alpha >= minimum_opaque_alpha;
@@ -2037,11 +2043,15 @@ int run_gx2_guest_triangle_test(
         shader == GuestTriangleShader::spirv_default_pixel_input ||
         shader == GuestTriangleShader::spirv_matched_varying_move ||
         shader == GuestTriangleShader::spirv_matched_varying_add_half ||
-        shader == GuestTriangleShader::spirv_matched_varying_multiply_half;
+        shader == GuestTriangleShader::spirv_matched_varying_multiply_half ||
+        shader == GuestTriangleShader::spirv_matched_varying_maximum_half ||
+        shader == GuestTriangleShader::spirv_matched_varying_minimum_half;
     const bool use_varying_passthrough =
         shader == GuestTriangleShader::spirv_matched_varying_move ||
         shader == GuestTriangleShader::spirv_matched_varying_add_half ||
-        shader == GuestTriangleShader::spirv_matched_varying_multiply_half;
+        shader == GuestTriangleShader::spirv_matched_varying_multiply_half ||
+        shader == GuestTriangleShader::spirv_matched_varying_maximum_half ||
+        shader == GuestTriangleShader::spirv_matched_varying_minimum_half;
     constexpr std::uint32_t vertex_buffer_address = 0x10000U;
     constexpr std::uint32_t index_buffer_address = 0x4000U;
     constexpr std::uint32_t big_endian_index_buffer_address = 0x5000U;
@@ -2477,6 +2487,22 @@ int run_gx2_guest_triangle_test(
                     affogato::gpu::latte_alu_source_half_float_selector);
                 pixel_opcode =
                     affogato::gpu::latte_alu_op2_multiply_ieee_opcode;
+            }
+            else if (shader ==
+                     GuestTriangleShader::spirv_matched_varying_maximum_half)
+            {
+                source1_encoding = static_cast<std::uint32_t>(
+                    affogato::gpu::latte_alu_source_half_float_selector);
+                pixel_opcode =
+                    affogato::gpu::latte_alu_op2_maximum_dx10_opcode;
+            }
+            else if (shader ==
+                     GuestTriangleShader::spirv_matched_varying_minimum_half)
+            {
+                source1_encoding = static_cast<std::uint32_t>(
+                    affogato::gpu::latte_alu_source_half_float_selector);
+                pixel_opcode =
+                    affogato::gpu::latte_alu_op2_minimum_dx10_opcode;
             }
             const std::uint32_t source_word =
                 source_selector |
@@ -3544,6 +3570,22 @@ int main(int argc, char* argv[])
                 return run_gx2_guest_triangle_test(
                     false,
                     GuestTriangleShader::spirv_matched_varying_multiply_half);
+            }
+            if (std::string_view(argv[1]) ==
+                    "--gx2-guest-triangle-matched-varying-maximum-half-smoke-test" &&
+                argc == 2)
+            {
+                return run_gx2_guest_triangle_test(
+                    false,
+                    GuestTriangleShader::spirv_matched_varying_maximum_half);
+            }
+            if (std::string_view(argv[1]) ==
+                    "--gx2-guest-triangle-matched-varying-minimum-half-smoke-test" &&
+                argc == 2)
+            {
+                return run_gx2_guest_triangle_test(
+                    false,
+                    GuestTriangleShader::spirv_matched_varying_minimum_half);
             }
             if (std::string_view(argv[1]) == "--gx2-guest-triangle-display-test" &&
                 argc == 2)
