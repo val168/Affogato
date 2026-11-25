@@ -1,5 +1,19 @@
 # Affogato Development Status
 
+## Latte integer shift ALU subset (2026-11-25)
+
+Affogato's CPU shader evaluator now supports the R700 `ASHR_INT`, `LSHR_INT`,
+and `LSHL_INT` OP2 operations. Counts 0, 31, 32, and 33 are covered with
+positive and negative source values; the opcode-specific R700 descriptions
+define zero or sign-fill for counts above 31. The vertex and matched-fragment
+SPIR-V emitters lower these operations with bounded shift counts and explicit
+overflow selection. Their generated modules pass `spirv-val`, and the Debug
+CPU/Latte SPIR-V tests pass 30/30. Vulkan framebuffer output for the shift
+family and Latte hardware conformance are not verified. The R700 guide's
+summary table mentions a related component-wise, low-five-bit behavior that
+does not cleanly match its per-opcode descriptions; that behavior remains
+unsupported until its Latte encoding is established.
+
 ## Interpolation qualifiers for matched guest inputs (2026-11-25)
 
 The opt-in matched shader path now lowers decoded `SEL_LINEAR` pixel inputs to

@@ -34148,6 +34148,54 @@ void latte_control_flow_decoder_tests()
     assert((unsigned_compare_result == expected_unsigned_compare));
     assert((shader_registers[7U] == expected_unsigned_compare));
 
+    using affogato::gpu::latte_alu_op2_arithmetic_shift_right_opcode;
+    using affogato::gpu::latte_alu_op2_logical_shift_left_opcode;
+    using affogato::gpu::latte_alu_op2_logical_shift_right_opcode;
+    constexpr LatteShaderRegister shift_sources{
+        0x80000000U, 0xFFFFFFFFU, 0x7FFFFFFFU, 0x80000001U};
+    constexpr LatteShaderRegister shift_counts{
+        1U, 31U, 32U, 33U};
+    constexpr std::array shift_cases{
+        std::pair{
+            latte_alu_op2_arithmetic_shift_right_opcode,
+            LatteShaderRegister{
+                0xC0000000U, 0xFFFFFFFFU, 0x00000000U, 0xFFFFFFFFU}},
+        std::pair{
+            latte_alu_op2_logical_shift_right_opcode,
+            LatteShaderRegister{
+                0x40000000U, 0x00000001U, 0x00000000U, 0x00000000U}},
+        std::pair{
+            latte_alu_op2_logical_shift_left_opcode,
+            LatteShaderRegister{
+                0x00000000U, 0x80000000U, 0x00000000U, 0x00000000U}}};
+    for (const auto& [opcode, expected_shift_result] : shift_cases)
+    {
+        auto shift_slots = alu_slots;
+        for (std::size_t component = 0U;
+             component < shift_slots.size();
+             ++component)
+        {
+            auto& slot = shift_slots[component];
+            slot.word0 = (slot.word0 & ~(0x1FFU << 13U)) | (2U << 13U);
+            slot.word0 = (slot.word0 & ~(0x03U << 10U)) |
+                (static_cast<std::uint32_t>(component) << 10U);
+            slot.word0 = (slot.word0 & ~(0x03U << 23U)) |
+                (static_cast<std::uint32_t>(component) << 23U);
+            slot.word1 = (slot.word1 & ~(0x7FFU << 7U)) |
+                (static_cast<std::uint32_t>(opcode) << 7U);
+        }
+        const auto shift_groups = decode_latte_alu_op2_groups(shift_slots);
+        std::array<LatteShaderRegister, 8U> shift_registers{};
+        shift_registers[1U] = shift_sources;
+        shift_registers[2U] = shift_counts;
+        const LatteShaderRegister shift_result =
+            execute_latte_alu_op2_vector_group(
+                shift_groups[0U],
+                shift_registers);
+        assert((shift_result == expected_shift_result));
+        assert((shift_registers[3U] == expected_shift_result));
+    }
+
     using affogato::gpu::latte_alu_op2_add_float_opcode;
     using affogato::gpu::latte_alu_op2_maximum_dx10_opcode;
     using affogato::gpu::latte_alu_op2_minimum_dx10_opcode;

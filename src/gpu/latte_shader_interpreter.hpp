@@ -32,6 +32,12 @@ inline constexpr std::uint16_t latte_alu_op2_add_float_opcode = 0x000U;
 inline constexpr std::uint16_t latte_alu_op2_multiply_ieee_opcode = 0x002U;
 inline constexpr std::uint16_t latte_alu_op2_maximum_dx10_opcode = 0x005U;
 inline constexpr std::uint16_t latte_alu_op2_minimum_dx10_opcode = 0x006U;
+inline constexpr std::uint16_t latte_alu_op2_arithmetic_shift_right_opcode =
+    0x070U;
+inline constexpr std::uint16_t latte_alu_op2_logical_shift_right_opcode =
+    0x071U;
+inline constexpr std::uint16_t latte_alu_op2_logical_shift_left_opcode =
+    0x072U;
 inline constexpr std::uint32_t latte_binary32_sign_mask = 0x80000000U;
 inline constexpr std::uint32_t latte_binary32_magnitude_mask = 0x7FFFFFFFU;
 inline constexpr std::uint16_t latte_alu_op2_and_integer_opcode = 0x030U;
@@ -664,7 +670,10 @@ evaluate_latte_normal_export(
         instruction.opcode != latte_alu_op2_set_greater_equal_integer_opcode &&
         instruction.opcode != latte_alu_op2_set_not_equal_integer_opcode &&
         instruction.opcode != latte_alu_op2_set_greater_unsigned_opcode &&
-        instruction.opcode != latte_alu_op2_set_greater_equal_unsigned_opcode)
+        instruction.opcode != latte_alu_op2_set_greater_equal_unsigned_opcode &&
+        instruction.opcode != latte_alu_op2_arithmetic_shift_right_opcode &&
+        instruction.opcode != latte_alu_op2_logical_shift_right_opcode &&
+        instruction.opcode != latte_alu_op2_logical_shift_left_opcode)
     {
         throw std::runtime_error(
             "Latte integer evaluation received an unsupported opcode");
@@ -721,6 +730,19 @@ evaluate_latte_normal_export(
 
     switch (instruction.opcode)
     {
+    case latte_alu_op2_arithmetic_shift_right_opcode:
+    {
+        const std::int32_t signed_source = std::bit_cast<std::int32_t>(source0);
+        if (source1 >= 32U)
+        {
+            return signed_source < 0 ? 0xFFFFFFFFU : 0U;
+        }
+        return static_cast<std::uint32_t>(signed_source >> source1);
+    }
+    case latte_alu_op2_logical_shift_right_opcode:
+        return source1 >= 32U ? 0U : source0 >> source1;
+    case latte_alu_op2_logical_shift_left_opcode:
+        return source1 >= 32U ? 0U : source0 << source1;
     case latte_alu_op2_add_integer_opcode:
         return source0 + source1;
     case latte_alu_op2_subtract_integer_opcode:
@@ -834,6 +856,9 @@ execute_latte_alu_op2_vector_group(
         case latte_alu_op2_set_not_equal_integer_opcode:
         case latte_alu_op2_set_greater_unsigned_opcode:
         case latte_alu_op2_set_greater_equal_unsigned_opcode:
+        case latte_alu_op2_arithmetic_shift_right_opcode:
+        case latte_alu_op2_logical_shift_right_opcode:
+        case latte_alu_op2_logical_shift_left_opcode:
             group_vector[component] =
                 evaluate_latte_alu_integer_value(
                     instruction,

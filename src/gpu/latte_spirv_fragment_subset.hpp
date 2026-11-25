@@ -566,6 +566,68 @@ private:
         return result_id;
     }
 
+    [[nodiscard]] std::uint32_t emit_integer_shift(
+        std::uint16_t opcode,
+        std::uint32_t source_value_id,
+        std::uint32_t shift_count_id)
+    {
+        const std::uint32_t shift_is_in_range_id = allocate_id();
+        append_instruction(function_body_, 176U, {
+            bool_type_id_, shift_is_in_range_id, shift_count_id,
+            constant(32U)});
+        const std::uint32_t safe_shift_count_id = allocate_id();
+        append_instruction(function_body_, 169U, {
+            uint_type_id_, safe_shift_count_id, shift_is_in_range_id,
+            shift_count_id, constant(31U)});
+
+        std::uint16_t shift_opcode = 0U;
+        std::uint32_t shifted_source_id = source_value_id;
+        std::uint32_t overflow_result_id = constant(0U);
+        std::uint32_t shift_result_type_id = uint_type_id_;
+        if (opcode == latte_alu_op2_logical_shift_right_opcode)
+        {
+            shift_opcode = 194U;
+        }
+        else if (opcode == latte_alu_op2_logical_shift_left_opcode)
+        {
+            shift_opcode = 196U;
+        }
+        else
+        {
+            shift_opcode = 195U;
+            shift_result_type_id = int_type_id_;
+            shifted_source_id = allocate_id();
+            append_instruction(function_body_, 124U, {
+                int_type_id_, shifted_source_id, source_value_id});
+            const std::uint32_t signed_overflow_result_id = allocate_id();
+            append_instruction(function_body_, 195U, {
+                int_type_id_, signed_overflow_result_id, shifted_source_id,
+                constant(31U)});
+            overflow_result_id = allocate_id();
+            append_instruction(function_body_, 124U, {
+                uint_type_id_, overflow_result_id,
+                signed_overflow_result_id});
+        }
+
+        const std::uint32_t shifted_result_id = allocate_id();
+        append_instruction(function_body_, shift_opcode, {
+            shift_result_type_id, shifted_result_id, shifted_source_id,
+            safe_shift_count_id});
+        std::uint32_t selected_shift_result_id = shifted_result_id;
+        if (shift_result_type_id == int_type_id_)
+        {
+            selected_shift_result_id = allocate_id();
+            append_instruction(function_body_, 124U, {
+                uint_type_id_, selected_shift_result_id, shifted_result_id});
+        }
+
+        const std::uint32_t result_id = allocate_id();
+        append_instruction(function_body_, 169U, {
+            uint_type_id_, result_id, shift_is_in_range_id,
+            selected_shift_result_id, overflow_result_id});
+        return result_id;
+    }
+
     void create_module_declarations(
         std::span<const LatteLinkedPixelShaderInput> linked_inputs)
     {
@@ -779,7 +841,10 @@ private:
                     operation.opcode == latte_alu_op2_set_greater_integer_opcode ||
                     operation.opcode == latte_alu_op2_set_greater_equal_integer_opcode ||
                     operation.opcode == latte_alu_op2_set_greater_unsigned_opcode ||
-                    operation.opcode == latte_alu_op2_set_greater_equal_unsigned_opcode;
+                    operation.opcode == latte_alu_op2_set_greater_equal_unsigned_opcode ||
+                    operation.opcode == latte_alu_op2_arithmetic_shift_right_opcode ||
+                    operation.opcode == latte_alu_op2_logical_shift_right_opcode ||
+                    operation.opcode == latte_alu_op2_logical_shift_left_opcode;
                 const bool supported_opcode =
                     operation.opcode == latte_alu_op2_move_opcode ||
                     operation.opcode == latte_alu_op2_add_float_opcode ||
@@ -827,6 +892,21 @@ private:
                         const std::uint32_t source1_value = source_value(
                             operation.source1_selector,
                             operation.source1_channel);
+                        if (operation.opcode ==
+                                latte_alu_op2_arithmetic_shift_right_opcode ||
+                            operation.opcode ==
+                                latte_alu_op2_logical_shift_right_opcode ||
+                            operation.opcode ==
+                                latte_alu_op2_logical_shift_left_opcode)
+                        {
+                            lane_values[lane] = emit_integer_shift(
+                                operation.opcode,
+                                source0_value,
+                                source1_value);
+                            destination_gprs[lane] =
+                                operation.destination_gpr;
+                            continue;
+                        }
                         std::uint16_t spirv_opcode = 0U;
                         switch (operation.opcode)
                         {

@@ -523,7 +523,10 @@ private:
             operation.opcode == latte_alu_op2_set_greater_integer_opcode ||
             operation.opcode == latte_alu_op2_set_greater_equal_integer_opcode ||
             operation.opcode == latte_alu_op2_set_greater_unsigned_opcode ||
-            operation.opcode == latte_alu_op2_set_greater_equal_unsigned_opcode;
+            operation.opcode == latte_alu_op2_set_greater_equal_unsigned_opcode ||
+            operation.opcode == latte_alu_op2_arithmetic_shift_right_opcode ||
+            operation.opcode == latte_alu_op2_logical_shift_right_opcode ||
+            operation.opcode == latte_alu_op2_logical_shift_left_opcode;
         if ((operation.opcode != latte_alu_op2_move_opcode &&
              operation.opcode != latte_alu_op2_add_float_opcode &&
              operation.opcode != latte_alu_op2_multiply_ieee_opcode &&
@@ -582,6 +585,19 @@ private:
             previous_vector);
         if (is_integer_operation)
         {
+            if (operation.opcode ==
+                    latte_alu_op2_arithmetic_shift_right_opcode ||
+                operation.opcode ==
+                    latte_alu_op2_logical_shift_right_opcode ||
+                operation.opcode ==
+                    latte_alu_op2_logical_shift_left_opcode)
+            {
+                return emit_integer_shift(
+                    operation.opcode,
+                    source0_id,
+                    source1_id);
+            }
+
             if (operation.opcode == latte_alu_op2_add_integer_opcode ||
                 operation.opcode == latte_alu_op2_subtract_integer_opcode ||
                 operation.opcode == latte_alu_op2_and_integer_opcode ||
@@ -744,6 +760,69 @@ private:
         const std::uint32_t result_id = allocate_id();
         append_instruction(function_body_, 124U, {
             uint_type_id_, result_id, result_float_id});
+        return result_id;
+    }
+
+    [[nodiscard]] std::uint32_t emit_integer_shift(
+        std::uint16_t opcode,
+        std::uint32_t source_value_id,
+        std::uint32_t shift_count_id)
+    {
+        const std::uint32_t shift_is_in_range_id = allocate_id();
+        append_instruction(function_body_, 176U, {
+            bool_type_id_, shift_is_in_range_id, shift_count_id,
+            constant(32U)});
+        const std::uint32_t safe_shift_count_id = allocate_id();
+        append_instruction(function_body_, 169U, {
+            uint_type_id_, safe_shift_count_id, shift_is_in_range_id,
+            shift_count_id, constant(31U)});
+
+        const std::uint32_t shift_result_id = allocate_id();
+        std::uint16_t shift_opcode = 0U;
+        std::uint32_t shifted_source_id = source_value_id;
+        std::uint32_t overflow_result_id = unsigned_zero_id_;
+
+        if (opcode == latte_alu_op2_logical_shift_right_opcode)
+        {
+            shift_opcode = 194U;
+        }
+        else if (opcode == latte_alu_op2_logical_shift_left_opcode)
+        {
+            shift_opcode = 196U;
+        }
+        else
+        {
+            shift_opcode = 195U;
+            shifted_source_id = allocate_id();
+            append_instruction(function_body_, 124U, {
+                int_type_id_, shifted_source_id, source_value_id});
+            overflow_result_id = allocate_id();
+            append_instruction(function_body_, 195U, {
+                int_type_id_, overflow_result_id, shifted_source_id,
+                constant(31U)});
+        }
+
+        append_instruction(function_body_, shift_opcode, {
+            shift_opcode == 195U ? int_type_id_ : uint_type_id_,
+            shift_result_id, shifted_source_id, safe_shift_count_id});
+
+        std::uint32_t unsigned_shift_result_id = shift_result_id;
+        if (shift_opcode == 195U)
+        {
+            unsigned_shift_result_id = allocate_id();
+            append_instruction(function_body_, 124U, {
+                uint_type_id_, unsigned_shift_result_id, shift_result_id});
+            const std::uint32_t unsigned_overflow_result_id = allocate_id();
+            append_instruction(function_body_, 124U, {
+                uint_type_id_, unsigned_overflow_result_id,
+                overflow_result_id});
+            overflow_result_id = unsigned_overflow_result_id;
+        }
+
+        const std::uint32_t result_id = allocate_id();
+        append_instruction(function_body_, 169U, {
+            uint_type_id_, result_id, shift_is_in_range_id,
+            unsigned_shift_result_id, overflow_result_id});
         return result_id;
     }
 

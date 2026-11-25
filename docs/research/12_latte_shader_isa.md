@@ -13,7 +13,9 @@ shader execution subsets are also implemented. A typed IR represents bounded
 OP2 or OP3 CPU clauses; an experimental SPIR-V vertex emitter lowers MOV,
 binary32 ADD, IEEE multiply, DX10 min/max, integer bitwise/arithmetic/min-max/
 comparison OP2 groups, and floating-point and integer conditional-move OP3
-groups. The
+groups. The integer ALU subset also implements the R700 `ASHR_INT`,
+`LSHR_INT`, and `LSHL_INT` operations with explicit out-of-range shift behavior.
+The
 diagnostic Vulkan triangle still uses an explicit bounded shader test path
 rather than normal guest programs.
 
@@ -1302,6 +1304,29 @@ Sample and point-sprite inputs also remain unsupported. The Vulkan
 [shader interface and interpolation rules](https://docs.vulkan.org/spec/latest/chapters/shaders.html)
 and [SPIR-V `NoPerspective` decoration](https://registry.khronos.org/SPIR-V/specs/unified1/SPIRV.html)
 were used as backend requirements.
+
+### Integer shift operations (2026-11-25)
+
+The [AMD R700-family ISA guide](https://www.amd.com/system/files/TechDocs/R700-Family_Instruction_Set_Architecture.pdf)
+chapter 9 identifies `ASHR_INT`, `LSHR_INT`, and `LSHL_INT` as OP2 opcodes
+`0x70`, `0x71`, and `0x72`. Their opcode-specific descriptions define
+arithmetic right shift with sign fill, logical shifts with zero fill, and a
+zero/sign-filled result when the unsigned count exceeds 31. The guide's
+summary table also mentions an LSB-five-bit component-wise shift behavior,
+which is not consistent with the opcode-specific scalar descriptions (and
+describes zero fill under the arithmetic shift heading). Affogato implements
+only the explicit opcode-specific OP2 behavior; that additional component-wise
+behavior remains unsupported pending a precise Latte instruction mapping.
+
+The CPU shader subset evaluates all three operations for counts 0 through 31
+and counts 32 or greater without undefined host shifts. The vertex and matched
+fragment SPIR-V subsets use logical/arithmetic shift operations, clamp the
+backend shift operand to 31 before evaluation, and select the documented
+overflow result for counts outside the guest range. Fixtures check sign bits,
+count 31, 32, and 33, and generated vertex/fragment modules pass `spirv-val`.
+This verifies Affogato's selected reference interpretation and module
+validity; no Latte hardware trace or Vulkan framebuffer result for these
+integer operations has yet been recorded.
 
 This follows Affogato's decoded `SPI_PS_INPUT_CNTL_n` linkage model and is
 consistent with the issue report for Cemu [#2029](https://github.com/cemu-project/Cemu/issues/2029),

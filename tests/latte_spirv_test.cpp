@@ -489,7 +489,16 @@ int main(int argc, char* argv[])
             std::uint16_t{172U}},
         std::pair{
             affogato::gpu::latte_alu_op2_set_greater_equal_unsigned_opcode,
-            std::uint16_t{174U}}};
+            std::uint16_t{174U}},
+        std::pair{
+            affogato::gpu::latte_alu_op2_arithmetic_shift_right_opcode,
+            std::uint16_t{195U}},
+        std::pair{
+            affogato::gpu::latte_alu_op2_logical_shift_right_opcode,
+            std::uint16_t{194U}},
+        std::pair{
+            affogato::gpu::latte_alu_op2_logical_shift_left_opcode,
+            std::uint16_t{196U}}};
     for (const auto& [latte_opcode, spirv_opcode] : integer_operations)
     {
         auto integer_operation_program = add_program;
@@ -513,6 +522,11 @@ int main(int argc, char* argv[])
         {
             assert(module_contains_opcode(integer_operation_module, 169U));
         }
+        if (spirv_opcode >= 194U && spirv_opcode <= 196U)
+        {
+            assert(module_contains_opcode(integer_operation_module, 176U));
+            assert(module_contains_opcode(integer_operation_module, 169U));
+        }
     }
 
     auto integer_alu_program = add_program;
@@ -520,7 +534,11 @@ int main(int argc, char* argv[])
         affogato::gpu::LatteShaderIrAluClause>(
             integer_alu_program.instructions[0U]);
     integer_alu_clause.groups.clear();
-    for (std::size_t group_index = 0U; group_index < 4U; ++group_index)
+    const std::size_t integer_operation_group_count =
+        (integer_operations.size() + 3U) / 4U;
+    for (std::size_t group_index = 0U;
+         group_index < integer_operation_group_count;
+         ++group_index)
     {
         auto group = add_clause.groups[0U];
         for (std::size_t lane = 0U; lane < group.instructions.size(); ++lane)
@@ -1027,6 +1045,36 @@ int main(int argc, char* argv[])
             matched_integer_comparison_module, opcode));
     }
 
+    auto matched_integer_shift_program = matched_move_program;
+    auto& matched_integer_shift_clause = std::get<
+        affogato::gpu::LatteShaderIrAluClause>(
+            matched_integer_shift_program.instructions[0U]);
+    constexpr std::array<std::uint16_t, 3U> integer_shift_opcodes{
+        affogato::gpu::latte_alu_op2_logical_shift_left_opcode,
+        affogato::gpu::latte_alu_op2_logical_shift_right_opcode,
+        affogato::gpu::latte_alu_op2_arithmetic_shift_right_opcode};
+    for (const std::uint16_t opcode : integer_shift_opcodes)
+    {
+        auto group = matched_integer_shift_clause.groups[0U];
+        for (auto& operation : group.instructions)
+        {
+            operation.opcode = opcode;
+            operation.source1_selector =
+                affogato::gpu::latte_alu_source_one_integer_selector;
+            operation.source1_channel = operation.destination_component;
+        }
+        matched_integer_shift_clause.groups.push_back(std::move(group));
+    }
+    const std::vector<std::uint32_t> matched_integer_shift_module =
+        affogato::gpu::emit_latte_spirv_fragment_matched_alu_subset(
+            matched_integer_shift_program,
+            matched_varying_input);
+    assert(module_contains_opcode(matched_integer_shift_module, 194U));
+    assert(module_contains_opcode(matched_integer_shift_module, 195U));
+    assert(module_contains_opcode(matched_integer_shift_module, 196U));
+    assert(module_contains_opcode(matched_integer_shift_module, 176U));
+    assert(module_contains_opcode(matched_integer_shift_module, 169U));
+
     auto unsupported_matched_move_program = matched_move_program;
     auto& unsupported_matched_move_clause = std::get<
         affogato::gpu::LatteShaderIrAluClause>(
@@ -1139,7 +1187,7 @@ int main(int argc, char* argv[])
     }
     assert(rejected_nonzero_mrt);
 
-    if (argc == 29 && std::string_view(argv[1]) == "--write-modules")
+    if (argc == 30 && std::string_view(argv[1]) == "--write-modules")
     {
         write_module(argv[2], module);
         write_module(argv[3], modified_module);
@@ -1168,6 +1216,7 @@ int main(int argc, char* argv[])
         write_module(argv[26], linear_fragment_module);
         write_module(argv[27], centroid_fragment_module);
         write_module(argv[28], linear_centroid_fragment_module);
+        write_module(argv[29], matched_integer_shift_module);
     }
     return 0;
 }

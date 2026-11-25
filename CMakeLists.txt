@@ -287,6 +287,8 @@ if(BUILD_TESTING)
         "${CMAKE_CURRENT_BINARY_DIR}/latte_fragment_centroid_input.spv")
     set(AFFOGATO_LATTE_SPIRV_FRAGMENT_LINEAR_CENTROID_TEST_MODULE
         "${CMAKE_CURRENT_BINARY_DIR}/latte_fragment_linear_centroid_input.spv")
+    set(AFFOGATO_LATTE_SPIRV_FRAGMENT_MATCHED_INTEGER_SHIFT_TEST_MODULE
+        "${CMAKE_CURRENT_BINARY_DIR}/latte_fragment_matched_integer_shift.spv")
     add_test(NAME affogato_latte_spirv_tests
         COMMAND affogato_latte_spirv_tests
             --write-modules
@@ -316,7 +318,8 @@ if(BUILD_TESTING)
             "${AFFOGATO_LATTE_SPIRV_FRAGMENT_MULTIPLE_VARYINGS_TEST_MODULE}"
             "${AFFOGATO_LATTE_SPIRV_FRAGMENT_LINEAR_TEST_MODULE}"
             "${AFFOGATO_LATTE_SPIRV_FRAGMENT_CENTROID_TEST_MODULE}"
-            "${AFFOGATO_LATTE_SPIRV_FRAGMENT_LINEAR_CENTROID_TEST_MODULE}")
+            "${AFFOGATO_LATTE_SPIRV_FRAGMENT_LINEAR_CENTROID_TEST_MODULE}"
+            "${AFFOGATO_LATTE_SPIRV_FRAGMENT_MATCHED_INTEGER_SHIFT_TEST_MODULE}")
     set_tests_properties(affogato_latte_spirv_tests PROPERTIES
         FIXTURES_SETUP affogato_latte_spirv_module
     )
@@ -459,6 +462,15 @@ if(BUILD_TESTING)
                 "${AFFOGATO_LATTE_SPIRV_FRAGMENT_LINEAR_CENTROID_TEST_MODULE}")
         set_tests_properties(
             affogato_latte_spirv_fragment_linear_centroid_validation PROPERTIES
+            FIXTURES_REQUIRED affogato_latte_spirv_module
+        )
+        add_test(
+            NAME affogato_latte_spirv_fragment_matched_integer_shift_validation
+            COMMAND "${AFFOGATO_SPIRV_VAL_EXECUTABLE}"
+                --target-env vulkan1.0
+                "${AFFOGATO_LATTE_SPIRV_FRAGMENT_MATCHED_INTEGER_SHIFT_TEST_MODULE}")
+        set_tests_properties(
+            affogato_latte_spirv_fragment_matched_integer_shift_validation PROPERTIES
             FIXTURES_REQUIRED affogato_latte_spirv_module
         )
         add_test(NAME affogato_latte_spirv_modifier_validation
