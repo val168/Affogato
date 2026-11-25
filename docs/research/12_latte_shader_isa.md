@@ -700,3 +700,103 @@ not establish the register's value for arbitrary Wii U shaders. The output is
 still rendered with host diagnostic shaders, does not write a guest render
 target, and does not demonstrate general Latte shader execution or WWHD
 rendering.
+
+## Translation architecture audit (2026-11-25)
+
+### Verified Affogato state
+
+`latte_shader_decoder.hpp` currently produces typed control-flow records,
+decoded OP2 fields/groups, and export metadata. `latte_shader_interpreter.hpp`
+executes a deliberately bounded CPU subset. `latte_vertex_shader_subset.hpp`
+connects captured draw-time fetch inputs, semantic registers, shader words, and
+vertex constants for one selected vertex. `Gx2RegisterState::draw_snapshot()`
+provides a borrowed view over one draw's captured state. The controlled
+diagnostic path now calls this CPU subset, but there is no shared shader IR,
+SPIR-V generator, shader-module cache, or guest shader pipeline in
+`VulkanRenderer`.
+
+The Vulkan SDK installed for this workspace provides `glslc`,
+`glslangValidator`, `spirv-as`, and `spirv-val`, plus glslang and shaderc
+libraries. Affogato's CMake currently links Vulkan but does not discover or
+link those shader compiler libraries. The diagnostic vertex/fragment SPIR-V
+is embedded in `src/gpu/vulkan/diagnostic_shader_spirv.hpp`. This establishes
+local validation tools; it does not establish a portable runtime compiler
+dependency.
+
+### Reference implementation findings
+
+- Cemu's
+  [`LatteShader.cpp`](https://github.com/cemu-project/Cemu/blob/main/src/Cafe/HW/Latte/Core/LatteShader.cpp)
+  owns stage shader caches and links parsed shader state to renderer shader
+  creation. Its shader keys combine guest program data with state that changes
+  translation, including fetch-shader state, pixel-shader imports, clip/output
+  state, streamout, primitive handling, and selected auxiliary state. Uniform
+  values and mutable buffers are not simply treated as shader source bytes.
+- Cemu's experimental
+  [`LatteTC.cpp`](https://github.com/cemu-project/Cemu/blob/main/src/Cafe/HW/Latte/Transcompiler/LatteTC.cpp)
+  groups control-flow records into basic-block nodes and emits a `Zir` IR.
+  The checked source labels this transcompiler experimental/WIP; it is an
+  architectural reference, not evidence of complete shader coverage.
+- Cemu's legacy
+  [`LatteDecompiler.cpp`](https://github.com/cemu-project/Cemu/blob/main/src/Cafe/HW/Latte/LegacyShaderDecompiler/LatteDecompiler.cpp)
+  parses CF records, exports, ALU, texture, and fetch records into an
+  intermediate representation and generated shader source. Its Vulkan
+  renderer compiles generated shader source through glslang, as visible in
+  [`VulkanRenderer.cpp`](https://github.com/cemu-project/Cemu/blob/main/src/Cafe/HW/Latte/Renderer/Vulkan/VulkanRenderer.cpp).
+- Decaf's GPL-3.0 reference implementation has a Latte parser under
+  `src/libgpu/src/latte/` and a direct SPIR-V backend under
+  `src/libgpu/src/spirv/`. The
+  [`spirv_transpiler.cpp`](https://github.com/decaf-emu/decaf-emu/blob/master/src/libgpu/src/spirv/spirv_transpiler.cpp)
+  layers on the parser and shader SPIR-V builder; operation families are
+  separated into files such as
+  [`spirv_alu_op2.cpp`](https://github.com/decaf-emu/decaf-emu/blob/master/src/libgpu/src/spirv/spirv_alu_op2.cpp),
+  [`spirv_export.cpp`](https://github.com/decaf-emu/decaf-emu/blob/master/src/libgpu/src/spirv/spirv_export.cpp),
+  and [`spirv_vtx.cpp`](https://github.com/decaf-emu/decaf-emu/blob/master/src/libgpu/src/spirv/spirv_vtx.cpp).
+  These files demonstrate a maintained parser/backend split and per-family
+  lowering, but many operations rely on Decaf-specific state and assumptions.
+  Decaf's GPL-3.0 code was inspected for architecture only; no implementation
+  code is copied into Affogato.
+
+### Design constraints for Affogato
+
+The next translator must reuse the current decoder and its explicit rejection
+behavior rather than create a second opcode parser. A typed, immutable shader
+program representation should be the boundary between bytecode decoding and
+both backends. The CPU subset remains the semantic reference; SPIR-V lowering
+must reject every operation, control-flow form, source mode, or export it does
+not implement. Supported operations should be added in complete tested
+families, with CPU-versus-SPIR-V output comparisons for deterministic shader
+fixtures.
+
+Translation variants must include all shader-affecting captured state, at
+minimum stage and bytecode, fetch program, vertex semantic linkage, relevant
+output/clip controls, and resource-interface declarations. Constant values,
+vertex/index bytes, and image contents should remain draw resources rather
+than shader-variant keys unless verified hardware behavior makes them part of
+the generated interface. A cache key cannot be finalized until Affogato
+captures the required per-stage interface state.
+
+For the first genuine Vulkan shader milestone, require both a supported Latte
+vertex program and a supported Latte pixel program to produce the Vulkan stage
+modules. A fixed host diagnostic shader may remain available only under its
+explicit test policy. A translated shader pair alone is not an end-to-end
+rendering milestone: render-target selection, pixel writes, synchronization,
+scanout copying, and readback/presentation must also be verified.
+
+### Uncertainties and test plan
+
+The available AMD R6xx/R700 references describe related hardware families,
+not the complete Latte ISA. Current fixtures establish only selected word
+layouts and operations. Cemu and Decaf differ in code organization and may
+contain workarounds or assumptions; neither is treated as hardware proof.
+Unknown Latte-specific instruction encodings, input/system GPR initialization,
+export layout, precision, and state-dependent translation requirements must
+be resolved from Wii U SDK behavior, real guest fixtures, or cross-verified
+reference paths before implementation.
+
+Use checked-in deterministic bytecode fixtures and test each supported
+decoder/IR operation against the CPU executor. Generate SPIR-V for those same
+fixtures, validate modules with `spirv-val` where available, create Vulkan
+shader modules, and compare actual shader outputs against CPU reference
+results. Then add draw-level tests that verify guest render-target pixels
+through scanout. No such SPIR-V or draw-output tests exist yet.
