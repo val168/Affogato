@@ -2013,7 +2013,8 @@ enum class GuestTriangleShader
     spirv_matched_two_varyings,
     spirv_matched_varying_linear,
     spirv_matched_varying_perspective_unequal_w,
-    spirv_matched_varying_centroid
+    spirv_matched_varying_centroid,
+    spirv_matched_varying_linear_centroid
 };
 
 [[nodiscard]] bool contains_expected_interpolated_pixels(
@@ -2194,7 +2195,9 @@ int run_gx2_guest_triangle_test(
         shader == GuestTriangleShader::spirv_matched_varying_linear ||
         shader == GuestTriangleShader::
             spirv_matched_varying_perspective_unequal_w ||
-        shader == GuestTriangleShader::spirv_matched_varying_centroid;
+        shader == GuestTriangleShader::spirv_matched_varying_centroid ||
+        shader == GuestTriangleShader::
+            spirv_matched_varying_linear_centroid;
     const bool use_varying_passthrough =
         shader == GuestTriangleShader::spirv_matched_varying_move ||
         shader == GuestTriangleShader::spirv_matched_varying_add_half ||
@@ -2212,7 +2215,9 @@ int run_gx2_guest_triangle_test(
         shader == GuestTriangleShader::spirv_matched_varying_linear ||
         shader == GuestTriangleShader::
             spirv_matched_varying_perspective_unequal_w ||
-        shader == GuestTriangleShader::spirv_matched_varying_centroid;
+        shader == GuestTriangleShader::spirv_matched_varying_centroid ||
+        shader == GuestTriangleShader::
+            spirv_matched_varying_linear_centroid;
     constexpr std::uint32_t vertex_buffer_address = 0x10000U;
     constexpr std::uint32_t index_buffer_address = 0x4000U;
     constexpr std::uint32_t big_endian_index_buffer_address = 0x5000U;
@@ -2662,17 +2667,30 @@ int run_gx2_guest_triangle_test(
                     (pixel_input_default_value <<
                      pixel_input_default_value_shift);
             if (shader == GuestTriangleShader::spirv_matched_varying_linear ||
-                shader == GuestTriangleShader::spirv_matched_varying_centroid)
+                shader == GuestTriangleShader::spirv_matched_varying_centroid ||
+                shader == GuestTriangleShader::
+                    spirv_matched_varying_linear_centroid)
             {
                 constexpr std::uint32_t linear_interpolation_bit = 1U << 12U;
                 constexpr std::uint32_t centroid_interpolation_bit = 1U << 11U;
-                const std::uint32_t interpolation_bit =
-                    shader == GuestTriangleShader::spirv_matched_varying_linear
-                        ? linear_interpolation_bit
-                        : centroid_interpolation_bit;
+                std::uint32_t interpolation_bits = 0U;
+                if (shader ==
+                        GuestTriangleShader::spirv_matched_varying_linear ||
+                    shader == GuestTriangleShader::
+                        spirv_matched_varying_linear_centroid)
+                {
+                    interpolation_bits |= linear_interpolation_bit;
+                }
+                if (shader ==
+                        GuestTriangleShader::spirv_matched_varying_centroid ||
+                    shader == GuestTriangleShader::
+                        spirv_matched_varying_linear_centroid)
+                {
+                    interpolation_bits |= centroid_interpolation_bit;
+                }
                 pixel_shader_descriptor[
                     pixel_shader_first_input_control_word_index] |=
-                        interpolation_bit;
+                        interpolation_bits;
             }
             if (shader ==
                 GuestTriangleShader::spirv_matched_varying_default_alpha)
@@ -4003,6 +4021,15 @@ int main(int argc, char* argv[])
                 return run_gx2_guest_triangle_test(
                     false,
                     GuestTriangleShader::spirv_matched_varying_centroid);
+            }
+            if (std::string_view(argv[1]) ==
+                    "--gx2-guest-triangle-matched-varying-linear-centroid-test" &&
+                argc == 2)
+            {
+                return run_gx2_guest_triangle_test(
+                    false,
+                    GuestTriangleShader::
+                        spirv_matched_varying_linear_centroid);
             }
             if (std::string_view(argv[1]) == "--gx2-guest-triangle-display-test" &&
                 argc == 2)

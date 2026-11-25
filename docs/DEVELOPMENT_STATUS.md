@@ -5,15 +5,15 @@
 The opt-in matched shader path now lowers decoded `SEL_LINEAR` pixel inputs to
 SPIR-V `NoPerspective` decorations on both the corresponding vertex output and
 fragment input, and `Centroid` on the corresponding fragment input. Controlled
-guest draws for both input modes pass Vulkan buffer readback, and generated
-modules pass `spirv-val`. The original linear fixture uses equal clip-space W
-values and verifies stage linkage. A separate unequal-W test runs the same
-guest geometry through linear and default perspective interpolation, then
-requires the same framebuffer sample to differ by at least 20 UNORM levels.
-The centroid readback verifies pipeline acceptance and execution, not a visible
-sampling-position difference. Flat shading remains unsupported until the guest
-provoking-vertex convention is verified; sample and point-sprite behavior are
-also unsupported.
+guest draws for linear, centroid, and combined linear-centroid input modes pass
+Vulkan buffer readback, and generated modules pass `spirv-val`. The original
+linear fixture uses equal clip-space W values and verifies stage linkage. A
+separate unequal-W test runs the same guest geometry through linear and default
+perspective interpolation, then requires the same framebuffer sample to differ
+by at least 20 UNORM levels. The centroid readback verifies pipeline acceptance
+and execution, not a visible sampling-position difference. Flat shading remains
+unsupported until the guest provoking-vertex convention is verified; sample
+and point-sprite behavior are also unsupported.
 
 ## Matched fragment input sets in SPIR-V (2026-11-25)
 

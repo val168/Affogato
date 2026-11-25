@@ -783,6 +783,16 @@ int main(int argc, char* argv[])
             centroid_varying_input);
     assert(module_contains_decoration(centroid_fragment_module, 16U));
 
+    auto linear_centroid_varying_input = matched_varying_input;
+    linear_centroid_varying_input.linear = true;
+    linear_centroid_varying_input.centroid = true;
+    const std::vector<std::uint32_t> linear_centroid_fragment_module =
+        affogato::gpu::emit_latte_spirv_fragment_matched_alu_subset(
+            matched_move_program,
+            linear_centroid_varying_input);
+    assert(module_contains_decoration(linear_centroid_fragment_module, 13U));
+    assert(module_contains_decoration(linear_centroid_fragment_module, 16U));
+
     const std::array<affogato::gpu::LatteLinkedPixelShaderInput, 2U>
         matched_and_default_inputs{{
             matched_varying_input,
@@ -1129,7 +1139,7 @@ int main(int argc, char* argv[])
     }
     assert(rejected_nonzero_mrt);
 
-    if (argc == 28 && std::string_view(argv[1]) == "--write-modules")
+    if (argc == 29 && std::string_view(argv[1]) == "--write-modules")
     {
         write_module(argv[2], module);
         write_module(argv[3], modified_module);
@@ -1157,6 +1167,7 @@ int main(int argc, char* argv[])
         write_module(argv[25], multiple_varying_module);
         write_module(argv[26], linear_fragment_module);
         write_module(argv[27], centroid_fragment_module);
+        write_module(argv[28], linear_centroid_fragment_module);
     }
     return 0;
 }

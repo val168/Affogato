@@ -1220,9 +1220,9 @@ fragment `Input` variable whose `Location` is that `SPI_PS_INPUT_CNTL_n` index;
 an unmatched semantic becomes four raw binary32 component constants from its
 captured `DEFAULT_VAL`. This keeps the fragment shader's GPR numbering aligned
 with the input-control index and avoids declaring unmatched Vulkan stage inputs.
-Perspective, decoded linear interpolation, and centroid sampling are supported.
-Flat, point-sprite, and sample modes still fail explicitly. Existing selected
-OP2 ALU and MRT0 limits are unchanged.
+Perspective, decoded linear interpolation, centroid sampling, and their tested
+linear-centroid combination are supported. Flat, point-sprite, and sample modes
+still fail explicitly. Existing selected OP2 ALU and MRT0 limits are unchanged.
 
 The Vulkan diagnostic draw policy now emits vertex parameter outputs for every
 matched input while retaining captured defaults for unmatched inputs. Tests
@@ -1265,6 +1265,14 @@ shader specification defines the `Centroid` constraint on the fragment input.
 Generated SPIR-V passes `spirv-val`, and a controlled guest draw reaches Vulkan
 buffer readback with the qualifier enabled. This does not compare covered-edge
 sample positions against pixel-center interpolation.
+
+The tested combined qualifier sets both `SEL_LINEAR` and `SEL_CENTROID`, and the
+fragment emitter preserves both as SPIR-V `NoPerspective` and `Centroid` on the
+same input variable. Vulkan permits the linear interpolation mode together
+with the centroid sampling constraint. The synthetic GX2 fixture passes
+`spirv-val` and guest-draw readback. The combined Latte behavior is based on the
+independent meanings of these AMD-family fields and Vulkan's qualifier model;
+it has not been checked against a Latte trace or hardware.
 
 Flat shading remains deferred until Affogato captures and matches the guest
 provoking-vertex convention. Sample and point-sprite inputs also remain
