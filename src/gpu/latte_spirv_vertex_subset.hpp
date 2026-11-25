@@ -283,7 +283,9 @@ private:
                 const LatteAluOp2Instruction& operation =
                     group.instructions[lane];
                 if ((operation.opcode != latte_alu_op2_move_opcode &&
-                     operation.opcode != latte_alu_op2_add_float_opcode) ||
+                     operation.opcode != latte_alu_op2_add_float_opcode &&
+                     operation.opcode !=
+                         latte_alu_op2_multiply_ieee_opcode) ||
                     operation.destination_component != lane ||
                     operation.last_in_group != (lane == 3U) ||
                     operation.destination_gpr >= registers_.size() ||
@@ -299,7 +301,7 @@ private:
                      (operation.source1_relative ||
                       operation.source1_absolute ||
                       operation.source1_negate)) ||
-                    (operation.opcode == latte_alu_op2_add_float_opcode &&
+                    (operation.opcode != latte_alu_op2_move_opcode &&
                      operation.source1_relative))
                 {
                     throw std::runtime_error(
@@ -317,7 +319,7 @@ private:
                     operation.source0_negate);
 
                 std::uint32_t result_id = source0_id;
-                if (operation.opcode == latte_alu_op2_add_float_opcode)
+                if (operation.opcode != latte_alu_op2_move_opcode)
                 {
                     std::uint32_t source1_id = source_value(
                         operation.source1_selector,
@@ -335,13 +337,17 @@ private:
                     const std::uint32_t source1_float_id = allocate_id();
                     append_instruction(function_body_, 124U, {
                         float_type_id_, source1_float_id, source1_id});
-                    const std::uint32_t sum_float_id = allocate_id();
-                    append_instruction(function_body_, 129U, {
-                        float_type_id_, sum_float_id,
+                    const std::uint32_t result_float_id = allocate_id();
+                    const std::uint16_t spirv_opcode =
+                        operation.opcode == latte_alu_op2_add_float_opcode
+                            ? 129U
+                            : 133U;
+                    append_instruction(function_body_, spirv_opcode, {
+                        float_type_id_, result_float_id,
                         source0_float_id, source1_float_id});
                     result_id = allocate_id();
                     append_instruction(function_body_, 124U, {
-                        uint_type_id_, result_id, sum_float_id});
+                        uint_type_id_, result_id, result_float_id});
                 }
                 group_result[lane] = result_id;
             }
@@ -435,7 +441,7 @@ private:
 
 } // namespace detail
 
-// Emit one float32x4 input, no-literal MOV/ADD groups, and one completed
+// Emit one float32x4 input, no-literal MOV/ADD/MUL groups, and one completed
 // identity position export. Unsupported shader behavior is rejected explicitly.
 [[nodiscard]] inline std::vector<std::uint32_t>
 emit_latte_spirv_vertex_position_subset(

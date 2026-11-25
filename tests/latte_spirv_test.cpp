@@ -185,6 +185,22 @@ int main(int argc, char* argv[])
     assert(module_contains_opcode(modified_add_module, 199U));
     assert(module_contains_opcode(modified_add_module, 198U));
 
+    auto multiply_program = add_program;
+    auto& multiply_clause = std::get<
+        affogato::gpu::LatteShaderIrAluClause>(
+            multiply_program.instructions[0U]);
+    for (auto& operation : multiply_clause.groups[0U].instructions)
+    {
+        operation.opcode =
+            affogato::gpu::latte_alu_op2_multiply_ieee_opcode;
+        operation.source1_relative = false;
+    }
+    const std::vector<std::uint32_t> multiply_module =
+        affogato::gpu::emit_latte_spirv_vertex_position_subset(
+            multiply_program,
+            {1U, 0U});
+    assert(module_contains_opcode(multiply_module, 133U));
+
     add_clause.groups[0U].instructions[0U].source1_relative = true;
     bool rejected_relative_add_source = false;
     try
@@ -200,11 +216,12 @@ int main(int argc, char* argv[])
     }
     assert(rejected_relative_add_source);
 
-    if (argc == 5 && std::string_view(argv[1]) == "--write-modules")
+    if (argc == 6 && std::string_view(argv[1]) == "--write-modules")
     {
         write_module(argv[2], module);
         write_module(argv[3], modified_module);
         write_module(argv[4], add_module);
+        write_module(argv[5], multiply_module);
     }
     return 0;
 }

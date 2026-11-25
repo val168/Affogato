@@ -1,5 +1,19 @@
 # Affogato Development Status
 
+## Bounded Latte IEEE multiply SPIR-V lowering (2026-11-25)
+
+The same bounded vertex emitter now lowers OP2 `MUL_IEEE` (`0x002`) lanes to
+SPIR-V `OpFMul`, using the previously added binary32 source conversion and
+absolute/negate handling. Unsupported modifiers and relative operands still
+fail explicitly. The opcode and IEEE zero-times-infinity distinction are
+documented in AMD's R700-family ISA manual, section 9.2; Latte-specific
+confirmation is not available. The deterministic module test checks `OpFMul`
+emission and `spirv-val` accepts the generated module. Debug and Release builds
+passed; CTest passed 8/8 in both, including the GPU integration test. The GPU
+test executes the ADD-with-zero fixture, not MUL. MUL has not yet been executed
+through Vulkan or checked against output pixels. See
+[`research/12_latte_shader_isa.md`](research/12_latte_shader_isa.md).
+
 ## Bounded Latte binary32 ADD SPIR-V lowering (2026-11-25)
 
 The experimental vertex SPIR-V emitter now lowers no-literal OP2 ADD
