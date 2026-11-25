@@ -1066,11 +1066,28 @@ default into unmatched-input handling, choose interpolation qualifiers, and
 verify generated fragment inputs through SPIR-V validation and Vulkan output.
 
 The paired `decode_latte_vertex_shader_output_interface()` helper reads
-`VS_PER_COMPONENT` from vertex descriptor word 2, `num_spi_vs_out_id` from
-word 3, and packed output semantic words from word 4 onward. Each output ID
-word is retained as four byte-sized semantic IDs. AMD's register reference
-defines `VS_PER_COMPONENT` at bit 0 of `SPI_VS_OUT_CONFIG` and the four
+`VS_PER_COMPONENT`, `VS_EXPORT_COUNT`, `num_spi_vs_out_id`, and the packed
+semantic words from the captured vertex descriptor. `VS_EXPORT_COUNT` is
+decoded as the documented count-minus-one field. Each output ID word is
+retained as four byte-sized semantic IDs. AMD's register reference defines
+`VS_PER_COMPONENT` at bit 0 of `SPI_VS_OUT_CONFIG` and the four
 `SEMANTIC_0..3` bytes at bits 0–31 of each `SPI_VS_OUT_ID` register. The helper
-validates the ten-entry maximum and descriptor range; it deliberately does
-not decide whether each entry is a parameter vector or a per-component value
-and does not infer export-to-input matches.
+checks that the descriptor provides enough semantic words for the declared
+parameter count.
+
+`link_latte_pixel_shader_inputs()` takes the parameter entries from the
+decoded normal-export values and connects each pixel input semantic to the
+matching active output slot. The four semantic bytes are indexed sequentially
+by export slot. This ordering is cross-checked against Mesa's related-family
+[`evergreen_update_vs_state()`](https://chromium.googlesource.com/chromiumos/third_party/mesa/+/refs/heads/stabilize-13982.70.B-chromeos-amd/src/gallium/drivers/r600/evergreen_state.c),
+which packs parameter semantic IDs in groups of four and sets the export count
+from that ordered list; it is reference behavior, not direct Latte hardware
+validation. If a pixel input has no matching active parameter export, the
+link result carries its documented `DEFAULT_VAL` float bit pattern. Flat,
+centroid, linear, point-sprite, and sample flags are preserved for later
+shader-interface lowering. Duplicate/out-of-range active export indices,
+ambiguous matching semantics, incomplete descriptors, and `VS_PER_COMPONENT`
+linking are rejected. Tests cover both duplicate export slots and ambiguous
+semantic matches. The result is linkage metadata only: no fragment SPIR-V
+inputs or interpolated values are emitted yet, and the linker is not connected
+to the CPU shader executor or Vulkan pipeline.

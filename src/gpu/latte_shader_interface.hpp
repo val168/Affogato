@@ -1,10 +1,13 @@
 #pragma once
 
 #include "cpu/espresso/gx2_hle.hpp"
+#include "gpu/latte_shader_interpreter.hpp"
 
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
+#include <span>
 #include <stdexcept>
 #include <vector>
 
@@ -43,6 +46,7 @@ struct LatteVertexShaderOutputId
 struct LatteVertexShaderOutputInterface
 {
     bool outputs_per_component{};
+    std::uint8_t parameter_export_count{};
     std::vector<LatteVertexShaderOutputId> output_ids;
 
     bool operator==(const LatteVertexShaderOutputInterface&) const = default;
@@ -57,6 +61,9 @@ decode_latte_vertex_shader_output_interface(
     constexpr std::size_t output_id_count_register_index = 3U;
     constexpr std::size_t first_output_id_register_index = 4U;
     constexpr std::size_t maximum_vertex_shader_output_ids = 10U;
+    constexpr std::uint32_t output_count_mask = 0x3EU;
+    constexpr std::uint32_t output_count_shift = 1U;
+    constexpr std::uint32_t maximum_parameter_exports = 32U;
     constexpr std::uint32_t output_per_component_mask = 1U;
 
     if (shader.stage != cpu::espresso::Gx2ProgramStage::vertex)
@@ -84,6 +91,22 @@ decode_latte_vertex_shader_output_interface(
     output_interface.outputs_per_component =
         (shader.descriptor_words[output_configuration_register_index] &
          output_per_component_mask) != 0U;
+    output_interface.parameter_export_count = static_cast<std::uint8_t>(
+        ((shader.descriptor_words[output_configuration_register_index] &
+          output_count_mask) >> output_count_shift) + 1U);
+    if (output_interface.parameter_export_count > maximum_parameter_exports)
+    {
+        throw std::invalid_argument(
+            "Latte vertex shader parameter export count exceeds hardware capacity");
+    }
+    const std::size_t required_output_id_count =
+        (output_interface.parameter_export_count + 3U) / 4U;
+    if (output_id_count < required_output_id_count)
+    {
+        throw std::invalid_argument(
+            "Latte vertex shader is missing parameter output semantic IDs");
+    }
+
     output_interface.output_ids.reserve(output_id_count);
     for (std::uint32_t output_index = 0U;
          output_index < output_id_count;
@@ -99,6 +122,156 @@ decode_latte_vertex_shader_output_interface(
     }
 
     return output_interface;
+}
+
+enum class LattePixelInputSource : std::uint8_t
+{
+    vertex_parameter,
+    default_value,
+};
+
+struct LatteLinkedPixelShaderInput
+{
+    std::size_t pixel_input_index{};
+    std::uint8_t semantic{};
+    LattePixelInputSource source{};
+    std::optional<std::uint32_t> vertex_export_index;
+    std::array<std::uint32_t, 4U> default_component_bits{};
+    bool flat_shade{};
+    bool centroid{};
+    bool linear{};
+    bool point_sprite_texture{};
+    bool sample{};
+
+    bool operator==(const LatteLinkedPixelShaderInput&) const = default;
+};
+
+[[nodiscard]] inline std::array<std::uint32_t, 4U>
+get_latte_pixel_input_default_bits(LattePixelInputDefaultValue default_value)
+{
+    constexpr std::uint32_t one_float_bits = 0x3F800000U;
+
+    switch (default_value)
+    {
+    case LattePixelInputDefaultValue::zero:
+        return {0U, 0U, 0U, 0U};
+    case LattePixelInputDefaultValue::zero_rgb_one_alpha:
+        return {0U, 0U, 0U, one_float_bits};
+    case LattePixelInputDefaultValue::one_rgb_zero_alpha:
+        return {one_float_bits, one_float_bits, one_float_bits, 0U};
+    case LattePixelInputDefaultValue::one:
+        return {one_float_bits, one_float_bits, one_float_bits, one_float_bits};
+    }
+
+    throw std::invalid_argument("Latte pixel input default value is out of range");
+}
+
+[[nodiscard]] inline std::vector<LatteLinkedPixelShaderInput>
+link_latte_pixel_shader_inputs(
+    const LatteVertexShaderOutputInterface& vertex_output_interface,
+    std::span<const LatteShaderExportValue> vertex_exports,
+    std::span<const LattePixelShaderInputControl> pixel_input_controls)
+{
+    if (vertex_output_interface.outputs_per_component)
+    {
+        throw std::invalid_argument(
+            "Latte per-component vertex output linking is unsupported");
+    }
+
+    const std::size_t required_output_id_count =
+        (vertex_output_interface.parameter_export_count + 3U) / 4U;
+    if (vertex_output_interface.parameter_export_count == 0U ||
+        vertex_output_interface.parameter_export_count > 32U ||
+        vertex_output_interface.output_ids.size() < required_output_id_count)
+    {
+        throw std::invalid_argument(
+            "Latte vertex output interface is incomplete or invalid");
+    }
+
+    for (std::size_t export_list_index = 0U;
+         export_list_index < vertex_exports.size();
+         ++export_list_index)
+    {
+        const LatteShaderExportValue& vertex_export =
+            vertex_exports[export_list_index];
+        if (vertex_export.type != LatteExportType::parameter)
+        {
+            continue;
+        }
+
+        const std::uint32_t export_index = vertex_export.array_index;
+        if (export_index >= vertex_output_interface.parameter_export_count)
+        {
+            throw std::invalid_argument(
+                "Latte vertex parameter export index exceeds VS_EXPORT_COUNT");
+        }
+        for (std::size_t previous_index = 0U;
+             previous_index < export_list_index;
+             ++previous_index)
+        {
+            const LatteShaderExportValue& previous_export =
+                vertex_exports[previous_index];
+            if (previous_export.type == LatteExportType::parameter &&
+                previous_export.array_index == export_index)
+            {
+                throw std::invalid_argument(
+                    "Latte vertex parameter export index is duplicated");
+            }
+        }
+    }
+
+    std::vector<LatteLinkedPixelShaderInput> linked_inputs;
+    linked_inputs.reserve(pixel_input_controls.size());
+    for (std::size_t pixel_input_index = 0U;
+         pixel_input_index < pixel_input_controls.size();
+         ++pixel_input_index)
+    {
+        const LattePixelShaderInputControl& pixel_input =
+            pixel_input_controls[pixel_input_index];
+        std::optional<std::uint32_t> matching_export_index;
+        for (const LatteShaderExportValue& vertex_export : vertex_exports)
+        {
+            if (vertex_export.type != LatteExportType::parameter)
+            {
+                continue;
+            }
+
+            const std::uint32_t export_index = vertex_export.array_index;
+            const std::size_t semantic_register_index = export_index / 4U;
+            const std::size_t semantic_lane_index = export_index % 4U;
+            const std::uint8_t output_semantic = vertex_output_interface
+                .output_ids[semantic_register_index]
+                .semantics[semantic_lane_index];
+            if (output_semantic != pixel_input.semantic)
+            {
+                continue;
+            }
+            if (matching_export_index.has_value())
+            {
+                throw std::invalid_argument(
+                    "Latte pixel input semantic matches multiple vertex exports");
+            }
+            matching_export_index = export_index;
+        }
+
+        LatteLinkedPixelShaderInput linked_input{};
+        linked_input.pixel_input_index = pixel_input_index;
+        linked_input.semantic = pixel_input.semantic;
+        linked_input.vertex_export_index = matching_export_index;
+        linked_input.source = matching_export_index.has_value()
+            ? LattePixelInputSource::vertex_parameter
+            : LattePixelInputSource::default_value;
+        linked_input.default_component_bits =
+            get_latte_pixel_input_default_bits(pixel_input.default_value);
+        linked_input.flat_shade = pixel_input.flat_shade;
+        linked_input.centroid = pixel_input.centroid;
+        linked_input.linear = pixel_input.linear;
+        linked_input.point_sprite_texture = pixel_input.point_sprite_texture;
+        linked_input.sample = pixel_input.sample;
+        linked_inputs.push_back(linked_input);
+    }
+
+    return linked_inputs;
 }
 
 [[nodiscard]] inline std::vector<LattePixelShaderInputControl>

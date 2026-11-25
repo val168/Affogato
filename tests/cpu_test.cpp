@@ -32744,29 +32744,71 @@ void latte_vertex_output_interface_decode_tests()
 {
     using affogato::cpu::espresso::Gx2ProgramShaderBinding;
     using affogato::cpu::espresso::Gx2ProgramStage;
+    using affogato::gpu::LattePixelInputDefaultValue;
+    using affogato::gpu::LattePixelInputSource;
+    using affogato::gpu::LattePixelShaderInputControl;
+    using affogato::gpu::LatteExportType;
+    using affogato::gpu::LatteShaderExportValue;
+    using affogato::gpu::LatteVertexShaderOutputInterface;
     using affogato::gpu::LatteVertexShaderOutputId;
     using affogato::gpu::decode_latte_vertex_shader_output_interface;
+    using affogato::gpu::link_latte_pixel_shader_inputs;
 
     Gx2ProgramShaderBinding vertex_shader{};
     vertex_shader.stage = Gx2ProgramStage::vertex;
     vertex_shader.descriptor_words.resize(14U);
-    vertex_shader.descriptor_words[2U] = 1U;
-    vertex_shader.descriptor_words[3U] = 2U;
-    vertex_shader.descriptor_words[4U] = 0x04030201U;
-    vertex_shader.descriptor_words[5U] = 0x08070605U;
+    vertex_shader.descriptor_words[2U] = 4U;
+    vertex_shader.descriptor_words[3U] = 1U;
+    vertex_shader.descriptor_words[4U] = 0x00FE2A11U;
 
     const auto output_interface =
         decode_latte_vertex_shader_output_interface(vertex_shader);
-    assert(output_interface.outputs_per_component);
-    assert(output_interface.output_ids.size() == 2U);
+    assert(!output_interface.outputs_per_component);
+    assert(output_interface.parameter_export_count == 3U);
+    assert(output_interface.output_ids.size() == 1U);
     assert((output_interface.output_ids[0U] == LatteVertexShaderOutputId{{
-        1U, 2U, 3U, 4U}}));
-    assert((output_interface.output_ids[1U] == LatteVertexShaderOutputId{{
-        5U, 6U, 7U, 8U}}));
+        0x11U, 0x2AU, 0xFEU, 0U}}));
 
-    vertex_shader.descriptor_words[2U] = 0U;
-    assert(!decode_latte_vertex_shader_output_interface(
-        vertex_shader).outputs_per_component);
+    const std::array<LatteShaderExportValue, 3U> vertex_exports{{
+        {LatteExportType::position, 0U, {}},
+        {LatteExportType::parameter, 0U, {}},
+        {LatteExportType::parameter, 2U, {}}}};
+    const std::array<LattePixelShaderInputControl, 4U> pixel_inputs{{
+        {0x11U, LattePixelInputDefaultValue::zero, 0U, true, false, false,
+            false, false},
+        {0x2AU, LattePixelInputDefaultValue::zero_rgb_one_alpha, 0U, false,
+            true, false, false, true},
+        {0xFEU, LattePixelInputDefaultValue::one_rgb_zero_alpha, 0U, false,
+            false, true, true, false},
+        {0x63U, LattePixelInputDefaultValue::one, 0U, false, false, false,
+            false, false}}};
+    const auto linked_inputs = link_latte_pixel_shader_inputs(
+        output_interface,
+        vertex_exports,
+        pixel_inputs);
+    assert(linked_inputs.size() == pixel_inputs.size());
+    assert(linked_inputs[0U].source == LattePixelInputSource::vertex_parameter);
+    assert(linked_inputs[0U].vertex_export_index == 0U);
+    assert(linked_inputs[0U].flat_shade);
+    assert(linked_inputs[0U].default_component_bits ==
+        (std::array<std::uint32_t, 4U>{0U, 0U, 0U, 0U}));
+    assert(linked_inputs[1U].source == LattePixelInputSource::default_value);
+    assert(!linked_inputs[1U].vertex_export_index.has_value());
+    assert(linked_inputs[1U].default_component_bits ==
+        (std::array<std::uint32_t, 4U>{0U, 0U, 0U, 0x3F800000U}));
+    assert(linked_inputs[1U].centroid);
+    assert(linked_inputs[1U].sample);
+    assert(linked_inputs[2U].source == LattePixelInputSource::vertex_parameter);
+    assert(linked_inputs[2U].vertex_export_index == 2U);
+    assert(linked_inputs[2U].linear);
+    assert(linked_inputs[2U].point_sprite_texture);
+    assert(linked_inputs[2U].default_component_bits ==
+        (std::array<std::uint32_t, 4U>{
+            0x3F800000U, 0x3F800000U, 0x3F800000U, 0U}));
+    assert(linked_inputs[3U].source == LattePixelInputSource::default_value);
+    assert(linked_inputs[3U].default_component_bits ==
+        (std::array<std::uint32_t, 4U>{
+            0x3F800000U, 0x3F800000U, 0x3F800000U, 0x3F800000U}));
 
     bool rejected_non_vertex_shader = false;
     try
@@ -32796,6 +32838,88 @@ void latte_vertex_output_interface_decode_tests()
         rejected_truncated_output_ids = true;
     }
     assert(rejected_truncated_output_ids);
+
+    bool rejected_insufficient_output_ids = false;
+    try
+    {
+        Gx2ProgramShaderBinding incomplete_shader = vertex_shader;
+        incomplete_shader.descriptor_words[2U] = 8U;
+        static_cast<void>(
+            decode_latte_vertex_shader_output_interface(incomplete_shader));
+    }
+    catch (const std::invalid_argument&)
+    {
+        rejected_insufficient_output_ids = true;
+    }
+    assert(rejected_insufficient_output_ids);
+
+    bool rejected_per_component_linking = false;
+    try
+    {
+        LatteVertexShaderOutputInterface per_component_interface = output_interface;
+        per_component_interface.outputs_per_component = true;
+        static_cast<void>(link_latte_pixel_shader_inputs(
+            per_component_interface,
+            vertex_exports,
+            pixel_inputs));
+    }
+    catch (const std::invalid_argument&)
+    {
+        rejected_per_component_linking = true;
+    }
+    assert(rejected_per_component_linking);
+
+    bool rejected_invalid_parameter_export = false;
+    try
+    {
+        const std::array<LatteShaderExportValue, 1U> invalid_exports{{
+            {LatteExportType::parameter, 3U, {}}}};
+        static_cast<void>(link_latte_pixel_shader_inputs(
+            output_interface,
+            invalid_exports,
+            pixel_inputs));
+    }
+    catch (const std::invalid_argument&)
+    {
+        rejected_invalid_parameter_export = true;
+    }
+    assert(rejected_invalid_parameter_export);
+
+    bool rejected_duplicate_parameter_export = false;
+    try
+    {
+        const std::array<LatteShaderExportValue, 2U> duplicate_exports{{
+            {LatteExportType::parameter, 0U, {}},
+            {LatteExportType::parameter, 0U, {}}}};
+        static_cast<void>(link_latte_pixel_shader_inputs(
+            output_interface,
+            duplicate_exports,
+            pixel_inputs));
+    }
+    catch (const std::invalid_argument&)
+    {
+        rejected_duplicate_parameter_export = true;
+    }
+    assert(rejected_duplicate_parameter_export);
+
+    bool rejected_ambiguous_semantic = false;
+    try
+    {
+        LatteVertexShaderOutputInterface ambiguous_interface = output_interface;
+        ambiguous_interface.output_ids[0U].semantics[1U] = 0x11U;
+        const std::array<LatteShaderExportValue, 2U> ambiguous_exports{{
+            {LatteExportType::parameter, 0U, {}},
+            {LatteExportType::parameter, 1U, {}}}};
+        static_cast<void>(link_latte_pixel_shader_inputs(
+            ambiguous_interface,
+            ambiguous_exports,
+            std::span<const LattePixelShaderInputControl>(pixel_inputs.data(), 1U)));
+    }
+    catch (const std::invalid_argument&)
+    {
+        rejected_ambiguous_semantic = true;
+    }
+    assert(rejected_ambiguous_semantic);
 }
 
 void latte_control_flow_decoder_tests()
