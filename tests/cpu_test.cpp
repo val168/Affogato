@@ -32257,6 +32257,32 @@ void latte_control_flow_decoder_tests()
     assert((integer_logic_vector == expected_integer_logic_vector));
     assert((shader_registers[3U] == expected_integer_logic_vector));
 
+    auto move_modifier_slots = alu_slots;
+    move_modifier_slots[0U].word1 |= 1U;
+    move_modifier_slots[1U].word0 |= 1U << 12U;
+    move_modifier_slots[2U].word1 |= 1U;
+    move_modifier_slots[2U].word0 |= 1U << 12U;
+    move_modifier_slots[3U].word1 |= 1U;
+    move_modifier_slots[3U].word0 |= 1U << 12U;
+    const auto move_modifier_groups =
+        decode_latte_alu_op2_groups(move_modifier_slots);
+    const LatteShaderRegister move_modifier_input{
+        0x80000000U,
+        0x7FC12345U,
+        0xFF800000U,
+        0xC0200000U};
+    shader_registers[1U] = move_modifier_input;
+    const LatteShaderRegister expected_move_modifier_result{
+        0x00000000U,
+        0xFFC12345U,
+        0xFF800000U,
+        0xC0200000U};
+    const auto move_modifier_result = execute_latte_alu_op2_vector_group(
+        move_modifier_groups[0U],
+        shader_registers);
+    assert((move_modifier_result == expected_move_modifier_result));
+    assert((shader_registers[3U] == expected_move_modifier_result));
+
     bool rejected_literal_alu_operand = false;
     try
     {
@@ -32307,28 +32333,15 @@ void latte_control_flow_decoder_tests()
         bool rejected_source_absolute_modifier = false;
         try
         {
+            auto absolute_source_slots = integer_logic_slots;
+            absolute_source_slots[0U].word1 |= source_absolute_mask;
+            const auto absolute_source_groups =
+                decode_latte_alu_op2_groups(absolute_source_slots);
             shader_registers[3U].fill(0xDEADBEEFU);
-            if (source_absolute_mask == 1U)
-            {
-                auto absolute_source_slots = alu_slots;
-                absolute_source_slots[0U].word1 |= source_absolute_mask;
-                const auto absolute_source_groups =
-                    decode_latte_alu_op2_groups(absolute_source_slots);
-                static_cast<void>(execute_latte_alu_op2_vector_group(
-                    absolute_source_groups[0U],
-                    shader_registers));
-            }
-            else
-            {
-                auto absolute_source_slots = integer_logic_slots;
-                absolute_source_slots[0U].word1 |= source_absolute_mask;
-                const auto absolute_source_groups =
-                    decode_latte_alu_op2_groups(absolute_source_slots);
-                static_cast<void>(execute_latte_alu_op2_vector_group(
-                    absolute_source_groups[0U],
-                    shader_registers,
-                    incoming_previous_vector));
-            }
+            static_cast<void>(execute_latte_alu_op2_vector_group(
+                absolute_source_groups[0U],
+                shader_registers,
+                incoming_previous_vector));
         }
         catch (const std::runtime_error&)
         {

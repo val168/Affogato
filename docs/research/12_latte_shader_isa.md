@@ -311,13 +311,15 @@ groups. The pass-through fixture contains one four-slot group and no literals.
 MOV or integer AND/OR/XOR/NOT, absolute GPR or explicitly supplied previous-PV
 sources, inline constants `248`–`252`, write masks enabled, and no other
 modifiers. The OP2 decoder records `SRC0_ABS` and `SRC1_ABS` from word1 bits 0
-and 1. The bounded raw-bit evaluator rejects these modifiers; the R700 manual
-defines absolute value only for floating-point inputs, whose semantics are not
-implemented here. The executor gathers all sources before updating destination
-lanes and returns the resulting vector value. A missing PV input is rejected
-before any destination write. Tests cover bit-preserving MOV values, same-group
-source/destination overlap, PV forwarding, inline constant bit patterns,
-integer logical truth tables, and rejection without partial register writes.
+and 1. MOV applies its source absolute and negate flags as binary32 sign-bit
+operations, in that order; the integer logic evaluator rejects both flags.
+This follows the R700 instruction-family semantics and retains all non-sign
+bits, but it has not been checked against Latte hardware. The executor gathers
+all sources before updating destination lanes and returns the resulting vector
+value. A missing PV input is rejected before any destination write. Tests cover
+bit-preserving and modified MOV values, same-group source/destination overlap,
+PV forwarding, inline constant bit patterns, integer logical truth tables, and
+rejection without partial register writes.
 The group behavior follows the R700-family reference and the assembled fixture;
 it is not independently verified against Latte hardware. PS, literal and
 constant-file reads, other groups/opcodes, clause execution, shader IR, and
@@ -344,5 +346,7 @@ ALU.Trans implementation that Affogato does not yet have.
 The R700 `ALU_WORD1_OP2` field table places `SRC0_ABS` at bit 0 and `SRC1_ABS`
 at bit 1 (Chapter 10, page 10-18). It describes absolute value before
 negation and says to use it only for floating-point inputs. The decoder exposes
-these bits, while the current evaluator rejects them pending floating-point
-modifier semantics.
+these bits. The bounded MOV evaluator implements the specified ordering by
+clearing the binary32 sign bit for absolute value and toggling it for negation;
+the integer logic subset rejects either modifier. Source 1 modifiers for MOV
+remain irrelevant because this opcode consumes only source 0.

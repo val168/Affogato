@@ -96,8 +96,7 @@ using LatteShaderRegister =
             "Latte ALU MOV evaluation received a different OP2 opcode");
     }
 
-    if (instruction.source0_relative || instruction.source0_negate ||
-        instruction.source0_absolute ||
+    if (instruction.source0_relative ||
         instruction.destination_relative || instruction.destination_clamp ||
         instruction.output_modifier != 0U || instruction.index_mode != 0U ||
         !instruction.write_mask)
@@ -119,11 +118,26 @@ using LatteShaderRegister =
             "Latte ALU MOV destination is outside a four-component GPR");
     }
 
-    return read_latte_alu_source(
+    std::uint32_t source_value = read_latte_alu_source(
         instruction.source0_selector,
         instruction.source0_channel,
         guest_registers,
         incoming_previous_vector);
+
+    // R700 applies floating-point absolute value before source negation.
+    // Sign-bit operations preserve every other binary32 bit, including NaN
+    // payloads and the distinction between positive and negative zero.
+    if (instruction.source0_absolute)
+    {
+        source_value &= 0x7FFFFFFFU;
+    }
+
+    if (instruction.source0_negate)
+    {
+        source_value ^= 0x80000000U;
+    }
+
+    return source_value;
 }
 
 // Evaluate supported GPR, inline-constant, and prior-PV integer logic operands.

@@ -432,3 +432,12 @@ Tests check exact constant bit patterns, decode/execute AND, OR, XOR, and NOT
 groups, and verify unsupported modifiers fail before writeback. Debug and
 Release builds succeeded; CTest passed 2/2 in each, and `git diff --check` is
 clean. Behavior is not verified against Latte hardware.
+
+## Latte MOV source modifiers (2026-11-25)
+
+The bounded MOV evaluator now applies its source-0 absolute and negate flags
+using binary32 sign-bit operations in the R700-specified order: absolute value,
+then negation. The integer logic subset continues to reject these flags. Tests
+cover signed zero, NaN payload preservation, infinity, and combined modifiers.
+Debug and Release builds and CTest passed 2/2 in both configurations; the
+behavior remains unverified on Latte hardware.
