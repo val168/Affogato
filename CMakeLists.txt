@@ -335,6 +335,16 @@ if(BUILD_TESTING)
                 --gx2-guest-triangle-multiply-spirv-smoke-test
         )
         add_test(
+            NAME affogato_vulkan_guest_add_offset_readback
+            COMMAND affogato_frontend
+                --gx2-guest-triangle-add-one-x-spirv-smoke-test
+        )
+        add_test(
+            NAME affogato_vulkan_guest_multiply_zero_readback
+            COMMAND affogato_frontend
+                --gx2-guest-triangle-multiply-zero-spirv-smoke-test
+        )
+        add_test(
             NAME affogato_vulkan_guest_maximum_readback
             COMMAND affogato_frontend
                 --gx2-guest-triangle-maximum-spirv-smoke-test

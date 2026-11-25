@@ -23,6 +23,20 @@ CPU-decoded geometry and the diagnostic host pipeline; the shader-result
 assertion uses the separate Vulkan swapchain draw. See
 [`research/12_latte_shader_isa.md`](research/12_latte_shader_isa.md).
 
+## Non-identity Latte arithmetic output checks (2026-11-25)
+
+The controlled Vulkan guest-shader harness now checks non-identity arithmetic
+results in swapchain readback. `ADD(x, 1.0)` moves the fixture triangle and is
+checked at a pixel outside the unchanged triangle; `MUL_IEEE(x, 0.0)` collapses
+its position and is checked at a pixel that the original triangle covers.
+These checks exercise generated guest vertex modules through Vulkan rather
+than inferring arithmetic from the diagnostic color-buffer path. The generated
+geometry still comes from the controlled fixture, and the pixel shader remains
+diagnostic, so this does not establish general GX2 draw handling or arbitrary
+Latte shader support. Debug and Release CTest each passed 17/17, including the
+new ADD and MUL readback cases. Latte-specific instruction behavior remains
+unverified on hardware; see [`research/12_latte_shader_isa.md`](research/12_latte_shader_isa.md).
+
 ## Controlled Vulkan run for Latte MUL_IEEE (2026-11-25)
 
 The guest-triangle integration harness now has a separate SPIR-V mode that

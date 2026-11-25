@@ -1917,7 +1917,9 @@ enum class GuestTriangleShader
 {
     cpu_mov,
     spirv_add_zero,
+    spirv_add_one_x,
     spirv_multiply_one,
+    spirv_multiply_zero,
     spirv_maximum_self,
     spirv_minimum_self,
     spirv_maximum_zero,
@@ -2094,6 +2096,11 @@ int run_gx2_guest_triangle_test(
             second_operand_selector =
                 affogato::gpu::latte_alu_source_one_float_selector;
         }
+        else if (shader == GuestTriangleShader::spirv_multiply_zero)
+        {
+            operation_opcode =
+                affogato::gpu::latte_alu_op2_multiply_ieee_opcode;
+        }
         else if (shader == GuestTriangleShader::spirv_maximum_self)
         {
             operation_opcode =
@@ -2119,9 +2126,23 @@ int run_gx2_guest_triangle_test(
         for (std::uint32_t component = 0U; component < 4U; ++component)
         {
             const std::uint32_t slot = 64U + component * 2U;
+            std::uint16_t component_source1_selector =
+                second_operand_selector;
+            if (shader == GuestTriangleShader::spirv_add_one_x &&
+                component == 0U)
+            {
+                component_source1_selector =
+                    affogato::gpu::latte_alu_source_one_float_selector;
+            }
+            if (shader == GuestTriangleShader::spirv_multiply_zero &&
+                component == 3U)
+            {
+                component_source1_selector =
+                    affogato::gpu::latte_alu_source_one_float_selector;
+            }
             const std::uint32_t source_word =
                 1U |
-                (second_operand_selector << 13U) |
+                (static_cast<std::uint32_t>(component_source1_selector) << 13U) |
                 (component << 10U) |
                 (component << 23U) |
                 (component == 3U ? 0x80000000U : 0U);
@@ -2639,10 +2660,12 @@ int run_gx2_guest_triangle_test(
         throw std::runtime_error(
             "GX2 color-buffer copy did not produce readable RGBA8 scanout pixels");
     }
-    const bool verify_clamped_shader_output =
+    const bool verify_shader_output =
+        shader == GuestTriangleShader::spirv_add_one_x ||
+        shader == GuestTriangleShader::spirv_multiply_zero ||
         shader == GuestTriangleShader::spirv_maximum_zero ||
         shader == GuestTriangleShader::spirv_minimum_zero;
-    if (verify_clamped_shader_output)
+    if (verify_shader_output)
     {
         renderer.render_frame();
         const auto& shader_frame = renderer.frame_readback();
@@ -2653,10 +2676,23 @@ int run_gx2_guest_triangle_test(
                 "Vulkan Latte shader output readback is unavailable");
         }
 
-        std::uint32_t shader_sample_x = (shader_frame->width * 70U) / 100U;
+        std::uint32_t shader_sample_x = shader_frame->width / 2U;
         std::uint32_t shader_sample_y =
-            (shader_frame->height * 7U) / 12U;
-        if (shader == GuestTriangleShader::spirv_minimum_zero)
+            (shader_frame->height * 5U) / 12U;
+        bool expect_red = false;
+        if (shader == GuestTriangleShader::spirv_add_one_x)
+        {
+            shader_sample_x = (shader_frame->width * 90U) / 100U;
+            shader_sample_y = (shader_frame->height * 7U) / 12U;
+            expect_red = true;
+        }
+        else if (shader == GuestTriangleShader::spirv_maximum_zero)
+        {
+            shader_sample_x = (shader_frame->width * 70U) / 100U;
+            shader_sample_y = (shader_frame->height * 7U) / 12U;
+            expect_red = true;
+        }
+        else if (shader == GuestTriangleShader::spirv_minimum_zero)
         {
             shader_sample_x = (shader_frame->width * 60U) / 100U;
             shader_sample_y = (shader_frame->height * 23U) / 40U;
@@ -2672,12 +2708,18 @@ int run_gx2_guest_triangle_test(
         const bool shader_sample_is_red =
             shader_frame->pixels[shader_sample_offset] >= 200U &&
             shader_frame->pixels[shader_sample_offset + 2U] <= 40U;
-        const bool expect_red =
-            shader == GuestTriangleShader::spirv_maximum_zero;
         if (shader_sample_is_red != expect_red)
         {
             throw std::runtime_error(
-                "Vulkan Latte shader output pixel did not match its clamp result");
+                "Vulkan Latte shader output pixel at (" +
+                std::to_string(shader_sample_x) + ", " +
+                std::to_string(shader_sample_y) + ") was (" +
+                std::to_string(shader_frame->pixels[shader_sample_offset]) +
+                ", " +
+                std::to_string(shader_frame->pixels[shader_sample_offset + 1U]) +
+                ", " +
+                std::to_string(shader_frame->pixels[shader_sample_offset + 2U]) +
+                ")");
         }
     }
     renderer.consume_guest_commands(
@@ -2726,10 +2768,20 @@ int run_gx2_guest_triangle_test(
         shader_subset_description =
             "the bounded MOV/ADD-to-position SPIR-V vertex subset";
     }
+    if (shader == GuestTriangleShader::spirv_add_one_x)
+    {
+        shader_subset_description =
+            "the bounded MOV/ADD-offset-to-position SPIR-V vertex subset";
+    }
     if (shader == GuestTriangleShader::spirv_multiply_one)
     {
         shader_subset_description =
             "the bounded MOV/MUL-to-position SPIR-V vertex subset";
+    }
+    if (shader == GuestTriangleShader::spirv_multiply_zero)
+    {
+        shader_subset_description =
+            "the bounded MOV/MUL-collapse-to-position SPIR-V vertex subset";
     }
     if (shader == GuestTriangleShader::spirv_maximum_self)
     {
@@ -2812,6 +2864,22 @@ int main(int argc, char* argv[])
                     GuestTriangleShader::spirv_multiply_one);
             }
             if (std::string_view(argv[1]) ==
+                    "--gx2-guest-triangle-add-one-x-spirv-smoke-test" &&
+                argc == 2)
+            {
+                return run_gx2_guest_triangle_test(
+                    false,
+                    GuestTriangleShader::spirv_add_one_x);
+            }
+            if (std::string_view(argv[1]) ==
+                    "--gx2-guest-triangle-multiply-zero-spirv-smoke-test" &&
+                argc == 2)
+            {
+                return run_gx2_guest_triangle_test(
+                    false,
+                    GuestTriangleShader::spirv_multiply_zero);
+            }
+            if (std::string_view(argv[1]) ==
                     "--gx2-guest-triangle-maximum-spirv-smoke-test" &&
                 argc == 2)
             {
@@ -2857,6 +2925,8 @@ int main(int argc, char* argv[])
                          "       AffogatoFrontend.exe --gx2-guest-triangle-smoke-test\n"
                          "       AffogatoFrontend.exe --gx2-guest-triangle-spirv-smoke-test\n"
                          "       AffogatoFrontend.exe --gx2-guest-triangle-multiply-spirv-smoke-test\n"
+                         "       AffogatoFrontend.exe --gx2-guest-triangle-add-one-x-spirv-smoke-test\n"
+                         "       AffogatoFrontend.exe --gx2-guest-triangle-multiply-zero-spirv-smoke-test\n"
                          "       AffogatoFrontend.exe --gx2-guest-triangle-maximum-spirv-smoke-test\n"
                          "       AffogatoFrontend.exe --gx2-guest-triangle-minimum-spirv-smoke-test\n"
                          "       AffogatoFrontend.exe --gx2-guest-triangle-maximum-zero-spirv-smoke-test\n"
