@@ -160,6 +160,34 @@ struct LatteAluOp2Instruction
     bool operator==(const LatteAluOp2Instruction&) const = default;
 };
 
+struct LatteAluOp3Instruction
+{
+    std::size_t word_offset{};
+    std::uint16_t opcode{};
+    std::uint16_t source0_selector{};
+    std::uint16_t source1_selector{};
+    std::uint16_t source2_selector{};
+    std::uint8_t source0_channel{};
+    std::uint8_t source1_channel{};
+    std::uint8_t source2_channel{};
+    std::uint8_t index_mode{};
+    std::uint8_t bank_swizzle{};
+    std::uint8_t destination_gpr{};
+    std::uint8_t destination_component{};
+    std::uint8_t predicate_selection{};
+    bool source0_relative{};
+    bool source1_relative{};
+    bool source2_relative{};
+    bool source0_negate{};
+    bool source1_negate{};
+    bool source2_negate{};
+    bool destination_relative{};
+    bool destination_clamp{};
+    bool last_in_group{};
+
+    bool operator==(const LatteAluOp3Instruction&) const = default;
+};
+
 struct LatteAluOp2InstructionGroup
 {
     std::size_t word_offset{};
@@ -391,6 +419,54 @@ decode_latte_alu_clause_slots(
         ((slot.word1 >> 28U) & 1U) != 0U,
         ((slot.word1 >> 31U) & 1U) != 0U,
         ((slot.word1 >> 4U) & 1U) != 0U,
+        ((slot.word0 >> 31U) & 1U) != 0U};
+}
+
+// Decode the shared source fields and OP3-specific source-2 fields without
+// assigning semantics to the opcode or selector values.
+[[nodiscard]] inline LatteAluOp3Instruction decode_latte_alu_op3_instruction(
+    const LatteAluClauseSlot& slot)
+{
+    constexpr std::uint32_t op3_encoding_shift = 13U;
+    constexpr std::uint32_t op3_encoding_mask = 0x1FU;
+    constexpr std::uint32_t first_op3_encoding = 0x08U;
+
+    const std::uint32_t opcode =
+        (slot.word1 >> op3_encoding_shift) & op3_encoding_mask;
+    if (opcode < first_op3_encoding)
+    {
+        throw std::runtime_error(
+            "Latte ALU slot uses OP2 encoding, not the OP3 layout");
+    }
+
+    constexpr std::uint32_t source_selector_mask = 0x1FFU;
+    constexpr std::uint32_t source_channel_mask = 0x03U;
+    constexpr std::uint32_t destination_gpr_mask = 0x7FU;
+    constexpr std::uint32_t destination_component_mask = 0x03U;
+
+    return {
+        slot.word_offset,
+        static_cast<std::uint16_t>(opcode),
+        static_cast<std::uint16_t>(slot.word0 & source_selector_mask),
+        static_cast<std::uint16_t>((slot.word0 >> 13U) & source_selector_mask),
+        static_cast<std::uint16_t>(slot.word1 & source_selector_mask),
+        static_cast<std::uint8_t>((slot.word0 >> 10U) & source_channel_mask),
+        static_cast<std::uint8_t>((slot.word0 >> 23U) & source_channel_mask),
+        static_cast<std::uint8_t>((slot.word1 >> 10U) & source_channel_mask),
+        static_cast<std::uint8_t>((slot.word0 >> 26U) & 0x07U),
+        static_cast<std::uint8_t>((slot.word1 >> 18U) & 0x07U),
+        static_cast<std::uint8_t>((slot.word1 >> 21U) & destination_gpr_mask),
+        static_cast<std::uint8_t>(
+            (slot.word1 >> 29U) & destination_component_mask),
+        static_cast<std::uint8_t>((slot.word0 >> 29U) & 0x03U),
+        ((slot.word0 >> 9U) & 1U) != 0U,
+        ((slot.word0 >> 22U) & 1U) != 0U,
+        ((slot.word1 >> 9U) & 1U) != 0U,
+        ((slot.word0 >> 12U) & 1U) != 0U,
+        ((slot.word0 >> 25U) & 1U) != 0U,
+        ((slot.word1 >> 12U) & 1U) != 0U,
+        ((slot.word1 >> 28U) & 1U) != 0U,
+        ((slot.word1 >> 31U) & 1U) != 0U,
         ((slot.word0 >> 31U) & 1U) != 0U};
 }
 

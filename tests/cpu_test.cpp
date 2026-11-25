@@ -32655,6 +32655,7 @@ void latte_control_flow_decoder_tests()
     using affogato::gpu::decode_latte_alu_clause_slots;
     using affogato::gpu::decode_latte_alu_op2_instruction;
     using affogato::gpu::decode_latte_alu_op2_groups;
+    using affogato::gpu::decode_latte_alu_op3_instruction;
     using affogato::gpu::decode_latte_control_flow;
     using affogato::gpu::evaluate_latte_normal_export;
     using affogato::gpu::execute_latte_shader_subset;
@@ -33820,6 +33821,67 @@ void latte_control_flow_decoder_tests()
         rejected_op3_layout = true;
     }
     assert(rejected_op3_layout);
+
+    constexpr std::uint32_t op3_word0 =
+        0x12U |
+        (1U << 9U) |
+        (2U << 10U) |
+        (1U << 12U) |
+        (0x123U << 13U) |
+        (1U << 22U) |
+        (3U << 23U) |
+        (1U << 25U) |
+        (5U << 26U) |
+        (2U << 29U) |
+        (1U << 31U);
+    constexpr std::uint32_t op3_word1 =
+        0x155U |
+        (1U << 9U) |
+        (2U << 10U) |
+        (1U << 12U) |
+        (20U << 13U) |
+        (6U << 18U) |
+        (37U << 21U) |
+        (1U << 28U) |
+        (2U << 29U) |
+        (1U << 31U);
+    const auto decoded_op3 = decode_latte_alu_op3_instruction(
+        {42U, op3_word0, op3_word1});
+    assert((decoded_op3 == affogato::gpu::LatteAluOp3Instruction{
+        42U,
+        20U,
+        0x12U,
+        0x123U,
+        0x155U,
+        2U,
+        3U,
+        2U,
+        5U,
+        6U,
+        37U,
+        2U,
+        2U,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true}));
+
+    bool rejected_op2_as_op3 = false;
+    try
+    {
+        static_cast<void>(
+            decode_latte_alu_op3_instruction(alu_slots.front()));
+    }
+    catch (const std::runtime_error&)
+    {
+        rejected_op2_as_op3 = true;
+    }
+    assert(rejected_op2_as_op3);
 
     constexpr std::array<std::uint32_t, 2U> source_absolute_masks{
         1U,

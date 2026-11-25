@@ -1,5 +1,20 @@
 # Affogato Development Status
 
+## Structural Latte OP3 instruction decoding (2026-11-25)
+
+Added `LatteAluOp3Instruction` and a separate raw-field decoder for OP3
+instructions. It captures all three selectors/channels and relative/negate
+flags, the raw opcode, index mode, bank swizzle, predicate selection,
+destination fields, clamp, and group-end marker. The decoder rejects OP2
+encodings; the existing OP2 path continues to reject OP3. Tests construct a
+field-rich OP3 word pair and check every decoded field. This is structural
+decoding only: no OP3 grouping, CPU interpretation, or SPIR-V lowering is
+implemented. The R700 manual describes OP3 `MULADD_IEEE` opcode `0x14`, but
+Latte-specific multiply-add rounding behavior remains unknown. Cemu's Latte
+parser was consulted as a source-layout cross-check; no implementation code
+was copied. Debug and Release builds succeeded, and CTest passed 18/18 in both.
+See [`research/12_latte_shader_isa.md`](research/12_latte_shader_isa.md).
+
 ## Bounded Latte DX10 min/max SPIR-V lowering (2026-11-25)
 
 The experimental vertex emitter now lowers `MAX_DX10` and `MIN_DX10` using

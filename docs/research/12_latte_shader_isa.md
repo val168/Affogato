@@ -513,6 +513,23 @@ is Chapter 9.2, “Copy To GPR” (page 9-92); its applicability to Latte remain
 family-level reference cross-checked by the assembled fixture, not a complete
 Latte specification.
 
+`decode_latte_alu_op3_instruction()` now extracts the raw OP3 opcode, the
+shared source 0/source 1 fields, source 2 selector/relative/channel/negate
+fields, index mode, bank swizzle, destination, predicate selection, clamp,
+and group-end state. The R700 manual's Chapter 10 `ALU_DWORD1_OP3` layout
+places source 2 in word 1 bits 0–12 and the five-bit opcode in bits 13–17;
+its Chapter 9 table identifies `MULADD_IEEE` as OP3 opcode `0x14` and gives
+`dst = src0 * src1 + src2`. Cemu's
+[`LatteDecompiler_ParseALUClause`](https://github.com/cemu-project/Cemu/blob/main/src/Cafe/HW/Latte/LegacyShaderDecompiler/LatteDecompiler.cpp)
+parses the same source-2 fields from word 1. Affogato uses this as a structural
+cross-check and does not copy Cemu code. The new decoder is structural only:
+OP3 slots are not yet admitted into ALU groups, interpreted, or emitted as
+SPIR-V. In particular, the exact Latte multiply-add rounding/contraction
+behavior still needs Latte-specific evidence before choosing `OpFma` versus
+separate multiply and add operations. Debug CTest passed 18/18 with a
+constructed-field fixture; Release validation for this decoder change is
+recorded in the development status.
+
 The R700 manual's Chapter 4.3 says the LAST bit delimits groups of ALU slots;
 Chapter 4.6.2 defines PV/PS as results from the previous group. Chapter 4.9.2
 also states that an OP2 write-mask suppresses the GPR write while PV/PS still
