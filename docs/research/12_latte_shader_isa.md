@@ -289,9 +289,18 @@ update. Therefore a complete MOV executor cannot be modeled as only a
 destination-register copy. Any follow-up execution work must represent grouped
 ALU results and their state transitions before claiming instruction execution.
 
+Chapter 4.3 also describes group instruction slots in X, Y, Z, W, Trans order;
+literal constants may occupy following 64-bit slots and do not carry LAST bits,
+while the ALU clause count is expressed in total slots. Chapter 4.4 describes
+how destination components select vector units and how transcendental
+operations use ALU.Trans. This is R700-family evidence, so Affogato must still
+confirm these details against Latte-focused sources and fixtures. In
+particular, a group parser must distinguish instruction slots from literal
+payloads before treating each LAST bit as a complete group boundary.
+
 Next implementation work should add semantic execution for a verified ALU
-group handling and one or more verified ALU instruction subsets with
-independently expected results and explicit guest register/PV/PS state. The
-pass-through shader alone does not establish complete shader decoding. Do not
-start SPIR-V emission until opcode semantics, slot grouping, and expected
-architectural outputs have deterministic tests.
+group representation that preserves instruction/literal slot boundaries,
+followed by independently tested instruction subsets and explicit guest
+register/PV/PS state. The pass-through shader alone does not establish complete
+shader decoding. Do not start SPIR-V emission until opcode semantics, slot
+grouping, and expected architectural outputs have deterministic tests.
