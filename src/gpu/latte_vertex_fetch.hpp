@@ -523,4 +523,79 @@ decode_latte_vertex_shader_input(
     return LatteVertexShaderInput{*destination_gpr, components};
 }
 
+[[nodiscard]] inline std::size_t apply_latte_vertex_shader_inputs(
+    std::span<const LatteVertexAttribute> attributes,
+    std::span<const cpu::espresso::Gx2VertexBufferSnapshot> vertex_buffers,
+    std::span<const std::uint32_t> semantic_table,
+    std::uint32_t vertex_shader_gpr_base,
+    std::uint32_t vertex_index,
+    std::span<std::array<std::uint32_t, 4U>> shader_registers)
+{
+    std::array<LatteVertexShaderInput, latte_vertex_semantic_entry_count>
+        pending_inputs{};
+    std::size_t pending_input_count = 0U;
+
+    for (const LatteVertexAttribute& attribute : attributes)
+    {
+        const std::optional<LatteVertexShaderInput> input =
+            decode_latte_vertex_shader_input(
+                attribute,
+                vertex_buffers,
+                semantic_table,
+                vertex_shader_gpr_base,
+                vertex_index);
+        if (!input.has_value())
+        {
+            continue;
+        }
+
+        if (input->destination_gpr >= shader_registers.size())
+        {
+            throw std::runtime_error(
+                "Latte vertex shader input GPR exceeds the supplied register file");
+        }
+        if (std::ranges::any_of(
+                std::span<const LatteVertexShaderInput>(pending_inputs).first(
+                    pending_input_count),
+                [&input](const LatteVertexShaderInput& pending_input)
+                {
+                    return pending_input.destination_gpr ==
+                        input->destination_gpr;
+                }))
+        {
+            throw std::runtime_error(
+                "Latte vertex fetch writes one shader input GPR more than once");
+        }
+        if (pending_input_count == pending_inputs.size())
+        {
+            throw std::runtime_error(
+                "Latte vertex shader inputs exceed the semantic-table limit");
+        }
+
+        pending_inputs[pending_input_count] = *input;
+        ++pending_input_count;
+    }
+
+    // Validate every fetch before applying writes so an invalid later attribute
+    // cannot leave a partially populated shader input register file.
+    for (std::size_t input_index = 0U;
+         input_index < pending_input_count;
+         ++input_index)
+    {
+        const LatteVertexShaderInput& input = pending_inputs[input_index];
+        for (std::size_t component_index = 0U;
+             component_index < input.components.size();
+             ++component_index)
+        {
+            if (input.components[component_index].has_value())
+            {
+                shader_registers[input.destination_gpr][component_index] =
+                    *input.components[component_index];
+            }
+        }
+    }
+
+    return pending_input_count;
+}
+
 }

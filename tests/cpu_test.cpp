@@ -31834,6 +31834,7 @@ void latte_vertex_fetch_decoder_tests()
     using affogato::gpu::decode_latte_vertex_component;
     using affogato::gpu::decode_latte_vertex_attribute_vector;
     using affogato::gpu::decode_latte_vertex_shader_input;
+    using affogato::gpu::apply_latte_vertex_shader_inputs;
     using affogato::gpu::capture_latte_vertex_semantic_table;
     using affogato::gpu::resolve_latte_vertex_input_gpr;
 
@@ -32099,6 +32100,52 @@ void latte_vertex_fetch_decoder_tests()
     assert(shader_input->components[1U] == 0x3FC00000U);
     assert(shader_input->components[2U] == 0U);
     assert(!shader_input->components[3U].has_value());
+
+    input_semantic_table[3U] = 7U;
+    std::array<std::uint32_t, 4U> initial_shader_register{};
+    initial_shader_register.fill(0xDEADBEEFU);
+    std::array<std::array<std::uint32_t, 4U>, 16U> shader_registers{};
+    shader_registers.fill(initial_shader_register);
+    const std::array<affogato::gpu::LatteVertexAttribute, 1U>
+        shader_attributes{semantic_float_attribute};
+    assert(apply_latte_vertex_shader_inputs(
+        shader_attributes,
+        input_vertex_buffers,
+        input_semantic_table,
+        4U,
+        1U,
+        shader_registers) == 1U);
+    assert(shader_registers[8U][0U] == 0xC0000000U);
+    assert(shader_registers[8U][1U] == 0x3FC00000U);
+    assert(shader_registers[8U][2U] == 0U);
+    assert(shader_registers[8U][3U] == 0xDEADBEEFU);
+
+    const auto registers_before_invalid_input = shader_registers;
+    input_semantic_table[4U] = 8U;
+    auto invalid_semantic_attribute = semantic_float_attribute;
+    invalid_semantic_attribute.semantic_id = 8U;
+    invalid_semantic_attribute.buffer_index = 3U;
+    const std::array<affogato::gpu::LatteVertexAttribute, 2U>
+        partially_invalid_attributes{
+            semantic_float_attribute,
+            invalid_semantic_attribute};
+    bool rejected_invalid_shader_input = false;
+    try
+    {
+        static_cast<void>(apply_latte_vertex_shader_inputs(
+            partially_invalid_attributes,
+            input_vertex_buffers,
+            input_semantic_table,
+            4U,
+            1U,
+            shader_registers));
+    }
+    catch (const std::runtime_error&)
+    {
+        rejected_invalid_shader_input = true;
+    }
+    assert(rejected_invalid_shader_input);
+    assert(shader_registers == registers_before_invalid_input);
 
     input_semantic_table.fill(0xFFFFFFFFU);
     assert(!decode_latte_vertex_shader_input(

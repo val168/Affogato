@@ -611,3 +611,14 @@ lookup, snapshot bounds, component selection, and absent semantics. Debug and
 Release builds and both CTest suites passed 2/2. The existing diagnostic
 Vulkan smoke test still passes; its pixels use the fixed diagnostic host
 shader, not a guest Latte shader.
+
+`apply_latte_vertex_shader_inputs()` now assembles the supported attribute
+results into a caller-provided register file. It retains masked channels,
+validates all attributes before mutating registers, and uses fixed-capacity
+temporary storage bounded by the 32-entry semantic table. Tests verify the
+register writes, preserved masked channel, and unchanged state when a later
+attribute references a missing draw-time buffer snapshot. Debug and Release
+builds succeeded, CTest passed 2/2 in each configuration, and the existing
+diagnostic Vulkan triangle smoke test passed. This is input assembly for an
+explicit caller-supplied vertex index; it does not execute a Latte vertex
+shader or establish Wii U hardware conformance.
