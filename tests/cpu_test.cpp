@@ -32041,6 +32041,10 @@ void latte_control_flow_decoder_tests()
     assert(!first_move.source1_negate);
     assert(!first_move.source0_absolute);
     assert(!first_move.source1_absolute);
+    assert(!first_move.update_execute_mask);
+    assert(!first_move.update_predicate);
+    assert(first_move.bank_swizzle == 0U);
+    assert(first_move.predicate_selection == 0U);
     assert(!first_move.destination_relative);
     assert(!first_move.destination_clamp);
     assert(first_move.output_modifier == 0U);
@@ -32441,6 +32445,66 @@ void latte_control_flow_decoder_tests()
         }
 
         assert(rejected_source_absolute_modifier);
+        assert((shader_registers[3U] ==
+                LatteShaderRegister{0xDEADBEEFU, 0xDEADBEEFU,
+                                    0xDEADBEEFU, 0xDEADBEEFU}));
+    }
+
+    struct UnsupportedControlFieldTest
+    {
+        std::uint32_t word0_mask;
+        std::uint32_t word1_mask;
+    };
+    constexpr std::array<UnsupportedControlFieldTest, 6U>
+        unsupported_control_fields{{
+            {0U, 1U << 2U},
+            {0U, 1U << 3U},
+            {0U, 1U << 18U},
+            {1U << 29U, 0U},
+            {1U << 30U, 0U},
+            {3U << 29U, 0U}}};
+    for (const auto& unsupported_control_field : unsupported_control_fields)
+    {
+        bool rejected_unsupported_control = false;
+        try
+        {
+            auto unsupported_control_slots = alu_slots;
+            unsupported_control_slots[0U].word0 |=
+                unsupported_control_field.word0_mask;
+            unsupported_control_slots[0U].word1 |=
+                unsupported_control_field.word1_mask;
+            const auto unsupported_control_groups =
+                decode_latte_alu_op2_groups(unsupported_control_slots);
+            const auto& decoded_instruction =
+                unsupported_control_groups[0U].instructions[0U];
+            if (unsupported_control_field.word1_mask == (1U << 2U))
+            {
+                assert(decoded_instruction.update_execute_mask);
+            }
+            else if (unsupported_control_field.word1_mask == (1U << 3U))
+            {
+                assert(decoded_instruction.update_predicate);
+            }
+            else if (unsupported_control_field.word1_mask == (1U << 18U))
+            {
+                assert(decoded_instruction.bank_swizzle == 1U);
+            }
+            else
+            {
+                assert(decoded_instruction.predicate_selection != 0U);
+            }
+
+            shader_registers[3U].fill(0xDEADBEEFU);
+            static_cast<void>(execute_latte_alu_op2_vector_group(
+                unsupported_control_groups[0U],
+                shader_registers));
+        }
+        catch (const std::runtime_error&)
+        {
+            rejected_unsupported_control = true;
+        }
+
+        assert(rejected_unsupported_control);
         assert((shader_registers[3U] ==
                 LatteShaderRegister{0xDEADBEEFU, 0xDEADBEEFU,
                                     0xDEADBEEFU, 0xDEADBEEFU}));

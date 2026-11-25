@@ -337,6 +337,16 @@ its decoder and checks the bitwise results. These references are
 family/implementation evidence; no Latte hardware output has been captured
 for this subset.
 
+The OP2 word1 fields also include `UPDATE_EXECUTE_MASK` (bit 2),
+`UPDATE_PRED` (bit 3), and `BANK_SWIZZLE` (bits 18–20), as listed in the R700
+Chapter 10 field table. Predicate/mask updates mutate shader execution state,
+and bank swizzle controls source read-cycle selection (Chapter 4, Sections
+4.7.7 and 4.9.3). Word0 also contains `PRED_SEL` in bits 29–30 (Chapter 10,
+page 10-17); it controls per-instruction predicate execution. The bounded
+evaluator does not model predicate state or read-cycle selection, so it decodes
+these fields and rejects any nonzero value before guest-register writeback.
+Only the zero/default bank swizzle and `PRED_SEL_OFF` are accepted.
+
 The R700 manual documents `ADD_INT` as `src0 + src1` (opcode `0x034`) and
 `SUB_INT` as integer subtraction (opcode `0x035`) in Chapter 9 and the OP2
 opcode table in Chapter 10. Their bounded evaluator uses `std::uint32_t`

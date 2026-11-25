@@ -459,3 +459,12 @@ the unsigned operands, avoiding host signed-conversion assumptions. Group
 tests exercise values on both sides of the signed boundary and unsigned
 high-bit ordering. Debug and Release builds and CTest passed 2/2 in both
 configurations; Latte hardware behavior remains unverified.
+
+## Latte OP2 control-field validation (2026-11-25)
+
+The OP2 decoder now exposes `UPDATE_EXECUTE_MASK`, `UPDATE_PRED`,
+`BANK_SWIZZLE`, and `PRED_SEL`. The current vector evaluator rejects
+predicate/mask updates, nonzero bank swizzles, and predicated instructions
+rather than discarding shader state or read-cycle selection. Tests verify the
+field positions and rejection before writeback. These semantics are based on
+the R700-family field tables, not Latte hardware captures.

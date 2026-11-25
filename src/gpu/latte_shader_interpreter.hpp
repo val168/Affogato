@@ -106,7 +106,9 @@ using LatteShaderRegister =
             "Latte ALU MOV evaluation received a different OP2 opcode");
     }
 
-    if (instruction.source0_relative ||
+    if (instruction.source0_relative || instruction.update_execute_mask ||
+        instruction.update_predicate || instruction.bank_swizzle != 0U ||
+        instruction.predicate_selection != 0U ||
         instruction.destination_relative || instruction.destination_clamp ||
         instruction.output_modifier != 0U || instruction.index_mode != 0U ||
         !instruction.write_mask)
@@ -175,6 +177,9 @@ using LatteShaderRegister =
     if (instruction.source0_relative || instruction.source1_relative ||
         instruction.source0_negate || instruction.source1_negate ||
         instruction.source0_absolute || instruction.source1_absolute ||
+        instruction.update_execute_mask || instruction.update_predicate ||
+        instruction.bank_swizzle != 0U ||
+        instruction.predicate_selection != 0U ||
         instruction.destination_relative || instruction.destination_clamp ||
         instruction.output_modifier != 0U || instruction.index_mode != 0U ||
         !instruction.write_mask)

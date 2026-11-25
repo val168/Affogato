@@ -60,6 +60,10 @@ struct LatteAluOp2Instruction
     bool source1_negate{};
     bool source0_absolute{};
     bool source1_absolute{};
+    bool update_execute_mask{};
+    bool update_predicate{};
+    std::uint8_t bank_swizzle{};
+    std::uint8_t predicate_selection{};
     bool destination_relative{};
     bool destination_clamp{};
     bool write_mask{};
@@ -276,6 +280,10 @@ decode_latte_alu_clause_slots(
         ((slot.word0 >> 25U) & 1U) != 0U,
         (slot.word1 & 1U) != 0U,
         ((slot.word1 >> 1U) & 1U) != 0U,
+        ((slot.word1 >> 2U) & 1U) != 0U,
+        ((slot.word1 >> 3U) & 1U) != 0U,
+        static_cast<std::uint8_t>((slot.word1 >> 18U) & 0x07U),
+        static_cast<std::uint8_t>((slot.word0 >> 29U) & 0x03U),
         ((slot.word1 >> 28U) & 1U) != 0U,
         ((slot.word1 >> 31U) & 1U) != 0U,
         ((slot.word1 >> 4U) & 1U) != 0U,
