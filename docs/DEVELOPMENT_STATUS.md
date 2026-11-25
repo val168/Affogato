@@ -1,14 +1,15 @@
 # Affogato Development Status
 
-## Latte integer shift ALU subset (2026-11-25)
+## Latte integer shift and floating rounding ALU subsets (2026-11-25)
 
 Affogato's CPU shader evaluator now supports the R700 `ASHR_INT`, `LSHR_INT`,
-and `LSHL_INT` OP2 operations. Counts 0, 31, 32, and 33 are covered with
+and `LSHL_INT` OP2 operations. Counts 0, 1, 31, 32, and 33 are covered with
 positive and negative source values; the opcode-specific R700 descriptions
 define zero or sign-fill for counts above 31. The vertex and matched-fragment
 SPIR-V emitters lower these operations with bounded shift counts and explicit
-overflow selection. Their generated modules pass `spirv-val`, and the Debug
-CPU/Latte SPIR-V tests pass 30/30. Controlled diagnostic guest draws also
+overflow selection. Their generated modules pass `spirv-val`. At this
+checkpoint, the full Debug and Release CTest suites each pass 69/69.
+Controlled diagnostic guest draws also
 exercise each operation through the matched fragment SPIR-V path and Vulkan
 framebuffer readback. They shift the `1.0F` bit pattern by one: right shifts
 produce a small positive value that quantizes to black, while the left shift
@@ -18,6 +19,14 @@ WWHD shader compatibility are not verified. The R700 guide's
 summary table mentions a related component-wise, low-five-bit behavior that
 does not cleanly match its per-opcode descriptions; that behavior remains
 unsupported until its Latte encoding is established.
+
+The same CPU evaluator and vertex/matched-fragment SPIR-V paths now support
+R700 `FRACT`, `CEIL`, and `FLOOR`. CPU tests cover positive and negative
+fractions, signed zero, infinity, and the NaN result of `FRACT(+infinity)`.
+Generated vertex and fragment modules pass `spirv-val`; controlled guest draw
+readback checks `FRACT(1.0F)` as black and `CEIL/FLOOR(1.0F)` as white. These
+readbacks verify the selected lowering for constant `1.0F`, not general Latte
+conformance or game shader compatibility.
 
 ## Interpolation qualifiers for matched guest inputs (2026-11-25)
 

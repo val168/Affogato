@@ -34255,6 +34255,66 @@ void latte_control_flow_decoder_tests()
     assert((float_result == expected_float_vector));
     assert((shader_registers[3U] == expected_float_vector));
 
+    using affogato::gpu::latte_alu_op2_ceiling_opcode;
+    using affogato::gpu::latte_alu_op2_floor_opcode;
+    using affogato::gpu::latte_alu_op2_fraction_opcode;
+    constexpr LatteShaderRegister rounding_sources{
+        0x3FC00000U, 0xBFC00000U, 0x80000000U, 0x7F800000U};
+    const std::array rounding_cases{
+        std::pair{
+            latte_alu_op2_ceiling_opcode,
+            LatteShaderRegister{
+                0x40000000U, 0xBF800000U, 0x80000000U, 0x7F800000U}},
+        std::pair{
+            latte_alu_op2_floor_opcode,
+            LatteShaderRegister{
+                0x3F800000U, 0xC0000000U, 0x80000000U, 0x7F800000U}},
+        std::pair{
+            latte_alu_op2_fraction_opcode,
+            LatteShaderRegister{
+                0x3F000000U, 0x3F000000U, 0x00000000U, 0xFFC00000U}}};
+    for (const auto& [opcode, expected_rounding_result] : rounding_cases)
+    {
+        auto rounding_slots = alu_slots;
+        for (std::size_t component = 0U;
+             component < rounding_slots.size();
+             ++component)
+        {
+            auto& slot = rounding_slots[component];
+            slot.word0 = (slot.word0 & ~0x1FFU) | 1U;
+            slot.word0 = (slot.word0 & ~(0x03U << 10U)) |
+                (static_cast<std::uint32_t>(component) << 10U);
+            slot.word0 = (slot.word0 & ~(0x03U << 23U)) |
+                (static_cast<std::uint32_t>(component) << 23U);
+            slot.word1 = (slot.word1 & ~(0x7FFU << 7U)) |
+                (static_cast<std::uint32_t>(opcode) << 7U);
+        }
+        const auto rounding_groups =
+            decode_latte_alu_op2_groups(rounding_slots);
+        std::array<LatteShaderRegister, 8U> rounding_registers{};
+        rounding_registers[1U] = rounding_sources;
+        const LatteShaderRegister rounding_result =
+            execute_latte_alu_op2_vector_group(
+                rounding_groups[0U],
+                rounding_registers);
+        if (opcode == latte_alu_op2_fraction_opcode)
+        {
+            for (std::size_t component = 0U;
+                 component + 1U < rounding_result.size();
+                 ++component)
+            {
+                assert(rounding_result[component] ==
+                    expected_rounding_result[component]);
+            }
+            assert(std::isnan(std::bit_cast<float>(rounding_result[3U])));
+        }
+        else
+        {
+            assert((rounding_result == expected_rounding_result));
+        }
+        assert((rounding_registers[3U] == rounding_result));
+    }
+
     shader_registers[1U][2U] = 0x80000000U;
     shader_registers[2U][2U] = 0x00000000U;
     shader_registers[1U][3U] = 0x80000000U;

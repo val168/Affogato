@@ -1332,6 +1332,22 @@ Affogato's selected reference interpretation and Vulkan lowering for that
 constant case; it does not establish Latte hardware conformance or arbitrary
 runtime-value equivalence.
 
+### Floating-point rounding operations (2026-11-25)
+
+The R700 guide identifies `CEIL` as OP2 opcode `0x12` (section 9, p. 9-49),
+`FLOOR` as `0x14` (p. 9-61), and `FRACT` as `0x10` (p. 9-67). It specifies
+ceiling/floor relative to truncation and defines fractional output as
+`src0 - FLOOR(src0)`. Affogato evaluates these through binary32 `std::ceil`,
+`std::floor`, and the documented subtraction, then lowers them to
+`GLSL.std.450` `Ceil`, `Floor`, and `Fract` extended instructions. CPU tests
+cover positive and negative fractions, signed zero, infinity, and the
+`FRACT(+infinity)` NaN case. Generated vertex and fragment modules pass
+`spirv-val`; controlled diagnostic guest draws verify framebuffer output for
+each operation on `1.0F`. This does not establish all NaN-payload/signaling
+behavior or Latte hardware execution. The AMD R700 guide is the semantic and
+encoding source; Cemu's Latte decompiler and Decaf's Latte GPU shader code are
+comparison points, and no code was copied from either project.
+
 This follows Affogato's decoded `SPI_PS_INPUT_CNTL_n` linkage model and is
 consistent with the issue report for Cemu [#2029](https://github.com/cemu-project/Cemu/issues/2029),
 which describes missing producer semantics as inputs populated from

@@ -560,6 +560,29 @@ int main(int argc, char* argv[])
             integer_alu_program,
             {1U, 0U});
 
+    constexpr std::array<std::uint16_t, 3U> float_rounding_opcodes{
+        affogato::gpu::latte_alu_op2_fraction_opcode,
+        affogato::gpu::latte_alu_op2_ceiling_opcode,
+        affogato::gpu::latte_alu_op2_floor_opcode};
+    std::vector<std::uint32_t> float_rounding_module;
+    for (const std::uint16_t opcode : float_rounding_opcodes)
+    {
+        auto rounding_program = add_program;
+        auto& rounding_clause = std::get<
+            affogato::gpu::LatteShaderIrAluClause>(
+                rounding_program.instructions[0U]);
+        for (auto& operation : rounding_clause.groups[0U].instructions)
+        {
+            operation.opcode = opcode;
+            operation.source1_relative = false;
+        }
+        float_rounding_module =
+            affogato::gpu::emit_latte_spirv_vertex_position_subset(
+                rounding_program,
+                {1U, 0U});
+        assert(module_contains_opcode(float_rounding_module, 12U));
+    }
+
     auto conditional_move_program = program;
     auto& conditional_move_clause = std::get<
         affogato::gpu::LatteShaderIrAluClause>(
@@ -1075,6 +1098,25 @@ int main(int argc, char* argv[])
     assert(module_contains_opcode(matched_integer_shift_module, 176U));
     assert(module_contains_opcode(matched_integer_shift_module, 169U));
 
+    auto matched_float_rounding_program = matched_move_program;
+    auto& matched_float_rounding_clause = std::get<
+        affogato::gpu::LatteShaderIrAluClause>(
+            matched_float_rounding_program.instructions[0U]);
+    for (const std::uint16_t opcode : float_rounding_opcodes)
+    {
+        auto group = matched_float_rounding_clause.groups[0U];
+        for (auto& operation : group.instructions)
+        {
+            operation.opcode = opcode;
+        }
+        matched_float_rounding_clause.groups.push_back(std::move(group));
+    }
+    const std::vector<std::uint32_t> matched_float_rounding_module =
+        affogato::gpu::emit_latte_spirv_fragment_matched_alu_subset(
+            matched_float_rounding_program,
+            matched_varying_input);
+    assert(module_contains_opcode(matched_float_rounding_module, 12U));
+
     auto unsupported_matched_move_program = matched_move_program;
     auto& unsupported_matched_move_clause = std::get<
         affogato::gpu::LatteShaderIrAluClause>(
@@ -1187,7 +1229,7 @@ int main(int argc, char* argv[])
     }
     assert(rejected_nonzero_mrt);
 
-    if (argc == 30 && std::string_view(argv[1]) == "--write-modules")
+    if (argc == 32 && std::string_view(argv[1]) == "--write-modules")
     {
         write_module(argv[2], module);
         write_module(argv[3], modified_module);
@@ -1217,6 +1259,8 @@ int main(int argc, char* argv[])
         write_module(argv[27], centroid_fragment_module);
         write_module(argv[28], linear_centroid_fragment_module);
         write_module(argv[29], matched_integer_shift_module);
+        write_module(argv[30], float_rounding_module);
+        write_module(argv[31], matched_float_rounding_module);
     }
     return 0;
 }

@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <array>
 #include <bit>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -32,6 +33,9 @@ inline constexpr std::uint16_t latte_alu_op2_add_float_opcode = 0x000U;
 inline constexpr std::uint16_t latte_alu_op2_multiply_ieee_opcode = 0x002U;
 inline constexpr std::uint16_t latte_alu_op2_maximum_dx10_opcode = 0x005U;
 inline constexpr std::uint16_t latte_alu_op2_minimum_dx10_opcode = 0x006U;
+inline constexpr std::uint16_t latte_alu_op2_fraction_opcode = 0x010U;
+inline constexpr std::uint16_t latte_alu_op2_ceiling_opcode = 0x012U;
+inline constexpr std::uint16_t latte_alu_op2_floor_opcode = 0x014U;
 inline constexpr std::uint16_t latte_alu_op2_arithmetic_shift_right_opcode =
     0x070U;
 inline constexpr std::uint16_t latte_alu_op2_logical_shift_right_opcode =
@@ -528,9 +532,9 @@ evaluate_latte_normal_export(
     return source_value;
 }
 
-// Evaluate the documented two-source binary32 OP2 subset. The DX10 min/max
-// forms select source 1 when the ordered comparison with source 0 is false,
-// including when either operand is NaN.
+// Evaluate the supported binary32 OP2 subset. The DX10 min/max forms select
+// source 1 when the ordered comparison with source 0 is false, including when
+// either operand is NaN.
 [[nodiscard]] inline std::uint32_t evaluate_latte_alu_float_value(
     const LatteAluOp2Instruction& instruction,
     std::span<const LatteShaderRegister> guest_registers,
@@ -541,7 +545,10 @@ evaluate_latte_normal_export(
     if (instruction.opcode != latte_alu_op2_add_float_opcode &&
         instruction.opcode != latte_alu_op2_multiply_ieee_opcode &&
         instruction.opcode != latte_alu_op2_maximum_dx10_opcode &&
-        instruction.opcode != latte_alu_op2_minimum_dx10_opcode)
+        instruction.opcode != latte_alu_op2_minimum_dx10_opcode &&
+        instruction.opcode != latte_alu_op2_fraction_opcode &&
+        instruction.opcode != latte_alu_op2_ceiling_opcode &&
+        instruction.opcode != latte_alu_op2_floor_opcode)
     {
         throw std::runtime_error(
             "Latte floating-point evaluation received an unsupported opcode");
@@ -595,15 +602,23 @@ evaluate_latte_normal_export(
             constant_file),
         instruction.source0_absolute,
         instruction.source0_negate);
-    const float source1 = apply_source_modifiers(
-        read_latte_alu_source(
-            instruction.source1_selector,
-            instruction.source1_channel,
-            guest_registers,
-            incoming_previous_vector,
-            constant_file),
-        instruction.source1_absolute,
-        instruction.source1_negate);
+    const bool is_unary_operation =
+        instruction.opcode == latte_alu_op2_fraction_opcode ||
+        instruction.opcode == latte_alu_op2_ceiling_opcode ||
+        instruction.opcode == latte_alu_op2_floor_opcode;
+    float source1 = 0.0F;
+    if (!is_unary_operation)
+    {
+        source1 = apply_source_modifiers(
+            read_latte_alu_source(
+                instruction.source1_selector,
+                instruction.source1_channel,
+                guest_registers,
+                incoming_previous_vector,
+                constant_file),
+            instruction.source1_absolute,
+            instruction.source1_negate);
+    }
 
     float result = 0.0F;
     switch (instruction.opcode)
@@ -619,6 +634,15 @@ evaluate_latte_normal_export(
         break;
     case latte_alu_op2_minimum_dx10_opcode:
         result = source0 < source1 ? source0 : source1;
+        break;
+    case latte_alu_op2_fraction_opcode:
+        result = source0 - std::floor(source0);
+        break;
+    case latte_alu_op2_ceiling_opcode:
+        result = std::ceil(source0);
+        break;
+    case latte_alu_op2_floor_opcode:
+        result = std::floor(source0);
         break;
     default:
         throw std::runtime_error(
@@ -834,6 +858,9 @@ execute_latte_alu_op2_vector_group(
         case latte_alu_op2_multiply_ieee_opcode:
         case latte_alu_op2_maximum_dx10_opcode:
         case latte_alu_op2_minimum_dx10_opcode:
+        case latte_alu_op2_fraction_opcode:
+        case latte_alu_op2_ceiling_opcode:
+        case latte_alu_op2_floor_opcode:
             group_vector[component] = evaluate_latte_alu_float_value(
                 instruction,
                 read_only_registers,
@@ -932,6 +959,9 @@ execute_latte_alu_op2_vector_group(
             case latte_alu_op2_multiply_ieee_opcode:
             case latte_alu_op2_maximum_dx10_opcode:
             case latte_alu_op2_minimum_dx10_opcode:
+            case latte_alu_op2_fraction_opcode:
+            case latte_alu_op2_ceiling_opcode:
+            case latte_alu_op2_floor_opcode:
                 group_vector[component] = evaluate_latte_alu_float_value(
                     *op2_instruction,
                     read_only_registers,

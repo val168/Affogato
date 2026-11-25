@@ -2010,6 +2010,9 @@ enum class GuestTriangleShader
     spirv_matched_varying_arithmetic_shift_right,
     spirv_matched_varying_logical_shift_right,
     spirv_matched_varying_logical_shift_left,
+    spirv_matched_varying_fraction,
+    spirv_matched_varying_ceiling,
+    spirv_matched_varying_floor,
     spirv_matched_varying_maximum_signed_integer_half,
     spirv_matched_varying_minimum_unsigned_integer_half,
     spirv_matched_varying_default_alpha,
@@ -2031,15 +2034,33 @@ enum class GuestTriangleShader
             GuestTriangleShader::spirv_matched_varying_logical_shift_left;
 }
 
-[[nodiscard]] bool contains_expected_integer_shift_pixels(
+[[nodiscard]] bool is_matched_varying_rounding(
+    GuestTriangleShader shader)
+{
+    return shader == GuestTriangleShader::spirv_matched_varying_fraction ||
+        shader == GuestTriangleShader::spirv_matched_varying_ceiling ||
+        shader == GuestTriangleShader::spirv_matched_varying_floor;
+}
+
+[[nodiscard]] bool is_matched_varying_alu_output(
+    GuestTriangleShader shader)
+{
+    return is_matched_varying_integer_shift(shader) ||
+        is_matched_varying_rounding(shader);
+}
+
+[[nodiscard]] bool contains_expected_matched_alu_pixels(
     std::span<const std::uint8_t> rgba_pixels,
     GuestTriangleShader shader)
 {
     constexpr std::size_t bytes_per_pixel = 4U;
     constexpr std::uint8_t maximum_black_channel = 40U;
     constexpr std::uint8_t minimum_white_channel = 200U;
-    const bool expect_white = shader ==
-        GuestTriangleShader::spirv_matched_varying_logical_shift_left;
+    const bool expect_white =
+        shader == GuestTriangleShader::
+            spirv_matched_varying_logical_shift_left ||
+        shader == GuestTriangleShader::spirv_matched_varying_ceiling ||
+        shader == GuestTriangleShader::spirv_matched_varying_floor;
     std::size_t matching_pixel_count = 0U;
 
     for (std::size_t pixel_offset = 0U;
@@ -2232,6 +2253,7 @@ int run_gx2_guest_triangle_test(
         shader == GuestTriangleShader::spirv_matched_varying_add_negative_half ||
         shader == GuestTriangleShader::spirv_matched_varying_xor_zero ||
         is_matched_varying_integer_shift(shader) ||
+        is_matched_varying_rounding(shader) ||
         shader == GuestTriangleShader::
             spirv_matched_varying_maximum_signed_integer_half ||
         shader == GuestTriangleShader::
@@ -2253,6 +2275,7 @@ int run_gx2_guest_triangle_test(
         shader == GuestTriangleShader::spirv_matched_varying_add_negative_half ||
         shader == GuestTriangleShader::spirv_matched_varying_xor_zero ||
         is_matched_varying_integer_shift(shader) ||
+        is_matched_varying_rounding(shader) ||
         shader == GuestTriangleShader::
             spirv_matched_varying_maximum_signed_integer_half ||
         shader == GuestTriangleShader::
@@ -2839,6 +2862,25 @@ int run_gx2_guest_triangle_test(
                         latte_alu_op2_logical_shift_left_opcode;
                 }
             }
+            else if (is_matched_varying_rounding(shader))
+            {
+                source_selector = affogato::gpu::
+                    latte_alu_source_one_float_selector;
+                if (shader == GuestTriangleShader::
+                        spirv_matched_varying_fraction)
+                {
+                    pixel_opcode = affogato::gpu::latte_alu_op2_fraction_opcode;
+                }
+                else if (shader == GuestTriangleShader::
+                             spirv_matched_varying_ceiling)
+                {
+                    pixel_opcode = affogato::gpu::latte_alu_op2_ceiling_opcode;
+                }
+                else
+                {
+                    pixel_opcode = affogato::gpu::latte_alu_op2_floor_opcode;
+                }
+            }
             else if (shader ==
                      GuestTriangleShader::spirv_matched_varying_multiply_half)
             {
@@ -3419,8 +3461,8 @@ int run_gx2_guest_triangle_test(
     }
     if (use_varying_passthrough)
     {
-        has_diagnostic_color = is_matched_varying_integer_shift(shader)
-            ? contains_expected_integer_shift_pixels(
+        has_diagnostic_color = is_matched_varying_alu_output(shader)
+            ? contains_expected_matched_alu_pixels(
                 color_buffer_updates.front().bytes,
                 shader)
             : contains_expected_interpolated_pixels(
@@ -3581,8 +3623,8 @@ int run_gx2_guest_triangle_test(
             }
             if (use_varying_passthrough)
             {
-                shader_sample_matches = is_matched_varying_integer_shift(shader)
-                    ? contains_expected_integer_shift_pixels(
+                shader_sample_matches = is_matched_varying_alu_output(shader)
+                    ? contains_expected_matched_alu_pixels(
                         shader_frame->pixels,
                         shader)
                     : contains_expected_interpolated_pixels(
@@ -3683,8 +3725,8 @@ int run_gx2_guest_triangle_test(
     }
     if (use_varying_passthrough)
     {
-        presented_diagnostic_color = is_matched_varying_integer_shift(shader)
-            ? contains_expected_integer_shift_pixels(
+        presented_diagnostic_color = is_matched_varying_alu_output(shader)
+            ? contains_expected_matched_alu_pixels(
                 rendered_frame->pixels,
                 shader)
             : contains_expected_interpolated_pixels(
@@ -3785,13 +3827,13 @@ int run_gx2_guest_triangle_test(
     }
     if (use_varying_passthrough)
     {
-        shader_subset_description = is_matched_varying_integer_shift(shader)
-            ? "the bounded guest vertex parameter and integer shift SPIR-V subsets"
+        shader_subset_description = is_matched_varying_alu_output(shader)
+            ? "the bounded guest vertex parameter and ALU SPIR-V subsets"
             : "the bounded guest vertex position/parameter and pixel MOV subsets";
     }
-    const char* fragment_shader_status = is_matched_varying_integer_shift(shader)
-        ? "the captured guest integer shift operations executed in the matched "
-          "fragment SPIR-V subset; general Latte shader execution remains unsupported.\n"
+    const char* fragment_shader_status = is_matched_varying_alu_output(shader)
+        ? "the captured guest ALU operations executed in the matched fragment "
+          "SPIR-V subset; general Latte shader execution remains unsupported.\n"
         : (use_varying_passthrough
         ? "the captured guest fragment MOV subset executed on the matched "
           "varying; other guest pixel operations remain unsupported.\n"
@@ -4053,6 +4095,30 @@ int main(int argc, char* argv[])
                     false,
                     GuestTriangleShader::
                         spirv_matched_varying_logical_shift_left);
+            }
+            if (std::string_view(argv[1]) ==
+                    "--gx2-guest-triangle-matched-varying-fract-readback-test" &&
+                argc == 2)
+            {
+                return run_gx2_guest_triangle_test(
+                    false,
+                    GuestTriangleShader::spirv_matched_varying_fraction);
+            }
+            if (std::string_view(argv[1]) ==
+                    "--gx2-guest-triangle-matched-varying-ceil-readback-test" &&
+                argc == 2)
+            {
+                return run_gx2_guest_triangle_test(
+                    false,
+                    GuestTriangleShader::spirv_matched_varying_ceiling);
+            }
+            if (std::string_view(argv[1]) ==
+                    "--gx2-guest-triangle-matched-varying-floor-readback-test" &&
+                argc == 2)
+            {
+                return run_gx2_guest_triangle_test(
+                    false,
+                    GuestTriangleShader::spirv_matched_varying_floor);
             }
             if (std::string_view(argv[1]) ==
                     "--gx2-guest-triangle-matched-varying-signed-max-readback-test" &&

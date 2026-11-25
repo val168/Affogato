@@ -45,6 +45,10 @@ public:
         : vertex_input_(vertex_input),
           parameter_outputs_(parameter_outputs.begin(), parameter_outputs.end())
     {
+        glsl_std_450_import_id_ = allocate_id();
+        append_instruction(extended_instruction_imports_, 11U, {
+            glsl_std_450_import_id_, 0x4C534C47U, 0x6474732EU,
+            0x3035342EU, 0U});
         void_type_id_ = allocate_id();
         function_type_id_ = allocate_id();
         float_type_id_ = allocate_id();
@@ -240,6 +244,7 @@ public:
         std::vector<std::uint32_t> module{
             0x07230203U, 0x00010000U, 0U, next_id_, 0U};
         append_section(module, capabilities_);
+        append_section(module, extended_instruction_imports_);
         append_section(module, memory_model_);
         append_section(module, entry_point_);
         append_section(module, annotations_);
@@ -532,6 +537,9 @@ private:
              operation.opcode != latte_alu_op2_multiply_ieee_opcode &&
              operation.opcode != latte_alu_op2_maximum_dx10_opcode &&
              operation.opcode != latte_alu_op2_minimum_dx10_opcode &&
+             operation.opcode != latte_alu_op2_fraction_opcode &&
+             operation.opcode != latte_alu_op2_ceiling_opcode &&
+             operation.opcode != latte_alu_op2_floor_opcode &&
              !is_integer_operation) ||
             operation.destination_gpr >= registers_.size() ||
             !operation.write_mask || operation.source0_relative ||
@@ -576,6 +584,30 @@ private:
                     uint_type_id_, result_id, source0_id});
                 return result_id;
             }
+        }
+
+        if (operation.opcode == latte_alu_op2_fraction_opcode ||
+            operation.opcode == latte_alu_op2_ceiling_opcode ||
+            operation.opcode == latte_alu_op2_floor_opcode)
+        {
+            const std::uint32_t source0_float_id = allocate_id();
+            append_instruction(function_body_, 124U, {
+                float_type_id_, source0_float_id, source0_id});
+            const std::uint32_t result_float_id = allocate_id();
+            const std::uint32_t extended_opcode =
+                operation.opcode == latte_alu_op2_fraction_opcode
+                    ? 10U
+                    : (operation.opcode == latte_alu_op2_ceiling_opcode
+                        ? 9U
+                        : 8U);
+            append_instruction(function_body_, 12U, {
+                float_type_id_, result_float_id,
+                glsl_std_450_import_id_, extended_opcode,
+                source0_float_id});
+            const std::uint32_t result_id = allocate_id();
+            append_instruction(function_body_, 124U, {
+                uint_type_id_, result_id, result_float_id});
+            return result_id;
         }
 
         std::uint32_t source1_id = source_value(
@@ -1082,6 +1114,7 @@ private:
     std::uint32_t output_struct_type_id_{};
     std::uint32_t output_struct_pointer_type_id_{};
     std::uint32_t output_vector_pointer_type_id_{};
+    std::uint32_t glsl_std_450_import_id_{};
     std::uint32_t function_id_{};
     std::uint32_t label_id_{};
     std::uint32_t input_variable_id_{};
@@ -1089,6 +1122,7 @@ private:
     RegisterValues registers_{};
     std::unordered_map<std::uint32_t, std::uint32_t> constant_ids_;
     std::vector<std::uint32_t> capabilities_;
+    std::vector<std::uint32_t> extended_instruction_imports_;
     std::vector<std::uint32_t> memory_model_;
     std::vector<std::uint32_t> entry_point_;
     std::vector<std::uint32_t> annotations_;
@@ -1100,8 +1134,8 @@ private:
 
 } // namespace detail
 
-// Emit one float32x4 input, no-literal MOV/ADD/MUL/MAX_DX10/MIN_DX10 groups,
-// and one completed identity position export. Unsupported behavior is rejected.
+// Emit one float32x4 input, selected MOV/ALU groups, and one completed identity
+// position export. Unsupported behavior is rejected.
 [[nodiscard]] inline std::vector<std::uint32_t>
 emit_latte_spirv_vertex_position_subset(
     const LatteShaderIrProgram& program,
