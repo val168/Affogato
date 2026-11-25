@@ -104,9 +104,9 @@ microtile ordering is X0, X1, Y0, X2, Y1, Y2. Only zero descriptor swizzle,
 single-sample slice zero, and RGBA8 color surfaces are accepted by this HLE
 path. Deterministic tests check known addresses, uniqueness for each element
 in a macro tile, and an end-to-end HLE clear/copy fixture across a 1280x720
-surface. This is CPU guest-memory verification; tiled Vulkan visual scanout,
-bank-swizzled surfaces, other macro-tiled modes, and draw render-target writes
-remain unverified or unsupported.
+surface. The controlled Vulkan diagnostic test now verifies draw writeback and
+scanout for a linear RGBA8 surface. Tiled Vulkan draw output, bank-swizzled
+surfaces, and other macro-tiled modes remain unverified or unsupported.
 
 ### Diagnostic draws
 
@@ -117,9 +117,10 @@ adds a narrow Float16x2 fetch/position case (`611238b`); its Debug/Release build
 CTest, and hidden Vulkan smoke tests passed. The final visible-window rerun for
 that Float16x2 update was not verified. The renderer decodes only the
 HLE-generated fetch subset needed to select location 0, then expands captured
-positions into transient host vertices. The fixed diagnostic host shaders draw
-to the host swapchain. These operations do not execute arbitrary guest
-attributes or shaders and do not modify the guest render target.
+positions into transient host vertices. The fixed diagnostic host fragment
+shader draws to the host swapchain and, for supported draw-time snapshots, the
+offscreen RGBA8 target. This does not execute arbitrary guest attributes or
+Latte vertex/pixel shaders.
 
 The decoder now accepts the unsigned normalized 8-bit GX2 family in its
 verified HLE-generated VTX encoding: data formats `0x00` (x1), `0x04` (x2),
@@ -214,46 +215,46 @@ this opt-in mode to the interpreter so it can stop at the exact HLE boundary;
 ordinary recompiled execution is unchanged. CPU and recompiler tests verify
 the event, one-step accounting, post-HLE CIA, and captured draw command.
 
-This remains only a CPU execution checkpoint. The explicit diagnostic-draw
-frontend mode requests it, pauses the worker, publishes its captured command
-batch, and waits until the UI thread consumes the batch and returns from
-`render_frame()`. The condition-variable wait observes the worker
-`stop_token`; replacing a finished launch or closing the frontend requests stop
-and wakes it. This orders diagnostic swapchain work at the CPU submission level
-only. It does not wait for GPU completion, guarantee every frame was presented,
-execute arbitrary guest draws, or make Vulkan render-target data visible in
-guest memory. The mode is not used during ordinary guest execution. Bounded
-render-target readback must update guest memory before a dependent HLE copy
-resumes. A future asynchronous path can reduce these synchronization points
-only after its guest-memory visibility rules are explicit.
+The explicit diagnostic-draw frontend mode pauses the guest worker at a
+captured draw and publishes its command batch to the UI thread. For an eligible
+draw, Vulkan renders into a temporary RGBA8 offscreen image, waits on a
+submission fence, and returns readback bytes. The UI queues those bytes for the
+worker; after draw-boundary acknowledgement and before resuming guest
+execution, the worker writes them to the guest image address. A later HLE
+color-buffer copy can then observe the rendered pixels. This opt-in mode is
+disabled during normal execution. It uses a host diagnostic fragment shader,
+temporary image/staging resources, and synchronous readback per captured draw;
+it does not execute arbitrary guest pixel shaders or establish general
+GPU/CPU cache-coherency behavior.
 
-#### Bounded offscreen-target prototype
+#### Bounded offscreen-target diagnostic path
 
-The first diagnostic target prototype should support one captured color target
-only, and should accept it only when its draw-time descriptor passes the
-existing RGBA8, single-sample, base-level, single-slice validation. To preserve
-pixels outside the diagnostic geometry, the renderer needs the guest target
-contents captured at the HLE draw boundary and must load them into an offscreen
-`VK_FORMAT_R8G8B8A8_UNORM` image. Do not initialize a target from the current
-swapchain image or from the presentation clear color.
+The current path accepts the existing RGBA8, single-sample, base-level,
+single-slice descriptors validated by GX2 HLE. Draw-time bytes initialize an
+offscreen `VK_FORMAT_R8G8B8A8_UNORM` image, preserving pixels outside diagnostic
+geometry. The hidden Vulkan test uses a 1280x720 linear-aligned surface and a
+diagnostic host fragment shader.
 
 The offscreen image needs color-attachment and transfer-source usage. It also
 needs transfer-destination usage when initial guest bytes are uploaded. After
 rendering, record the image-to-buffer copy outside the render pass, synchronize
-the attachment writes with transfer reads, wait for the relevant submission
-before host readback, and convert the tightly packed RGBA result back through
-`write_rgba8_surface()` using the captured pitch and supported tile mode. Only
-after the emulator worker applies those bytes should it resume and allow a
-following HLE color-buffer copy to execute. Unsupported target state must
-produce a diagnostic failure and no guest-memory write.
+the attachment writes with transfer reads, wait on the target submission
+fence, and convert tightly packed RGBA readback through
+`write_rgba8_surface()` using the captured pitch and supported tile mode. The
+worker applies those bytes before resuming and permitting a following HLE
+color-buffer copy. Unsupported target state produces an explicit diagnostic
+failure and no guest-memory write.
 
 This is an explicitly diagnostic first step: a fixed host fragment shader and
 the existing bounded diagnostic vertex policy can prove the target/load/draw/
 readback/writeback ordering, but cannot establish guest pixel-shader behavior.
-The first acceptance fixture should initialize target bytes with a known
-pattern, issue one controlled draw, and verify both untouched pattern pixels
-and diagnostic draw pixels in guest memory before invoking scanout copy. The
-swapchain output remains an independent presentation of the diagnostic draw.
+The hidden integration test initializes guest target bytes with a known blue
+pattern, captures controlled GX2 draw commands, verifies unchanged background
+and diagnostic draw pixels after readback/writeback, then runs the GX2 TV
+scanout copy and checks swapchain readback. This is a controlled host-shader
+test and does not verify Latte pixel shaders, visible window output, or WWHD
+graphics. GPU execution for 1D/2D tiled layouts is untested even though shared
+surface converters accept supported tile modes.
 
 This design follows Vulkan's color-attachment storage and transfer-source
 usage constraints ([render-pass attachment rules](https://docs.vulkan.org/spec/latest/chapters/renderpass.html#renderpass-attachments),
@@ -267,12 +268,12 @@ the texture to the latest contents and waits for the readback transfer in
 These references motivate the resource-coherence model; the Affogato prototype
 remains intentionally synchronous and restricted to its tested RGBA8 layouts.
 
-The acceptance test must execute guest PPC calls in order: bind a supported
-color buffer, issue a controlled draw, invoke the GX2 color-buffer-to-scanout
-copy, swap, and verify both the guest color-buffer bytes and presented/readback
-pixels. It must also verify that the same color-buffer bytes are visible to a
-subsequent guest CPU read. A draw that only appears in the Vulkan swapchain
-does not satisfy guest render-target integration.
+The current controlled test executes guest PPC HLE calls to bind a supported
+color buffer, issue controlled draws, and invoke the GX2 color-buffer-to-scanout
+copy. It checks guest backing-memory pixels after renderer writeback and checks
+swapchain readback after scanout. It does not yet issue a guest PPC load
+instruction to verify the writeback, nor does it verify window output by eye.
+General guest shader output and coherence with texture reads remain unverified.
 
 ## Important state, formats, and invariants
 
@@ -311,7 +312,7 @@ does not satisfy guest render-target integration.
 | Fetch shader | Narrow HLE-generated format decoder | additional verified VTX variants, component/normalization semantics |
 | General vertex/index/instance handling | Partial snapshots and diagnostic expansion | fetch semantics, offset/base-instance rules, state capture |
 | Latte vertex/pixel shader execution | Missing; program words are captured | verified binary decoder, IR, translation and test corpus |
-| Guest render target for draws | Missing; draw diagnostic targets swapchain | surface addressing, Vulkan image cache, guest visibility/readback |
+| Guest render target for draws | Partial; diagnostic host shader writes supported RGBA8 snapshots and synchronously returns guest-memory bytes | general surface/image cache, guest shader output, GPU cache coherence |
 | Color clear/copy | Verified linear-aligned, 1D thin1 and zero-swizzle 2D thin1 RGBA8 CPU/HLE path | bank-swizzled/other macro-tiling, additional formats, resolve and sync semantics |
 | Depth/stencil and blend pipeline | Registers/descriptors are partly captured | register interpretation and Vulkan state mapping |
 | General texture sampling | Resource/sampler word capture and constrained staging | tiled addressing, format coverage, cache coherence |

@@ -963,6 +963,8 @@ struct WorkerResult
     std::optional<affogato::gpu::Rgba8TextureStaging> latest_guest_scanout;
     std::uint64_t guest_scanout_sequence{};
     std::vector<affogato::cpu::espresso::Gx2Command> pending_gx2_commands;
+    std::vector<affogato::cpu::espresso::Gx2ColorBufferSnapshot>
+        pending_guest_color_buffer_updates;
     std::uint64_t draw_boundary_sequence{};
     std::uint64_t processed_draw_boundary_sequence{};
     std::atomic_bool running{};
@@ -993,6 +995,7 @@ void launch_game(
         worker.latest_guest_scanout.reset();
         worker.draw_boundary_sequence = 0U;
         worker.processed_draw_boundary_sequence = 0U;
+        worker.pending_guest_color_buffer_updates.clear();
         ++worker.guest_scanout_sequence;
     }
     thread = std::jthread([
@@ -1034,6 +1037,8 @@ void launch_game(
                 bytes, path.parent_path().parent_path() / "content"));
             emulator.core().gx2.capture_draw_vertex_data =
                 capture_guest_draw_vertex_data;
+            emulator.core().gx2.capture_draw_color_buffer_data =
+                synchronize_draw_capture;
             const auto rpx_load_end = std::chrono::steady_clock::now();
             const auto rpx_load_time = std::chrono::duration_cast<std::chrono::milliseconds>(
                 rpx_load_end - rpx_load_start);
@@ -1093,9 +1098,12 @@ void launch_game(
                 if (draw_boundary_sequence != 0U)
                 {
                     worker.draw_boundary_acknowledged.notify_all();
-                    std::unique_lock lock(worker.mutex);
-                    const bool acknowledged =
-                        worker.draw_boundary_acknowledged.wait(
+                    std::vector<
+                        affogato::cpu::espresso::Gx2ColorBufferSnapshot> updates;
+                    bool acknowledged = false;
+                    {
+                        std::unique_lock lock(worker.mutex);
+                        acknowledged = worker.draw_boundary_acknowledged.wait(
                             lock,
                             stop_token,
                             [&worker, draw_boundary_sequence]
@@ -1103,9 +1111,28 @@ void launch_game(
                                 return worker.processed_draw_boundary_sequence >=
                                     draw_boundary_sequence;
                             });
+                        if (acknowledged)
+                        {
+                            updates.swap(
+                                worker.pending_guest_color_buffer_updates);
+                        }
+                    }
                     if (!acknowledged)
                     {
                         break;
+                    }
+
+                    for (const auto& update : updates)
+                    {
+                        if (update.status != affogato::cpu::espresso::
+                                Gx2ColorBufferSnapshotStatus::captured)
+                        {
+                            throw std::runtime_error(
+                                "Frontend received a failed GX2 color-buffer readback");
+                        }
+                        emulator.core().memory.write_bytes(
+                            update.descriptor.image_address,
+                            update.bytes);
                     }
                     continue;
                 }
@@ -1608,6 +1635,16 @@ int run_frontend()
             try
             {
                 vulkan_output->consume_guest_commands(guest_commands, draw_policy);
+                auto color_buffer_updates =
+                    vulkan_output->take_guest_color_buffer_updates();
+                if (!color_buffer_updates.empty())
+                {
+                    std::lock_guard lock(worker.mutex);
+                    worker.pending_guest_color_buffer_updates.insert(
+                        worker.pending_guest_color_buffer_updates.end(),
+                        std::make_move_iterator(color_buffer_updates.begin()),
+                        std::make_move_iterator(color_buffer_updates.end()));
+                }
             }
             catch (const std::exception& error)
             {
@@ -1889,6 +1926,13 @@ int run_gx2_guest_triangle_test(
     constexpr std::uint32_t attribute_stream_address = 0x3200U;
     constexpr std::uint32_t vertex_shader_descriptor_address = 0x3300U;
     constexpr std::uint32_t vertex_shader_program_address = 0x3400U;
+    constexpr std::uint32_t color_buffer_descriptor_address = 0x7000U;
+    constexpr std::uint32_t color_buffer_image_address = 0x20000U;
+    constexpr std::uint32_t color_buffer_scanout_address = 0x500000U;
+    constexpr std::uint32_t color_buffer_width = 1280U;
+    constexpr std::uint32_t color_buffer_height = 720U;
+    constexpr std::uint32_t color_buffer_size =
+        color_buffer_width * color_buffer_height * 4U;
     constexpr std::uint32_t guest_bctrl_instruction = 0x4E800421U;
     constexpr std::uint32_t gx2_primitive_mode_triangles = 4U;
     constexpr std::uint32_t gx2_primitive_mode_triangle_fan = 5U;
@@ -1948,7 +1992,53 @@ int run_gx2_guest_triangle_test(
     };
 
     invoke("GX2Init", std::array<std::uint32_t, 1U>{0U});
+    invoke("GX2SetTVBuffer", std::array<std::uint32_t, 5U>{
+        color_buffer_scanout_address,
+        color_buffer_size,
+        3U,
+        0x1AU,
+        1U});
     core.gx2.capture_draw_vertex_data = true;
+    core.gx2.capture_draw_color_buffer_data = true;
+
+    std::array<std::uint32_t, 39U> color_buffer_descriptor{};
+    color_buffer_descriptor[0U] = 1U;
+    color_buffer_descriptor[1U] = color_buffer_width;
+    color_buffer_descriptor[2U] = color_buffer_height;
+    color_buffer_descriptor[3U] = 1U;
+    color_buffer_descriptor[4U] = 1U;
+    color_buffer_descriptor[5U] = 0x1AU;
+    color_buffer_descriptor[7U] = 0x02U;
+    color_buffer_descriptor[8U] = color_buffer_size;
+    color_buffer_descriptor[9U] = color_buffer_image_address;
+    color_buffer_descriptor[12U] =
+        affogato::gpu::gx2_tile_mode_linear_aligned;
+    color_buffer_descriptor[14U] = 1U;
+    color_buffer_descriptor[15U] = color_buffer_width;
+    color_buffer_descriptor[31U] = 1U;
+    for (std::size_t index = 0U;
+         index < color_buffer_descriptor.size();
+         ++index)
+    {
+        core.memory.write32_be(
+            color_buffer_descriptor_address +
+                static_cast<std::uint32_t>(index * sizeof(std::uint32_t)),
+            color_buffer_descriptor[index]);
+    }
+    std::vector<std::uint8_t> initial_color_buffer(color_buffer_size);
+    for (std::size_t pixel_offset = 0U;
+         pixel_offset < initial_color_buffer.size();
+         pixel_offset += 4U)
+    {
+        initial_color_buffer[pixel_offset] = 0U;
+        initial_color_buffer[pixel_offset + 1U] = 0U;
+        initial_color_buffer[pixel_offset + 2U] = 180U;
+        initial_color_buffer[pixel_offset + 3U] = 255U;
+    }
+    core.memory.write_bytes(color_buffer_image_address, initial_color_buffer);
+    invoke("GX2SetColorBuffer", std::array<std::uint32_t, 2U>{
+        color_buffer_descriptor_address,
+        0U});
 
     // This bounded diagnostic program copies fetched VS input r1 to r3 and
     // exports r3 as position. It exercises only the existing CPU MOV subset.
@@ -2414,6 +2504,75 @@ int run_gx2_guest_triangle_test(
                 diagnostic_latte_vertex_spirv_position_base_zero
             : affogato::gpu::vulkan::GuestDrawPolicy::
                 diagnostic_latte_vertex_position_base_zero);
+    const auto color_buffer_updates =
+        renderer.take_guest_color_buffer_updates();
+    if (color_buffer_updates.size() != 1U ||
+        color_buffer_updates.front().status !=
+            affogato::cpu::espresso::Gx2ColorBufferSnapshotStatus::captured)
+    {
+        throw std::runtime_error(
+            "Vulkan guest draw did not return a color-buffer readback");
+    }
+    core.memory.write_bytes(
+        color_buffer_image_address,
+        color_buffer_updates.front().bytes);
+    std::array<std::uint8_t, 4U> untouched_pixel{};
+    core.memory.read_bytes(color_buffer_image_address, untouched_pixel);
+    if (untouched_pixel != std::array<std::uint8_t, 4U>{0U, 0U, 180U, 255U})
+    {
+        throw std::runtime_error(
+            "Vulkan guest color-buffer readback changed a pixel outside the diagnostic draws");
+    }
+    const std::uint32_t color_sample_x = color_buffer_width / 2U;
+    const std::uint32_t color_sample_y = (color_buffer_height * 5U) / 12U;
+    const std::size_t color_sample_offset =
+        (static_cast<std::size_t>(color_sample_y) * color_buffer_width +
+         color_sample_x) * 4U;
+    std::array<std::uint8_t, 4U> diagnostic_pixel{};
+    core.memory.read_bytes(
+        color_buffer_image_address +
+            static_cast<std::uint32_t>(color_sample_offset),
+        diagnostic_pixel);
+    if (diagnostic_pixel[0U] < 200U || diagnostic_pixel[2U] > 40U)
+    {
+        throw std::runtime_error(
+            "Vulkan guest color-buffer readback omitted the diagnostic draw pixels");
+    }
+
+    invoke("GX2CopyColorBufferToScanBuffer", std::array<std::uint32_t, 2U>{
+        color_buffer_descriptor_address,
+        1U});
+    const auto scanout_commands =
+        affogato::cpu::espresso::take_gx2_commands(core.gx2);
+    if (scanout_commands.size() != 1U ||
+        scanout_commands.front().type !=
+            affogato::cpu::espresso::Gx2CommandType::
+                copy_color_buffer_to_scan_buffer)
+    {
+        throw std::runtime_error(
+            "GX2 color-buffer copy did not produce the expected scanout command");
+    }
+    std::vector<std::uint8_t> scanout_bytes(color_buffer_size);
+    core.memory.read_bytes(color_buffer_scanout_address, scanout_bytes);
+    const auto scanout = affogato::gpu::stage_rgba8_scanout(
+        color_buffer_width,
+        color_buffer_height,
+        color_buffer_width,
+        scanout_bytes);
+    if (!scanout)
+    {
+        throw std::runtime_error(
+            "GX2 color-buffer copy did not produce readable RGBA8 scanout pixels");
+    }
+    renderer.consume_guest_commands(
+        scanout_commands,
+        affogato::gpu::vulkan::GuestDrawPolicy::capture_only);
+    renderer.clear_guest_diagnostic_draws();
+    if (!renderer.set_guest_scanout(*scanout))
+    {
+        throw std::runtime_error(
+            "Vulkan surface does not support the guest color-buffer scanout");
+    }
     renderer.set_guest_clear_color({0.08F, 0.75F, 0.2F, 1.0F});
     renderer.render_frame();
     const auto& rendered_frame = renderer.frame_readback();
@@ -2445,10 +2604,11 @@ int run_gx2_guest_triangle_test(
               << (use_latte_spirv
                     ? "the bounded MOV-to-position SPIR-V vertex subset"
                     : "the supported CPU MOV/export shader subset")
-              << ", and frame readback verified the diagnostic fragment output on "
+              << "; Vulkan readback and guest-memory writeback verified the "
+                 "diagnostic color-buffer path on "
               << renderer.device_name()
-              << ". General Latte shader translation and guest render-target writes "
-              << "remain unsupported.\n";
+              << ". The fragment shader remains diagnostic; general Latte shader "
+                 "translation and WWHD graphics remain unsupported.\n";
     return 0;
 }
 

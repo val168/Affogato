@@ -167,18 +167,23 @@ Wii U hardware. See [`research/12_latte_shader_isa.md`](research/12_latte_shader
 
 ## Current implementation checkpoint (2026-11-25)
 
-Opt-in draw capture now snapshots the supported RGBA8 contents of bound GX2
-color target 0 at the HLE draw boundary. The snapshot travels with its draw
-command, so later guest writes cannot change the renderer's source bytes. The
-capture policy is disabled by default and is preserved across `GX2Init`.
-Unsupported descriptors and inaccessible guest image ranges are carried as
-explicit failed snapshot statuses. Direct GX2 draw HLE calls and decoded PM4
-display-list draws both capture this data when enabled. Tests cover successful
-capture, immutability, unsupported layout, and unmapped guest memory. Debug and
-Release builds succeeded and CTest passed 6/6 in each configuration. This only
-provides draw-time input for a future offscreen-target path: direct GX2 draw
-calls and PM4 display-list draws are covered, but draws still do not write
-results back to guest color-buffer memory.
+Opt-in draw capture snapshots the supported RGBA8 contents of bound GX2 color
+target 0 at the HLE draw boundary. Direct GX2 calls and decoded PM4 display-list
+draws carry immutable target bytes with each command; capture is disabled by
+default and preserved across `GX2Init`. Unsupported descriptors and inaccessible
+guest image ranges receive explicit failure statuses.
+
+The explicit diagnostic draw mode now renders captured vertices into an
+offscreen `VK_FORMAT_R8G8B8A8_UNORM` target initialized from those bytes. It
+reads the image back after a fence, converts through the shared RGBA8 surface
+helper, and sends the result to the paused worker. The worker writes guest
+memory before resuming guest execution, so a subsequent GX2 color-buffer copy
+sees those pixels. A controlled 1280x720 guest HLE workload verifies that
+untouched blue pixels survive, diagnostic host-shader pixels appear in the
+color buffer, GX2 copies it to TV scanout, and swapchain readback contains the
+draw. Debug and Release builds and CTest passed 6/6 in both configurations.
+This verifies a controlled diagnostic draw path only; general Latte shader
+execution and WWHD rendering remain unverified.
 
 `GX2SetContextState` and `GX2DirectCallDisplayList` share a bounded PM4
 decoder. It accepts Type-0 writes in supported config/context and

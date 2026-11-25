@@ -56,6 +56,8 @@ public:
     void consume_guest_commands(
         std::span<const cpu::espresso::Gx2Command> commands,
         GuestDrawPolicy draw_policy = GuestDrawPolicy::capture_only);
+    [[nodiscard]] std::vector<cpu::espresso::Gx2ColorBufferSnapshot>
+    take_guest_color_buffer_updates();
     [[nodiscard]] std::size_t upload_rgba8_texture(
         const Rgba8TextureStaging& staging);
     [[nodiscard]] VkImageView uploaded_texture_view(std::size_t texture_id) const;
@@ -123,12 +125,14 @@ private:
         const char* operation) const;
     [[nodiscard]] VkPipeline create_diagnostic_graphics_pipeline(
         VkShaderModule vertex_module,
-        VkShaderModule fragment_module) const;
+        VkShaderModule fragment_module,
+        VkRenderPass render_pass) const;
     [[nodiscard]] VkPipeline create_latte_vertex_pipeline(
         std::span<const std::uint32_t> vertex_code) const;
     void set_latte_vertex_pipeline(
         std::span<const std::uint32_t> vertex_code);
     void create_framebuffers();
+    void create_guest_color_buffer_render_pass();
     void create_command_resources();
     void create_synchronization();
     void create_scanout_upload_buffers();
@@ -136,6 +140,10 @@ private:
     void create_frame_readback_buffers();
     void destroy_frame_readback_buffers() noexcept;
     void read_frame_pixels(std::size_t frame_index);
+    [[nodiscard]] cpu::espresso::Gx2ColorBufferSnapshot
+    render_guest_color_buffer_diagnostic(
+        const cpu::espresso::Gx2ColorBufferSnapshot& snapshot,
+        std::span<const DiagnosticVertex> vertices);
     void recreate_swapchain();
     void destroy_swapchain() noexcept;
     void destroy_uploaded_textures() noexcept;
@@ -163,8 +171,10 @@ private:
     std::vector<VkImage> swapchain_images_;
     std::vector<VkImageView> image_views_;
     VkRenderPass render_pass_{};
+    VkRenderPass guest_color_buffer_render_pass_{};
     VkPipelineLayout diagnostic_pipeline_layout_{};
     VkPipeline diagnostic_pipeline_{};
+    VkPipeline guest_color_buffer_diagnostic_pipeline_{};
     VkPipeline latte_vertex_pipeline_{};
     std::vector<std::uint32_t> latte_vertex_shader_code_;
     std::vector<VkFramebuffer> framebuffers_;
@@ -193,6 +203,8 @@ private:
     bool guest_scanout_dirty_{};
     std::optional<Rgba8TextureStaging> guest_scanout_;
     std::optional<Rgba8TextureStaging> frame_readback_;
+    std::vector<cpu::espresso::Gx2ColorBufferSnapshot>
+        guest_color_buffer_updates_;
     std::vector<UploadedTexture> uploaded_textures_;
     std::size_t current_frame_{};
     std::array<float, 4U> guest_clear_color_{0.025F, 0.055F, 0.09F, 1.0F};
