@@ -37,6 +37,14 @@ Latte shader support. Debug and Release CTest each passed 17/17, including the
 new ADD and MUL readback cases. Latte-specific instruction behavior remains
 unverified on hardware; see [`research/12_latte_shader_isa.md`](research/12_latte_shader_isa.md).
 
+The fixture also emits the documented source-1 negate modifier for its X-lane
+`ADD` and verifies the translated triangle at a pixel only the negative offset
+covers. This exercises the captured OP2 modifier through decode, SPIR-V
+generation, Vulkan execution, and readback. The AMD R700 ISA defines input
+negation as an FP source modifier; this remains family-level reference evidence
+and has not been confirmed on Latte silicon. Debug and Release CTest each
+passed 18/18, including this additional Vulkan readback test.
+
 ## Controlled Vulkan run for Latte MUL_IEEE (2026-11-25)
 
 The guest-triangle integration harness now has a separate SPIR-V mode that

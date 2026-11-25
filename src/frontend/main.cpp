@@ -1918,6 +1918,7 @@ enum class GuestTriangleShader
     cpu_mov,
     spirv_add_zero,
     spirv_add_one_x,
+    spirv_add_negative_one_x,
     spirv_multiply_one,
     spirv_multiply_zero,
     spirv_maximum_self,
@@ -1957,6 +1958,8 @@ int run_gx2_guest_triangle_test(
     constexpr std::uint32_t position_attribute_offset = 4U;
     constexpr std::uint32_t vertex_buffer_size = 4U * vertex_buffer_stride;
     constexpr std::uint16_t guest_position_gpr_selector = 1U;
+    // OP2 ALU_WORD0 bit 25 marks the source-1 negate modifier.
+    constexpr std::uint32_t latte_source1_negate_mask = 1U << 25U;
     constexpr std::array<affogato::gpu::vulkan::DiagnosticVertex, 3U> vertices{{
         {-0.65F, -0.60F}, {0.65F, -0.60F}, {0.0F, 0.70F}}};
 
@@ -2134,6 +2137,12 @@ int run_gx2_guest_triangle_test(
                 component_source1_selector =
                     affogato::gpu::latte_alu_source_one_float_selector;
             }
+            if (shader == GuestTriangleShader::spirv_add_negative_one_x &&
+                component == 0U)
+            {
+                component_source1_selector =
+                    affogato::gpu::latte_alu_source_one_float_selector;
+            }
             if (shader == GuestTriangleShader::spirv_multiply_zero &&
                 component == 3U)
             {
@@ -2145,6 +2154,10 @@ int run_gx2_guest_triangle_test(
                 (static_cast<std::uint32_t>(component_source1_selector) << 13U) |
                 (component << 10U) |
                 (component << 23U) |
+                (shader == GuestTriangleShader::spirv_add_negative_one_x &&
+                         component == 0U
+                     ? latte_source1_negate_mask
+                     : 0U) |
                 (component == 3U ? 0x80000000U : 0U);
             const std::uint32_t destination_word =
                 0x00600010U |
@@ -2662,6 +2675,7 @@ int run_gx2_guest_triangle_test(
     }
     const bool verify_shader_output =
         shader == GuestTriangleShader::spirv_add_one_x ||
+        shader == GuestTriangleShader::spirv_add_negative_one_x ||
         shader == GuestTriangleShader::spirv_multiply_zero ||
         shader == GuestTriangleShader::spirv_maximum_zero ||
         shader == GuestTriangleShader::spirv_minimum_zero;
@@ -2683,6 +2697,12 @@ int run_gx2_guest_triangle_test(
         if (shader == GuestTriangleShader::spirv_add_one_x)
         {
             shader_sample_x = (shader_frame->width * 90U) / 100U;
+            shader_sample_y = (shader_frame->height * 7U) / 12U;
+            expect_red = true;
+        }
+        else if (shader == GuestTriangleShader::spirv_add_negative_one_x)
+        {
+            shader_sample_x = (shader_frame->width * 10U) / 100U;
             shader_sample_y = (shader_frame->height * 7U) / 12U;
             expect_red = true;
         }
@@ -2772,6 +2792,11 @@ int run_gx2_guest_triangle_test(
     {
         shader_subset_description =
             "the bounded MOV/ADD-offset-to-position SPIR-V vertex subset";
+    }
+    if (shader == GuestTriangleShader::spirv_add_negative_one_x)
+    {
+        shader_subset_description =
+            "the bounded MOV/ADD-negated-offset-to-position SPIR-V vertex subset";
     }
     if (shader == GuestTriangleShader::spirv_multiply_one)
     {
@@ -2872,6 +2897,14 @@ int main(int argc, char* argv[])
                     GuestTriangleShader::spirv_add_one_x);
             }
             if (std::string_view(argv[1]) ==
+                    "--gx2-guest-triangle-add-negative-one-x-spirv-smoke-test" &&
+                argc == 2)
+            {
+                return run_gx2_guest_triangle_test(
+                    false,
+                    GuestTriangleShader::spirv_add_negative_one_x);
+            }
+            if (std::string_view(argv[1]) ==
                     "--gx2-guest-triangle-multiply-zero-spirv-smoke-test" &&
                 argc == 2)
             {
@@ -2926,6 +2959,7 @@ int main(int argc, char* argv[])
                          "       AffogatoFrontend.exe --gx2-guest-triangle-spirv-smoke-test\n"
                          "       AffogatoFrontend.exe --gx2-guest-triangle-multiply-spirv-smoke-test\n"
                          "       AffogatoFrontend.exe --gx2-guest-triangle-add-one-x-spirv-smoke-test\n"
+                         "       AffogatoFrontend.exe --gx2-guest-triangle-add-negative-one-x-spirv-smoke-test\n"
                          "       AffogatoFrontend.exe --gx2-guest-triangle-multiply-zero-spirv-smoke-test\n"
                          "       AffogatoFrontend.exe --gx2-guest-triangle-maximum-spirv-smoke-test\n"
                          "       AffogatoFrontend.exe --gx2-guest-triangle-minimum-spirv-smoke-test\n"
