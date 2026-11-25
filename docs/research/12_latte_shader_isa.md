@@ -30,6 +30,9 @@ Relevant local implementation:
   to the little-endian Latte DWORD values represented in GFD shader code, then
   decodes a narrow structural control-flow subset. It checks ALU clause header
   ranges but does not decode or execute clause payloads.
+- `src/gpu/latte_shader_interpreter.hpp` contains an initial MOV source-value
+  helper for one absolute GPR form. It returns raw register bits; it does not
+  perform destination writeback, PV/PS updates, or instruction-group execution.
 
 ## Evidence categories
 
@@ -181,7 +184,7 @@ real shader fixtures before implementation.
 | GX2 vertex/pixel/geometry descriptor capture | Implemented and tested as capture | HLE descriptor/program range checks and draw-time state snapshots |
 | Fetch-shader parsing | Narrow diagnostic subset | `latte_vertex_fetch.hpp`; generated VTX programs only |
 | Latte shader control-flow decoding | Partial | `latte_shader_decoder.hpp` decodes fixture-verified `CALL_FS`, `EXPORT`, `EXPORT_DONE`, and `ALU` clause headers, including EOP and bounded clause ranges. Unknown opcodes and malformed streams fail explicitly. No branch/loop decoding or clause execution. |
-| Latte ALU decoding/execution | Partial field decoding | `decode_latte_alu_op2_instruction()` extracts the shared OP2 field layout and distinguishes OP3 slots; only assembled MOV fixture fields are asserted. No opcode semantics, VLIW execution, writeback, predicate, or PV/PS behavior. |
+| Latte ALU decoding/execution | Partial field/value subset | `decode_latte_alu_op2_instruction()` extracts the OP2 layout; `evaluate_latte_alu_move_value()` returns the source bits for one absolute GPR MOV form. No group scheduling, destination writeback, PV/PS update, predicate, or other opcode semantics. |
 | Vertex/pixel shader translation | Missing | Stage interfaces, exports, constants, textures, and SPIR-V backend |
 | Guest shader integration with Vulkan draws | Missing | Shader modules, pipeline cache, descriptor binding, render-target path |
 | WWHD shader requirements | Unknown in Affogato | Existing recorded WWHD runs stop before a guest draw is captured |
@@ -263,16 +266,32 @@ behavior, interpret ALU opcode fields, or generate SPIR-V in this step. Raw
 slot extraction validates that its input record is an ALU clause and rechecks
 that the clause range fits the captured program.
 
-The initial OP2 field decoder extracts raw operation ID, source selectors,
+The OP2 field decoder extracts raw operation ID, source selectors,
 channels, relative/negate flags, index mode, destination register/component,
 clamp/write-mask, output modifier, and group-end marker. It rejects slots whose
 word1 format bits identify OP3. The parser does not classify selector values
 or assign operation behavior. A controlled MOV fixture checks source r1 to
 destination r3 components and the final-in-group marker against Cemu's
 `LatteClauseInstruction_ALU` fields and `MOV` opcode `0x019`.
+`evaluate_latte_alu_move_value()` handles the fixture's absolute GPR source
+and returns its raw 32-bit component unchanged. The R700 reference describes
+MOV as `dst = src0` and also permits constants or previous results; Affogato
+currently supports only the GPR source. It does not apply destination writes
+or update previous-vector/previous-scalar state. The supporting R700 reference
+is Chapter 9.2, “Copy To GPR” (page 9-92); its applicability to Latte remains a
+family-level reference cross-checked by the assembled fixture, not a complete
+Latte specification.
+
+The R700 manual's Chapter 4.3 says the LAST bit delimits groups of ALU slots;
+Chapter 4.6.2 defines PV/PS as results from the previous group. Chapter 4.9.2
+also states that an OP2 write-mask suppresses the GPR write while PV/PS still
+update. Therefore a complete MOV executor cannot be modeled as only a
+destination-register copy. Any follow-up execution work must represent grouped
+ALU results and their state transitions before claiming instruction execution.
 
 Next implementation work should add semantic execution for a verified ALU
-instruction subset with independently expected results and explicit guest
-register/group state. The pass-through shader alone does not establish
-complete shader decoding. Do not start SPIR-V emission until opcode semantics,
-slot grouping, and expected architectural outputs have deterministic tests.
+group handling and one or more verified ALU instruction subsets with
+independently expected results and explicit guest register/PV/PS state. The
+pass-through shader alone does not establish complete shader decoding. Do not
+start SPIR-V emission until opcode semantics, slot grouping, and expected
+architectural outputs have deterministic tests.

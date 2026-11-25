@@ -15,6 +15,7 @@
 #include "emulator.hpp"
 #include "gpu/gx2_register_state.hpp"
 #include "gpu/latte_shader_decoder.hpp"
+#include "gpu/latte_shader_interpreter.hpp"
 #include "gpu/latte_surface_staging.hpp"
 #include "gpu/latte_vertex_fetch.hpp"
 #include "gpu/latte_texture_staging.hpp"
@@ -31950,6 +31951,8 @@ void latte_control_flow_decoder_tests()
     using affogato::gpu::decode_latte_alu_clause_slots;
     using affogato::gpu::decode_latte_alu_op2_instruction;
     using affogato::gpu::decode_latte_control_flow;
+    using affogato::gpu::evaluate_latte_alu_move_value;
+    using affogato::gpu::LatteShaderRegister;
 
     // Captured with read32_be() from the assembled GFD pass-through vertex
     // shader. The source has CALL_FS, two EXP_DONE records, then EOP.
@@ -32064,6 +32067,51 @@ void latte_control_flow_decoder_tests()
         rejected_op3_layout = true;
     }
     assert(rejected_op3_layout);
+
+    std::array<LatteShaderRegister, 128U> guest_registers{};
+    std::array<std::uint32_t, 4U> move_results{};
+    guest_registers[1U] = {
+        0x3FA00000U,
+        0xFFC12345U,
+        0x80000000U,
+        0x7F800000U};
+    for (const auto& slot : alu_slots)
+    {
+        const auto instruction = decode_latte_alu_op2_instruction(slot);
+        move_results[instruction.destination_component] =
+            evaluate_latte_alu_move_value(instruction, guest_registers);
+    }
+
+    assert((move_results == guest_registers[1U]));
+    assert(guest_registers[2U] == LatteShaderRegister{});
+
+    bool rejected_constant_source = false;
+    try
+    {
+        auto constant_source_move = first_move;
+        constant_source_move.source0_selector = 248U;
+        static_cast<void>(evaluate_latte_alu_move_value(
+            constant_source_move,
+            guest_registers));
+    }
+    catch (const std::runtime_error&)
+    {
+        rejected_constant_source = true;
+    }
+    assert(rejected_constant_source);
+
+    bool rejected_short_register_file = false;
+    try
+    {
+        static_cast<void>(evaluate_latte_alu_move_value(
+            first_move,
+            std::span<const LatteShaderRegister>(guest_registers).first(3U)));
+    }
+    catch (const std::runtime_error&)
+    {
+        rejected_short_register_file = true;
+    }
+    assert(rejected_short_register_file);
 
     bool rejected_non_alu_record = false;
     try

@@ -370,3 +370,13 @@ semantics. The assembled MOV fixture checks r1 to r3 component fields and the
 group-ending slot; OP3 layouts are rejected by this entry point. This is still
 not shader execution. Debug and Release builds succeeded; CTest passed 2/2 in
 both configurations. `git diff --check` is clean.
+
+## Latte MOV source-value subset (2026-11-25)
+
+Added `evaluate_latte_alu_move_value()` for the assembled MOV form that reads an
+absolute GPR component. It returns the raw 32-bit source unchanged, preserving
+NaN payloads, signed zero, and non-floating register bit patterns. The helper
+does not write the destination or update previous-vector/previous-scalar state;
+it is not an ALU instruction-group executor. Tests use bit-pattern fixtures
+including NaN, negative zero, and infinity. Debug and Release builds succeeded;
+CTest passed 2/2 in both configurations. `git diff --check` is clean.
