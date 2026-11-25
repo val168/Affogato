@@ -632,13 +632,13 @@ draw-time vertex snapshots and semantics for one explicitly supplied vertex
 index, then passes the populated registers into the existing straight-line
 CPU shader subset. A deterministic fixture verifies big-endian Float32x2
 input, a destination selector with a masked component, MOV execution, and
-register output. This composes tested CPU helpers; it is not wired to ordinary
-GX2 draw processing, does not execute general guest fetch programs, and does
-not generate Vulkan shaders. The fixture initially failed because its fetch
-record omitted the documented Float32 endian mode; correcting the fixture made
-Debug CTest pass 2/2. The previous Release build/test and diagnostic GPU smoke
-test passed after this new integration header was added. Release build and
-CTest passed 2/2 for this stage. The smoke test still uses the diagnostic host
-shader. The visible-window test was not run because the Windows capture tool
-failed during initialization (`failed to write kernel assets`), so no new
-visual verification is claimed.
+register output. A draw-snapshot overload obtains the fetch shader, vertex
+shader, semantic table, and immutable vertex bytes from one captured
+`Gx2DrawSnapshotView`; a regression test runs it through `Gx2RegisterState`.
+This composes tested CPU helpers; it is not wired to normal Vulkan draw
+submission, does not execute general guest fetch programs, and does not
+generate Vulkan shaders. Debug and Release builds succeeded and CTest passed
+2/2 in both configurations. The diagnostic Vulkan triangle smoke test passed;
+it still uses host diagnostic shaders. The visible-window test was not run
+because the Windows capture tool failed during initialization (`failed to
+write kernel assets`), so no new visual verification is claimed.

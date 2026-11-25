@@ -32500,6 +32500,64 @@ void latte_control_flow_decoder_tests()
     assert(vertex_shader_result.shader_execution.registers[3U] ==
         vertex_shader_result.shader_execution.registers[1U]);
 
+    std::vector<Gx2Command> draw_state_commands;
+    Gx2Command set_fetch_shader_command{};
+    set_fetch_shader_command.type = Gx2CommandType::set_fetch_shader;
+    set_fetch_shader_command.fetch_shader = fetch_shader;
+    draw_state_commands.push_back(set_fetch_shader_command);
+
+    Gx2ProgramShaderBinding vertex_shader_binding{};
+    vertex_shader_binding.stage = Gx2ProgramStage::vertex;
+    vertex_shader_binding.program_words.assign(
+        linear_shader_words.begin(),
+        linear_shader_words.end());
+    Gx2Command set_vertex_shader_command{};
+    set_vertex_shader_command.type = Gx2CommandType::set_program_shader;
+    set_vertex_shader_command.program_shader = vertex_shader_binding;
+    draw_state_commands.push_back(set_vertex_shader_command);
+
+    for (std::size_t semantic_index = 0U;
+         semantic_index < vertex_semantic_table.size();
+         ++semantic_index)
+    {
+        Gx2Command semantic_register_command{};
+        semantic_register_command.type =
+            Gx2CommandType::set_context_register;
+        semantic_register_command.register_address =
+            affogato::gpu::latte_vertex_semantic_register_base +
+            static_cast<std::uint32_t>(semantic_index * sizeof(std::uint32_t));
+        semantic_register_command.value = vertex_semantic_table[semantic_index];
+        draw_state_commands.push_back(semantic_register_command);
+    }
+
+    Gx2Command draw_command{};
+    draw_command.type = Gx2CommandType::draw;
+    draw_command.draw_call = Gx2DrawCall{
+        4U, 1U, false, 0U, 0U, 1U, 1U, 0U};
+    draw_command.draw_vertex_data.push_back(vertex_buffer);
+    draw_state_commands.push_back(draw_command);
+
+    affogato::gpu::Gx2RegisterState draw_register_state;
+    draw_register_state.apply(draw_state_commands);
+    const std::optional<affogato::gpu::Gx2DrawSnapshotView> draw_snapshot =
+        draw_register_state.draw_snapshot(0U);
+    assert(draw_snapshot.has_value());
+
+    std::array<LatteShaderRegister, 8U> draw_shader_registers{};
+    draw_shader_registers[1U].fill(0xDEADBEEFU);
+    const auto draw_shader_result = execute_latte_vertex_shader_subset(
+        *draw_snapshot,
+        0U,
+        1U,
+        draw_shader_registers);
+    assert(draw_shader_result.fetched_attribute_count == 1U);
+    assert(draw_shader_result.shader_execution.registers[3U] ==
+        (LatteShaderRegister{
+            0xC0000000U,
+            0x3FC00000U,
+            0U,
+            0xDEADBEEFU}));
+
     bool rejected_fetch_shader_call = false;
     try
     {

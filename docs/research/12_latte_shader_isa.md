@@ -37,9 +37,11 @@ Relevant local implementation:
   assembled into a caller-provided register file with transactional writes.
   `execute_latte_vertex_shader_subset()` joins that fetch subset to the
   supported straight-line CPU shader subset for one explicitly selected
-  vertex. This is a deterministic CPU execution path, not normal GX2 draw
-  execution; system inputs are not modeled. The fetch path remains separate
-  from general guest vertex/pixel shader execution.
+  vertex. Its draw-snapshot overload reads the fetch shader, vertex shader,
+  semantic registers, and immutable vertex bytes from one
+  `Gx2DrawSnapshotView`. This is a deterministic CPU execution path, not
+  normal Vulkan draw execution; system inputs are not modeled. The fetch path
+  remains separate from general guest vertex/pixel shader execution.
 - `GX2InitFetchShaderEx` in `src/cpu/espresso/gx2_hle.cpp` emits one four-dword
   record per attribute. Word 0 selects the semantic VTX form; under that form,
   word 1's overlapping low field is a semantic ID, not a direct destination
