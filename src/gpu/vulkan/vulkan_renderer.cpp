@@ -2,6 +2,7 @@
 
 #include "gpu/vulkan/diagnostic_shader_spirv.hpp"
 #include "gpu/latte_draw.hpp"
+#include "gpu/latte_shader_interface.hpp"
 #include "gpu/latte_spirv_fragment_subset.hpp"
 #include "gpu/latte_spirv_vertex_subset.hpp"
 #include "gpu/latte_surface_staging.hpp"
@@ -24,6 +25,7 @@
 #include <stdexcept>
 #include <string>
 #include <utility>
+#include <variant>
 #include <vector>
 
 namespace affogato::gpu::vulkan
@@ -526,8 +528,79 @@ void decode_diagnostic_latte_spirv_pixel_shader(
 
     const LatteShaderIrProgram shader_ir = decode_latte_shader_ir_subset(
         pixel_shader->program_words);
-    std::vector<std::uint32_t> decoded_shader_code =
-        emit_latte_spirv_fragment_constant_color_subset(shader_ir);
+    const std::vector<LattePixelShaderInputControl> pixel_input_controls =
+        decode_latte_pixel_shader_input_controls(*pixel_shader);
+    std::vector<std::uint32_t> decoded_shader_code;
+    if (pixel_input_controls.empty())
+    {
+        decoded_shader_code =
+            emit_latte_spirv_fragment_constant_color_subset(shader_ir);
+    }
+    else
+    {
+        constexpr std::size_t vertex_shader_stage_index =
+            static_cast<std::size_t>(cpu::espresso::Gx2ProgramStage::vertex);
+        const auto& vertex_shader =
+            draw_snapshot.program_shaders[vertex_shader_stage_index];
+        if (!vertex_shader.has_value() ||
+            vertex_shader->stage != cpu::espresso::Gx2ProgramStage::vertex)
+        {
+            throw std::runtime_error(
+                "Vulkan Latte fragment diagnostic cannot resolve pixel inputs without captured vertex state");
+        }
+
+        const LatteVertexShaderOutputInterface vertex_output_interface =
+            decode_latte_vertex_shader_output_interface(*vertex_shader);
+        const LatteShaderIrProgram vertex_shader_ir =
+            decode_latte_shader_ir_subset(
+                vertex_shader->program_words,
+                true);
+        std::vector<LatteShaderExportValue> vertex_parameter_exports;
+        for (const LatteShaderIrInstruction& instruction :
+             vertex_shader_ir.instructions)
+        {
+            const LatteShaderIrExport* export_instruction =
+                std::get_if<LatteShaderIrExport>(&instruction);
+            if (export_instruction == nullptr ||
+                export_instruction->fields.type != LatteExportType::parameter)
+            {
+                continue;
+            }
+
+            const LatteExportFields& export_fields = export_instruction->fields;
+            if (export_fields.read_write_relative ||
+                export_fields.index_gpr != 0U ||
+                export_fields.uses_buffer_encoding ||
+                export_fields.burst_count == 0U ||
+                export_fields.burst_count > 16U ||
+                export_fields.array_base >
+                    std::numeric_limits<std::uint32_t>::max() -
+                        export_fields.burst_count)
+            {
+                throw std::runtime_error(
+                    "Vulkan Latte fragment diagnostic cannot link this vertex parameter export form");
+            }
+
+            for (std::uint8_t burst_index = 0U;
+                 burst_index < export_fields.burst_count;
+                 ++burst_index)
+            {
+                LatteShaderExportValue export_value{};
+                export_value.type = LatteExportType::parameter;
+                export_value.array_index = export_fields.array_base + burst_index;
+                vertex_parameter_exports.push_back(export_value);
+            }
+        }
+
+        const std::vector<LatteLinkedPixelShaderInput> linked_inputs =
+            link_latte_pixel_shader_inputs(
+                vertex_output_interface,
+                vertex_parameter_exports,
+                pixel_input_controls);
+        decoded_shader_code = emit_latte_spirv_fragment_default_input_subset(
+            shader_ir,
+            linked_inputs);
+    }
     if (!pixel_shader_code.empty() && pixel_shader_code != decoded_shader_code)
     {
         throw std::runtime_error(

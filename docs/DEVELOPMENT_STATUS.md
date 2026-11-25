@@ -1,17 +1,21 @@
 # Affogato Development Status
 
-## Pixel shader `DEFAULT_VAL` lowering in the diagnostic SPIR-V subset (2026-11-25)
+## Pixel shader defaults through controlled Vulkan guest draw (2026-11-25)
 
-The bounded fragment SPIR-V emitter can now seed its GPR file with linked GX2
-pixel-input defaults and fold them through supported MOV-only shader IR into a
-constant fragment output. Tests cover the `1,1,1,0` default vector, output
-constant bits, and explicit rejection of matched vertex varyings; the generated
-module passes `spirv-val`. This is an emitter/test capability only: the
-diagnostic renderer does not yet link draw-time VS outputs to PS inputs or use
-this path, and interpolation, non-MOV fragment ALU, and guest PS execution in
-normal draws remain unsupported. Debug/Release full-suite results are recorded
-after validation: both builds succeeded and Debug/Release CTest each passed
-30/30.
+The bounded fragment SPIR-V emitter seeds its GPRs from linked GX2 pixel-input
+defaults and folds supported MOV-only shader IR into a constant fragment
+output. The explicitly selected diagnostic Vulkan policy now decodes the
+captured VS output interface and PS input controls, links their semantics, and
+uses that emitter when the PS inputs resolve entirely to `DEFAULT_VAL`. A
+controlled GX2 HLE fixture issues a draw with a guest pixel shader that reads
+the default vector; Vulkan framebuffer readback verifies the resulting white
+triangle, and guest color-buffer/scanout checks still pass. A matched varying
+is explicitly rejected because stage interface variables and interpolation
+have not been implemented. This verifies a controlled guest command and
+shader path under diagnostic policy; ordinary game draw routing, general PS
+ALU, Latte hardware behavior, visible-window output, and WWHD rendering remain
+unverified. Debug and Release builds succeeded; both full CTest suites passed
+31/31, including `spirv-val`.
 
 ## WWHD startup blocker reproduction (2026-11-25)
 

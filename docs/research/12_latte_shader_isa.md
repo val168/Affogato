@@ -79,11 +79,16 @@ Relevant local implementation:
   vectors into the supported MOV-only fragment IR and emit a constant-color
   SPIR-V fragment module. The test checks the four output component bit
   patterns, rejects a matched vertex varying, and validates the module with
-  `spirv-val`. The renderer does not yet call this emitter; matched varyings,
-  interpolation, and non-MOV fragment operations remain unsupported. The
-  default-value encoding is taken from the AMD R700-family reference documented
-  below and is not yet cross-verified against Latte hardware or a real game
-  workload.
+  `spirv-val`. The explicit diagnostic Vulkan draw policy decodes a captured
+  vertex output descriptor and pixel input controls, links semantics, and
+  invokes the emitter only when all linked inputs use `DEFAULT_VAL`. Its
+  controlled guest fixture reads a default vector in MOV lanes and verifies
+  white fragment pixels using framebuffer readback. This does not establish
+  ordinary guest draw support; matched varyings lack Vulkan stage-interface
+  variables and interpolation, and general fragment ALU remains unsupported.
+  The default-value encoding is taken from the AMD R700-family reference
+  documented below and is not yet cross-verified against Latte hardware or a
+  real game workload.
 
 ## Evidence categories
 
