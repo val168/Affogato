@@ -80,6 +80,55 @@ program size/address at `0xA4/0xA8`. Affogato uses these offsets in
 `gx2_hle.cpp`; its tests exercise descriptor capture. Interface layouts do
 not define the full Latte machine semantics.
 
+### GX2 shader resource mode and register state
+
+WUT's [`include/gx2/shaders.h`](https://github.com/devkitPro/wut/blob/master/include/gx2/shaders.h)
+declares `GX2SetShaderModeEx(mode, numVsGpr, numVsStackEntries,
+numGsGpr, numGsStackEntries, numPsGpr, numPsStackEntries)` and its inline
+`GX2SetShaderMode` wrapper supplies `0x30/0x40/0/0/0xC8/0xC0` for non-geometry
+modes or `0x2C/0x20/0x40/0x30/0x4C/0xB0` for geometry mode. WUT's
+`GX2ShaderMode` distinguishes uniform-register, uniform-block, geometry, and
+compute modes. These are documented public API values, not proof that the
+associated device state is emulated.
+
+Decaf's `GX2SetShaderModeEx` in
+[`gx2_shaders.cpp`](https://github.com/decaf-emu/decaf-emu/blob/master/src/libdecaf/src/cafe/libraries/gx2/gx2_shaders.cpp)
+reads existing register values, edits fields, and emits `VGT_GS_MODE` plus six
+contiguous config registers beginning at `SQ_CONFIG`. The AMD
+[R7xx register reference](https://vgamuseum.info/index.php/companies/item/download/1285_186d50f48f4f4c1398a91e1b07eba33c)
+lists `SQ_CONFIG` at `0x8C00`; `SQ_GPR_RESOURCE_MGMT_1/2` at
+`0x8C04/0x8C08`; thread management at `0x8C0C`; and stack management at
+`0x8C10/0x8C14`. It describes `SQ_CONFIG` as a graphics-idle-only register,
+and GPR/stack allocation writes as requiring relevant shader work to be
+flushed. Decaf's implementation sets shader priorities, vector-ALU preference,
+uniform-register mode, shader GPR/stack allocations, and per-stage thread
+allocations. Geometry and compute modes additionally alter VGT mode or require
+ring-buffer/resource setup. This is useful cross-checked implementation
+behavior, but Decaf is GPL-3.0 and is used here only as a reference; no code is
+copied.
+
+Affogato does not currently register `GX2SetShaderModeEx`. Its ordered command
+stream can retain config/context register writes, but the GX2 runtime does not
+maintain a complete prior-value shadow for all six config registers or the
+VGT mode register. The reference implementation's read-modify-write behavior
+means emitting guessed complete register words would overwrite state that
+Affogato has not observed. Correct implementation therefore depends on a
+defined GPU register reset model or an ordered register shadow that consumes
+all guest writes before constructing the mode update; mode changes also need
+to preserve the documented idle/flush ordering. Until then, shader resource
+allocation and mode transitions remain missing, rather than being modeled as
+successful no-ops.
+
+The first compatible implementation should validate mode and allocation
+arguments, build the documented register-field updates against known current
+state, retain them in the same ordered command stream, and explicitly reject
+geometry/compute paths until their ring resources and scheduling semantics are
+modeled. Tests should verify wrapper-equivalent arguments, bitfield
+preservation, command order, draw-time snapshots, invalid modes, and required
+synchronization boundaries. Wii U traces or hardware fixtures are still needed
+to confirm Latte-specific differences from R7xx and whether the reference's
+allocation policy matches Cafe OS on hardware.
+
 ### Hardware-family references
 
 WiiUBrew's [GX2 hardware page](https://wiiubrew.org/wiki/Hardware/GX2)
