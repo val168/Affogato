@@ -41,7 +41,31 @@ struct LatteAluClauseSlot
     bool operator==(const LatteAluClauseSlot&) const = default;
 };
 
-// Decode the verified non-ALU control-flow records in a shader program.
+struct LatteAluOp2Instruction
+{
+    std::size_t word_offset{};
+    std::uint16_t opcode{};
+    std::uint16_t source0_selector{};
+    std::uint16_t source1_selector{};
+    std::uint8_t source0_channel{};
+    std::uint8_t source1_channel{};
+    std::uint8_t index_mode{};
+    std::uint8_t output_modifier{};
+    std::uint8_t destination_gpr{};
+    std::uint8_t destination_component{};
+    bool source0_relative{};
+    bool source1_relative{};
+    bool source0_negate{};
+    bool source1_negate{};
+    bool destination_relative{};
+    bool destination_clamp{};
+    bool write_mask{};
+    bool last_in_group{};
+
+    bool operator==(const LatteAluOp2Instruction&) const = default;
+};
+
+// Decode verified control-flow records and the supported ALU-clause header.
 // GX2 shader memory is captured as big-endian CPU words; Latte instruction
 // DWORDs use the little-endian word values emitted in GFD shader programs.
 [[nodiscard]] inline std::vector<LatteControlFlowRecord>
@@ -199,6 +223,50 @@ decode_latte_alu_clause_slots(
     }
 
     return slots;
+}
+
+// Decode the common OP2 field layout without assigning semantics to its opcode.
+// Cemu's Latte ISA definitions distinguish OP2/OP3 using word1 bits 17:13.
+[[nodiscard]] inline LatteAluOp2Instruction decode_latte_alu_op2_instruction(
+    const LatteAluClauseSlot& slot)
+{
+    constexpr std::uint32_t op3_encoding_shift = 13U;
+    constexpr std::uint32_t op3_encoding_mask = 0x1FU;
+    constexpr std::uint32_t first_op3_encoding = 0x08U;
+
+    const std::uint32_t op3_encoding =
+        (slot.word1 >> op3_encoding_shift) & op3_encoding_mask;
+    if (op3_encoding >= first_op3_encoding)
+    {
+        throw std::runtime_error(
+            "Latte ALU slot uses OP3 encoding, not the OP2 layout");
+    }
+
+    constexpr std::uint32_t source_selector_mask = 0x1FFU;
+    constexpr std::uint32_t source_channel_mask = 0x03U;
+    constexpr std::uint32_t destination_gpr_mask = 0x7FU;
+    constexpr std::uint32_t destination_component_mask = 0x03U;
+
+    return {
+        slot.word_offset,
+        static_cast<std::uint16_t>((slot.word1 >> 7U) & 0x7FFU),
+        static_cast<std::uint16_t>(slot.word0 & source_selector_mask),
+        static_cast<std::uint16_t>((slot.word0 >> 13U) & source_selector_mask),
+        static_cast<std::uint8_t>((slot.word0 >> 10U) & source_channel_mask),
+        static_cast<std::uint8_t>((slot.word0 >> 23U) & source_channel_mask),
+        static_cast<std::uint8_t>((slot.word0 >> 26U) & 0x07U),
+        static_cast<std::uint8_t>((slot.word1 >> 5U) & 0x03U),
+        static_cast<std::uint8_t>((slot.word1 >> 21U) & destination_gpr_mask),
+        static_cast<std::uint8_t>(
+            (slot.word1 >> 29U) & destination_component_mask),
+        ((slot.word0 >> 9U) & 1U) != 0U,
+        ((slot.word0 >> 22U) & 1U) != 0U,
+        ((slot.word0 >> 12U) & 1U) != 0U,
+        ((slot.word0 >> 25U) & 1U) != 0U,
+        ((slot.word1 >> 28U) & 1U) != 0U,
+        ((slot.word1 >> 31U) & 1U) != 0U,
+        ((slot.word1 >> 4U) & 1U) != 0U,
+        ((slot.word0 >> 31U) & 1U) != 0U};
 }
 
 } // namespace affogato::gpu

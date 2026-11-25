@@ -360,3 +360,13 @@ first and last slot, rejects a non-ALU record, and covers truncated and
 out-of-range input. Debug and Release builds succeeded; CTest passed 2/2 in
 both configurations. `git diff --check` is clean. This is structural access
 only; ALU opcode semantics and shader execution remain unimplemented.
+
+## Latte ALU OP2 field decoding (2026-11-25)
+
+Added `decode_latte_alu_op2_instruction()` for the common OP2 word layout. It
+extracts raw opcode, source selectors/channels and modifiers, destination
+fields, output modifier, and last-in-group state without assigning opcode
+semantics. The assembled MOV fixture checks r1 to r3 component fields and the
+group-ending slot; OP3 layouts are rejected by this entry point. This is still
+not shader execution. Debug and Release builds succeeded; CTest passed 2/2 in
+both configurations. `git diff --check` is clean.

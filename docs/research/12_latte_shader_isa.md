@@ -181,7 +181,7 @@ real shader fixtures before implementation.
 | GX2 vertex/pixel/geometry descriptor capture | Implemented and tested as capture | HLE descriptor/program range checks and draw-time state snapshots |
 | Fetch-shader parsing | Narrow diagnostic subset | `latte_vertex_fetch.hpp`; generated VTX programs only |
 | Latte shader control-flow decoding | Partial | `latte_shader_decoder.hpp` decodes fixture-verified `CALL_FS`, `EXPORT`, `EXPORT_DONE`, and `ALU` clause headers, including EOP and bounded clause ranges. Unknown opcodes and malformed streams fail explicitly. No branch/loop decoding or clause execution. |
-| Latte ALU decoding/execution | Missing | VLIW slot, writeback, predicate, and PV/PS semantics |
+| Latte ALU decoding/execution | Partial field decoding | `decode_latte_alu_op2_instruction()` extracts the shared OP2 field layout and distinguishes OP3 slots; only assembled MOV fixture fields are asserted. No opcode semantics, VLIW execution, writeback, predicate, or PV/PS behavior. |
 | Vertex/pixel shader translation | Missing | Stage interfaces, exports, constants, textures, and SPIR-V backend |
 | Guest shader integration with Vulkan draws | Missing | Shader modules, pipeline cache, descriptor binding, render-target path |
 | WWHD shader requirements | Unknown in Affogato | Existing recorded WWHD runs stop before a guest draw is captured |
@@ -263,9 +263,16 @@ behavior, interpret ALU opcode fields, or generate SPIR-V in this step. Raw
 slot extraction validates that its input record is an ALU clause and rechecks
 that the clause range fits the captured program.
 
-Next implementation work should specify and test an initial ALU instruction
-family from assembled fixtures and cross-check the bitfields against Cemu's
-`LatteClauseInstruction_ALU` definitions and the R700-family manual. The
-pass-through shader alone does not establish complete shader decoding. Do not
-start SPIR-V emission until opcode decoding, slot grouping, and expected
-architectural outputs have deterministic tests.
+The initial OP2 field decoder extracts raw operation ID, source selectors,
+channels, relative/negate flags, index mode, destination register/component,
+clamp/write-mask, output modifier, and group-end marker. It rejects slots whose
+word1 format bits identify OP3. The parser does not classify selector values
+or assign operation behavior. A controlled MOV fixture checks source r1 to
+destination r3 components and the final-in-group marker against Cemu's
+`LatteClauseInstruction_ALU` fields and `MOV` opcode `0x019`.
+
+Next implementation work should add semantic execution for a verified ALU
+instruction subset with independently expected results and explicit guest
+register/group state. The pass-through shader alone does not establish
+complete shader decoding. Do not start SPIR-V emission until opcode semantics,
+slot grouping, and expected architectural outputs have deterministic tests.

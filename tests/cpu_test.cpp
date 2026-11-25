@@ -31948,6 +31948,7 @@ void latte_control_flow_decoder_tests()
 {
     using affogato::gpu::LatteControlFlowOpcode;
     using affogato::gpu::decode_latte_alu_clause_slots;
+    using affogato::gpu::decode_latte_alu_op2_instruction;
     using affogato::gpu::decode_latte_control_flow;
 
     // Captured with read32_be() from the assembled GFD pass-through vertex
@@ -32019,6 +32020,50 @@ void latte_control_flow_decoder_tests()
     assert(alu_slots[3U].word_offset == 70U);
     assert(alu_slots[3U].word0 == 0x80000C01U);
     assert(alu_slots[3U].word1 == 0x60600C90U);
+
+    const auto first_move = decode_latte_alu_op2_instruction(alu_slots[0U]);
+    assert(first_move.word_offset == 64U);
+    assert(first_move.opcode == 0x19U);
+    assert(first_move.source0_selector == 1U);
+    assert(first_move.source0_channel == 0U);
+    assert(first_move.source1_selector == 0U);
+    assert(first_move.source1_channel == 0U);
+    assert(first_move.destination_gpr == 3U);
+    assert(first_move.destination_component == 0U);
+    assert(!first_move.source0_relative);
+    assert(!first_move.source1_relative);
+    assert(!first_move.source0_negate);
+    assert(!first_move.source1_negate);
+    assert(!first_move.destination_relative);
+    assert(!first_move.destination_clamp);
+    assert(first_move.output_modifier == 0U);
+    assert(first_move.index_mode == 0U);
+    assert(first_move.write_mask);
+    assert(!first_move.last_in_group);
+
+    const auto final_move = decode_latte_alu_op2_instruction(alu_slots[3U]);
+    assert(final_move.opcode == 0x19U);
+    assert(final_move.source0_selector == 1U);
+    assert(final_move.source0_channel == 3U);
+    assert(final_move.destination_gpr == 3U);
+    assert(final_move.destination_component == 3U);
+    assert(final_move.write_mask);
+    assert(final_move.last_in_group);
+
+    bool rejected_op3_layout = false;
+    try
+    {
+        constexpr affogato::gpu::LatteAluClauseSlot op3_slot{
+            0U,
+            0U,
+            0x00010000U};
+        static_cast<void>(decode_latte_alu_op2_instruction(op3_slot));
+    }
+    catch (const std::runtime_error&)
+    {
+        rejected_op3_layout = true;
+    }
+    assert(rejected_op3_layout);
 
     bool rejected_non_alu_record = false;
     try
