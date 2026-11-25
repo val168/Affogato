@@ -1,5 +1,6 @@
 #pragma once
 
+#include "latte_shader_interface.hpp"
 #include "latte_shader_program.hpp"
 
 #include <array>
@@ -22,6 +23,28 @@ class LatteSpirvFragmentSubsetBuilder
 public:
     using RegisterValues =
         std::array<std::array<std::optional<std::uint32_t>, 4U>, 128U>;
+
+    explicit LatteSpirvFragmentSubsetBuilder(
+        const LattePixelShaderInputRegisters& input_registers)
+    {
+        for (std::size_t input_index = 0U;
+             input_index < input_registers.size();
+             ++input_index)
+        {
+            if (!input_registers[input_index].has_value())
+            {
+                continue;
+            }
+
+            for (std::size_t component = 0U;
+                 component < registers_[input_index].size();
+                 ++component)
+            {
+                registers_[input_index][component] =
+                    (*input_registers[input_index])[component];
+            }
+        }
+    }
 
     [[nodiscard]] std::array<std::uint32_t, 4U> evaluate(
         const LatteShaderIrProgram& program)
@@ -100,8 +123,9 @@ private:
                         "Latte SPIR-V fragment subset received an unsupported MOV operation or modifier");
                 }
 
-                lane_values[lane] = read_inline_float_constant(
-                    operation.source0_selector);
+                lane_values[lane] = read_move_source(
+                    operation.source0_selector,
+                    operation.source0_channel);
                 destination_gprs[lane] = operation.destination_gpr;
             }
 
@@ -112,21 +136,36 @@ private:
         }
     }
 
-    [[nodiscard]] static std::uint32_t read_inline_float_constant(
-        std::uint16_t selector)
+    [[nodiscard]] std::uint32_t read_move_source(
+        std::uint16_t selector,
+        std::uint8_t channel) const
     {
+        if (channel >= 4U)
+        {
+            throw std::runtime_error(
+                "Latte SPIR-V fragment MOV source channel is out of range");
+        }
+
         switch (selector)
         {
         case source_zero_selector:
-            return 0x00000000U;
+            return 0U;
         case source_one_float_selector:
             return 0x3F800000U;
         case source_half_float_selector:
             return 0x3F000000U;
         default:
-            throw std::runtime_error(
-                "Latte SPIR-V fragment subset supports only inline float constants");
+            break;
         }
+
+        if (selector >= registers_.size() ||
+            !registers_[selector][channel].has_value())
+        {
+            throw std::runtime_error(
+                "Latte SPIR-V fragment MOV reads an unsupported or uninitialized GPR");
+        }
+
+        return *registers_[selector][channel];
     }
 
     [[nodiscard]] std::array<std::uint32_t, 4U> read_pixel_export(
@@ -304,7 +343,43 @@ private:
 emit_latte_spirv_fragment_constant_color_subset(
     const LatteShaderIrProgram& program)
 {
-    detail::LatteSpirvFragmentSubsetBuilder subset_builder;
+    detail::LatteSpirvFragmentSubsetBuilder subset_builder(
+        LattePixelShaderInputRegisters{});
+    const std::array<std::uint32_t, 4U> color =
+        subset_builder.evaluate(program);
+
+    detail::LatteSpirvFragmentModuleBuilder module_builder;
+    return module_builder.build(color);
+}
+
+// Resolve a fragment program whose active inputs all come from SPI defaults.
+// These values are constant across fragments, so the bounded MOV subset can
+// fold them into the generated module without inventing interpolated inputs.
+[[nodiscard]] inline std::vector<std::uint32_t>
+emit_latte_spirv_fragment_default_input_subset(
+    const LatteShaderIrProgram& program,
+    std::span<const LatteLinkedPixelShaderInput> linked_inputs)
+{
+    LattePixelShaderInputRegisters input_registers{};
+    for (const LatteLinkedPixelShaderInput& linked_input : linked_inputs)
+    {
+        if (linked_input.source != LattePixelInputSource::default_value)
+        {
+            throw std::runtime_error(
+                "Latte SPIR-V default-input subset cannot compile matched varyings");
+        }
+        if (linked_input.pixel_input_index >= input_registers.size() ||
+            input_registers[linked_input.pixel_input_index].has_value())
+        {
+            throw std::runtime_error(
+                "Latte SPIR-V default-input subset has an invalid or duplicate GPR assignment");
+        }
+
+        input_registers[linked_input.pixel_input_index] =
+            linked_input.default_component_bits;
+    }
+
+    detail::LatteSpirvFragmentSubsetBuilder subset_builder(input_registers);
     const std::array<std::uint32_t, 4U> color =
         subset_builder.evaluate(program);
 

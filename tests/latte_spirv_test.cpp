@@ -1,5 +1,6 @@
 #include "gpu/latte_spirv_vertex_subset.hpp"
 #include "gpu/latte_spirv_fragment_subset.hpp"
+#include "gpu/latte_shader_interface.hpp"
 
 #include <array>
 #include <cassert>
@@ -551,6 +552,50 @@ int main(int argc, char* argv[])
     assert(module_contains_opcode(fragment_module, 44U));
     assert(module_contains_opcode(fragment_module, 62U));
 
+    auto default_input_fragment_program = create_fragment_program();
+    auto& default_input_alu_clause = std::get<
+        affogato::gpu::LatteShaderIrAluClause>(
+            default_input_fragment_program.instructions[0U]);
+    for (std::uint8_t component = 0U; component < 4U; ++component)
+    {
+        auto& move = default_input_alu_clause.groups[0U].instructions[component];
+        move.source0_selector = 0U;
+        move.source0_channel = component;
+    }
+    const std::array<affogato::gpu::LatteLinkedPixelShaderInput, 1U>
+        default_input_link{{
+            {0U, 0x31U,
+                affogato::gpu::LattePixelInputSource::default_value,
+                std::nullopt,
+                {0x3F800000U, 0x3F800000U, 0x3F800000U, 0U},
+                false, false, false, false, false}}};
+    const std::vector<std::uint32_t> default_input_fragment_module =
+        affogato::gpu::emit_latte_spirv_fragment_default_input_subset(
+            default_input_fragment_program,
+            default_input_link);
+    assert(read_float_constants(default_input_fragment_module) ==
+        (std::vector<std::uint32_t>{
+            0x3F800000U, 0x3F800000U, 0x3F800000U, 0U}));
+    assert(module_contains_opcode(default_input_fragment_module, 62U));
+
+    bool rejected_matched_fragment_input = false;
+    try
+    {
+        auto matched_input_link = default_input_link;
+        matched_input_link[0U].source =
+            affogato::gpu::LattePixelInputSource::vertex_parameter;
+        matched_input_link[0U].vertex_export_index = 0U;
+        static_cast<void>(
+            affogato::gpu::emit_latte_spirv_fragment_default_input_subset(
+                default_input_fragment_program,
+                matched_input_link));
+    }
+    catch (const std::runtime_error&)
+    {
+        rejected_matched_fragment_input = true;
+    }
+    assert(rejected_matched_fragment_input);
+
     auto swizzled_fragment = fragment_program;
     auto& swizzled_export = std::get<
         affogato::gpu::LatteShaderIrExport>(
@@ -643,7 +688,7 @@ int main(int argc, char* argv[])
     }
     assert(rejected_nonzero_mrt);
 
-    if (argc == 13 && std::string_view(argv[1]) == "--write-modules")
+    if (argc == 14 && std::string_view(argv[1]) == "--write-modules")
     {
         write_module(argv[2], module);
         write_module(argv[3], modified_module);
@@ -656,6 +701,7 @@ int main(int argc, char* argv[])
         write_module(argv[10], mixed_module);
         write_module(argv[11], integer_alu_module);
         write_module(argv[12], fragment_module);
+        write_module(argv[13], default_input_fragment_module);
     }
     return 0;
 }

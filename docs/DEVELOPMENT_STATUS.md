@@ -1,5 +1,18 @@
 # Affogato Development Status
 
+## Pixel shader `DEFAULT_VAL` lowering in the diagnostic SPIR-V subset (2026-11-25)
+
+The bounded fragment SPIR-V emitter can now seed its GPR file with linked GX2
+pixel-input defaults and fold them through supported MOV-only shader IR into a
+constant fragment output. Tests cover the `1,1,1,0` default vector, output
+constant bits, and explicit rejection of matched vertex varyings; the generated
+module passes `spirv-val`. This is an emitter/test capability only: the
+diagnostic renderer does not yet link draw-time VS outputs to PS inputs or use
+this path, and interpolation, non-MOV fragment ALU, and guest PS execution in
+normal draws remain unsupported. Debug/Release full-suite results are recorded
+after validation: both builds succeeded and Debug/Release CTest each passed
+30/30.
+
 ## WWHD startup blocker reproduction (2026-11-25)
 
 A headless interpreter run of the local WWHD RPX, limited to 10,000,000

@@ -70,8 +70,20 @@ Relevant local implementation:
   supported OP3-only ALU clauses and normal exports. It requires
   caller-provided initial GPRs, rejects mixed OP2/OP3 clauses, and explicitly
   rejects fetch-shader calls, branches, texture clauses, and unsupported CF
-  operations. It is a testable CPU execution slice, not connected to guest
-  draw submission or Vulkan. The SPIR-V emitter still accepts OP2 clauses only.
+  operations. The pixel-stage entry point can seed its GPR file from linked
+  pixel inputs and evaluate that same supported subset; inputs whose defaults
+  are specified by `SPI_PS_INPUT_CNTL_n` are resolved by the shader-interface
+  helper. It is a testable CPU execution slice, not connected to normal guest
+  draw submission or Vulkan.
+- `src/gpu/latte_spirv_fragment_subset.hpp` can fold linked `DEFAULT_VAL`
+  vectors into the supported MOV-only fragment IR and emit a constant-color
+  SPIR-V fragment module. The test checks the four output component bit
+  patterns, rejects a matched vertex varying, and validates the module with
+  `spirv-val`. The renderer does not yet call this emitter; matched varyings,
+  interpolation, and non-MOV fragment operations remain unsupported. The
+  default-value encoding is taken from the AMD R700-family reference documented
+  below and is not yet cross-verified against Latte hardware or a real game
+  workload.
 
 ## Evidence categories
 
