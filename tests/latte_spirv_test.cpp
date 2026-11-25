@@ -729,15 +729,19 @@ int main(int argc, char* argv[])
          matched_add_clause.groups[0U].instructions)
     {
         operation.opcode = affogato::gpu::latte_alu_op2_add_float_opcode;
+        operation.source0_absolute = true;
         operation.source1_selector =
             affogato::gpu::latte_alu_source_half_float_selector;
         operation.source1_channel = operation.destination_component;
+        operation.source1_negate = true;
     }
     const std::vector<std::uint32_t> matched_add_module =
         affogato::gpu::emit_latte_spirv_fragment_matched_alu_subset(
             matched_add_program,
             matched_varying_input);
     assert(module_contains_opcode(matched_add_module, 129U));
+    assert(module_contains_opcode(matched_add_module, 199U));
+    assert(module_contains_opcode(matched_add_module, 198U));
 
     auto matched_multiply_program = matched_move_program;
     auto& matched_multiply_clause = std::get<

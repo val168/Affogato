@@ -122,12 +122,15 @@ no-perspective, centroid, sample, and point-sprite inputs until their GX2
 semantics are mapped. A separate matched-input ALU emitter translates bounded
 guest MOV, ADD, and MUL_IEEE operations instead of substituting this
 passthrough module. The emitter interprets register values as IEEE-754 float32
-for ADD and MUL_IEEE, using SPIR-V `OpFAdd` and `OpFMul`; it continues to reject
-source and destination modifiers. The R700 ISA guide describes ADD as floating
-point addition and distinguishes IEEE `MUL_IEEE` from non-IEEE `MUL` around
-zero operands. This is related GPU-family evidence rather than direct Latte
-conformance; the opcode values match Affogato's existing shader interpreter
-definitions in `latte_shader_interpreter.hpp`.
+for ADD and MUL_IEEE, using SPIR-V `OpFAdd` and `OpFMul`. Source absolute value
+and negation use bitwise magnitude masking and sign-bit flipping, matching the
+CPU reference subset and preserving the other binary32 bits. Relative source
+addressing and destination modifiers remain unsupported. The R700 ISA guide
+describes ADD as floating point addition and distinguishes IEEE `MUL_IEEE`
+from non-IEEE `MUL` around zero operands. This is related GPU-family evidence
+rather than direct Latte conformance; opcode values and modifier ordering match
+Affogato's existing shader interpreter definitions in
+`latte_shader_interpreter.hpp`.
 
 ### Controlled matched-varying Vulkan integration (2026-11-25)
 

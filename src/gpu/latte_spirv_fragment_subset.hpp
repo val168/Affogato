@@ -533,6 +533,31 @@ private:
         return *registers_[selector][channel];
     }
 
+    [[nodiscard]] std::uint32_t apply_source_modifiers(
+        std::uint32_t value,
+        bool absolute,
+        bool negate)
+    {
+        // Match the CPU reference's bit-preserving binary32 modifiers.
+        if (absolute)
+        {
+            const std::uint32_t absolute_id = allocate_id();
+            append_instruction(function_body_, 199U, {
+                uint_type_id_, absolute_id, value,
+                constant(latte_binary32_magnitude_mask)});
+            value = absolute_id;
+        }
+        if (negate)
+        {
+            const std::uint32_t negate_id = allocate_id();
+            append_instruction(function_body_, 198U, {
+                uint_type_id_, negate_id, value,
+                constant(latte_binary32_sign_mask)});
+            value = negate_id;
+        }
+        return value;
+    }
+
     void execute_clause(const LatteShaderIrAluClause& clause)
     {
         if (!clause.op3_groups.empty() || !clause.vector_groups.empty() ||
@@ -563,32 +588,39 @@ private:
                     operation.destination_component != lane ||
                     operation.last_in_group != (lane == 3U) ||
                     operation.destination_gpr >= registers_.size() ||
-                    operation.source0_relative || operation.source0_absolute ||
-                    operation.source0_negate || operation.source1_relative ||
-                    operation.source1_absolute || operation.source1_negate ||
+                    operation.source0_relative || operation.source1_relative ||
                     operation.update_execute_mask || operation.update_predicate ||
                     operation.bank_swizzle != 0U ||
                     operation.predicate_selection != 0U ||
                     operation.destination_relative ||
                     operation.destination_clamp ||
                     operation.output_modifier != 0U ||
-                    operation.index_mode != 0U || !operation.write_mask)
+                    operation.index_mode != 0U || !operation.write_mask ||
+                    (operation.opcode == latte_alu_op2_move_opcode &&
+                     (operation.source1_absolute ||
+                      operation.source1_negate)))
                 {
                     throw std::runtime_error(
                         "Latte fragment SPIR-V subset received an unsupported operation or modifier");
                 }
-                const std::uint32_t source0_id = source_value(
-                    operation.source0_selector,
-                    operation.source0_channel);
+                const std::uint32_t source0_id = apply_source_modifiers(
+                    source_value(
+                        operation.source0_selector,
+                        operation.source0_channel),
+                    operation.source0_absolute,
+                    operation.source0_negate);
                 if (operation.opcode == latte_alu_op2_move_opcode)
                 {
                     lane_values[lane] = source0_id;
                 }
                 else
                 {
-                    const std::uint32_t source1_id = source_value(
-                        operation.source1_selector,
-                        operation.source1_channel);
+                    const std::uint32_t source1_id = apply_source_modifiers(
+                        source_value(
+                            operation.source1_selector,
+                            operation.source1_channel),
+                        operation.source1_absolute,
+                        operation.source1_negate);
                     const std::uint32_t source0_float_id = allocate_id();
                     append_instruction(function_body_, 124U, {
                         float_type_id_, source0_float_id, source0_id});
