@@ -925,21 +925,19 @@ std::vector<Gx2Command> read_gx2_context_restore_commands(
     return commands;
 }
 
-std::vector<Gx2Command> decode_gx2_context_display_list(
-    std::span<const std::uint8_t> context_bytes,
-    std::uint32_t display_list_size)
+std::vector<Gx2Command> decode_gx2_context_register_display_list(
+    std::span<const std::uint8_t> display_list_bytes,
+    const char* api_name)
 {
-    if ((display_list_size % sizeof(std::uint32_t)) != 0U)
+    if ((display_list_bytes.size() % sizeof(std::uint32_t)) != 0U)
     {
         throw HleExecutionError(
-            "gx2::GX2SetContextState: PM4 context display-list size is not "
-            "dword-aligned");
+            std::string("gx2::") + api_name +
+            ": PM4 display-list size is not dword-aligned");
     }
 
-    const auto display_list_bytes = context_bytes.subspan(
-        gx2_context_display_list_offset, display_list_size);
     std::vector<std::uint32_t> words(
-        display_list_size / sizeof(std::uint32_t));
+        display_list_bytes.size() / sizeof(std::uint32_t));
     for (std::size_t index = 0U; index < words.size(); ++index)
     {
         const std::size_t byte_offset = index * sizeof(std::uint32_t);
@@ -982,8 +980,8 @@ std::vector<Gx2Command> decode_gx2_context_display_list(
         }
 
         throw HleExecutionError(
-            std::string("gx2::GX2SetContextState: PM4 context display-list ") +
-            reason + " at word offset " +
+            std::string("gx2::") + api_name + ": PM4 display list " + reason +
+            " at word offset " +
             std::to_string(decoded.error_word_offset));
     }
 
@@ -5517,8 +5515,10 @@ void register_gx2_hle(HleDispatcher& dispatcher)
             }
             else
             {
-                restore_commands = decode_gx2_context_display_list(
-                    context_bytes, display_list_size);
+                restore_commands = decode_gx2_context_register_display_list(
+                    std::span<const std::uint8_t>(context_bytes).subspan(
+                        gx2_context_display_list_offset, display_list_size),
+                    api_name);
             }
 
             core.gx2.pending_commands.reserve(
@@ -5529,6 +5529,83 @@ void register_gx2_hle(HleDispatcher& dispatcher)
             }
             core.gx2.current_context_state = context_state;
             core.gx2.context_state_shadowing_enabled = true;
+        });
+
+    dispatcher.register_function(
+        "gx2",
+        "GX2DirectCallDisplayList",
+        [](EspressoCore& core) {
+            constexpr const char* api_name = "GX2DirectCallDisplayList";
+            if (!core.gx2.initialized)
+            {
+                throw HleExecutionError(
+                    "gx2::GX2DirectCallDisplayList: GX2 has not been initialized");
+            }
+
+            const std::uint32_t display_list_address = core.state.gpr[3];
+            const std::uint32_t display_list_size = core.state.gpr[4];
+            if (display_list_size == 0U)
+            {
+                return;
+            }
+            if (display_list_address == 0U)
+            {
+                throw HleExecutionError(
+                    "gx2::GX2DirectCallDisplayList: display-list pointer is null");
+            }
+            if ((display_list_size % sizeof(std::uint32_t)) != 0U)
+            {
+                throw HleExecutionError(
+                    "gx2::GX2DirectCallDisplayList: display-list size is not "
+                    "dword-aligned");
+            }
+            if (static_cast<std::uint64_t>(display_list_address) +
+                    display_list_size >
+                guest_address_space_end)
+            {
+                throw HleExecutionError(
+                    "gx2::GX2DirectCallDisplayList: display-list range wraps "
+                    "the guest address space");
+            }
+
+            try
+            {
+                core.memory.validate_read_range(
+                    display_list_address, display_list_size);
+            }
+            catch (const GuestMemoryFault&)
+            {
+                throw HleExecutionError(
+                    "gx2::GX2DirectCallDisplayList: display-list is outside "
+                    "mapped guest memory");
+            }
+
+            std::vector<std::uint8_t> display_list_bytes(display_list_size);
+            try
+            {
+                core.memory.read_bytes(display_list_address, display_list_bytes);
+            }
+            catch (const GuestMemoryFault&)
+            {
+                throw HleExecutionError(
+                    "gx2::GX2DirectCallDisplayList: display-list is outside "
+                    "mapped guest memory");
+            }
+
+            std::vector<Gx2Command> register_commands =
+                decode_gx2_context_register_display_list(
+                    display_list_bytes, api_name);
+
+            // The frontend consumes the copied, decoded register commands in
+            // guest order. Draw and other stateful PM4 opcodes remain explicit
+            // decoder errors until their execution semantics are implemented.
+            auto& pending_commands = core.gx2.pending_commands;
+            pending_commands.reserve(
+                pending_commands.size() + register_commands.size());
+            for (Gx2Command& command : register_commands)
+            {
+                pending_commands.push_back(std::move(command));
+            }
         });
 
     dispatcher.register_function(

@@ -28806,7 +28806,7 @@ void gx2_set_context_state_hle_tests()
         core.gx2.current_context_state;
     const RunResult list_error = core.run(1U);
     assert(list_error.reason == StopReason::hle_error);
-    assert(list_error.detail.find("PM4 context display-list contains a truncated") !=
+    assert(list_error.detail.find("PM4 display list contains a truncated") !=
            std::string::npos);
     assert(core.gx2.pending_commands == commands_before_list_error);
     assert(core.gx2.current_context_state == active_context_before_list_error);
@@ -28823,7 +28823,7 @@ void gx2_set_context_state_hle_tests()
     const RunResult unsupported_packet = core.run(1U);
     assert(unsupported_packet.reason == StopReason::hle_error);
     assert(unsupported_packet.detail.find(
-               "PM4 context display-list contains an unsupported Type-3 opcode") !=
+               "PM4 display list contains an unsupported Type-3 opcode") !=
            std::string::npos);
     assert(core.gx2.pending_commands == commands_before_unsupported_packet);
     assert(core.gx2.current_context_state == active_context_before_list_error);
@@ -28846,7 +28846,7 @@ void gx2_set_context_state_hle_tests()
     const RunResult register_overrun = core.run(1U);
     assert(register_overrun.reason == StopReason::hle_error);
     assert(register_overrun.detail.find(
-               "PM4 context display-list writes outside the context-register range") !=
+               "PM4 display list writes outside the context-register range") !=
            std::string::npos);
     assert(core.gx2.pending_commands == commands_before_register_overrun);
     assert(core.gx2.current_context_state == active_context_before_list_error);
@@ -28864,7 +28864,7 @@ void gx2_set_context_state_hle_tests()
     const RunResult predicated_packet = core.run(1U);
     assert(predicated_packet.reason == StopReason::hle_error);
     assert(predicated_packet.detail.find(
-               "PM4 context display-list contains a predicated or invalid Type-3 header") !=
+               "PM4 display list contains a predicated or invalid Type-3 header") !=
            std::string::npos);
     assert(core.gx2.pending_commands == commands_before_predicated_packet);
     assert(core.gx2.current_context_state == active_context_before_list_error);
@@ -28937,6 +28937,81 @@ void gx2_flush_hle_tests()
                       core.gx2.pending_commands.begin()));
     assert(core.gx2.pending_commands.back() ==
            (Gx2Command{Gx2CommandType::flush, 0U, 0U}));
+}
+
+void gx2_direct_call_display_list_hle_tests()
+{
+    constexpr std::uint32_t display_list_address = 0x100U;
+    constexpr std::uint32_t display_list_size = 20U;
+    constexpr std::uint32_t return_address = 0x200U;
+
+    EspressoCore core(0x1000U);
+    register_gx2_hle(core.hle);
+    core.gx2.initialized = true;
+    const std::uint32_t import = core.hle.bind_import(
+        "gx2", "GX2DirectCallDisplayList");
+    assert(import != 0U);
+
+    core.memory.write32_be(display_list_address, 0xC0001000U);
+    core.memory.write32_be(display_list_address + 4U, 0xDEADBEEFU);
+    core.memory.write32_be(display_list_address + 8U, 0x0001A040U);
+    core.memory.write32_be(display_list_address + 12U, 0x11223344U);
+    core.memory.write32_be(display_list_address + 16U, 0x55667788U);
+
+    const auto invoke = [&](std::uint32_t address, std::uint32_t size) {
+        core.state.gpr[3] = address;
+        core.state.gpr[4] = size;
+        core.state.cia = import;
+        core.state.lr = return_address;
+        return core.run(1U);
+    };
+
+    const RunResult result = invoke(display_list_address, display_list_size);
+    assert(result.reason == StopReason::instruction_limit);
+    assert(core.state.cia == return_address);
+    assert(core.gx2.pending_commands.size() == 2U);
+    assert((core.gx2.pending_commands[0U] == Gx2Command{
+        Gx2CommandType::set_context_register, 0x28100U, 0x11223344U}));
+    assert((core.gx2.pending_commands[1U] == Gx2Command{
+        Gx2CommandType::set_context_register, 0x28104U, 0x55667788U}));
+
+    // HLE snapshots list bytes before adding asynchronous frontend commands.
+    core.memory.write32_be(display_list_address + 12U, 0xAABBCCDDU);
+    assert(core.gx2.pending_commands[0U].value == 0x11223344U);
+
+    const auto commands_before_invalid_list = core.gx2.pending_commands;
+    core.memory.write32_be(display_list_address, 0xC0001100U);
+    core.memory.write32_be(display_list_address + 4U, 0U);
+    const RunResult unsupported_packet = invoke(display_list_address, 8U);
+    assert(unsupported_packet.reason == StopReason::hle_error);
+    assert(unsupported_packet.detail.find("GX2DirectCallDisplayList") !=
+           std::string::npos);
+    assert(core.gx2.pending_commands == commands_before_invalid_list);
+
+    const RunResult unaligned_size = invoke(display_list_address, 5U);
+    assert(unaligned_size.reason == StopReason::hle_error);
+    assert(core.gx2.pending_commands == commands_before_invalid_list);
+
+    const RunResult null_pointer = invoke(0U, 4U);
+    assert(null_pointer.reason == StopReason::hle_error);
+    assert(null_pointer.detail.find("pointer is null") != std::string::npos);
+    assert(core.gx2.pending_commands == commands_before_invalid_list);
+
+    const RunResult wrapping_range = invoke(0xFFFFFFFCU, 8U);
+    assert(wrapping_range.reason == StopReason::hle_error);
+    assert(wrapping_range.detail.find("wraps the guest address space") !=
+           std::string::npos);
+    assert(core.gx2.pending_commands == commands_before_invalid_list);
+
+    const RunResult unmapped_range = invoke(0xFF0U, 32U);
+    assert(unmapped_range.reason == StopReason::hle_error);
+    assert(unmapped_range.detail.find("mapped guest memory") !=
+           std::string::npos);
+    assert(core.gx2.pending_commands == commands_before_invalid_list);
+
+    const RunResult empty_list = invoke(0U, 0U);
+    assert(empty_list.reason == StopReason::instruction_limit);
+    assert(core.gx2.pending_commands == commands_before_invalid_list);
 }
 
 void gx2_draw_done_hle_tests()
@@ -41706,6 +41781,7 @@ int main(int argc, char* argv[])
     gx2_setup_context_state_ex_hle_tests();
     gx2_get_context_state_display_list_hle_tests();
     gx2_set_context_state_hle_tests();
+    gx2_direct_call_display_list_hle_tests();
     gx2_flush_hle_tests();
     gx2_draw_done_hle_tests();
     gx2_draw_ex_hle_tests();

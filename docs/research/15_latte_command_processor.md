@@ -82,10 +82,15 @@ Affogato does not copy its implementation.
 These sources distinguish three behaviors that must not be collapsed into a
 single host callback: constructing a guest display list, queuing an indirect
 call into a command stream, and submitting a display-list buffer directly.
-Affogato currently registers none of the WUT display-list APIs. Its
-`GX2SetContextState` parser is a separate bounded restore-list path, not a
-general submission path. The pending typed HLE queue therefore cannot observe
-guest-authored or guest-mutated PM4 display-list contents.
+Affogato registers `GX2DirectCallDisplayList` for a narrow subset: it validates
+and copies the guest bytes at call time, then queues the supported context
+register writes in order. The shared decoder accepts Type-0 context-window
+writes, Type-2 filler, Type-3 NOP and Type-3 `SET_CONTEXT_REG`. Other opcodes,
+including draw packets, fail explicitly. This is state submission through the
+current HLE queue, not GPU execution. `GX2BeginDisplayListEx`,
+`GX2EndDisplayList`, `GX2CallDisplayList` and `GX2CopyDisplayList` remain
+unregistered; queued indirect calls and guest-authored recording therefore
+remain unsupported.
 
 For Affogato, a submission implementation must define when raw guest dwords are
 captured and owned across the frontend-thread handoff, validate guest ranges
@@ -132,7 +137,9 @@ verified against a Latte fixture or Wii U behavior.
   zero-length display-list results, shadow restoration, big-endian packet
   playback, Type-3 NOP payload advancement, ordered Type-0 sequential and
   Type-3 context register writes, out-of-window Type-0 rejection, and
-  malformed/unsupported-list rejection.
+  malformed/unsupported-list rejection. The direct-call test also verifies
+  call-time guest-byte capture, unsupported-opcode atomicity, alignment and
+  guest-memory errors, and empty-list behavior.
 - `Gx2RegisterState::apply` models writes to `SQ_VTX_SEMANTIC_CLEAR` at
   `0x288E0`: each set bit clears the matching entry in the 32-word semantic
   table beginning at `0x28380`, storing `0xFFFFFFFF` in the shadow. The clear
@@ -155,7 +162,7 @@ lists and guest-written command streams remain unsupported.
 | Capability | Status | Evidence / dependency |
 | --- | --- | --- |
 | GX2 command-pool registration | Partial and tested | Bounds/alignment/ownership checks in `initialize_gx2` |
-| GX2 display-list API lifecycle and submission | Missing | WUT declares begin/end, queued/direct call, and copy APIs, but Affogato has no registrations or guest dword ownership model; see the reference comparison above. |
+| GX2 display-list API lifecycle and submission | Partial and tested | `GX2DirectCallDisplayList` copies a bounded guest-memory stream and queues only supported context-register writes; recording, queued indirect call, and copy APIs remain missing. |
 | Typed GX2 HLE event ordering | Partial and tested | `pending_commands`, register shadow and frontend drain |
 | PM4 packet framing | Partial and tested | Type-0 payload lengths, Type-2 filler and Type-3 lengths; Type-1 remains unsupported |
 | PM4 register writes | Partial and tested | Type-0 sequential writes and Type-3 `SET_CONTEXT_REG` are bounded to the context-register byte range |
