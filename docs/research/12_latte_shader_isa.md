@@ -31,6 +31,14 @@ Relevant local implementation:
   duplicate, or wrongly typed entries. The table is not yet consumed to
   populate shader invocation inputs. This fetch path is separate from the
   guest vertex/pixel shader ISA.
+- `GX2InitFetchShaderEx` in `src/cpu/espresso/gx2_hle.cpp` emits one four-dword
+  record per attribute. Its comments identify word 0 as a semantic fetch but
+  word 1's low seven bits as `VTX_WORD1_GPR.DST_GPR`. AMD documents SEM and GPR
+  as alternative word-1 formats, so this local combination needs bytecode and
+  hardware-family cross-checking before it is used for real shader execution.
+  `GX2SetFetchShader` captures the guest descriptor and program but does not
+  itself emit `SQ_VTX_SEMANTIC` register writes. The current HLE therefore does
+  not establish a complete fetch-to-VS input path.
 - `src/gpu/latte_shader_decoder.hpp` converts the captured big-endian words
   to the little-endian Latte DWORD values represented in GFD shader code, then
   decodes a narrow control-flow subset, ALU clause ranges, OP2 fields, and
@@ -117,6 +125,16 @@ resolver currently models only the 8-bit table/register view; it does not
 decode a guest fetch instruction's semantic field or prove that the mapping
 matches Latte hardware. It also does not model system-generated inputs or
 populate draw shader inputs.
+
+Affogato's own fetch-shader HLE has a second unresolved point: its generated
+word 0 is tagged as `VTX_INST_SEMANTIC`, while the word-1 low bits are described
+in code as a direct-GPR destination. The R700 ISA manual specifies these as
+alternative word-1 layouts. `GX2SetFetchShader` currently captures the bytes
+but does not synthesize semantic-table writes. Neither the generated HLE
+program nor the isolated semantic resolver is evidence that arbitrary guest
+fetch instructions are decoded correctly. Resolve this with a verified Wii U
+fetch-shader fixture or a directly cross-checked Cemu/Decaf path before wiring
+guest vertex bytes into shader GPRs.
 
 ### Reference emulator research
 

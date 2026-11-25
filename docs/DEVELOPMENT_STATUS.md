@@ -545,6 +545,14 @@ populate shader inputs, and system-generated vertex/instance inputs are not
 modeled. Debug and Release builds succeeded and CTest passed 2/2 in both
 configurations.
 
+The HLE audit also found that `GX2InitFetchShaderEx` labels its generated
+word-0 instruction as semantic while its word-1 comment identifies the low
+bits as a direct-GPR destination. AMD's ISA reference treats these as
+alternative layouts. `GX2SetFetchShader` captures the bytes without emitting
+semantic-table writes. Resolve this mismatch against a verified Wii U fetch
+program or cross-checked reference-emulator path before implementing shader
+input population; no behavior has been guessed or changed here.
+
 ## Draw-time Latte semantic-table extraction (2026-11-25)
 
 Added `capture_latte_vertex_semantic_table()` in
