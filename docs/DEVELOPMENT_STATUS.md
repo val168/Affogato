@@ -1,5 +1,17 @@
 # Affogato Development Status
 
+## OP2 integer comparison SPIR-V lowering (2026-11-25)
+
+The experimental vertex SPIR-V emitter now lowers OP2 `SETE_INT`,
+`SETNE_INT`, `SETGT_INT`, `SETGE_INT`, `SETGT_UINT`, and `SETGE_UINT`.
+Signed comparisons bitcast the source bit patterns to signed 32-bit values;
+unsigned comparisons retain `uint32` values. Results are expanded to the
+32-bit all-ones/zero masks produced by the CPU reference. The deterministic
+test emits a module containing all six forms, and `spirv-val` accepts it.
+Debug and Release builds passed; Debug CTest passed 25/25. This validates the
+backend encoding only: Latte hardware behavior and normal guest shader use are
+still unverified.
+
 ## Mixed OP2/OP3 CPU shader groups (2026-11-25)
 
 The shader decoder and CPU reference now preserve OP2 and OP3 instruction

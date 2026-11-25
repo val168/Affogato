@@ -67,6 +67,12 @@ public:
         append_instruction(types_, 22U, {float_type_id_, 32U});
         append_instruction(types_, 21U, {int_type_id_, 32U, 1U});
         append_instruction(types_, 21U, {uint_type_id_, 32U, 0U});
+        unsigned_zero_id_ = allocate_id();
+        append_instruction(constants_, 43U, {
+            uint_type_id_, unsigned_zero_id_, 0U});
+        unsigned_all_bits_set_id_ = allocate_id();
+        append_instruction(constants_, 43U, {
+            uint_type_id_, unsigned_all_bits_set_id_, 0xFFFFFFFFU});
         signed_zero_id_ = allocate_id();
         append_instruction(constants_, 43U, {
             int_type_id_, signed_zero_id_, 0U});
@@ -390,11 +396,19 @@ private:
         const RegisterValues& source_registers,
         const std::optional<VectorValue>& previous_vector)
     {
+        const bool is_integer_comparison =
+            operation.opcode == latte_alu_op2_set_equal_integer_opcode ||
+            operation.opcode == latte_alu_op2_set_not_equal_integer_opcode ||
+            operation.opcode == latte_alu_op2_set_greater_integer_opcode ||
+            operation.opcode == latte_alu_op2_set_greater_equal_integer_opcode ||
+            operation.opcode == latte_alu_op2_set_greater_unsigned_opcode ||
+            operation.opcode == latte_alu_op2_set_greater_equal_unsigned_opcode;
         if ((operation.opcode != latte_alu_op2_move_opcode &&
              operation.opcode != latte_alu_op2_add_float_opcode &&
              operation.opcode != latte_alu_op2_multiply_ieee_opcode &&
              operation.opcode != latte_alu_op2_maximum_dx10_opcode &&
-             operation.opcode != latte_alu_op2_minimum_dx10_opcode) ||
+             operation.opcode != latte_alu_op2_minimum_dx10_opcode &&
+             !is_integer_comparison) ||
             operation.destination_gpr >= registers_.size() ||
             !operation.write_mask || operation.source0_relative ||
             operation.update_execute_mask || operation.update_predicate ||
@@ -406,7 +420,10 @@ private:
              (operation.source1_relative || operation.source1_absolute ||
               operation.source1_negate)) ||
             (operation.opcode != latte_alu_op2_move_opcode &&
-             operation.source1_relative))
+             operation.source1_relative) ||
+            (is_integer_comparison &&
+             (operation.source0_absolute || operation.source0_negate ||
+              operation.source1_absolute || operation.source1_negate)))
         {
             throw std::runtime_error(
                 "Latte SPIR-V vertex subset received an unsupported ALU operation or modifier");
@@ -431,6 +448,59 @@ private:
             operation.source1_channel,
             source_registers,
             previous_vector);
+        if (is_integer_comparison)
+        {
+            std::uint32_t comparison_source0_id = source0_id;
+            std::uint32_t comparison_source1_id = source1_id;
+            std::uint16_t comparison_opcode = 0U;
+            switch (operation.opcode)
+            {
+            case latte_alu_op2_set_equal_integer_opcode:
+                comparison_opcode = 170U;
+                break;
+            case latte_alu_op2_set_not_equal_integer_opcode:
+                comparison_opcode = 171U;
+                break;
+            case latte_alu_op2_set_greater_integer_opcode:
+                comparison_opcode = 173U;
+                comparison_source0_id = allocate_id();
+                append_instruction(function_body_, 124U, {
+                    int_type_id_, comparison_source0_id, source0_id});
+                comparison_source1_id = allocate_id();
+                append_instruction(function_body_, 124U, {
+                    int_type_id_, comparison_source1_id, source1_id});
+                break;
+            case latte_alu_op2_set_greater_equal_integer_opcode:
+                comparison_opcode = 175U;
+                comparison_source0_id = allocate_id();
+                append_instruction(function_body_, 124U, {
+                    int_type_id_, comparison_source0_id, source0_id});
+                comparison_source1_id = allocate_id();
+                append_instruction(function_body_, 124U, {
+                    int_type_id_, comparison_source1_id, source1_id});
+                break;
+            case latte_alu_op2_set_greater_unsigned_opcode:
+                comparison_opcode = 172U;
+                break;
+            case latte_alu_op2_set_greater_equal_unsigned_opcode:
+                comparison_opcode = 174U;
+                break;
+            default:
+                throw std::runtime_error(
+                    "Latte SPIR-V vertex subset received an unsupported integer comparison");
+            }
+
+            const std::uint32_t comparison_id = allocate_id();
+            append_instruction(function_body_, comparison_opcode, {
+                bool_type_id_, comparison_id,
+                comparison_source0_id, comparison_source1_id});
+            const std::uint32_t result_id = allocate_id();
+            append_instruction(function_body_, 169U, {
+                uint_type_id_, result_id, comparison_id,
+                unsigned_all_bits_set_id_, unsigned_zero_id_});
+            return result_id;
+        }
+
         source1_id = apply_source_modifiers(
             source1_id,
             operation.source1_absolute,
@@ -666,6 +736,8 @@ private:
     std::uint32_t int_type_id_{};
     std::uint32_t uint_type_id_{};
     std::uint32_t signed_zero_id_{};
+    std::uint32_t unsigned_zero_id_{};
+    std::uint32_t unsigned_all_bits_set_id_{};
     std::uint32_t bool_type_id_{};
     std::uint32_t vector_type_id_{};
     std::uint32_t input_pointer_type_id_{};

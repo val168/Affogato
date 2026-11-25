@@ -11,9 +11,10 @@ at each draw. Structural control-flow decoding recognizes fixture-verified
 ALU slots, OP2/OP3 fields, no-literal OP2/OP3 groups, and narrow four-lane
 shader execution subsets are also implemented. A typed IR represents bounded
 OP2 or OP3 CPU clauses; an experimental SPIR-V vertex emitter lowers MOV,
-binary32 ADD, IEEE multiply, DX10 min/max OP2 groups, and floating-point and
-integer conditional-move OP3 groups. The diagnostic Vulkan triangle still
-uses an explicit bounded shader test path rather than normal guest programs.
+binary32 ADD, IEEE multiply, DX10 min/max, signed/unsigned integer comparison
+OP2 groups, and floating-point and integer conditional-move OP3 groups. The
+diagnostic Vulkan triangle still uses an explicit bounded shader test path
+rather than normal guest programs.
 
 Relevant local implementation:
 
@@ -417,7 +418,7 @@ arbitrary guest fetch programs or claiming Latte hardware verification.
 | Fetch-shader parsing and semantic linkage | Narrow CPU subset | `latte_vertex_fetch.hpp` recognizes Affogato-generated semantic VTX records, decodes supported formats, applies destination selectors (component swizzles, 0.0, 1.0, and masked writes), extracts a complete correctly typed 32-entry `SQ_VTX_SEMANTIC` table from a draw snapshot, and maps attributes plus immutable vertex snapshots into a caller-provided register file at an explicit vertex index and `VS_GPR_BASE + 1 + table index`. `execute_latte_vertex_shader_subset()` passes this input file to the supported CPU shader subset in one deterministic test path. Writes are validated transactionally. AMD references differ on semantic-field width (R6xx: 8; R700 ISA Chapter 5: 9, while its Chapter 9 semantic-format table says 8); Latte applicability remains unresolved. Arbitrary guest fetch programs are not executed, normal draw dispatch is not connected, and system-generated inputs remain unsupported. No Wii U hardware verification. |
 | Latte shader control-flow decoding | Partial | `latte_shader_decoder.hpp` decodes fixture-verified `CALL_FS`, `EXPORT`, `EXPORT_DONE`, and `ALU` clause headers, including EOP, bounded clause ranges, normal export metadata, and `CALL_FS` address/pop/condition/nesting fields. The generic straight-line executor rejects calls. A vertex-specific path accepts one leading canonical call only after separately processing the captured HLE fetch subset. Other call forms, branches, and loops remain unsupported; exports are typed values and are not connected to stage outputs. This behavior is not Wii U hardware-verified. |
 | Latte ALU decoding/execution | Experimental subset | OP2/OP3 fields and LAST-delimited no-literal groups are decoded. The CPU clause/program subset executes homogeneous groups and mixed four-lane X/Y/Z/W groups for supported OP2 operations plus floating CMOVE/CMOVGT/CMOVGE and integer CMOVE_INT/CMOVGT_INT/CMOVGE_INT OP3 operations. Sources are read from the pre-group state, writes commit by group, PV forwards between groups, and clause state commits transactionally. Integer conditions use raw-zero equality and signed comparisons; integer source negation is rejected. ALU.Trans/PS, kcache/literal reads in the shader IR, other opcodes, relative addressing, general control flow, normal draw integration, and Latte-hardware validation remain absent. |
-| Vertex/pixel shader translation | Experimental vertex subset | `latte_spirv_vertex_subset.hpp` emits SPIR-V for no-literal OP2 MOV, binary32 ADD, IEEE binary32 multiply, and DX10 min/max, plus floating and integer OP3 conditional moves and mixed OP2/OP3 four-lane groups, followed by one identity position export. Generated mixed-group modules pass `spirv-val`; a controlled GX2 guest-word fixture executes an OP2 MOV plus OP3 conditional-move program through Vulkan and confirms red framebuffer pixels using the diagnostic fragment shader. Pixel shader translation, general interfaces, constants, textures, normal draw integration, and direct Latte hardware validation remain missing. |
+| Vertex/pixel shader translation | Experimental vertex subset | `latte_spirv_vertex_subset.hpp` emits SPIR-V for no-literal OP2 MOV, binary32 ADD, IEEE binary32 multiply, DX10 min/max, and six signed/unsigned integer comparisons, plus floating and integer OP3 conditional moves and mixed OP2/OP3 four-lane groups, followed by one identity position export. Generated mixed-group and integer-comparison modules pass `spirv-val`; a controlled GX2 guest-word fixture executes an OP2 MOV plus OP3 conditional-move program through Vulkan and confirms red framebuffer pixels using the diagnostic fragment shader. Pixel shader translation, general interfaces, constants, textures, normal draw integration, and direct Latte hardware validation remain missing. |
 | Guest shader integration with Vulkan draws | Missing | Shader modules, pipeline cache, descriptor binding, render-target path |
 | WWHD shader requirements | Unknown in Affogato | Existing recorded WWHD runs stop before a guest draw is captured |
 
@@ -819,8 +820,9 @@ dependency.
 
 `latte_spirv_vertex_subset.hpp` lowers the shared IR for a single
 `float32x4` input mapped to a caller-selected guest GPR and Vulkan location,
-four-lane OP2 MOV/arithmetic/min/max groups, OP3 floating conditional-move
-groups, and one completed identity `POSITION` export at array base `0x3c`. MOV
+four-lane OP2 MOV/arithmetic/min/max/integer-comparison groups, OP3 floating
+conditional-move groups, and one completed identity `POSITION` export at array
+base `0x3c`. MOV
 reads initialized absolute GPRs or supported inline constants/PV; source
 absolute and negate are emitted as 32-bit sign/magnitude bit operations so
 NaN payloads and signed zero are preserved. OP3 comparisons use ordered
@@ -828,9 +830,19 @@ SPIR-V float comparisons against zero and select raw 32-bit values. ALU
 constant-file reads, additional inputs, parameter exports, pixel shaders, and
 guest control flow remain unsupported.
 
+The OP2 integer comparison subset lowers equality and inequality to unsigned
+32-bit SPIR-V comparisons, signed greater-than/greater-or-equal to signed
+32-bit comparisons after bitcasts, and unsigned greater-than/greater-or-equal
+directly. `OpSelect` expands each boolean to `0xFFFFFFFF` or zero, matching
+the existing CPU reference. R700 Family ISA Chapter 9 documents the six OP2
+operation meanings and result masks; the R700 family is a GPU-family reference,
+not proof that every detail is identical on Latte. The generated combined
+fixture is accepted by `spirv-val`; no Latte shader execution has verified the
+lowering on Wii U hardware.
+
 The modules use SPIR-V 1.0 and the Vulkan GLSL450 memory model. A CPU-only
-CTest generates pass-through, modifier, arithmetic, min/max, and OP3
-conditional-move modules; when the SDK tool is available, it runs
+CTest generates pass-through, modifier, arithmetic, min/max, integer-comparison,
+and OP3 conditional-move modules; when the SDK tool is available, it runs
 `spirv-val --target-env vulkan1.0` on each. The OP3 test checks `OpFOrdEqual`,
 `OpFOrdGreaterThan`, `OpFOrdGreaterThanEqual`, and `OpSelect` emission, and
 rejects relative sources. `affogato_vulkan_guest_op3_conditional_move_readback`

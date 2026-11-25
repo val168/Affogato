@@ -237,6 +237,74 @@ int main(int argc, char* argv[])
     assert(module_contains_opcode(minimum_module, 184U));
     assert(module_contains_opcode(minimum_module, 169U));
 
+    constexpr std::array integer_comparisons{
+        std::pair{
+            affogato::gpu::latte_alu_op2_set_equal_integer_opcode,
+            std::uint16_t{170U}},
+        std::pair{
+            affogato::gpu::latte_alu_op2_set_not_equal_integer_opcode,
+            std::uint16_t{171U}},
+        std::pair{
+            affogato::gpu::latte_alu_op2_set_greater_integer_opcode,
+            std::uint16_t{173U}},
+        std::pair{
+            affogato::gpu::latte_alu_op2_set_greater_equal_integer_opcode,
+            std::uint16_t{175U}},
+        std::pair{
+            affogato::gpu::latte_alu_op2_set_greater_unsigned_opcode,
+            std::uint16_t{172U}},
+        std::pair{
+            affogato::gpu::latte_alu_op2_set_greater_equal_unsigned_opcode,
+            std::uint16_t{174U}}};
+    for (const auto& [latte_opcode, spirv_opcode] : integer_comparisons)
+    {
+        auto comparison_program = add_program;
+        auto& comparison_clause = std::get<
+            affogato::gpu::LatteShaderIrAluClause>(
+                comparison_program.instructions[0U]);
+        for (auto& operation : comparison_clause.groups[0U].instructions)
+        {
+            operation.opcode = latte_opcode;
+            operation.source1_relative = false;
+            operation.source1_absolute = false;
+            operation.source1_negate = false;
+        }
+
+        const std::vector<std::uint32_t> comparison_module =
+            affogato::gpu::emit_latte_spirv_vertex_position_subset(
+                comparison_program,
+                {1U, 0U});
+        assert(module_contains_opcode(comparison_module, spirv_opcode));
+        assert(module_contains_opcode(comparison_module, 169U));
+    }
+
+    auto integer_comparison_program = add_program;
+    auto& integer_comparison_clause = std::get<
+        affogato::gpu::LatteShaderIrAluClause>(
+            integer_comparison_program.instructions[0U]);
+    integer_comparison_clause.groups.clear();
+    for (std::size_t group_index = 0U; group_index < 2U; ++group_index)
+    {
+        auto group = add_clause.groups[0U];
+        for (std::size_t lane = 0U; lane < group.instructions.size(); ++lane)
+        {
+            const std::size_t opcode_index = group_index * 4U + lane;
+            if (opcode_index < integer_comparisons.size())
+            {
+                group.instructions[lane].opcode =
+                    integer_comparisons[opcode_index].first;
+                group.instructions[lane].source1_relative = false;
+                group.instructions[lane].source1_absolute = false;
+                group.instructions[lane].source1_negate = false;
+            }
+        }
+        integer_comparison_clause.groups.push_back(std::move(group));
+    }
+    const std::vector<std::uint32_t> integer_comparison_module =
+        affogato::gpu::emit_latte_spirv_vertex_position_subset(
+            integer_comparison_program,
+            {1U, 0U});
+
     auto conditional_move_program = program;
     auto& conditional_move_clause = std::get<
         affogato::gpu::LatteShaderIrAluClause>(
@@ -360,7 +428,7 @@ int main(int argc, char* argv[])
     }
     assert(rejected_relative_add_source);
 
-    if (argc == 11 && std::string_view(argv[1]) == "--write-modules")
+    if (argc == 12 && std::string_view(argv[1]) == "--write-modules")
     {
         write_module(argv[2], module);
         write_module(argv[3], modified_module);
@@ -371,6 +439,7 @@ int main(int argc, char* argv[])
         write_module(argv[8], conditional_move_module);
         write_module(argv[9], integer_conditional_move_module);
         write_module(argv[10], mixed_module);
+        write_module(argv[11], integer_comparison_module);
     }
     return 0;
 }
