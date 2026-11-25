@@ -15,6 +15,12 @@ option and provides no evidence of WWHD rendering. The object's intended owner
 and initialization path remain unidentified; no callback or successful
 behavior should be fabricated to bypass it.
 
+Repeating the same 10,000,000-instruction diagnostic with the experimental
+recompiler produced the same 6,081,749-instruction count, CIA `0`, unsupported
+word, recent instruction trace, and final GX2 setup calls. This makes an
+interpreter/JIT divergence an unlikely cause of this reproduced stop; it does
+not explain the guest helper's null result.
+
 The existing guest-memory write watch on `0x07E4F670` observed two writes,
 both storing zero: one at CIA `0x02785D14` from `r30`, and another at
 `0x02785EC4` from `r3` after guest helper `0x027538C0` returned. That helper
