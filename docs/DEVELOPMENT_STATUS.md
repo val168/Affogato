@@ -1,5 +1,15 @@
 # Affogato Development Status
 
+## Structural OP3 group segmentation (2026-11-25)
+
+Added a bounded OP3-only group parser that segments decoded slots by `LAST`,
+preserves slot offsets and raw instruction fields, and rejects literal source
+selectors or an unterminated final group. Tests cover the four destination
+lanes, group-end state, literal rejection, and missing `LAST`. The parser does
+not process mixed OP2/OP3 groups, literal payload slots, ALU.Trans, instruction
+semantics, or shader IR/renderer integration. Debug and Release CTest passed
+18/18 in both configurations.
+
 ## Structural Latte OP3 instruction decoding (2026-11-25)
 
 Added `LatteAluOp3Instruction` and a separate raw-field decoder for OP3

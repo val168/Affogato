@@ -196,6 +196,14 @@ struct LatteAluOp2InstructionGroup
     bool operator==(const LatteAluOp2InstructionGroup&) const = default;
 };
 
+struct LatteAluOp3InstructionGroup
+{
+    std::size_t word_offset{};
+    std::vector<LatteAluOp3Instruction> instructions;
+
+    bool operator==(const LatteAluOp3InstructionGroup&) const = default;
+};
+
 // Decode verified control-flow records and the supported ALU-clause header.
 // GX2 shader memory is captured as big-endian CPU words; Latte instruction
 // DWORDs use the little-endian word values emitted in GFD shader programs.
@@ -468,6 +476,49 @@ decode_latte_alu_clause_slots(
         ((slot.word1 >> 28U) & 1U) != 0U,
         ((slot.word1 >> 31U) & 1U) != 0U,
         ((slot.word0 >> 31U) & 1U) != 0U};
+}
+
+// Split OP3-only instruction slots at LAST; literal payloads are not decoded.
+[[nodiscard]] inline std::vector<LatteAluOp3InstructionGroup>
+decode_latte_alu_op3_groups(std::span<const LatteAluClauseSlot> slots)
+{
+    constexpr std::uint16_t literal_source_selector = 253U;
+
+    std::vector<LatteAluOp3InstructionGroup> groups;
+    LatteAluOp3InstructionGroup current_group;
+
+    for (const LatteAluClauseSlot& slot : slots)
+    {
+        const LatteAluOp3Instruction instruction =
+            decode_latte_alu_op3_instruction(slot);
+        if (instruction.source0_selector == literal_source_selector ||
+            instruction.source1_selector == literal_source_selector ||
+            instruction.source2_selector == literal_source_selector)
+        {
+            throw std::runtime_error(
+                "Latte OP3 group decoding does not support literal operands");
+        }
+
+        if (current_group.instructions.empty())
+        {
+            current_group.word_offset = slot.word_offset;
+        }
+        current_group.instructions.push_back(instruction);
+
+        if (instruction.last_in_group)
+        {
+            groups.push_back(std::move(current_group));
+            current_group = {};
+        }
+    }
+
+    if (!current_group.instructions.empty())
+    {
+        throw std::runtime_error(
+            "Latte OP3 clause ends before the final instruction-group marker");
+    }
+
+    return groups;
 }
 
 // Split OP2 slots into LAST-delimited groups when no literal payload is used.

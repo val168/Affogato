@@ -32656,6 +32656,7 @@ void latte_control_flow_decoder_tests()
     using affogato::gpu::decode_latte_alu_op2_instruction;
     using affogato::gpu::decode_latte_alu_op2_groups;
     using affogato::gpu::decode_latte_alu_op3_instruction;
+    using affogato::gpu::decode_latte_alu_op3_groups;
     using affogato::gpu::decode_latte_control_flow;
     using affogato::gpu::evaluate_latte_normal_export;
     using affogato::gpu::execute_latte_shader_subset;
@@ -33870,6 +33871,59 @@ void latte_control_flow_decoder_tests()
         true,
         true,
         true}));
+
+    std::array<affogato::gpu::LatteAluClauseSlot, 4U> op3_group_slots{};
+    for (std::size_t lane = 0U; lane < op3_group_slots.size(); ++lane)
+    {
+        const std::uint32_t source_fields =
+            1U | (1U << 13U) | (1U << 26U);
+        const std::uint32_t destination_fields =
+            2U |
+            (static_cast<std::uint32_t>(lane) << 29U) |
+            (20U << 13U);
+        op3_group_slots[lane] = {
+            100U + lane,
+            source_fields |
+                (lane + 1U == op3_group_slots.size() ? 0x80000000U : 0U),
+            destination_fields};
+    }
+    const auto op3_groups = decode_latte_alu_op3_groups(op3_group_slots);
+    assert(op3_groups.size() == 1U);
+    assert(op3_groups[0U].word_offset == 100U);
+    assert(op3_groups[0U].instructions.size() == 4U);
+    for (std::size_t lane = 0U; lane < op3_group_slots.size(); ++lane)
+    {
+        assert(op3_groups[0U].instructions[lane].destination_component == lane);
+        assert(op3_groups[0U].instructions[lane].last_in_group ==
+               (lane + 1U == op3_group_slots.size()));
+    }
+
+    auto op3_literal_slots = op3_group_slots;
+    op3_literal_slots[0U].word1 =
+        (op3_literal_slots[0U].word1 & ~0x1FFU) | 253U;
+    bool rejected_op3_literal = false;
+    try
+    {
+        static_cast<void>(decode_latte_alu_op3_groups(op3_literal_slots));
+    }
+    catch (const std::runtime_error&)
+    {
+        rejected_op3_literal = true;
+    }
+    assert(rejected_op3_literal);
+
+    bool rejected_unterminated_op3_group = false;
+    try
+    {
+        static_cast<void>(decode_latte_alu_op3_groups(
+            std::span<const affogato::gpu::LatteAluClauseSlot>(
+                op3_group_slots).first(3U)));
+    }
+    catch (const std::runtime_error&)
+    {
+        rejected_unterminated_op3_group = true;
+    }
+    assert(rejected_unterminated_op3_group);
 
     bool rejected_op2_as_op3 = false;
     try
