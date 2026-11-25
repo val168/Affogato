@@ -132,32 +132,58 @@ private:
     [[nodiscard]] std::array<std::uint32_t, 4U> read_pixel_export(
         const LatteShaderIrExport& shader_export) const
     {
-        constexpr std::array<std::uint8_t, 4U> identity_selectors{
-            0U, 1U, 2U, 3U};
+        constexpr std::uint8_t zero_float_selector = 4U;
+        constexpr std::uint8_t one_float_selector = 5U;
+        constexpr std::uint8_t reserved_selector = 6U;
+        constexpr std::uint8_t masked_selector = 7U;
         const LatteExportFields& fields = shader_export.fields;
         if (!shader_export.completes_type ||
             fields.type != LatteExportType::pixel || fields.array_base != 0U ||
             fields.read_write_gpr >= registers_.size() ||
             fields.index_gpr != 0U || fields.burst_count != 1U ||
-            fields.component_selectors != identity_selectors ||
             fields.read_write_relative || fields.uses_buffer_encoding ||
             fields.valid_pixel_mode || fields.whole_quad_mode)
         {
             throw std::runtime_error(
-                "Latte SPIR-V fragment subset requires one completed identity export to pixel target zero");
+                "Latte SPIR-V fragment subset requires one completed export to pixel target zero");
         }
 
         std::array<std::uint32_t, 4U> color{};
         for (std::size_t component = 0U; component < color.size(); ++component)
         {
-            const std::optional<std::uint32_t>& value =
-                registers_[fields.read_write_gpr][component];
-            if (!value.has_value())
+            const std::uint8_t selector = fields.component_selectors[component];
+            if (selector < color.size())
+            {
+                const std::optional<std::uint32_t>& value =
+                    registers_[fields.read_write_gpr][selector];
+                if (!value.has_value())
+                {
+                    throw std::runtime_error(
+                        "Latte SPIR-V fragment export reads an unwritten color component");
+                }
+                color[component] = *value;
+                continue;
+            }
+
+            if (selector == zero_float_selector)
+            {
+                color[component] = 0U;
+            }
+            else if (selector == one_float_selector)
+            {
+                color[component] = 0x3F800000U;
+            }
+            else if (selector >= reserved_selector &&
+                     selector <= masked_selector)
             {
                 throw std::runtime_error(
-                    "Latte SPIR-V fragment export reads an unwritten color component");
+                    "Latte SPIR-V fragment export uses a reserved or masked component selector");
             }
-            color[component] = *value;
+            else
+            {
+                throw std::runtime_error(
+                    "Latte SPIR-V fragment export component selector is out of range");
+            }
         }
         return color;
     }

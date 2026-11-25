@@ -1180,3 +1180,16 @@ execution, and WWHD graphics remain unsupported. The AMD R700 export reference
 and SPIR-V interface rules are recorded in
 [`research/12_latte_shader_isa.md`](research/12_latte_shader_isa.md); the AMD
 material is family-level evidence rather than direct Latte verification.
+
+## Latte fragment export swizzles (2026-11-25)
+
+Extended the bounded constant fragment translator to apply pixel export
+component selectors for source lanes 0–3 and float literals zero/one. Reserved
+and masked selectors remain explicit rejections because the current SPIR-V
+output contract requires a defined `vec4`. Tests verify exact generated
+constant ordering for swizzled/literal output and rejection of masked output.
+Debug and Release builds and full CTest suites passed 29/29 in both
+configurations, including fragment SPIR-V validation and controlled guest
+pixel readback.
+This follows Affogato's existing CPU normal-export selector behavior and the
+related-family R700 reference, not a new claim of direct Latte conformance.

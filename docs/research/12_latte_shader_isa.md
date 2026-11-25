@@ -1006,11 +1006,12 @@ integration tests remain future work.
 `latte_spirv_fragment_subset.hpp` accepts only four-lane OP2 MOV groups whose
 source 0 selectors are inline float zero, one, or one-half. It requires
 unmodified writes, tracks only GPRs written by those groups, and accepts one
-completed, identity-swizzled pixel export to target zero. It emits a SPIR-V
-Fragment module with `OriginUpperLeft` and a `Location 0` `vec4` output. Any
-missing color component, other ALU operation, unsupported modifier, extra
-export, or other target fails translation. This is constant folding of a
-narrow guest fragment program, not general pixel-shader execution.
+completed pixel export to target zero using component selectors 0–3, literal
+zero, and literal one. Reserved and masked output selectors are rejected. It
+emits a SPIR-V Fragment module with `OriginUpperLeft` and a `Location 0` `vec4`
+output. Any missing color component, other ALU operation, unsupported
+modifier, extra export, or other target fails translation. This is constant
+folding of a narrow guest fragment program, not general pixel-shader execution.
 
 The [R700-family ISA manual](https://docs.amd.com/v/u/en-US/R700-Family_Instruction_Set_Architecture),
 section 3.4.1, documents pixel exports into the pixel cache and MRT selection

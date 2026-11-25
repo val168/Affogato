@@ -127,6 +127,28 @@ void write_module(const char* path, std::span<const std::uint32_t> module)
     return false;
 }
 
+[[nodiscard]] std::vector<std::uint32_t> read_float_constants(
+    std::span<const std::uint32_t> module)
+{
+    std::vector<std::uint32_t> constants;
+    for (std::size_t word_offset = 5U; word_offset < module.size();)
+    {
+        const std::uint32_t instruction = module[word_offset];
+        const std::size_t word_count = instruction >> 16U;
+        if (word_count == 0U || word_count > module.size() - word_offset)
+        {
+            throw std::runtime_error("Invalid SPIR-V while reading constants");
+        }
+        if (static_cast<std::uint16_t>(instruction & 0xFFFFU) == 43U &&
+            word_count == 4U)
+        {
+            constants.push_back(module[word_offset + 3U]);
+        }
+        word_offset += word_count;
+    }
+    return constants;
+}
+
 } // namespace
 
 int main(int argc, char* argv[])
@@ -528,6 +550,64 @@ int main(int argc, char* argv[])
     assert(module_contains_opcode(fragment_module, 16U));
     assert(module_contains_opcode(fragment_module, 44U));
     assert(module_contains_opcode(fragment_module, 62U));
+
+    auto swizzled_fragment = fragment_program;
+    auto& swizzled_export = std::get<
+        affogato::gpu::LatteShaderIrExport>(
+            swizzled_fragment.instructions[1U]);
+    swizzled_export.fields.component_selectors = {1U, 2U, 0U, 4U};
+    const std::vector<std::uint32_t> swizzled_fragment_module =
+        affogato::gpu::emit_latte_spirv_fragment_constant_color_subset(
+            swizzled_fragment);
+    assert(read_float_constants(swizzled_fragment_module) ==
+        (std::vector<std::uint32_t>{
+            0U, 0x3F800000U, 0x3F800000U, 0U}));
+
+    auto one_fragment = fragment_program;
+    std::get<affogato::gpu::LatteShaderIrExport>(
+        one_fragment.instructions[1U]).fields.component_selectors =
+        {5U, 5U, 5U, 5U};
+    const std::vector<std::uint32_t> one_fragment_module =
+        affogato::gpu::emit_latte_spirv_fragment_constant_color_subset(
+            one_fragment);
+    assert(read_float_constants(one_fragment_module) ==
+        (std::vector<std::uint32_t>{
+            0x3F800000U,
+            0x3F800000U,
+            0x3F800000U,
+            0x3F800000U}));
+
+    auto masked_fragment = fragment_program;
+    std::get<affogato::gpu::LatteShaderIrExport>(
+        masked_fragment.instructions[1U]).fields.component_selectors[3U] = 7U;
+    bool rejected_masked_fragment_component = false;
+    try
+    {
+        static_cast<void>(
+            affogato::gpu::emit_latte_spirv_fragment_constant_color_subset(
+                masked_fragment));
+    }
+    catch (const std::runtime_error&)
+    {
+        rejected_masked_fragment_component = true;
+    }
+    assert(rejected_masked_fragment_component);
+
+    auto invalid_fragment = fragment_program;
+    std::get<affogato::gpu::LatteShaderIrExport>(
+        invalid_fragment.instructions[1U]).fields.component_selectors[3U] = 8U;
+    bool rejected_invalid_fragment_component = false;
+    try
+    {
+        static_cast<void>(
+            affogato::gpu::emit_latte_spirv_fragment_constant_color_subset(
+                invalid_fragment));
+    }
+    catch (const std::runtime_error&)
+    {
+        rejected_invalid_fragment_component = true;
+    }
+    assert(rejected_invalid_fragment_component);
 
     auto unsupported_fragment = fragment_program;
     auto& unsupported_fragment_clause = std::get<
