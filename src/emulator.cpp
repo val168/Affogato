@@ -54,7 +54,10 @@ cpu::espresso::RpxLoadResult Emulator::load_rpx(
     return loaded_image_;
 }
 
-EmulatorRunResult Emulator::run(std::size_t max_steps, ExecutionMode mode)
+EmulatorRunResult Emulator::run(
+    std::size_t max_steps,
+    ExecutionMode mode,
+    bool stop_after_gx2_draw)
 {
     if (!has_loaded_image_)
     {
@@ -62,8 +65,8 @@ EmulatorRunResult Emulator::run(std::size_t max_steps, ExecutionMode mode)
     }
 
     cpu::espresso::RunResult execution = mode == ExecutionMode::recompiler
-        ? recompiler_.run(core_, max_steps)
-        : core_.run(max_steps);
+        ? recompiler_.run(core_, max_steps, stop_after_gx2_draw)
+        : core_.run(max_steps, stop_after_gx2_draw);
     return {loaded_image_, std::move(execution), core_.state.gpr[3], mode,
             recompiler_.statistics(), core_.hle.call_statistics_snapshot(),
             cpu::espresso::take_gx2_commands(core_.gx2)};

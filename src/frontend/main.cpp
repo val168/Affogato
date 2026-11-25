@@ -378,6 +378,9 @@ std::string format_result(const affogato::EmulatorRunResult& result)
     case StopReason::instruction_limit:
         text << "\nStopped: instruction limit";
         break;
+    case StopReason::gx2_draw_submitted:
+        text << "\nPaused: GX2 draw submitted";
+        break;
     case StopReason::unsupported_instruction:
         text << "\nStopped: unsupported PowerPC instruction 0x" << std::hex
              << std::uppercase << result.execution.instruction_word;

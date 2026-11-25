@@ -27,6 +27,7 @@ enum class StepResult
 enum class StopReason
 {
     instruction_limit,
+    gx2_draw_submitted,
     unsupported_instruction,
     unsupported_architectural_state,
     unimplemented_hle_call,
@@ -362,7 +363,9 @@ public:
     }
 
     [[nodiscard]] StepResult step();
-    [[nodiscard]] RunResult run(std::size_t max_steps);
+    [[nodiscard]] RunResult run(
+        std::size_t max_steps,
+        bool stop_after_gx2_draw = false);
     [[nodiscard]] std::uint64_t time_base_ticks() const noexcept;
 
     CpuState state{};

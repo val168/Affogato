@@ -1,4 +1,5 @@
 #include "cpu/espresso/recompiler.hpp"
+#include "cpu/espresso/gx2_hle.hpp"
 
 #include <cassert>
 #include <array>
@@ -12154,6 +12155,27 @@ void recompiler_stop_reason_test()
     }
 }
 
+void recompiler_gx2_draw_boundary_test()
+{
+    EspressoCore core(0x1000U);
+    register_gx2_hle(core.hle);
+    core.state.gpr[3] = 4U;
+    core.state.gpr[4] = 3U;
+    core.state.gpr[5] = 0U;
+    core.state.gpr[6] = 1U;
+    core.state.lr = 0x2000U;
+    core.state.cia = core.hle.bind_import("gx2", "GX2DrawEx");
+
+    Recompiler recompiler;
+    const RunResult result = recompiler.run(core, 10U, true);
+    assert(result.reason == StopReason::gx2_draw_submitted);
+    assert(result.steps == 1U);
+    assert(core.state.cia == 0x2000U);
+    assert(core.gx2.pending_commands.size() == 1U);
+    assert(core.gx2.pending_commands.front().type == Gx2CommandType::draw);
+    assert(recompiler.statistics().native_instructions == 0U);
+}
+
 }
 
 int main()
@@ -12303,4 +12325,5 @@ int main()
     recompiler_memory_fault_test();
     recompiler_self_modifying_code_test();
     recompiler_stop_reason_test();
+    recompiler_gx2_draw_boundary_test();
 }

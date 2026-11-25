@@ -45,7 +45,8 @@ public:
         const std::filesystem::path& content_root = {});
     [[nodiscard]] EmulatorRunResult run(
         std::size_t max_steps = 1'000'000,
-        ExecutionMode mode = ExecutionMode::interpreter);
+        ExecutionMode mode = ExecutionMode::interpreter,
+        bool stop_after_gx2_draw = false);
 
     [[nodiscard]] cpu::espresso::EspressoCore& core() noexcept
     {

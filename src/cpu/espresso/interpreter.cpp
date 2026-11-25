@@ -6802,7 +6802,7 @@ StepResult EspressoCore::step()
     return StepResult::executed;
 }
 
-RunResult EspressoCore::run(std::size_t max_steps)
+RunResult EspressoCore::run(std::size_t max_steps, bool stop_after_gx2_draw)
 {
     RunResult result{};
     result.cia = state.cia;
@@ -6821,6 +6821,8 @@ RunResult EspressoCore::run(std::size_t max_steps)
 
     while (result.steps < max_steps)
     {
+        const std::size_t command_count_before_step =
+            stop_after_gx2_draw ? gx2.pending_commands.size() : 0U;
         StepResult step_result{};
         try
         {
@@ -6888,6 +6890,28 @@ RunResult EspressoCore::run(std::size_t max_steps)
         }
 
         ++result.steps;
+        if (stop_after_gx2_draw &&
+            gx2.pending_commands.size() > command_count_before_step)
+        {
+            bool draw_was_submitted = false;
+            for (std::size_t index = command_count_before_step;
+                 index < gx2.pending_commands.size();
+                 ++index)
+            {
+                if (gx2.pending_commands[index].type == Gx2CommandType::draw)
+                {
+                    draw_was_submitted = true;
+                    break;
+                }
+            }
+            if (draw_was_submitted)
+            {
+                result.reason = StopReason::gx2_draw_submitted;
+                result.cia = state.cia;
+                include_history();
+                return result;
+            }
+        }
     }
 
     result.reason = StopReason::instruction_limit;

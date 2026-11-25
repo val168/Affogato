@@ -206,16 +206,22 @@ specification.
 
 #### Required next design boundary
 
-Introduce one ordered guest graphics execution boundary that can consume
-captured draw-time target state before a dependent HLE copy reads guest memory.
-The first implementation can deliberately synchronize at a GX2 boundary, but
-it must specify how the emulator worker hands work to the Vulkan owner, how
-completion is acknowledged, and how bounded render-target readback updates
-guest memory before guest execution resumes. Preserve the existing UI-thread
-ownership of the window and Vulkan presentation; do not access mutable guest
-memory from the renderer thread. A future asynchronous path can reduce these
-synchronization points only after its guest-memory visibility rules are
-explicit.
+`EspressoCore::run(max_steps, true)` and the corresponding `Emulator::run` and
+`Recompiler::run` overloads now return with
+`StopReason::gx2_draw_submitted` immediately after a step adds a GX2 draw
+command. The command check is disabled by default. The recompiler delegates
+this opt-in mode to the interpreter so it can stop at the exact HLE boundary;
+ordinary recompiled execution is unchanged. CPU and recompiler tests verify
+the event, one-step accounting, post-HLE CIA, and captured draw command.
+
+This is only a CPU execution checkpoint. The frontend does not yet request it,
+wait for renderer completion, or write Vulkan render-target data back to guest
+memory. The next step is to connect this event to an acknowledged worker/UI
+handoff while preserving UI-thread ownership of Vulkan and preventing the
+renderer thread from reading mutable guest memory. Bounded render-target
+readback must update guest memory before a dependent HLE copy resumes. A future
+asynchronous path can reduce these synchronization points only after its
+guest-memory visibility rules are explicit.
 
 The acceptance test must execute guest PPC calls in order: bind a supported
 color buffer, issue a controlled draw, invoke the GX2 color-buffer-to-scanout

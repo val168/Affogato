@@ -17,6 +17,21 @@ guest-memory visibility. The next milestone is an ordered worker-to-renderer
 handoff with completion/writeback before guest HLE copy reads the target. See
 [`research/11_graphics.md`](research/11_graphics.md#guest-draw-guest-memory-and-scanout-ordering).
 
+## Opt-in GX2 draw execution checkpoint (2026-11-25)
+
+`EspressoCore::run`, `Recompiler::run`, and `Emulator::run` can now be asked
+to return immediately after a CPU step appends a GX2 draw command. The result
+uses `StopReason::gx2_draw_submitted`, reports the completed step count, and
+leaves CIA at the HLE return address. The default execution path is unchanged.
+For this opt-in stop mode, `Recompiler::run` delegates to the interpreter to
+preserve the exact HLE boundary. Deterministic CPU and recompiler-facing tests
+pass. Debug CTest passed 6/6, including the opt-in Vulkan swapchain readback
+test. This does not submit a guest draw automatically, wait for Vulkan
+completion, update guest color-buffer memory, or fix scanout ordering. The
+frontend worker/UI acknowledgement and guest-memory writeback remain the next
+required stages; see
+[`research/11_graphics.md`](research/11_graphics.md#guest-draw-guest-memory-and-scanout-ordering).
+
 ## Diagnostic Vulkan pixel readback for the Latte MOV vertex subset (2026-11-25)
 
 The explicit guest-triangle diagnostic can request swapchain transfer-source

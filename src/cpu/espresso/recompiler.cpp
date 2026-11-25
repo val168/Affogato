@@ -11214,8 +11214,19 @@ const RecompilerStatistics& Recompiler::statistics() const noexcept
     return impl_->stats;
 }
 
-RunResult Recompiler::run(EspressoCore& core, std::size_t max_steps)
+RunResult Recompiler::run(
+    EspressoCore& core,
+    std::size_t max_steps,
+    bool stop_after_gx2_draw)
 {
+    if (stop_after_gx2_draw)
+    {
+        // The opt-in boundary must stop at the exact HLE submission point.
+        // The interpreter provides that architectural boundary without
+        // changing normal recompiled execution.
+        return core.run(max_steps, true);
+    }
+
     RunResult result{};
     result.cia = core.state.cia;
     const auto include_history = [&]() {

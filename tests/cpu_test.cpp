@@ -30576,6 +30576,25 @@ void gx2_draw_ex_hle_tests()
     assert(!out_of_range_indexed_commands.front().draw_vertex_data.front().is_valid);
 }
 
+void gx2_draw_execution_boundary_tests()
+{
+    EspressoCore core(0x1000U);
+    register_gx2_hle(core.hle);
+    core.state.gpr[3] = 4U;
+    core.state.gpr[4] = 36U;
+    core.state.gpr[5] = 12U;
+    core.state.gpr[6] = 2U;
+    core.state.lr = 0x2000U;
+    core.state.cia = core.hle.bind_import("gx2", "GX2DrawEx");
+
+    const RunResult result = core.run(4U, true);
+    assert(result.reason == StopReason::gx2_draw_submitted);
+    assert(result.steps == 1U);
+    assert(core.state.cia == 0x2000U);
+    assert(core.gx2.pending_commands.size() == 1U);
+    assert(core.gx2.pending_commands.front().type == Gx2CommandType::draw);
+}
+
 void gx2_gpu_time_to_cpu_time_hle_tests()
 {
     constexpr std::uint32_t return_address = 0x2000U;
@@ -44369,6 +44388,9 @@ int main(int argc, char* argv[])
             case StopReason::instruction_limit:
                 std::cout << "instruction limit";
                 break;
+            case StopReason::gx2_draw_submitted:
+                std::cout << "GX2 draw submitted";
+                break;
             case StopReason::unsupported_instruction:
                 std::cout << "unsupported PPC instruction 0x" << std::hex
                           << execution.instruction_word << std::dec;
@@ -44769,6 +44791,7 @@ int main(int argc, char* argv[])
     gx2_flush_hle_tests();
     gx2_draw_done_hle_tests();
     gx2_draw_ex_hle_tests();
+    gx2_draw_execution_boundary_tests();
     latte_vertex_fetch_decoder_tests();
     latte_draw_vertex_index_tests();
     latte_control_flow_decoder_tests();

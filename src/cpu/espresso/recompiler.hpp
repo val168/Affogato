@@ -40,7 +40,10 @@ public:
     Recompiler(Recompiler&&) noexcept;
     Recompiler& operator=(Recompiler&&) noexcept;
 
-    [[nodiscard]] RunResult run(EspressoCore& core, std::size_t max_steps);
+    [[nodiscard]] RunResult run(
+        EspressoCore& core,
+        std::size_t max_steps,
+        bool stop_after_gx2_draw = false);
     void clear_cache() noexcept;
     [[nodiscard]] const RecompilerStatistics& statistics() const noexcept;
 
