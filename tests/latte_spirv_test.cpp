@@ -201,6 +201,40 @@ int main(int argc, char* argv[])
             {1U, 0U});
     assert(module_contains_opcode(multiply_module, 133U));
 
+    auto maximum_program = add_program;
+    auto& maximum_clause = std::get<
+        affogato::gpu::LatteShaderIrAluClause>(
+            maximum_program.instructions[0U]);
+    for (auto& operation : maximum_clause.groups[0U].instructions)
+    {
+        operation.opcode =
+            affogato::gpu::latte_alu_op2_maximum_dx10_opcode;
+        operation.source1_relative = false;
+    }
+    const std::vector<std::uint32_t> maximum_module =
+        affogato::gpu::emit_latte_spirv_vertex_position_subset(
+            maximum_program,
+            {1U, 0U});
+    assert(module_contains_opcode(maximum_module, 190U));
+    assert(module_contains_opcode(maximum_module, 169U));
+
+    auto minimum_program = add_program;
+    auto& minimum_clause = std::get<
+        affogato::gpu::LatteShaderIrAluClause>(
+            minimum_program.instructions[0U]);
+    for (auto& operation : minimum_clause.groups[0U].instructions)
+    {
+        operation.opcode =
+            affogato::gpu::latte_alu_op2_minimum_dx10_opcode;
+        operation.source1_relative = false;
+    }
+    const std::vector<std::uint32_t> minimum_module =
+        affogato::gpu::emit_latte_spirv_vertex_position_subset(
+            minimum_program,
+            {1U, 0U});
+    assert(module_contains_opcode(minimum_module, 184U));
+    assert(module_contains_opcode(minimum_module, 169U));
+
     add_clause.groups[0U].instructions[0U].source1_relative = true;
     bool rejected_relative_add_source = false;
     try
@@ -216,12 +250,14 @@ int main(int argc, char* argv[])
     }
     assert(rejected_relative_add_source);
 
-    if (argc == 6 && std::string_view(argv[1]) == "--write-modules")
+    if (argc == 8 && std::string_view(argv[1]) == "--write-modules")
     {
         write_module(argv[2], module);
         write_module(argv[3], modified_module);
         write_module(argv[4], add_module);
         write_module(argv[5], multiply_module);
+        write_module(argv[6], maximum_module);
+        write_module(argv[7], minimum_module);
     }
     return 0;
 }

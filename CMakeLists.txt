@@ -241,13 +241,19 @@ if(BUILD_TESTING)
         "${CMAKE_CURRENT_BINARY_DIR}/latte_vertex_subset_add.spv")
     set(AFFOGATO_LATTE_SPIRV_MULTIPLY_TEST_MODULE
         "${CMAKE_CURRENT_BINARY_DIR}/latte_vertex_subset_multiply.spv")
+    set(AFFOGATO_LATTE_SPIRV_MAXIMUM_TEST_MODULE
+        "${CMAKE_CURRENT_BINARY_DIR}/latte_vertex_subset_maximum.spv")
+    set(AFFOGATO_LATTE_SPIRV_MINIMUM_TEST_MODULE
+        "${CMAKE_CURRENT_BINARY_DIR}/latte_vertex_subset_minimum.spv")
     add_test(NAME affogato_latte_spirv_tests
         COMMAND affogato_latte_spirv_tests
             --write-modules
             "${AFFOGATO_LATTE_SPIRV_TEST_MODULE}"
             "${AFFOGATO_LATTE_SPIRV_MODIFIERS_TEST_MODULE}"
             "${AFFOGATO_LATTE_SPIRV_ADD_TEST_MODULE}"
-            "${AFFOGATO_LATTE_SPIRV_MULTIPLY_TEST_MODULE}")
+            "${AFFOGATO_LATTE_SPIRV_MULTIPLY_TEST_MODULE}"
+            "${AFFOGATO_LATTE_SPIRV_MAXIMUM_TEST_MODULE}"
+            "${AFFOGATO_LATTE_SPIRV_MINIMUM_TEST_MODULE}")
     set_tests_properties(affogato_latte_spirv_tests PROPERTIES
         FIXTURES_SETUP affogato_latte_spirv_module
     )
@@ -283,6 +289,20 @@ if(BUILD_TESTING)
                 --target-env vulkan1.0
                 "${AFFOGATO_LATTE_SPIRV_MULTIPLY_TEST_MODULE}")
         set_tests_properties(affogato_latte_spirv_multiply_validation PROPERTIES
+            FIXTURES_REQUIRED affogato_latte_spirv_module
+        )
+        add_test(NAME affogato_latte_spirv_maximum_validation
+            COMMAND "${AFFOGATO_SPIRV_VAL_EXECUTABLE}"
+                --target-env vulkan1.0
+                "${AFFOGATO_LATTE_SPIRV_MAXIMUM_TEST_MODULE}")
+        set_tests_properties(affogato_latte_spirv_maximum_validation PROPERTIES
+            FIXTURES_REQUIRED affogato_latte_spirv_module
+        )
+        add_test(NAME affogato_latte_spirv_minimum_validation
+            COMMAND "${AFFOGATO_SPIRV_VAL_EXECUTABLE}"
+                --target-env vulkan1.0
+                "${AFFOGATO_LATTE_SPIRV_MINIMUM_TEST_MODULE}")
+        set_tests_properties(affogato_latte_spirv_minimum_validation PROPERTIES
             FIXTURES_REQUIRED affogato_latte_spirv_module
         )
     endif()

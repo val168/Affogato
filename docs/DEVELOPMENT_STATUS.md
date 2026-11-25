@@ -1,5 +1,19 @@
 # Affogato Development Status
 
+## Bounded Latte DX10 min/max SPIR-V lowering (2026-11-25)
+
+The experimental vertex emitter now lowers `MAX_DX10` and `MIN_DX10` using
+ordered SPIR-V floating-point comparisons followed by `OpSelect`. This mirrors
+the existing CPU subset's comparison and source-selection rules, including
+source 1 selection for unordered comparisons; guest operands remain binary32
+and unsupported source modes/modifiers still fail. AMD's R700-family manual
+documents the OP2 semantics, while Latte-specific behavior remains
+unconfirmed. Deterministic tests check the comparison/select instruction
+sequence and `spirv-val` accepts both modules. Debug and Release builds passed;
+CTest passed 11/11 in both. Neither min/max operation has been executed through
+the Vulkan smoke harness yet. See
+[`research/12_latte_shader_isa.md`](research/12_latte_shader_isa.md).
+
 ## Controlled Vulkan run for Latte MUL_IEEE (2026-11-25)
 
 The guest-triangle integration harness now has a separate SPIR-V mode that
