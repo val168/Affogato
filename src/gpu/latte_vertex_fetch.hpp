@@ -366,4 +366,76 @@ decode_latte_vertex_fetch_shader(
         "Latte vertex component uses an unsupported data format");
 }
 
+[[nodiscard]] inline std::array<std::optional<std::uint32_t>, 4U>
+decode_latte_vertex_attribute_vector(
+    std::span<const std::uint8_t> vertex_bytes,
+    const LatteVertexAttribute& attribute)
+{
+    constexpr std::uint32_t selector_zero = 4U;
+    constexpr std::uint32_t selector_one = 5U;
+    constexpr std::uint32_t reserved_selector = 6U;
+    constexpr std::uint32_t selector_mask = 7U;
+    constexpr std::uint32_t float_one_bits = 0x3F800000U;
+
+    std::array<std::uint32_t, 4U> fetched_components{};
+    if (attribute.component_count > fetched_components.size())
+    {
+        throw std::runtime_error(
+            "Latte vertex attribute exceeds the four-component vector width");
+    }
+
+    for (std::size_t component_index = 0U;
+         component_index < attribute.component_count;
+         ++component_index)
+    {
+        fetched_components[component_index] = std::bit_cast<std::uint32_t>(
+            decode_latte_vertex_component(
+                vertex_bytes,
+                attribute,
+                component_index));
+    }
+
+    std::array<std::optional<std::uint32_t>, 4U> result{};
+    for (std::size_t destination_component = 0U;
+         destination_component < attribute.selectors.size();
+         ++destination_component)
+    {
+        const std::uint32_t selector =
+            attribute.selectors[destination_component];
+        if (selector < attribute.component_count)
+        {
+            result[destination_component] = fetched_components[selector];
+            continue;
+        }
+
+        if (selector == selector_zero)
+        {
+            result[destination_component] = 0U;
+            continue;
+        }
+
+        if (selector == selector_one)
+        {
+            result[destination_component] = float_one_bits;
+            continue;
+        }
+
+        if (selector == selector_mask)
+        {
+            continue;
+        }
+
+        if (selector == reserved_selector)
+        {
+            throw std::runtime_error(
+                "Latte vertex attribute uses a reserved destination selector");
+        }
+
+        throw std::runtime_error(
+            "Latte vertex attribute selects a component absent from its format");
+    }
+
+    return result;
+}
+
 }

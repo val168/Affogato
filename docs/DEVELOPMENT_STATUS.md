@@ -571,8 +571,8 @@ descriptor offsets `0x3C`, `0x40`, and `0x44`; it rejects counts above the
 32-entry Latte table. Regression coverage checks the emitted command sequence
 and extracts the table from a subsequent draw snapshot. This is reference
 cross-checking, not Wii U hardware verification. The resolver is still not
-connected to shader invocation inputs, and fetch-instruction decoding remains
-unresolved.
+connected to shader invocation inputs, and arbitrary guest fetch programs are
+not decoded or executed.
 
 ## Bounded Latte floating-point OP2 operations (2026-11-25)
 
@@ -586,3 +586,17 @@ transactional rejection. Debug and Release builds succeeded; CTest passed 2/2
 in both configurations. These operations follow the R700 ISA manual and are
 not verified against Latte hardware; they remain an isolated CPU shader model,
 not guest draw execution or Vulkan shader translation.
+
+## Latte VTX destination selectors (2026-11-25)
+
+Added `decode_latte_vertex_attribute_vector()` in
+[`latte_vertex_fetch.hpp`](../src/gpu/latte_vertex_fetch.hpp). It applies the
+decoded destination selector for each output channel: source components 0–3,
+constant 0.0, constant 1.0, or a masked (unwritten) channel. It rejects the
+reserved selector and selections outside the format's component count, and
+uses the existing endian-aware component decoder. Tests cover source
+reordering, constants, masked channels, reserved selectors, and truncated
+guest data. The selector behavior is documented in AMD's R700 ISA manual,
+Chapter 5, and remains an AMD-family reference rather than Wii U hardware
+verification. This helper does not yet assemble a complete shader input GPR or
+execute Latte fetch clauses.

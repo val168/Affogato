@@ -27,10 +27,12 @@ Relevant local implementation:
 - `src/gpu/latte_vertex_fetch.hpp` decodes a narrow, Affogato-generated fetch
   program subset for diagnostic host vertices, extracts a complete
   `SQ_VTX_SEMANTIC` table from a draw's raw register snapshot, and resolves a
-  fetch semantic ID to its VS input GPR. Table extraction rejects incomplete,
-  duplicate, or wrongly typed entries. The table is not yet consumed to
-  populate shader invocation inputs. This fetch path is separate from the
-  guest vertex/pixel shader ISA.
+  fetch semantic ID to its VS input GPR. It also applies VTX destination
+  selectors for supported scalar/vector formats, including 0.0, 1.0, and
+  masked components. Table extraction rejects incomplete, duplicate, or
+  wrongly typed entries. The table is not yet consumed to populate shader
+  invocation inputs. This fetch path is separate from the guest vertex/pixel
+  shader ISA.
 - `GX2InitFetchShaderEx` in `src/cpu/espresso/gx2_hle.cpp` emits one four-dword
   record per attribute. Word 0 selects the semantic VTX form; under that form,
   word 1's overlapping low field is a semantic ID, not a direct destination
@@ -253,7 +255,7 @@ arbitrary guest fetch programs or claiming Latte hardware verification.
 | Capability | Status | Evidence / dependency |
 | --- | --- | --- |
 | GX2 vertex/pixel/geometry descriptor capture | Implemented and tested as capture | HLE descriptor/program range checks and draw-time state snapshots |
-| Fetch-shader parsing and semantic linkage | Narrow diagnostic subset | `latte_vertex_fetch.hpp` decodes generated VTX programs, extracts a complete correctly typed 32-entry `SQ_VTX_SEMANTIC` table from a draw snapshot, and resolves 8-bit table IDs to `VS_GPR_BASE + 1 + table index`. AMD's R6xx register reference describes an 8-bit fetch semantic, while the R700 ISA manual says nine bits; applicability to Latte is unresolved. The helper does not decode guest fetch semantic fields or populate shader invocation inputs. System-generated inputs and arbitrary guest fetch programs remain unsupported. No Wii U hardware verification. |
+| Fetch-shader parsing and semantic linkage | Narrow diagnostic subset | `latte_vertex_fetch.hpp` recognizes Affogato-generated semantic VTX records, decodes supported formats, applies destination selectors (component swizzles, 0.0, 1.0, and masked writes), extracts a complete correctly typed 32-entry `SQ_VTX_SEMANTIC` table from a draw snapshot, and resolves 8-bit table IDs to `VS_GPR_BASE + 1 + table index`. AMD references differ on semantic-field width (R6xx: 8; R700 ISA Chapter 5: 9, while its Chapter 9 semantic-format table says 8); Latte applicability remains unresolved. This helper does not execute arbitrary guest fetch programs or populate shader invocation inputs. System-generated inputs remain unsupported. No Wii U hardware verification. |
 | Latte shader control-flow decoding | Partial | `latte_shader_decoder.hpp` decodes fixture-verified `CALL_FS`, `EXPORT`, `EXPORT_DONE`, and `ALU` clause headers, including EOP, bounded clause ranges, and normal export metadata (type, GPRs, burst count, and component selectors). Unknown opcodes and malformed streams fail explicitly. Export values are not applied to stage outputs; branch/loop execution is absent. |
 | Latte ALU decoding/execution | Experimental subset | OP2 fields and LAST-delimited no-literal groups are decoded. A bounded clause executor runs sequential four-slot X/Y/Z/W groups with MOV and selected integer operations, forwards PV between groups within the clause, and leaves external registers unchanged if a later supported-subset check fails. A straight-line shader subset connects ALU clauses to normal export materialization with caller-provided initial GPRs. Fetch shader execution, ALU.Trans/PS, constant-file/literal reads, other opcodes, general control flow, Vulkan use, and Latte-hardware validation are absent. |
 | Vertex/pixel shader translation | Missing | Stage interfaces, exports, constants, textures, and SPIR-V backend |

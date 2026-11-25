@@ -31832,6 +31832,7 @@ void latte_vertex_fetch_decoder_tests()
 {
     using affogato::gpu::decode_latte_vertex_fetch_shader;
     using affogato::gpu::decode_latte_vertex_component;
+    using affogato::gpu::decode_latte_vertex_attribute_vector;
     using affogato::gpu::capture_latte_vertex_semantic_table;
     using affogato::gpu::resolve_latte_vertex_input_gpr;
 
@@ -32008,6 +32009,59 @@ void latte_vertex_fetch_decoder_tests()
         assert(decoded.front().selectors[0U] == 0U);
         assert(decoded.front().selectors[1U] == 1U);
     }
+
+    affogato::gpu::LatteVertexAttribute swizzled_float_attribute{};
+    swizzled_float_attribute.byte_size = 4U * sizeof(std::uint32_t);
+    swizzled_float_attribute.component_count = 4U;
+    swizzled_float_attribute.component_size_bytes = sizeof(std::uint32_t);
+    swizzled_float_attribute.data_format = 0x13U;
+    swizzled_float_attribute.selectors = {3U, 0U, 4U, 5U};
+    constexpr std::array<std::uint8_t, 16U> float_attribute_bytes{
+        0x3FU, 0x80U, 0x00U, 0x00U,
+        0x40U, 0x00U, 0x00U, 0x00U,
+        0xC0U, 0x40U, 0x00U, 0x00U,
+        0x40U, 0x80U, 0x00U, 0x00U};
+    const auto swizzled_float_vector = decode_latte_vertex_attribute_vector(
+        float_attribute_bytes,
+        swizzled_float_attribute);
+    assert(swizzled_float_vector[0U] == 0x40800000U);
+    assert(swizzled_float_vector[1U] == 0x3F800000U);
+    assert(swizzled_float_vector[2U] == 0U);
+    assert(swizzled_float_vector[3U] == 0x3F800000U);
+
+    swizzled_float_attribute.selectors[3U] = 7U;
+    const auto masked_float_vector = decode_latte_vertex_attribute_vector(
+        float_attribute_bytes,
+        swizzled_float_attribute);
+    assert(!masked_float_vector[3U].has_value());
+
+    swizzled_float_attribute.selectors[3U] = 6U;
+    bool rejected_reserved_vertex_selector = false;
+    try
+    {
+        static_cast<void>(decode_latte_vertex_attribute_vector(
+            float_attribute_bytes,
+            swizzled_float_attribute));
+    }
+    catch (const std::runtime_error&)
+    {
+        rejected_reserved_vertex_selector = true;
+    }
+    assert(rejected_reserved_vertex_selector);
+
+    swizzled_float_attribute.selectors[3U] = 0U;
+    bool rejected_truncated_vertex_attribute = false;
+    try
+    {
+        static_cast<void>(decode_latte_vertex_attribute_vector(
+            std::span<const std::uint8_t>(float_attribute_bytes).first(15U),
+            swizzled_float_attribute));
+    }
+    catch (const std::runtime_error&)
+    {
+        rejected_truncated_vertex_attribute = true;
+    }
+    assert(rejected_truncated_vertex_attribute);
 
     affogato::cpu::espresso::Gx2FetchShaderBinding float16_fetch_shader{};
     float16_fetch_shader.program_size = 16U;
