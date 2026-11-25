@@ -107,6 +107,17 @@ The AMD R700 manual gives a useful structural model for planning a decoder:
   decoded by treating every slot as one uniform opcode layout (Chapter 4,
   §4.5; Chapter 10, §10.2).
 
+The R700 manual's `CALL_FS` entry (Chapter 9, p. 9-10) describes a fetch
+subroutine call whose address is relative to a host-configured register; it
+also enters fetch-program mode until the corresponding `RETURN`. Only a
+vertex shader may make this call, and the instruction includes condition and
+nesting fields. Affogato currently recognizes the opcode for structural
+decoding but does not retain or execute those call semantics. The CPU
+fetch-to-shader helper therefore tests a straight-line ALU program without a
+`CALL_FS`; it must not skip a real call merely because a GX2 fetch-shader
+binding is available. The base-register/address relationship and Latte call
+behavior remain to be verified before normal-draw integration.
+
 These are **R700-family reference facts**, not yet verified Latte decoding
 rules. In particular, they do not establish how a GX2 shader's guest bytes map
 to decoder dwords on this implementation, nor which R700 encodings Latte
