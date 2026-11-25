@@ -92,6 +92,9 @@ Relevant local implementation:
   unverified on Latte. This does not establish
   ordinary guest draw support; matched varyings lack Vulkan stage-interface
   variables and interpolation, and general fragment ALU remains unsupported.
+  This bounded path evaluates its MOV-only shader on the host with constant
+  inputs and emits the resulting color as a SPIR-V constant; it does not execute
+  Latte MOV instructions in the Vulkan fragment stage.
   The default-value encoding is taken from the AMD R700-family reference
   documented below and is not yet cross-verified against Latte hardware or a
   real game workload.

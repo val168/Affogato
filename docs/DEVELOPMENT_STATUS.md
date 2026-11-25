@@ -14,11 +14,25 @@ black triangle, and guest color-buffer/scanout checks still pass. Cemu's current
 most 1; the other two encodings remain based on related-family documentation
 and are not exercised end to end. A matched varying is explicitly rejected
 because stage interface variables and interpolation have not been
-implemented. This verifies a controlled guest command and
-shader path under diagnostic policy; ordinary game draw routing, general PS
-ALU, Latte hardware behavior, visible-window output, and WWHD rendering remain
-unverified. Debug and Release builds succeeded; both full CTest suites passed
-31/31, including `spirv-val`.
+implemented. The bounded MOV shader is evaluated on the host with constant
+inputs, and its color is emitted as a SPIR-V constant; this does not mean the
+Latte MOV executes in a Vulkan fragment shader. This verifies a controlled
+guest command and shader path under diagnostic policy; ordinary game draw
+routing, general PS ALU, Latte hardware behavior, visible output of this
+pixel-default path, and WWHD rendering remain unverified. Debug and Release
+builds succeeded; both full CTest suites passed 31/31, including `spirv-val`.
+
+## Visible diagnostic triangle retest (2026-11-25)
+
+The Release `--gx2-guest-triangle-display-test` opened the Vulkan output window
+on an NVIDIA GeForce RTX 5070 Laptop GPU. A screen capture showed the guest
+buffer geometry as red triangles and rectangles against the diagnostic blue
+background; the test's standard output also confirmed its float/indexed,
+strip, and fan geometry checks completed. The window stayed responsive during
+the capture and accepted a close request. This is diagnostic host-shader output
+from controlled test geometry, not a game frame or Latte shader rendering. The
+visible run did not independently check resizing or Vulkan validation-layer
+messages.
 
 ## WWHD startup blocker reproduction (2026-11-25)
 
@@ -713,9 +727,10 @@ frame in the Vulkan window; that confirms the controlled color-buffer clear,
 copy, and scanout route, not game rendering. It is not a WUT-built guest
 program, WWHD rendering, or guest draw test.
 
-The next step is to visually inspect the triangle display variant, then extend
-the diagnostic path from its known float2 vertex layout to verified guest
-fetch formats and shader execution. Add a WUT-built RPX fixture when
+The triangle display variant has since been visually inspected in the
+2026-11-25 retest above. Next, extend the diagnostic path from its known float2
+vertex layout to verified guest fetch formats and shader execution. Add a
+WUT-built RPX fixture when
 devkitPro/WUT is installed. At that checkpoint, clear/copy support still
 applied only to the documented linear RGBA8 subset.
 
