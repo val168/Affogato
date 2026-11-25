@@ -6906,7 +6906,7 @@ RunResult EspressoCore::run(std::size_t max_steps, bool stop_after_gx2_draw)
             }
             if (draw_was_submitted)
             {
-                result.reason = StopReason::gx2_draw_submitted;
+                result.reason = StopReason::gx2_draw_captured;
                 result.cia = state.cia;
                 include_history();
                 return result;

@@ -30588,7 +30588,7 @@ void gx2_draw_execution_boundary_tests()
     core.state.cia = core.hle.bind_import("gx2", "GX2DrawEx");
 
     const RunResult result = core.run(4U, true);
-    assert(result.reason == StopReason::gx2_draw_submitted);
+    assert(result.reason == StopReason::gx2_draw_captured);
     assert(result.steps == 1U);
     assert(core.state.cia == 0x2000U);
     assert(core.gx2.pending_commands.size() == 1U);
@@ -44388,8 +44388,8 @@ int main(int argc, char* argv[])
             case StopReason::instruction_limit:
                 std::cout << "instruction limit";
                 break;
-            case StopReason::gx2_draw_submitted:
-                std::cout << "GX2 draw submitted";
+            case StopReason::gx2_draw_captured:
+                std::cout << "GX2 draw captured";
                 break;
             case StopReason::unsupported_instruction:
                 std::cout << "unsupported PPC instruction 0x" << std::hex

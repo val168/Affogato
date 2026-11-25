@@ -21,7 +21,7 @@ handoff with completion/writeback before guest HLE copy reads the target. See
 
 `EspressoCore::run`, `Recompiler::run`, and `Emulator::run` can now be asked
 to return immediately after a CPU step appends a GX2 draw command. The result
-uses `StopReason::gx2_draw_submitted`, reports the completed step count, and
+uses `StopReason::gx2_draw_captured`, reports the completed step count, and
 leaves CIA at the HLE return address. The default execution path is unchanged.
 For this opt-in stop mode, `Recompiler::run` delegates to the interpreter to
 preserve the exact HLE boundary. Deterministic CPU and recompiler-facing tests

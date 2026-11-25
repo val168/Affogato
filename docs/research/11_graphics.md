@@ -208,7 +208,7 @@ specification.
 
 `EspressoCore::run(max_steps, true)` and the corresponding `Emulator::run` and
 `Recompiler::run` overloads now return with
-`StopReason::gx2_draw_submitted` immediately after a step adds a GX2 draw
+`StopReason::gx2_draw_captured` immediately after a step adds a GX2 draw
 command. The command check is disabled by default. The recompiler delegates
 this opt-in mode to the interpreter so it can stop at the exact HLE boundary;
 ordinary recompiled execution is unchanged. CPU and recompiler tests verify

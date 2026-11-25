@@ -27,7 +27,7 @@ enum class StepResult
 enum class StopReason
 {
     instruction_limit,
-    gx2_draw_submitted,
+    gx2_draw_captured,
     unsupported_instruction,
     unsupported_architectural_state,
     unimplemented_hle_call,

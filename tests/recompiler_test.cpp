@@ -12168,7 +12168,7 @@ void recompiler_gx2_draw_boundary_test()
 
     Recompiler recompiler;
     const RunResult result = recompiler.run(core, 10U, true);
-    assert(result.reason == StopReason::gx2_draw_submitted);
+    assert(result.reason == StopReason::gx2_draw_captured);
     assert(result.steps == 1U);
     assert(core.state.cia == 0x2000U);
     assert(core.gx2.pending_commands.size() == 1U);
