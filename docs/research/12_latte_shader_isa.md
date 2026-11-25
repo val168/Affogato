@@ -1043,9 +1043,10 @@ union into its active `SPI_PS_INPUT_CNTL` entries. The 41-word union stores
 words 5 through 36. The decoder preserves semantic ID, `DEFAULT_VAL`, flat,
 centroid, linear, cylindrical-wrap, point-sprite, and sample-selection fields.
 It rejects non-pixel stages, truncated register unions, and counts above the
-hardware register capacity. This is descriptor metadata decoding only; it
-does not link stage interfaces, synthesize missing producer outputs, or
-implement interpolation.
+hardware register capacity. The decoder and linker now resolve captured
+vertex parameter exports against pixel semantic controls and preserve a
+fallback value for unmatched inputs. They do not synthesize producer outputs,
+emit SPIR-V stage interfaces, or implement interpolation.
 
 The field positions and default vectors follow the AMD [R600/R700 3D
 register reference](https://shop.vgamuseum.info/index.php/f-naq/item/download/1322_c8e1805afa72eccfa594bfe05c47b972),
@@ -1060,10 +1061,11 @@ names. The raw register locations are decoded from that layout and AMD's
 register map; WUT's C bitfield layout is not used as host bit numbering.
 
 Tests cover field extraction, all selected flags in one control word, stage
-rejection, truncated descriptors, and excessive counts. A subsequent stage
-must resolve semantic linkage against `SPI_VS_OUT_ID`, carry the decoded
-default into unmatched-input handling, choose interpolation qualifiers, and
-verify generated fragment inputs through SPIR-V validation and Vulkan output.
+rejection, truncated descriptors, excessive counts, semantic linkage, and
+default-value resolution. The next stage must lower matched inputs to
+compatible VS/PS SPIR-V interfaces, insert defaults without creating
+unmatched Vulkan inputs, implement selected interpolation behavior, and
+verify shader outputs through SPIR-V validation and Vulkan readback.
 
 The paired `decode_latte_vertex_shader_output_interface()` helper reads
 `VS_PER_COMPONENT`, `VS_EXPORT_COUNT`, `num_spi_vs_out_id`, and the packed
@@ -1097,3 +1099,12 @@ evidence rather than direct Latte validation. The helper accepts already
 interpolated parameter vectors and does not perform interpolation. No
 fragment SPIR-V inputs are emitted, and neither helper is connected to the
 shader executor or Vulkan pipeline.
+
+Cemu's [`LatteShader_CreatePSInputTable()`](https://github.com/cemu-project/Cemu/blob/main/src/Cafe/HW/Latte/Core/LatteShader.cpp#L209)
+is a useful architectural comparison: it walks active PS input controls,
+retains semantic and interpolation metadata, and uses the control index as
+the shader import index. The function reads `DEFAULT_VAL` but its nearby
+assertion only accepts values 0 and 1, so Affogato follows the AMD guide's
+documented four-value mapping and tests all four rather than copying that
+limitation. This comparison does not independently establish Latte-specific
+behavior.
