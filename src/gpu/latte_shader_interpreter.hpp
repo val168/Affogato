@@ -2,12 +2,14 @@
 
 #include "latte_shader_decoder.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <span>
 #include <stdexcept>
+#include <vector>
 
 namespace affogato::gpu
 {
@@ -364,6 +366,41 @@ execute_latte_alu_op2_vector_group(
     }
 
     return group_vector;
+}
+
+// Execute a clause containing only four-slot OP2 vector groups. PV is visible
+// to later groups in the same clause and is reset when the caller starts a
+// separate clause. Work on a temporary register file so an unsupported later
+// group cannot leave partially updated guest shader state.
+[[nodiscard]] inline LatteShaderRegister execute_latte_alu_op2_clause(
+    std::span<const LatteAluClauseSlot> slots,
+    std::span<LatteShaderRegister> guest_registers)
+{
+    const std::vector<LatteAluOp2InstructionGroup> groups =
+        decode_latte_alu_op2_groups(slots);
+    if (groups.empty())
+    {
+        throw std::runtime_error("Latte OP2 clause must contain a group");
+    }
+
+    std::vector<LatteShaderRegister> working_registers(
+        guest_registers.begin(),
+        guest_registers.end());
+    std::optional<LatteShaderRegister> previous_vector;
+
+    for (const LatteAluOp2InstructionGroup& group : groups)
+    {
+        previous_vector = execute_latte_alu_op2_vector_group(
+            group,
+            working_registers,
+            previous_vector);
+    }
+
+    std::copy(
+        working_registers.begin(),
+        working_registers.end(),
+        guest_registers.begin());
+    return *previous_vector;
 }
 
 } // namespace affogato::gpu

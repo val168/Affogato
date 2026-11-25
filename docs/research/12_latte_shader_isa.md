@@ -31,11 +31,12 @@ Relevant local implementation:
   to the little-endian Latte DWORD values represented in GFD shader code, then
   decodes a narrow control-flow subset, ALU clause ranges, OP2 fields, and
   no-literal OP2 group boundaries.
-- `src/gpu/latte_shader_interpreter.hpp` evaluates MOV and integer bitwise
-  OP2 values from absolute GPRs, inline constants, and supplied prior-PV values.
-  Its four-slot X/Y/Z/W executor applies guest-register writes and returns the
-  group vector result; shader clauses, PS state, literal/constant-file reads,
-  and other opcodes remain unsupported.
+- `src/gpu/latte_shader_interpreter.hpp` evaluates MOV and selected integer
+  OP2 values from absolute GPRs, inline constants, and prior-PV values. Its
+  clause executor supports sequences of four-slot X/Y/Z/W groups and commits
+  guest-register updates only after all supported groups succeed. Shader
+  control flow, ALU.Trans/PS state, literal/constant-file reads, and other
+  opcodes remain unsupported.
 
 ## Evidence categories
 
@@ -187,7 +188,7 @@ real shader fixtures before implementation.
 | GX2 vertex/pixel/geometry descriptor capture | Implemented and tested as capture | HLE descriptor/program range checks and draw-time state snapshots |
 | Fetch-shader parsing | Narrow diagnostic subset | `latte_vertex_fetch.hpp`; generated VTX programs only |
 | Latte shader control-flow decoding | Partial | `latte_shader_decoder.hpp` decodes fixture-verified `CALL_FS`, `EXPORT`, `EXPORT_DONE`, and `ALU` clause headers, including EOP and bounded clause ranges. Unknown opcodes and malformed streams fail explicitly. No branch/loop decoding or clause execution. |
-| Latte ALU decoding/execution | Experimental subset | OP2 fields and LAST-delimited no-literal groups are decoded. Four-slot X/Y/Z/W groups support MOV and integer AND/OR/XOR/NOT with absolute GPR, inline constant, or supplied prior-PV sources and no modifiers; destination lanes are written after parallel source reads and the vector result is returned. No PS, constant-file/literal reads, other opcodes, clause execution, or Latte-hardware validation. |
+| Latte ALU decoding/execution | Experimental subset | OP2 fields and LAST-delimited no-literal groups are decoded. A bounded clause executor runs sequential four-slot X/Y/Z/W groups with MOV and selected integer operations, forwards PV between groups within the clause, and leaves external registers unchanged if a later supported-subset check fails. ALU.Trans/PS, constant-file/literal reads, other opcodes, full shader control flow, and Latte-hardware validation are absent. |
 | Vertex/pixel shader translation | Missing | Stage interfaces, exports, constants, textures, and SPIR-V backend |
 | Guest shader integration with Vulkan draws | Missing | Shader modules, pipeline cache, descriptor binding, render-target path |
 | WWHD shader requirements | Unknown in Affogato | Existing recorded WWHD runs stop before a guest draw is captured |
@@ -388,3 +389,14 @@ these bits. The bounded MOV evaluator implements the specified ordering by
 clearing the binary32 sign bit for absolute value and toggling it for negation;
 the integer logic subset rejects either modifier. Source 1 modifiers for MOV
 remain irrelevant because this opcode consumes only source 0.
+
+The R700 manual's Chapter 4.6.2 defines PV as the four vector-unit results of
+the previous instruction group and says PV/PS do not survive the end of an ALU
+clause. `execute_latte_alu_op2_clause()` applies that bounded rule by forwarding
+the prior group's vector result only while evaluating one clause. The executor
+supports only four vector slots per group: it does not parse or execute the
+fifth ALU.Trans slot, NOP behavior, or mixed-width groups. It evaluates on a
+temporary register file and commits only after every group is supported, so an
+unsupported later group cannot leave partial host-side test state. Tests cover
+PV forwarding across two groups and rejection without partial register writes.
+This is R700-family behavior and has not been validated against Latte hardware.

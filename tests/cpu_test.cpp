@@ -31953,6 +31953,7 @@ void latte_control_flow_decoder_tests()
     using affogato::gpu::decode_latte_alu_op2_groups;
     using affogato::gpu::decode_latte_control_flow;
     using affogato::gpu::evaluate_latte_alu_move_value;
+    using affogato::gpu::execute_latte_alu_op2_clause;
     using affogato::gpu::execute_latte_alu_op2_vector_group;
     using affogato::gpu::LatteShaderRegister;
 
@@ -32080,6 +32081,45 @@ void latte_control_flow_decoder_tests()
         alu_groups[0U], shader_registers);
     assert((previous_vector == shader_registers[1U]));
     assert((shader_registers[3U] == shader_registers[1U]));
+
+    std::array<affogato::gpu::LatteAluClauseSlot, 8U> two_group_clause{};
+    std::copy(alu_slots.begin(), alu_slots.end(), two_group_clause.begin());
+    for (std::size_t slot_index = 0U; slot_index < alu_slots.size(); ++slot_index)
+    {
+        auto& next_group_slot = two_group_clause[slot_index + alu_slots.size()];
+        next_group_slot = alu_slots[slot_index];
+        next_group_slot.word_offset += 8U;
+        next_group_slot.word0 =
+            (next_group_slot.word0 & ~0x1FFU) | 254U;
+    }
+
+    shader_registers[3U].fill(0xDEADBEEFU);
+    const auto final_clause_vector = execute_latte_alu_op2_clause(
+        two_group_clause,
+        shader_registers);
+    assert((final_clause_vector == shader_registers[1U]));
+    assert((shader_registers[3U] == shader_registers[1U]));
+
+    auto unsupported_later_group = two_group_clause;
+    constexpr std::uint32_t opcode_mask = 0x7FFU << 7U;
+    auto& unsupported_instruction = unsupported_later_group[4U];
+    unsupported_instruction.word1 =
+        (unsupported_instruction.word1 & ~opcode_mask) | (1U << 7U);
+    shader_registers[3U].fill(0xDEADBEEFU);
+    const auto registers_before_unsupported_clause = shader_registers;
+    bool rejected_unsupported_later_group = false;
+    try
+    {
+        static_cast<void>(execute_latte_alu_op2_clause(
+            unsupported_later_group,
+            shader_registers));
+    }
+    catch (const std::runtime_error&)
+    {
+        rejected_unsupported_later_group = true;
+    }
+    assert(rejected_unsupported_later_group);
+    assert(shader_registers == registers_before_unsupported_clause);
 
     auto previous_vector_slots = alu_slots;
     for (auto& slot : previous_vector_slots)

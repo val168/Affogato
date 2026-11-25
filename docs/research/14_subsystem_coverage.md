@@ -50,7 +50,7 @@ mean the guest behavior is implemented.
 | Latte shader control-flow and clause records | Partial | `latte_shader_decoder.hpp` decodes fixture-verified `CALL_FS`, `EXPORT`, `EXPORT_DONE`, one `ALU` header variant, bounded raw slots, and no-literal OP2 groups using LAST. Literal clauses and OP3 groups remain unsupported; no branch/loop decoding or execution. |
 | Primitive assembly | Diagnostic partial | Diagnostic route supports triangle lists, strips, fans plus selected index endian forms; not normal guest rasterization. |
 | Guest draw dispatch | Diagnostic only | Ordered captured commands can reach the fixed diagnostic host pipeline when explicitly opted in. Normal guest shader/render-target semantics are not executed. |
-| Vertex/pixel/geometry shader execution | Experimental subset | Four-slot no-literal X/Y/Z/W OP2 groups support MOV and integer AND/OR/XOR/NOT/ADD_INT/SUB_INT/MAX_INT/MIN_INT/MAX_UINT/MIN_UINT/SETE_INT/SETNE_INT/SETGT_INT/SETGE_INT/SETGT_UINT/SETGE_UINT with absolute-GPR, inline-constant, or supplied prior-PV sources and return the vector result. MOV applies source-0 absolute/negate as binary32 sign-bit operations; integer operations reject those modifiers. Predicate selection, predicate/mask updates, and nonzero bank swizzles are decoded and rejected. Coverage is based on R700-family semantics and assembled fixtures, not Latte hardware validation. Other opcodes, PS, constant-file/literal reads, shader IR, texture execution, and Vulkan translation are absent. |
+| Vertex/pixel/geometry shader execution | Experimental subset | Four-slot no-literal X/Y/Z/W OP2 groups support MOV and integer AND/OR/XOR/NOT/ADD_INT/SUB_INT/MAX_INT/MIN_INT/MAX_UINT/MIN_UINT/SETE_INT/SETNE_INT/SETGT_INT/SETGE_INT/SETGT_UINT/SETGE_UINT with absolute-GPR, inline-constant, or prior-PV sources. The bounded clause executor forwards PV across supported groups and commits test state only when the full clause subset succeeds. MOV applies source-0 absolute/negate as binary32 sign-bit operations; integer operations reject those modifiers. Predicate selection, predicate/mask updates, and nonzero bank swizzles are decoded and rejected. Coverage is based on R700-family semantics and assembled fixtures, not Latte hardware validation. Other clause formats/opcodes, PS, constant-file/literal reads, shader IR, texture execution, and Vulkan translation are absent. |
 | Texture/sampler decode | Partial | Selected register descriptors are decoded; bounded linear-aligned, 1D thin1, and zero-swizzle 2D thin1 CPU staging exists for selected 8/16/32-bit UNORM formats. Guest shader sampling, depth tiling, mip/array/compressed staging, and other layouts remain absent. |
 | Depth/stencil/blend/raster state | Partial capture | Some HLE register state is recorded; Vulkan state mapping and guest draw behavior are absent. |
 | GPU memory coherence | Blocked | Requires an explicit ownership/ordering model between emulator worker, renderer thread, host Vulkan resources, guest reads and scanout. |
@@ -104,8 +104,10 @@ mean the guest behavior is implemented.
    command bytes.
 4. Add a shared, independently tested surface-address/format subsystem before
    attempting guest draw writes or additional tiled scanout formats.
-5. Decode a narrow shader family from verified binaries into a small IR and
-   test values; then translate that IR to validated SPIR-V.
+5. Decode supported clause results into a shader-level representation, then
+   model stage exports and translate only a verified stage subset to validated
+   SPIR-V. Current OP2 clause execution is a CPU-side test helper, not yet part
+   of guest draw execution.
 6. Feed a controlled WUT/Decaf-derived guest draw through captured vertex,
    shader, target, copy, and scanout state; verify pixels by readback.
 7. Rerun title workloads and collect actual draw/shader/surface evidence before
