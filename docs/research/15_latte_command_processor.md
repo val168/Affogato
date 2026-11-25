@@ -89,6 +89,33 @@ not sufficient to accept or execute a normal Cemu-shaped draw stream. The
 PM4 predicate source/state semantics must be verified before relaxing that
 rejection.
 
+AMD's [R7xx/Evergreen/Cayman programming guide, §§9.3.4 and 9.3.9](https://docs.amd.com/api/khub/documents/ApP4PzuRytQl9QLD9lgkmA/content)
+describes `DRAW_INDEX_AUTO` as a two-DWORD payload containing index count and
+draw initiator. It also says `INDEX_TYPE` belongs to the draw packet sequence
+and is not shadowed. This is generation-family evidence, not a Latte-specific
+specification. The current Affogato subset therefore captures the packet value
+in its register shadow for analysis, but a future draw implementation should
+model its draw-time role explicitly rather than assume it is ordinary
+persistent context state. The same guide describes `NUM_INSTANCES` only as a
+one-DWORD command packet; it does not establish Latte's zero-count behavior.
+
+The references differ on the effects used to represent `INDEX_TYPE`:
+Cemu's [`LatteCP_itIndexType`](https://github.com/cemu-project/Cemu/blob/main/src/Cafe/HW/Latte/Core/LatteCommandProcessor.cpp#L405-L409)
+writes the value to its `VGT_DMA_INDEX_TYPE` context field, while Decaf's
+[`Pm4Processor::indexType`](https://github.com/decaf-emu/decaf-emu/blob/master/src/libgpu/src/pm4_processor.cpp#L239-L249)
+stores it in both `VGT_INDEX_TYPE` and `VGT_DMA_INDEX_TYPE` register slots.
+AMD's [Southern Islands register guide](https://www.amd.com/content/dam/amd/en/documents/radeon-tech-docs/programmer-references/CIK_3D_registers_v2.pdf)
+identifies `VGT_DMA_INDEX_TYPE` at `0x28A7C`; Decaf's
+[`latte_registers.h`](https://github.com/decaf-emu/decaf-emu/blob/master/src/libgpu/latte/latte_registers.h#L42-L48)
+separately identifies `VGT_INDEX_TYPE` at `0x895C`. The R7xx packet guide's
+statement that `VGT_INDEX_TYPE` is not shadowed supports treating this
+difference as an implementation-model question, not permission to mirror both
+writes without a Latte fixture.
+Likewise, Cemu normalizes a `NUM_INSTANCES` payload of zero to one, whereas
+Decaf stores the raw count. Affogato currently preserves the raw packet value;
+its draw path must resolve the zero-count semantics with Latte-specific
+evidence before using it to submit instances.
+
 AMD's [Evergreen/Cayman guide §9.1.4](https://www.x.org/docs/AMD/old/evergreen_cayman_programming_guide.pdf)
 identifies Type-3 header bit 0 as `PREDICATE` and bit 1 as `SHADER_TYPE`; the
 earlier R6xx/R7xx guide documents bit 0 as predication and treats bits 7:1 as
