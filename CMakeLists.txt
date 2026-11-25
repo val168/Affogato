@@ -567,6 +567,11 @@ if(BUILD_TESTING)
             COMMAND affogato_frontend
                 --gx2-guest-triangle-matched-varying-minimum-half-smoke-test
         )
+        add_test(
+            NAME affogato_vulkan_guest_matched_varying_add_negative_half_readback
+            COMMAND affogato_frontend
+                --gx2-guest-triangle-matched-varying-add-negative-half-smoke-test
+        )
     endif()
 
     add_executable(affogato_recompiler_benchmark

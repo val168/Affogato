@@ -17,9 +17,12 @@ DX10-style maximum/minimum forms. Controlled guest shader fixtures execute
 MOV, ADD-by-0.5, MUL-by-0.5, MAX_DX10-by-0.5, and MIN_DX10-by-0.5, with Vulkan
 readback checking each output range and the interpolated green gradient.
 Generated modules pass `spirv-val`. Source absolute-value and sign-bit negate
-modifiers are emitted and covered by SPIR-V validation, but not yet by Vulkan
-readback. These are bounded fixtures, not general Latte arithmetic coverage or
-independent hardware conformance.
+modifiers are also emitted and validated; a guest ADD fixture negates its
+alpha-lane half-float operand and verifies the changed Vulkan readback. The
+source absolute modifier is structurally validated but its current fixture
+inputs are nonnegative, so its visible effect is not isolated. These are
+bounded fixtures, not general Latte arithmetic coverage or independent
+hardware conformance.
 
 ## Fragment varying interface fixture (2026-11-25)
 
