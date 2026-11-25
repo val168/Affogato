@@ -32554,8 +32554,8 @@ void latte_control_flow_decoder_tests()
     assert(shader_result.exports[0U].values[0U].components[3U] ==
         shader_registers[1U][3U]);
 
-    std::array<LatteShaderRegister, 1U> shader_constant_registers{};
-    shader_constant_registers[0U] = {
+    affogato::gpu::LatteShaderConstantFile shader_constant_registers{};
+    shader_constant_registers.entries[0U] = {
         0x3F800000U,
         0xBF000000U,
         0x40400000U,
@@ -32577,13 +32577,18 @@ void latte_control_flow_decoder_tests()
     const auto constant_shader_result = execute_latte_shader_subset(
         constant_shader_words,
         shader_registers,
-        shader_constant_registers);
-    assert(constant_shader_result.registers[3U] ==
-           shader_constant_registers[0U]);
+        &shader_constant_registers);
+    for (std::size_t component = 0U;
+         component < shader_constant_registers.entries[0U].size();
+         ++component)
+    {
+        assert(constant_shader_result.registers[3U][component] ==
+               shader_constant_registers.entries[0U][component]);
+    }
     assert(constant_shader_result.exports[0U].values[0U].components[0U] ==
-           shader_constant_registers[0U][0U]);
+           shader_constant_registers.entries[0U][0U]);
     assert(constant_shader_result.exports[0U].values[0U].components[3U] ==
-           shader_constant_registers[0U][3U]);
+           shader_constant_registers.entries[0U][3U]);
 
     bool rejected_shader_constant_without_file = false;
     try
@@ -32652,8 +32657,8 @@ void latte_control_flow_decoder_tests()
     Gx2ProgramShaderBinding vertex_shader_binding{};
     vertex_shader_binding.stage = Gx2ProgramStage::vertex;
     vertex_shader_binding.program_words.assign(
-        captured_guest_words.begin(),
-        captured_guest_words.end());
+        constant_shader_words.begin(),
+        constant_shader_words.end());
     Gx2Command set_vertex_shader_command{};
     set_vertex_shader_command.type = Gx2CommandType::set_program_shader;
     set_vertex_shader_command.program_shader = vertex_shader_binding;
@@ -32671,6 +32676,19 @@ void latte_control_flow_decoder_tests()
             static_cast<std::uint32_t>(semantic_index * sizeof(std::uint32_t));
         semantic_register_command.value = vertex_semantic_table[semantic_index];
         draw_state_commands.push_back(semantic_register_command);
+    }
+
+    for (std::size_t component = 0U;
+         component < shader_constant_registers.entries[0U].size();
+         ++component)
+    {
+        Gx2Command constant_register_command{};
+        constant_register_command.type = Gx2CommandType::set_alu_constant;
+        constant_register_command.register_address = 0x00031000U +
+            static_cast<std::uint32_t>(component * sizeof(std::uint32_t));
+        constant_register_command.value =
+            *shader_constant_registers.entries[0U][component];
+        draw_state_commands.push_back(constant_register_command);
     }
 
     Gx2Command draw_command{};
@@ -32694,17 +32712,23 @@ void latte_control_flow_decoder_tests()
         1U,
         draw_shader_registers);
     assert(draw_shader_result.fetched_attribute_count == 1U);
-    assert(draw_shader_result.shader_execution.exports.size() == 2U);
+    assert(draw_shader_result.shader_execution.exports.size() == 1U);
     assert(draw_shader_result.shader_execution.registers[1U] ==
         (LatteShaderRegister{
             0xC0000000U,
             0x3FC00000U,
             0U,
             0xDEADBEEFU}));
+    assert(draw_shader_result.shader_execution.registers[3U] ==
+        (LatteShaderRegister{
+            0x3F800000U,
+            0xBF000000U,
+            0x40400000U,
+            0xC0800000U}));
     assert(draw_shader_result.shader_execution.exports[0U].values[0U].type ==
         LatteExportType::position);
     assert(draw_shader_result.shader_execution.exports[0U].values[0U].components[0U] ==
-        draw_shader_result.shader_execution.registers[1U][0U]);
+        draw_shader_result.shader_execution.registers[3U][0U]);
 
     bool rejected_fetch_shader_call = false;
     try
@@ -32996,13 +33020,13 @@ void latte_control_flow_decoder_tests()
     using affogato::gpu::LatteShaderRegister;
     using affogato::gpu::latte_alu_source_constant_file_base;
     using affogato::gpu::latte_alu_source_constant_file_last;
-    std::array<LatteShaderRegister, 256U> constant_registers{};
-    constant_registers[0U] = {
+    affogato::gpu::LatteShaderConstantFile constant_registers{};
+    constant_registers.entries[0U] = {
         0x3F800000U,
         0xC0000000U,
         0x40400000U,
         0xC0800000U};
-    constant_registers.back() = {
+    constant_registers.entries.back() = {
         0x41100000U,
         0xC1200000U,
         0x41300000U,
@@ -33031,7 +33055,7 @@ void latte_control_flow_decoder_tests()
         constant_file_group,
         shader_registers,
         std::nullopt,
-        constant_registers);
+        &constant_registers);
     assert((constant_file_vector == expected_constant_vector));
     assert((shader_registers[7U] == expected_constant_vector));
 
@@ -33835,6 +33859,18 @@ void gx2_set_uniform_register_hle_tests()
     const auto pixel_snapshot = register_state.draw_snapshot(1U);
     assert(vertex_snapshot.has_value());
     assert(pixel_snapshot.has_value());
+    const auto vertex_constant_file =
+        affogato::gpu::capture_latte_shader_constant_file(
+            vertex_snapshot->registers,
+            affogato::gpu::Gx2ShaderStage::vertex);
+    const auto pixel_constant_file =
+        affogato::gpu::capture_latte_shader_constant_file(
+            pixel_snapshot->registers,
+            affogato::gpu::Gx2ShaderStage::pixel);
+    assert(vertex_constant_file.entries[2U][0U] == uniform_words[0U]);
+    assert(!vertex_constant_file.entries[0U][0U].has_value());
+    assert(pixel_constant_file.entries[0U][0U] == uniform_words[0U]);
+    assert(!pixel_constant_file.entries[2U][0U].has_value());
     const auto vertex_constant = find_register(
         vertex_snapshot->registers,
         vertex_uniform_register_base + 8U * 4U);

@@ -8,10 +8,12 @@ to those vectors. Constant values flow through MOV, supported floating/integer
 operations, vector groups, clauses, and the straight-line shader subset.
 Missing constant vectors fail explicitly. Tests exercise selectors for the
 first and last vector, shader output propagation, and missing-file rejection.
-This remains a CPU shader subset, not guest draw execution; captured GX2
-uniform-register state is not yet converted into stage vectors or passed
-automatically. Kcache, relative addressing, literals, loop constants, and
-Latte-hardware confirmation remain outstanding. See
+The draw-snapshot vertex CPU subset now maps known vertex ALU-constant dwords
+into that file, preserving unwritten components as unknown; a regression
+executes a constant-fed MOV and checks the exported position. This remains a
+CPU test subset, not normal guest draw dispatch or Vulkan rendering. Kcache,
+relative addressing, literals, loop constants, and Latte-hardware confirmation
+remain outstanding. See
 [`research/12_latte_shader_isa.md`](research/12_latte_shader_isa.md).
 
 ## GX2 uniform-register upload capture (2026-11-25)

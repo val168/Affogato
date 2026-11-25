@@ -36,7 +36,7 @@ namespace detail
     std::span<const std::uint32_t> guest_big_endian_words,
     std::span<const LatteShaderRegister> initial_registers,
     bool fetch_subroutine_already_executed,
-    std::span<const LatteShaderRegister> constant_registers = {})
+    const LatteShaderConstantFile* constant_file = nullptr)
 {
     const std::vector<LatteControlFlowRecord> control_flow =
         decode_latte_control_flow(guest_big_endian_words);
@@ -111,7 +111,7 @@ namespace detail
             static_cast<void>(execute_latte_alu_op2_clause(
                 slots,
                 result.registers,
-                constant_registers));
+                constant_file));
             continue;
         }
 
@@ -152,13 +152,13 @@ namespace detail
 execute_latte_shader_subset(
     std::span<const std::uint32_t> guest_big_endian_words,
     std::span<const LatteShaderRegister> initial_registers,
-    std::span<const LatteShaderRegister> constant_registers = {})
+    const LatteShaderConstantFile* constant_file = nullptr)
 {
     return detail::execute_latte_shader_subset_impl(
         guest_big_endian_words,
         initial_registers,
         false,
-        constant_registers);
+        constant_file);
 }
 
 // Execute the straight-line vertex-shader subset after its bound fetch program
@@ -168,13 +168,13 @@ execute_latte_shader_subset(
 execute_latte_vertex_shader_program_subset(
     std::span<const std::uint32_t> guest_big_endian_words,
     std::span<const LatteShaderRegister> initial_registers,
-    std::span<const LatteShaderRegister> constant_registers = {})
+    const LatteShaderConstantFile* constant_file = nullptr)
 {
     return detail::execute_latte_shader_subset_impl(
         guest_big_endian_words,
         initial_registers,
         true,
-        constant_registers);
+        constant_file);
 }
 
 } // namespace affogato::gpu

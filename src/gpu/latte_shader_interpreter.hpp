@@ -62,6 +62,12 @@ inline constexpr std::size_t latte_shader_register_component_count = 4U;
 using LatteShaderRegister =
     std::array<std::uint32_t, latte_shader_register_component_count>;
 
+struct LatteShaderConstantFile
+{
+    std::array<std::array<std::optional<std::uint32_t>,
+        latte_shader_register_component_count>, 256U> entries{};
+};
+
 struct LatteShaderExportValue
 {
     LatteExportType type{};
@@ -158,7 +164,7 @@ evaluate_latte_normal_export(
     std::uint8_t source_channel,
     std::span<const LatteShaderRegister> guest_registers,
     const std::optional<LatteShaderRegister>& incoming_previous_vector,
-    std::span<const LatteShaderRegister> constant_registers = {})
+    const LatteShaderConstantFile* constant_file = nullptr)
 {
     if (source_channel >= latte_shader_register_component_count)
     {
@@ -198,13 +204,21 @@ evaluate_latte_normal_export(
     {
         const std::size_t constant_index =
             source_selector - latte_alu_source_constant_file_base;
-        if (constant_index >= constant_registers.size())
+        if (constant_file == nullptr)
         {
             throw std::runtime_error(
-                "Latte ALU constant-file selector exceeds the supplied constants");
+                "Latte ALU constant-file source has no supplied constant file");
         }
 
-        return constant_registers[constant_index][source_channel];
+        const std::optional<std::uint32_t>& constant_value =
+            constant_file->entries[constant_index][source_channel];
+        if (!constant_value.has_value())
+        {
+            throw std::runtime_error(
+                "Latte ALU constant-file source reads an uninitialized component");
+        }
+
+        return *constant_value;
     }
 
     constexpr std::uint16_t maximum_gpr_selector = 127U;
@@ -228,7 +242,7 @@ evaluate_latte_normal_export(
     std::span<const LatteShaderRegister> guest_registers,
     const std::optional<LatteShaderRegister>& incoming_previous_vector =
         std::nullopt,
-    std::span<const LatteShaderRegister> constant_registers = {})
+    const LatteShaderConstantFile* constant_file = nullptr)
 {
     if (instruction.opcode != latte_alu_op2_move_opcode)
     {
@@ -265,7 +279,7 @@ evaluate_latte_normal_export(
         instruction.source0_channel,
         guest_registers,
         incoming_previous_vector,
-        constant_registers);
+        constant_file);
 
     // R700 applies floating-point absolute value before source negation.
     // Sign-bit operations preserve every other binary32 bit, including NaN
@@ -291,7 +305,7 @@ evaluate_latte_normal_export(
     std::span<const LatteShaderRegister> guest_registers,
     const std::optional<LatteShaderRegister>& incoming_previous_vector =
         std::nullopt,
-    std::span<const LatteShaderRegister> constant_registers = {})
+    const LatteShaderConstantFile* constant_file = nullptr)
 {
     if (instruction.opcode != latte_alu_op2_add_float_opcode &&
         instruction.opcode != latte_alu_op2_multiply_ieee_opcode &&
@@ -347,7 +361,7 @@ evaluate_latte_normal_export(
             instruction.source0_channel,
             guest_registers,
             incoming_previous_vector,
-            constant_registers),
+            constant_file),
         instruction.source0_absolute,
         instruction.source0_negate);
     const float source1 = apply_source_modifiers(
@@ -356,7 +370,7 @@ evaluate_latte_normal_export(
             instruction.source1_channel,
             guest_registers,
             incoming_previous_vector,
-            constant_registers),
+            constant_file),
         instruction.source1_absolute,
         instruction.source1_negate);
 
@@ -408,7 +422,7 @@ evaluate_latte_normal_export(
     std::span<const LatteShaderRegister> guest_registers,
     const std::optional<LatteShaderRegister>& incoming_previous_vector =
         std::nullopt,
-    std::span<const LatteShaderRegister> constant_registers = {})
+    const LatteShaderConstantFile* constant_file = nullptr)
 {
     if (instruction.opcode != latte_alu_op2_and_integer_opcode &&
         instruction.opcode != latte_alu_op2_or_integer_opcode &&
@@ -463,7 +477,7 @@ evaluate_latte_normal_export(
         instruction.source0_channel,
         guest_registers,
         incoming_previous_vector,
-        constant_registers);
+        constant_file);
     if (instruction.opcode == latte_alu_op2_not_integer_opcode)
     {
         return ~source0;
@@ -474,7 +488,7 @@ evaluate_latte_normal_export(
         instruction.source1_channel,
         guest_registers,
         incoming_previous_vector,
-        constant_registers);
+        constant_file);
     constexpr std::uint32_t signed_order_bias = 0x80000000U;
     const std::uint32_t signed_order_source0 = source0 ^ signed_order_bias;
     const std::uint32_t signed_order_source1 = source1 ^ signed_order_bias;
@@ -535,7 +549,7 @@ execute_latte_alu_op2_vector_group(
     std::span<LatteShaderRegister> guest_registers,
     const std::optional<LatteShaderRegister>& incoming_previous_vector =
         std::nullopt,
-    std::span<const LatteShaderRegister> constant_registers = {})
+    const LatteShaderConstantFile* constant_file = nullptr)
 {
     if (group.instructions.size() != latte_shader_register_component_count)
     {
@@ -567,7 +581,7 @@ execute_latte_alu_op2_vector_group(
                 instruction,
                 read_only_registers,
                 incoming_previous_vector,
-                constant_registers);
+                constant_file);
             break;
         case latte_alu_op2_add_float_opcode:
         case latte_alu_op2_multiply_ieee_opcode:
@@ -577,7 +591,7 @@ execute_latte_alu_op2_vector_group(
                 instruction,
                 read_only_registers,
                 incoming_previous_vector,
-                constant_registers);
+                constant_file);
             break;
         case latte_alu_op2_and_integer_opcode:
         case latte_alu_op2_or_integer_opcode:
@@ -600,7 +614,7 @@ execute_latte_alu_op2_vector_group(
                     instruction,
                     read_only_registers,
                     incoming_previous_vector,
-                    constant_registers);
+                    constant_file);
             break;
         default:
             throw std::runtime_error(
@@ -627,7 +641,7 @@ execute_latte_alu_op2_vector_group(
 [[nodiscard]] inline LatteShaderRegister execute_latte_alu_op2_clause(
     std::span<const LatteAluClauseSlot> slots,
     std::span<LatteShaderRegister> guest_registers,
-    std::span<const LatteShaderRegister> constant_registers = {})
+    const LatteShaderConstantFile* constant_file = nullptr)
 {
     const std::vector<LatteAluOp2InstructionGroup> groups =
         decode_latte_alu_op2_groups(slots);
@@ -647,7 +661,7 @@ execute_latte_alu_op2_vector_group(
             group,
             working_registers,
             previous_vector,
-            constant_registers);
+            constant_file);
     }
 
     std::copy(

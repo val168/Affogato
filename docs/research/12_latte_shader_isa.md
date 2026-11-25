@@ -148,10 +148,12 @@ Affogato validates the 256-vector bank bounds and guest source range, reads
 each dword through guest big-endian access, and appends typed
 `set_alu_constant` writes to the ordered GX2 stream. The vertex bank begins at
 vector 256 in the shared register map; pixel begins at vector 0. Each write is
-retained by `Gx2RegisterState` and draw-time register snapshots. The CPU shader
-subset can read absolute constant selectors from a caller-provided vector span,
-but Affogato does not yet convert raw draw-snapshot register words into stage
-vectors or supply them automatically to shader execution or Vulkan uniforms.
+retained by `Gx2RegisterState` and draw-time register snapshots. The bounded
+vertex CPU subset maps known dwords from its draw snapshot into a sparse
+constant file and supplies it to shader execution; unwritten components remain
+unknown and reads of them fail. This is a deterministic test path, not normal
+GX2 draw dispatch or Vulkan uniform binding. Pixel snapshots can be decoded by
+the same address helper, but a pixel shader execution path is not implemented.
 
 The high 16 bits of Decaf's offset select an `SQ_LOOP_CONST_*` entry, while the
 lower bits select the ordinary constant register location. Affogato currently
