@@ -1,5 +1,21 @@
 # Affogato Development Status
 
+## GX2 shader-mode state capture (2026-11-25)
+
+`GX2SetShaderModeEx` now accepts uniform-register and uniform-block modes and
+queues a typed operation in the normal GX2 command stream. `Gx2RegisterState`
+applies the shader-mode GPR, stack, thread, `SQ_CONFIG`, and VGT-mode fields in
+order. Register snapshots retain a known-bit mask, so masked updates preserve
+previously observed values while leaving unobserved neighboring bits unknown.
+Geometry and compute modes fail explicitly because their ring resources and
+scheduling are not modeled. Tests cover HLE argument capture, allocation
+limits, both uniform modes, field preservation, unknown-bit tracking, and
+draw-time ordering. Debug build and CTest pass 2/2. This is CPU-side state
+capture only; it does not program a GPU, execute shaders, or prove Latte
+hardware semantics. In particular, uniform-block mode clearing `DX9_CONSTS`
+differs from Decaf's read/modify/write behavior and remains unverified against
+Wii U hardware. See [`research/12_latte_shader_isa.md`](research/12_latte_shader_isa.md).
+
 ## Current implementation checkpoint (2026-11-25)
 
 `GX2SetContextState` and `GX2DirectCallDisplayList` share a bounded PM4

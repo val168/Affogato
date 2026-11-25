@@ -30,6 +30,7 @@ enum class Gx2CommandType
     set_program_shader,
     set_color_buffer,
     set_depth_buffer,
+    set_shader_mode,
     draw,
 };
 
@@ -38,6 +39,27 @@ enum class Gx2ProgramStage : std::uint8_t
     vertex,
     pixel,
     geometry,
+};
+
+enum class Gx2ShaderMode : std::uint32_t
+{
+    uniform_register = 0U,
+    uniform_block = 1U,
+    geometry_shader = 2U,
+    compute_shader = 3U,
+};
+
+struct Gx2ShaderModeRequest
+{
+    Gx2ShaderMode mode{};
+    std::uint32_t vertex_gpr_count{};
+    std::uint32_t vertex_stack_entry_count{};
+    std::uint32_t geometry_gpr_count{};
+    std::uint32_t geometry_stack_entry_count{};
+    std::uint32_t pixel_gpr_count{};
+    std::uint32_t pixel_stack_entry_count{};
+
+    constexpr bool operator==(const Gx2ShaderModeRequest&) const = default;
 };
 
 struct Gx2DrawCall
@@ -239,6 +261,7 @@ struct Gx2Command
     std::optional<Gx2ClearColorRequest> clear_color;
     std::vector<Gx2VertexBufferSnapshot> draw_vertex_data;
     std::optional<Gx2IndexBufferSnapshot> draw_index_data;
+    std::optional<Gx2ShaderModeRequest> shader_mode;
 
     constexpr Gx2Command() = default;
     constexpr Gx2Command(
@@ -257,7 +280,8 @@ struct Gx2Command
         std::optional<Gx2ColorBufferScanCopy> command_scan_buffer_copy = std::nullopt,
         std::optional<Gx2ClearColorRequest> command_clear_color = std::nullopt,
         std::vector<Gx2VertexBufferSnapshot> command_draw_vertex_data = {},
-        std::optional<Gx2IndexBufferSnapshot> command_draw_index_data = std::nullopt)
+        std::optional<Gx2IndexBufferSnapshot> command_draw_index_data = std::nullopt,
+        std::optional<Gx2ShaderModeRequest> command_shader_mode = std::nullopt)
         : type(command_type),
           register_address(command_register_address),
           value(command_value),
@@ -273,7 +297,8 @@ struct Gx2Command
           scan_buffer_copy(command_scan_buffer_copy),
           clear_color(command_clear_color),
           draw_vertex_data(std::move(command_draw_vertex_data)),
-          draw_index_data(std::move(command_draw_index_data))
+          draw_index_data(std::move(command_draw_index_data)),
+          shader_mode(command_shader_mode)
     {
     }
 

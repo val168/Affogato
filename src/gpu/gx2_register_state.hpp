@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <optional>
 #include <span>
+#include <stdexcept>
 #include <unordered_map>
 #include <vector>
 
@@ -38,6 +39,9 @@ struct Gx2RegisterSnapshotEntry
     std::uint32_t address{};
     cpu::espresso::Gx2CommandType type{};
     std::uint32_t value{};
+    // A partial semantic update leaves untouched register bits unknown unless
+    // an earlier command supplied their values.
+    std::uint32_t known_mask{0xFFFFFFFFU};
 
     bool operator==(const Gx2RegisterSnapshotEntry&) const = default;
 };
@@ -112,6 +116,16 @@ public:
                 draw_color_buffers_.push_back(color_buffers_);
                 draw_depth_buffer_.push_back(depth_buffer_);
                 draw_registers_.push_back(snapshot_registers());
+                continue;
+            }
+            if (command.type == cpu::espresso::Gx2CommandType::set_shader_mode)
+            {
+                if (!command.shader_mode)
+                {
+                    throw std::invalid_argument(
+                        "GX2 shader-mode command is missing its request");
+                }
+                apply_shader_mode(*command.shader_mode);
                 continue;
             }
             if (command.type == cpu::espresso::Gx2CommandType::set_vertex_buffer)
@@ -190,7 +204,10 @@ public:
                 continue;
             }
 
-            registers_[command.register_address] = {command.type, command.value};
+            registers_[command.register_address] = {
+                command.type,
+                command.value,
+                0xFFFFFFFFU};
         }
     }
 
@@ -199,6 +216,10 @@ public:
     {
         const auto it = registers_.find(register_address);
         if (it == registers_.end())
+        {
+            return std::nullopt;
+        }
+        if (it->second.known_mask != 0xFFFFFFFFU)
         {
             return std::nullopt;
         }
@@ -450,12 +471,130 @@ public:
     }
 
 private:
+    static constexpr std::uint32_t sq_config_address = 0x00008C00U;
+    static constexpr std::uint32_t sq_gpr_resource_mgmt_1_address =
+        0x00008C04U;
+    static constexpr std::uint32_t sq_thread_resource_mgmt_address =
+        0x00008C0CU;
+    static constexpr std::uint32_t sq_stack_resource_mgmt_1_address =
+        0x00008C10U;
+    static constexpr std::uint32_t vgt_gs_mode_address = 0x00028A40U;
+
     // AMD's R6xx register reference documents this clear mask; Decaf's Latte
     // register map and PM4 path confirm the corresponding table addresses and
     // per-bit effect. This is related-generation reference evidence.
     static constexpr std::uint32_t vertex_semantic_base_address = 0x00028380U;
     static constexpr std::uint32_t vertex_semantic_clear_address = 0x000288E0U;
     static constexpr std::uint32_t vertex_semantic_count = 32U;
+
+    void apply_shader_mode(
+        const cpu::espresso::Gx2ShaderModeRequest& request)
+    {
+        using cpu::espresso::Gx2CommandType;
+        using cpu::espresso::Gx2ShaderMode;
+
+        constexpr std::uint32_t dx9_constants_mask = 1U << 2U;
+        constexpr std::uint32_t prefer_vector_alu_mask = 1U << 3U;
+        constexpr std::uint32_t pixel_priority_mask = 0x3U << 24U;
+        constexpr std::uint32_t vertex_priority_mask = 0x3U << 26U;
+        constexpr std::uint32_t geometry_priority_mask = 0x3U << 28U;
+        constexpr std::uint32_t export_priority_mask = 0x3U << 30U;
+        constexpr std::uint32_t pixel_shader_priority = 3U;
+        constexpr std::uint32_t vertex_shader_priority = 2U;
+        constexpr std::uint32_t geometry_shader_priority = 1U;
+        constexpr std::uint32_t export_shader_priority = 0U;
+        constexpr std::uint32_t shader_priorities_mask =
+            pixel_priority_mask | vertex_priority_mask |
+            geometry_priority_mask | export_priority_mask;
+        constexpr std::uint32_t config_mask =
+            dx9_constants_mask | prefer_vector_alu_mask |
+            shader_priorities_mask;
+        constexpr std::uint32_t gpr_count_mask = 0xFFU;
+        constexpr std::uint32_t pixel_gpr_mask = gpr_count_mask;
+        constexpr std::uint32_t vertex_gpr_mask = gpr_count_mask << 16U;
+        constexpr std::uint32_t stack_entry_mask = 0xFFFU;
+        constexpr std::uint32_t pixel_stack_mask = stack_entry_mask;
+        constexpr std::uint32_t vertex_stack_mask = stack_entry_mask << 16U;
+        constexpr std::uint32_t gs_mode_mask = 0x7U;
+        constexpr std::uint32_t pixel_thread_count = 136U;
+        constexpr std::uint32_t vertex_thread_count = 48U;
+        constexpr std::uint32_t geometry_thread_count = 4U;
+        constexpr std::uint32_t export_thread_count = 4U;
+        constexpr std::uint32_t shader_mode_off = 0U;
+
+        if (request.mode != Gx2ShaderMode::uniform_register &&
+            request.mode != Gx2ShaderMode::uniform_block)
+        {
+            throw std::invalid_argument(
+                "GX2 shader-mode state does not support this mode");
+        }
+
+        std::uint32_t config_value =
+            prefer_vector_alu_mask |
+            (pixel_shader_priority << 24U) |
+            (vertex_shader_priority << 26U) |
+            (geometry_shader_priority << 28U) |
+            (export_shader_priority << 30U);
+        if (request.mode == Gx2ShaderMode::uniform_register)
+        {
+            config_value |= dx9_constants_mask;
+        }
+        apply_masked_register_write(
+            sq_config_address,
+            config_value,
+            config_mask,
+            Gx2CommandType::set_config_register);
+
+        const std::uint32_t gpr_value =
+            (request.pixel_gpr_count & gpr_count_mask) |
+            ((request.vertex_gpr_count & gpr_count_mask) << 16U);
+        apply_masked_register_write(
+            sq_gpr_resource_mgmt_1_address,
+            gpr_value,
+            pixel_gpr_mask | vertex_gpr_mask,
+            Gx2CommandType::set_config_register);
+
+        // The bounded GX2 reference mode assigns fixed resident thread counts
+        // for ordinary graphics modes. This changes no GS/ES GPR allocation.
+        constexpr std::uint32_t thread_resource_value =
+            pixel_thread_count |
+            (vertex_thread_count << 8U) |
+            (geometry_thread_count << 16U) |
+            (export_thread_count << 24U);
+        apply_masked_register_write(
+            sq_thread_resource_mgmt_address,
+            thread_resource_value,
+            0xFFFFFFFFU,
+            Gx2CommandType::set_config_register);
+
+        const std::uint32_t stack_value =
+            (request.pixel_stack_entry_count & stack_entry_mask) |
+            ((request.vertex_stack_entry_count & stack_entry_mask) << 16U);
+        apply_masked_register_write(
+            sq_stack_resource_mgmt_1_address,
+            stack_value,
+            pixel_stack_mask | vertex_stack_mask,
+            Gx2CommandType::set_config_register);
+
+        apply_masked_register_write(
+            vgt_gs_mode_address,
+            shader_mode_off,
+            gs_mode_mask,
+            Gx2CommandType::set_context_register);
+    }
+
+    void apply_masked_register_write(
+        std::uint32_t address,
+        std::uint32_t value,
+        std::uint32_t write_mask,
+        cpu::espresso::Gx2CommandType type)
+    {
+        RegisterValue& register_value = registers_[address];
+        register_value.value =
+            (register_value.value & ~write_mask) | (value & write_mask);
+        register_value.known_mask |= write_mask;
+        register_value.type = type;
+    }
 
     void apply_vertex_semantic_clear(std::uint32_t clear_mask)
     {
@@ -477,7 +616,8 @@ private:
                 semantic_index * register_stride;
             registers_[semantic_address] = {
                 cpu::espresso::Gx2CommandType::set_context_register,
-                cleared_semantic_value};
+                cleared_semantic_value,
+                0xFFFFFFFFU};
         }
     }
 
@@ -488,7 +628,11 @@ private:
         result.reserve(registers_.size());
         for (const auto& [address, value] : registers_)
         {
-            result.push_back({address, value.type, value.value});
+            result.push_back({
+                address,
+                value.type,
+                value.value,
+                value.known_mask});
         }
         return result;
     }
@@ -517,6 +661,7 @@ private:
     {
         cpu::espresso::Gx2CommandType type{};
         std::uint32_t value{};
+        std::uint32_t known_mask{};
     };
 
     std::unordered_map<std::uint32_t, RegisterValue> registers_;

@@ -33636,6 +33636,192 @@ void latte_control_flow_decoder_tests()
     assert(rejected_missing_end_marker);
 }
 
+void gx2_set_shader_mode_ex_hle_tests()
+{
+    using affogato::gpu::Gx2RegisterState;
+
+    constexpr std::uint32_t return_address = 0x2000U;
+    constexpr std::uint32_t shader_mode_register = 0x00008C00U;
+    constexpr std::uint32_t gpr_resource_register = 0x00008C04U;
+    constexpr std::uint32_t thread_resource_register = 0x00008C0CU;
+    constexpr std::uint32_t stack_resource_register = 0x00008C10U;
+    constexpr std::uint32_t geometry_mode_register = 0x00028A40U;
+    constexpr std::uint32_t gx2_shader_mode_field_mask = 0xFF00000CU;
+
+    EspressoCore core(0x1000U);
+    register_gx2_hle(core.hle);
+    core.gx2.initialized = true;
+    core.state.gpr[3] = 0U;
+    core.state.gpr[4] = 48U;
+    core.state.gpr[5] = 64U;
+    core.state.gpr[6] = 0U;
+    core.state.gpr[7] = 0U;
+    core.state.gpr[8] = 200U;
+    core.state.gpr[9] = 192U;
+    core.state.lr = return_address;
+    const auto gprs_before = core.state.gpr;
+    core.state.cia = core.hle.bind_import("gx2", "GX2SetShaderModeEx");
+
+    const RunResult mode_result = core.run(1U);
+    assert(mode_result.reason == StopReason::instruction_limit);
+    assert(core.state.gpr == gprs_before);
+    assert(core.state.cia == return_address);
+    assert(core.gx2.pending_commands.size() == 1U);
+    const Gx2Command mode_command = core.gx2.pending_commands.front();
+    assert(mode_command.type == Gx2CommandType::set_shader_mode);
+    assert(mode_command.shader_mode == (Gx2ShaderModeRequest{
+        Gx2ShaderMode::uniform_register,
+        48U,
+        64U,
+        0U,
+        0U,
+        200U,
+        192U}));
+
+    constexpr std::uint32_t prior_config = 0xA5C3F0F3U;
+    constexpr std::uint32_t prior_gpr_allocation = 0xA5F05A5AU;
+    constexpr std::uint32_t prior_thread_allocation = 0xAAAAAAAAU;
+    constexpr std::uint32_t prior_stack_allocation = 0xCAFED234U;
+    constexpr std::uint32_t prior_geometry_mode = 0xDEADBEEFU;
+    const std::array<Gx2Command, 6U> initial_registers{{
+        {Gx2CommandType::set_config_register,
+            shader_mode_register,
+            prior_config},
+        {Gx2CommandType::set_config_register,
+            gpr_resource_register,
+            prior_gpr_allocation},
+        {Gx2CommandType::set_config_register,
+            thread_resource_register,
+            prior_thread_allocation},
+        {Gx2CommandType::set_config_register,
+            stack_resource_register,
+            prior_stack_allocation},
+        {Gx2CommandType::set_context_register,
+            geometry_mode_register,
+            prior_geometry_mode},
+        mode_command,
+    }};
+    Gx2RegisterState state;
+    state.apply(initial_registers);
+
+    Gx2Command draw_command{};
+    draw_command.type = Gx2CommandType::draw;
+    const std::array<Gx2Command, 1U> first_draw{draw_command};
+    state.apply(first_draw);
+
+    const Gx2ShaderModeRequest block_mode_request{
+        Gx2ShaderMode::uniform_block,
+        64U,
+        32U,
+        0U,
+        0U,
+        76U,
+        176U};
+    Gx2Command block_mode_command{};
+    block_mode_command.type = Gx2CommandType::set_shader_mode;
+    block_mode_command.value =
+        static_cast<std::uint32_t>(block_mode_request.mode);
+    block_mode_command.shader_mode = block_mode_request;
+    const std::array<Gx2Command, 2U> block_mode_draw{{
+        block_mode_command,
+        draw_command}};
+    state.apply(block_mode_draw);
+
+    const auto find_register = [](
+        std::span<const affogato::gpu::Gx2RegisterSnapshotEntry> registers,
+        std::uint32_t address)
+        -> std::optional<affogato::gpu::Gx2RegisterSnapshotEntry> {
+        const auto found = std::find_if(
+            registers.begin(),
+            registers.end(),
+            [address](const auto& entry) { return entry.address == address; });
+        if (found == registers.end())
+        {
+            return std::nullopt;
+        }
+        return *found;
+    };
+
+    const auto register_mode_snapshot = state.draw_snapshot(0U);
+    const auto block_mode_snapshot = state.draw_snapshot(1U);
+    assert(register_mode_snapshot.has_value());
+    assert(block_mode_snapshot.has_value());
+    const auto register_mode_config = find_register(
+        register_mode_snapshot->registers,
+        shader_mode_register);
+    assert(register_mode_config.has_value());
+    assert((register_mode_config->value & (1U << 2U)) != 0U);
+    const auto config =
+        find_register(block_mode_snapshot->registers, shader_mode_register);
+    assert(config.has_value());
+    const std::uint32_t expected_config_bits =
+        (3U << 24U) | (2U << 26U) | (1U << 28U) | (1U << 3U);
+    assert((config->value & gx2_shader_mode_field_mask) == expected_config_bits);
+    assert(config->known_mask == 0xFFFFFFFFU);
+    const auto gpr_allocation =
+        find_register(block_mode_snapshot->registers, gpr_resource_register);
+    assert(gpr_allocation.has_value());
+    const std::uint32_t gpr_allocation_mask = 0x00FF00FFU;
+    const std::uint32_t expected_gpr_allocation =
+        (prior_gpr_allocation & ~gpr_allocation_mask) |
+        76U |
+        (64U << 16U);
+    assert(gpr_allocation->value == expected_gpr_allocation);
+    const auto thread_allocation =
+        find_register(block_mode_snapshot->registers, thread_resource_register);
+    assert(thread_allocation.has_value());
+    assert(thread_allocation->value == 0x04043088U);
+    const auto stack_allocation =
+        find_register(block_mode_snapshot->registers, stack_resource_register);
+    assert(stack_allocation.has_value());
+    const std::uint32_t stack_allocation_mask = 0x0FFF0FFFU;
+    const std::uint32_t expected_stack_allocation =
+        (prior_stack_allocation & ~stack_allocation_mask) |
+        176U |
+        (32U << 16U);
+    assert(stack_allocation->value == expected_stack_allocation);
+    const auto geometry_mode =
+        find_register(block_mode_snapshot->registers, geometry_mode_register);
+    assert(geometry_mode.has_value());
+    assert((geometry_mode->value & 0x7U) == 0U);
+    assert((geometry_mode->value & ~0x7U) == (prior_geometry_mode & ~0x7U));
+
+    Gx2RegisterState unknown_register_state;
+    const std::array<Gx2Command, 2U> unknown_state_draw{{
+        mode_command,
+        draw_command}};
+    unknown_register_state.apply(unknown_state_draw);
+    const auto unknown_state_snapshot = unknown_register_state.draw_snapshot(0U);
+    assert(unknown_state_snapshot.has_value());
+    const auto partial_config = find_register(
+        unknown_state_snapshot->registers,
+        shader_mode_register);
+    assert(partial_config.has_value());
+    assert(partial_config->known_mask == 0xFF00000CU);
+    assert(!unknown_register_state.read(shader_mode_register).has_value());
+
+    const std::size_t command_count_before_invalid_mode =
+        core.gx2.pending_commands.size();
+    core.state.gpr[3] =
+        static_cast<std::uint32_t>(Gx2ShaderMode::geometry_shader);
+    core.state.cia = core.hle.bind_import("gx2", "GX2SetShaderModeEx");
+    const RunResult unsupported_mode_result = core.run(1U);
+    assert(unsupported_mode_result.reason == StopReason::hle_error);
+    assert(unsupported_mode_result.detail.find(
+               "geometry and compute modes require unimplemented ring resources") !=
+           std::string::npos);
+    assert(core.gx2.pending_commands.size() == command_count_before_invalid_mode);
+
+    core.state.gpr[3] = 0U;
+    core.state.gpr[4] = 0x100U;
+    core.state.cia = core.hle.bind_import("gx2", "GX2SetShaderModeEx");
+    const RunResult oversized_allocation_result = core.run(1U);
+    assert(oversized_allocation_result.reason == StopReason::hle_error);
+    assert(oversized_allocation_result.detail.find(
+               "allocation exceeds Latte register fields") != std::string::npos);
+    assert(core.gx2.pending_commands.size() == command_count_before_invalid_mode);
+}
+
 void gx2_register_state_tests()
 {
     using affogato::gpu::Gx2DrawShaderResources;
@@ -44148,6 +44334,7 @@ int main(int argc, char* argv[])
     gx2_set_vertex_and_geometry_texture_hle_tests();
     gx2_set_pixel_sampler_hle_tests();
     gx2_set_sampler_border_color_hle_tests();
+    gx2_set_shader_mode_ex_hle_tests();
     gx2_register_state_tests();
     latte_texture_staging_tests();
     gx2_calc_tv_size_hle_tests();

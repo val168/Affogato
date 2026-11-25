@@ -82,6 +82,10 @@ constexpr std::uint32_t gx2_context_display_list_capacity = 0x300U;
 constexpr std::uint32_t gx2_color_buffer_size = 0x9CU;
 constexpr std::uint32_t gx2_depth_buffer_size = 0xACU;
 constexpr std::uint32_t gx2_render_target_count = 8U;
+constexpr std::uint32_t gx2_shader_mode_uniform_register = 0U;
+constexpr std::uint32_t gx2_shader_mode_uniform_block = 1U;
+constexpr std::uint32_t gx2_shader_mode_max_gpr_count = 0xFFU;
+constexpr std::uint32_t gx2_shader_mode_max_stack_entry_count = 0xFFFU;
 static_assert(gx2_context_shadow_state_size == gx2_context_profiling_offset);
 static_assert(gx2_context_display_list_offset +
                   gx2_context_display_list_capacity ==
@@ -6378,6 +6382,47 @@ void register_gx2_hle(HleDispatcher& dispatcher)
                 std::nullopt,
                 binding});
             core.gx2.fetch_shader = std::move(binding);
+        });
+
+    dispatcher.register_function(
+        "gx2",
+        "GX2SetShaderModeEx",
+        [](EspressoCore& core) {
+            constexpr const char* api_name = "gx2::GX2SetShaderModeEx";
+            const std::uint32_t raw_mode = core.state.gpr[3];
+            if (raw_mode != gx2_shader_mode_uniform_register &&
+                raw_mode != gx2_shader_mode_uniform_block)
+            {
+                throw HleExecutionError(
+                    std::string(api_name) +
+                    ": geometry and compute modes require unimplemented ring resources");
+            }
+
+            const Gx2ShaderModeRequest request{
+                static_cast<Gx2ShaderMode>(raw_mode),
+                core.state.gpr[4],
+                core.state.gpr[5],
+                core.state.gpr[6],
+                core.state.gpr[7],
+                core.state.gpr[8],
+                core.state.gpr[9]};
+            if (request.vertex_gpr_count > gx2_shader_mode_max_gpr_count ||
+                request.pixel_gpr_count > gx2_shader_mode_max_gpr_count ||
+                request.vertex_stack_entry_count >
+                    gx2_shader_mode_max_stack_entry_count ||
+                request.pixel_stack_entry_count >
+                    gx2_shader_mode_max_stack_entry_count)
+            {
+                throw HleExecutionError(
+                    std::string(api_name) +
+                    ": vertex/pixel allocation exceeds Latte register fields");
+            }
+
+            Gx2Command command{};
+            command.type = Gx2CommandType::set_shader_mode;
+            command.value = raw_mode;
+            command.shader_mode = request;
+            core.gx2.pending_commands.push_back(std::move(command));
         });
 
     dispatcher.register_function(

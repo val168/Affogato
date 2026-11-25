@@ -107,27 +107,28 @@ ring-buffer/resource setup. This is useful cross-checked implementation
 behavior, but Decaf is GPL-3.0 and is used here only as a reference; no code is
 copied.
 
-Affogato does not currently register `GX2SetShaderModeEx`. Its ordered command
-stream can retain config/context register writes, but the GX2 runtime does not
-maintain a complete prior-value shadow for all six config registers or the
-VGT mode register. The reference implementation's read-modify-write behavior
-means emitting guessed complete register words would overwrite state that
-Affogato has not observed. Correct implementation therefore depends on a
-defined GPU register reset model or an ordered register shadow that consumes
-all guest writes before constructing the mode update; mode changes also need
-to preserve the documented idle/flush ordering. Until then, shader resource
-allocation and mode transitions remain missing, rather than being modeled as
-successful no-ops.
+Affogato registers `GX2SetShaderModeEx` for uniform-register and uniform-block
+modes. It queues a typed state operation; `Gx2RegisterState` applies it in
+command order as masked updates to the shader allocation, thread, stack,
+`SQ_CONFIG`, and `VGT_GS_MODE` fields. Register snapshot entries carry a known
+bit mask, so a partial update does not turn unobserved neighboring bits into
+fabricated zeroes. If all prior bits were supplied, updates preserve the
+untouched fields. This is a CPU-side state shadow only: it does not program a
+physical GPU or establish shader execution. Geometry and compute modes fail
+explicitly because their VGT/ring-buffer and scheduling behavior is not
+implemented.
 
-The first compatible implementation should validate mode and allocation
-arguments, build the documented register-field updates against known current
-state, retain them in the same ordered command stream, and explicitly reject
-geometry/compute paths until their ring resources and scheduling semantics are
-modeled. Tests should verify wrapper-equivalent arguments, bitfield
-preservation, command order, draw-time snapshots, invalid modes, and required
-synchronization boundaries. Wii U traces or hardware fixtures are still needed
-to confirm Latte-specific differences from R7xx and whether the reference's
-allocation policy matches Cafe OS on hardware.
+The implemented subset validates the public mode values and 8-bit GPR / 12-bit
+stack allocation fields, retains all ABI arguments, updates register state in
+the ordered draw stream, and rejects geometry/compute modes before queueing a
+command. Uniform-block mode clears `DX9_CONSTS` based on the R7xx register
+definition that zero selects DX10 constant-cache mode; Decaf only sets this bit
+for uniform-register mode and otherwise preserves it. This difference is not
+resolved by Wii U hardware evidence. The current tests verify state-shadow
+field behavior and command ordering, not Cafe OS hardware register programming.
+Latte traces or hardware fixtures are still needed to confirm this mapping,
+resource allocation policy, and synchronization behavior before these state
+updates can be treated as hardware-verified.
 
 ### Hardware-family references
 
