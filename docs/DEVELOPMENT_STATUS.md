@@ -1,5 +1,19 @@
 # Affogato Development Status
 
+## Latte absolute constant-file reads in CPU shader subset (2026-11-25)
+
+The bounded Latte OP2 CPU executor now accepts an explicit span of up to 256
+constant vectors and resolves R700-family absolute source selectors 256 through 511
+to those vectors. Constant values flow through MOV, supported floating/integer
+operations, vector groups, clauses, and the straight-line shader subset.
+Missing constant vectors fail explicitly. Tests exercise selectors for the
+first and last vector, shader output propagation, and missing-file rejection.
+This remains a CPU shader subset, not guest draw execution; captured GX2
+uniform-register state is not yet converted into stage vectors or passed
+automatically. Kcache, relative addressing, literals, loop constants, and
+Latte-hardware confirmation remain outstanding. See
+[`research/12_latte_shader_isa.md`](research/12_latte_shader_isa.md).
+
 ## GX2 uniform-register upload capture (2026-11-25)
 
 `GX2SetVertexUniformReg` and `GX2SetPixelUniformReg` validate the selected
@@ -9,9 +23,9 @@ retain the captured values even if the source guest memory is later changed.
 Invalid ranges and loop-constant selectors fail explicitly without appending a
 partial command batch. Tests cover stage-bank separation, word order, draw-time
 capture, bounds, and unmapped pointers. This is CPU-side state capture only:
-Latte shader constant reads, uniform blocks, loop constants, and Vulkan shader
-binding remain unsupported. Debug build and CTest passed 2/2; Release
-verification is pending. See
+automatic shader-subset input mapping, uniform blocks, loop constants, and
+Vulkan shader binding remain unsupported. Debug build and CTest passed 2/2; Release
+build and CTest also passed 2/2. See
 [`research/12_latte_shader_isa.md`](research/12_latte_shader_isa.md).
 
 ## GX2 shader-mode state capture (2026-11-25)

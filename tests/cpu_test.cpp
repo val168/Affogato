@@ -32554,6 +32554,50 @@ void latte_control_flow_decoder_tests()
     assert(shader_result.exports[0U].values[0U].components[3U] ==
         shader_registers[1U][3U]);
 
+    std::array<LatteShaderRegister, 1U> shader_constant_registers{};
+    shader_constant_registers[0U] = {
+        0x3F800000U,
+        0xBF000000U,
+        0x40400000U,
+        0xC0800000U};
+    auto constant_shader_words = linear_shader_words;
+    constexpr std::array<std::size_t, 4U> shader_slot_word_offsets{
+        0U,
+        2U,
+        4U,
+        6U};
+    for (const std::size_t slot_word_offset : shader_slot_word_offsets)
+    {
+        std::uint32_t& source_word =
+            constant_shader_words[64U + slot_word_offset];
+        const std::uint32_t latte_word = std::byteswap(source_word);
+        source_word = std::byteswap((latte_word & ~0x1FFU) | 256U);
+    }
+
+    const auto constant_shader_result = execute_latte_shader_subset(
+        constant_shader_words,
+        shader_registers,
+        shader_constant_registers);
+    assert(constant_shader_result.registers[3U] ==
+           shader_constant_registers[0U]);
+    assert(constant_shader_result.exports[0U].values[0U].components[0U] ==
+           shader_constant_registers[0U][0U]);
+    assert(constant_shader_result.exports[0U].values[0U].components[3U] ==
+           shader_constant_registers[0U][3U]);
+
+    bool rejected_shader_constant_without_file = false;
+    try
+    {
+        static_cast<void>(execute_latte_shader_subset(
+            constant_shader_words,
+            shader_registers));
+    }
+    catch (const std::runtime_error&)
+    {
+        rejected_shader_constant_without_file = true;
+    }
+    assert(rejected_shader_constant_without_file);
+
     affogato::cpu::espresso::Gx2FetchShaderBinding fetch_shader{};
     fetch_shader.program_size = 16U;
     fetch_shader.attribute_count = 1U;
@@ -32948,6 +32992,66 @@ void latte_control_flow_decoder_tests()
         inline_constant_groups[0U], shader_registers);
     assert((inline_constant_vector == expected_inline_constants));
     assert((shader_registers[6U] == expected_inline_constants));
+
+    using affogato::gpu::LatteShaderRegister;
+    using affogato::gpu::latte_alu_source_constant_file_base;
+    using affogato::gpu::latte_alu_source_constant_file_last;
+    std::array<LatteShaderRegister, 256U> constant_registers{};
+    constant_registers[0U] = {
+        0x3F800000U,
+        0xC0000000U,
+        0x40400000U,
+        0xC0800000U};
+    constant_registers.back() = {
+        0x41100000U,
+        0xC1200000U,
+        0x41300000U,
+        0xC1400000U};
+
+    auto constant_file_group = alu_groups[0U];
+    for (std::size_t component = 0U;
+         component < constant_file_group.instructions.size();
+         ++component)
+    {
+        constant_file_group.instructions[component].destination_gpr = 7U;
+        constant_file_group.instructions[component].source0_selector =
+            latte_alu_source_constant_file_base;
+        constant_file_group.instructions[component].source0_channel =
+            static_cast<std::uint8_t>(component);
+    }
+    constant_file_group.instructions.back().source0_selector =
+        latte_alu_source_constant_file_last;
+
+    const LatteShaderRegister expected_constant_vector{
+        0x3F800000U,
+        0xC0000000U,
+        0x40400000U,
+        0xC1400000U};
+    const auto constant_file_vector = execute_latte_alu_op2_vector_group(
+        constant_file_group,
+        shader_registers,
+        std::nullopt,
+        constant_registers);
+    assert((constant_file_vector == expected_constant_vector));
+    assert((shader_registers[7U] == expected_constant_vector));
+
+    auto missing_constant_group = constant_file_group;
+    missing_constant_group.instructions[0U].source0_selector =
+        latte_alu_source_constant_file_last;
+    const auto registers_before_missing_constant = shader_registers;
+    bool rejected_missing_constant = false;
+    try
+    {
+        static_cast<void>(execute_latte_alu_op2_vector_group(
+            missing_constant_group,
+            shader_registers));
+    }
+    catch (const std::runtime_error&)
+    {
+        rejected_missing_constant = true;
+    }
+    assert(rejected_missing_constant);
+    assert(shader_registers == registers_before_missing_constant);
 
     auto parallel_move_group = alu_groups[0U];
     for (std::size_t component = 0U;

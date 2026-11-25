@@ -54,6 +54,9 @@ inline constexpr std::uint16_t latte_alu_source_negative_one_integer_selector =
     251U;
 inline constexpr std::uint16_t latte_alu_source_half_float_selector = 252U;
 inline constexpr std::uint16_t latte_alu_source_previous_vector_selector = 254U;
+// R700 DX9 constant-file selectors address c[0, 255] in 256-511.
+inline constexpr std::uint16_t latte_alu_source_constant_file_base = 256U;
+inline constexpr std::uint16_t latte_alu_source_constant_file_last = 511U;
 inline constexpr std::size_t latte_shader_register_component_count = 4U;
 
 using LatteShaderRegister =
@@ -154,7 +157,8 @@ evaluate_latte_normal_export(
     std::uint16_t source_selector,
     std::uint8_t source_channel,
     std::span<const LatteShaderRegister> guest_registers,
-    const std::optional<LatteShaderRegister>& incoming_previous_vector)
+    const std::optional<LatteShaderRegister>& incoming_previous_vector,
+    std::span<const LatteShaderRegister> constant_registers = {})
 {
     if (source_channel >= latte_shader_register_component_count)
     {
@@ -189,19 +193,33 @@ evaluate_latte_normal_export(
         break;
     }
 
+    if (source_selector >= latte_alu_source_constant_file_base &&
+        source_selector <= latte_alu_source_constant_file_last)
+    {
+        const std::size_t constant_index =
+            source_selector - latte_alu_source_constant_file_base;
+        if (constant_index >= constant_registers.size())
+        {
+            throw std::runtime_error(
+                "Latte ALU constant-file selector exceeds the supplied constants");
+        }
+
+        return constant_registers[constant_index][source_channel];
+    }
+
     constexpr std::uint16_t maximum_gpr_selector = 127U;
     if (source_selector > maximum_gpr_selector ||
         source_selector >= guest_registers.size())
     {
         throw std::runtime_error(
-            "Latte ALU source selector is not a supported GPR, "
-            "inline constant, or PV");
+            "Latte ALU source selector is not a supported GPR, constant-file "
+            "entry, inline constant, or PV");
     }
 
     return guest_registers[source_selector][source_channel];
 }
 
-// Evaluate supported GPR, inline-constant, and prior-PV forms of MOV.
+// Evaluate supported GPR, inline-constant, constant-file, and prior-PV MOVs.
 // The group executor applies destination writes and returns the vector result;
 // previous-scalar state and other source modes remain unsupported.
 // Shader registers hold raw 32-bit values so MOV preserves all source bits.
@@ -209,7 +227,8 @@ evaluate_latte_normal_export(
     const LatteAluOp2Instruction& instruction,
     std::span<const LatteShaderRegister> guest_registers,
     const std::optional<LatteShaderRegister>& incoming_previous_vector =
-        std::nullopt)
+        std::nullopt,
+    std::span<const LatteShaderRegister> constant_registers = {})
 {
     if (instruction.opcode != latte_alu_op2_move_opcode)
     {
@@ -245,7 +264,8 @@ evaluate_latte_normal_export(
         instruction.source0_selector,
         instruction.source0_channel,
         guest_registers,
-        incoming_previous_vector);
+        incoming_previous_vector,
+        constant_registers);
 
     // R700 applies floating-point absolute value before source negation.
     // Sign-bit operations preserve every other binary32 bit, including NaN
@@ -270,7 +290,8 @@ evaluate_latte_normal_export(
     const LatteAluOp2Instruction& instruction,
     std::span<const LatteShaderRegister> guest_registers,
     const std::optional<LatteShaderRegister>& incoming_previous_vector =
-        std::nullopt)
+        std::nullopt,
+    std::span<const LatteShaderRegister> constant_registers = {})
 {
     if (instruction.opcode != latte_alu_op2_add_float_opcode &&
         instruction.opcode != latte_alu_op2_multiply_ieee_opcode &&
@@ -325,7 +346,8 @@ evaluate_latte_normal_export(
             instruction.source0_selector,
             instruction.source0_channel,
             guest_registers,
-            incoming_previous_vector),
+            incoming_previous_vector,
+            constant_registers),
         instruction.source0_absolute,
         instruction.source0_negate);
     const float source1 = apply_source_modifiers(
@@ -333,7 +355,8 @@ evaluate_latte_normal_export(
             instruction.source1_selector,
             instruction.source1_channel,
             guest_registers,
-            incoming_previous_vector),
+            incoming_previous_vector,
+            constant_registers),
         instruction.source1_absolute,
         instruction.source1_negate);
 
@@ -378,12 +401,14 @@ evaluate_latte_normal_export(
     return std::bit_cast<std::uint32_t>(result);
 }
 
-// Evaluate supported GPR, inline-constant, and prior-PV integer operands.
+// Evaluate supported GPR, inline-constant, constant-file, and prior-PV
+// integer operands.
 [[nodiscard]] inline std::uint32_t evaluate_latte_alu_integer_value(
     const LatteAluOp2Instruction& instruction,
     std::span<const LatteShaderRegister> guest_registers,
     const std::optional<LatteShaderRegister>& incoming_previous_vector =
-        std::nullopt)
+        std::nullopt,
+    std::span<const LatteShaderRegister> constant_registers = {})
 {
     if (instruction.opcode != latte_alu_op2_and_integer_opcode &&
         instruction.opcode != latte_alu_op2_or_integer_opcode &&
@@ -437,7 +462,8 @@ evaluate_latte_normal_export(
         instruction.source0_selector,
         instruction.source0_channel,
         guest_registers,
-        incoming_previous_vector);
+        incoming_previous_vector,
+        constant_registers);
     if (instruction.opcode == latte_alu_op2_not_integer_opcode)
     {
         return ~source0;
@@ -447,7 +473,8 @@ evaluate_latte_normal_export(
         instruction.source1_selector,
         instruction.source1_channel,
         guest_registers,
-        incoming_previous_vector);
+        incoming_previous_vector,
+        constant_registers);
     constexpr std::uint32_t signed_order_bias = 0x80000000U;
     const std::uint32_t signed_order_source0 = source0 ^ signed_order_bias;
     const std::uint32_t signed_order_source1 = source1 ^ signed_order_bias;
@@ -507,7 +534,8 @@ execute_latte_alu_op2_vector_group(
     const LatteAluOp2InstructionGroup& group,
     std::span<LatteShaderRegister> guest_registers,
     const std::optional<LatteShaderRegister>& incoming_previous_vector =
-        std::nullopt)
+        std::nullopt,
+    std::span<const LatteShaderRegister> constant_registers = {})
 {
     if (group.instructions.size() != latte_shader_register_component_count)
     {
@@ -538,7 +566,8 @@ execute_latte_alu_op2_vector_group(
             group_vector[component] = evaluate_latte_alu_move_value(
                 instruction,
                 read_only_registers,
-                incoming_previous_vector);
+                incoming_previous_vector,
+                constant_registers);
             break;
         case latte_alu_op2_add_float_opcode:
         case latte_alu_op2_multiply_ieee_opcode:
@@ -547,7 +576,8 @@ execute_latte_alu_op2_vector_group(
             group_vector[component] = evaluate_latte_alu_float_value(
                 instruction,
                 read_only_registers,
-                incoming_previous_vector);
+                incoming_previous_vector,
+                constant_registers);
             break;
         case latte_alu_op2_and_integer_opcode:
         case latte_alu_op2_or_integer_opcode:
@@ -569,7 +599,8 @@ execute_latte_alu_op2_vector_group(
                 evaluate_latte_alu_integer_value(
                     instruction,
                     read_only_registers,
-                    incoming_previous_vector);
+                    incoming_previous_vector,
+                    constant_registers);
             break;
         default:
             throw std::runtime_error(
@@ -595,7 +626,8 @@ execute_latte_alu_op2_vector_group(
 // group cannot leave partially updated guest shader state.
 [[nodiscard]] inline LatteShaderRegister execute_latte_alu_op2_clause(
     std::span<const LatteAluClauseSlot> slots,
-    std::span<LatteShaderRegister> guest_registers)
+    std::span<LatteShaderRegister> guest_registers,
+    std::span<const LatteShaderRegister> constant_registers = {})
 {
     const std::vector<LatteAluOp2InstructionGroup> groups =
         decode_latte_alu_op2_groups(slots);
@@ -614,7 +646,8 @@ execute_latte_alu_op2_vector_group(
         previous_vector = execute_latte_alu_op2_vector_group(
             group,
             working_registers,
-            previous_vector);
+            previous_vector,
+            constant_registers);
     }
 
     std::copy(

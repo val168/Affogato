@@ -148,9 +148,10 @@ Affogato validates the 256-vector bank bounds and guest source range, reads
 each dword through guest big-endian access, and appends typed
 `set_alu_constant` writes to the ordered GX2 stream. The vertex bank begins at
 vector 256 in the shared register map; pixel begins at vector 0. Each write is
-retained by `Gx2RegisterState` and draw-time register snapshots. This captures
-guest values but does not yet make the shader interpreter read constant-file
-selectors or bind Vulkan uniforms.
+retained by `Gx2RegisterState` and draw-time register snapshots. The CPU shader
+subset can read absolute constant selectors from a caller-provided vector span,
+but Affogato does not yet convert raw draw-snapshot register words into stage
+vectors or supply them automatically to shader execution or Vulkan uniforms.
 
 The high 16 bits of Decaf's offset select an `SQ_LOOP_CONST_*` entry, while the
 lower bits select the ordinary constant register location. Affogato currently
@@ -377,7 +378,7 @@ arbitrary guest fetch programs or claiming Latte hardware verification.
 | GX2 vertex/pixel/geometry descriptor capture | Implemented and tested as capture | HLE descriptor/program range checks and draw-time state snapshots |
 | Fetch-shader parsing and semantic linkage | Narrow CPU subset | `latte_vertex_fetch.hpp` recognizes Affogato-generated semantic VTX records, decodes supported formats, applies destination selectors (component swizzles, 0.0, 1.0, and masked writes), extracts a complete correctly typed 32-entry `SQ_VTX_SEMANTIC` table from a draw snapshot, and maps attributes plus immutable vertex snapshots into a caller-provided register file at an explicit vertex index and `VS_GPR_BASE + 1 + table index`. `execute_latte_vertex_shader_subset()` passes this input file to the supported CPU shader subset in one deterministic test path. Writes are validated transactionally. AMD references differ on semantic-field width (R6xx: 8; R700 ISA Chapter 5: 9, while its Chapter 9 semantic-format table says 8); Latte applicability remains unresolved. Arbitrary guest fetch programs are not executed, normal draw dispatch is not connected, and system-generated inputs remain unsupported. No Wii U hardware verification. |
 | Latte shader control-flow decoding | Partial | `latte_shader_decoder.hpp` decodes fixture-verified `CALL_FS`, `EXPORT`, `EXPORT_DONE`, and `ALU` clause headers, including EOP, bounded clause ranges, normal export metadata, and `CALL_FS` address/pop/condition/nesting fields. The generic straight-line executor rejects calls. A vertex-specific path accepts one leading canonical call only after separately processing the captured HLE fetch subset. Other call forms, branches, and loops remain unsupported; exports are typed values and are not connected to stage outputs. This behavior is not Wii U hardware-verified. |
-| Latte ALU decoding/execution | Experimental subset | OP2 fields and LAST-delimited no-literal groups are decoded. A bounded clause executor runs sequential four-slot X/Y/Z/W groups with MOV and selected integer operations, forwards PV between groups within the clause, and leaves external registers unchanged if a later supported-subset check fails. A straight-line shader subset connects ALU clauses to normal export materialization with caller-provided initial GPRs. Fetch shader execution, ALU.Trans/PS, constant-file/literal reads, other opcodes, general control flow, Vulkan use, and Latte-hardware validation are absent. |
+| Latte ALU decoding/execution | Experimental subset | OP2 fields and LAST-delimited no-literal groups are decoded. A bounded clause executor runs sequential four-slot X/Y/Z/W groups with MOV and selected floating/integer operations, forwards PV between groups within the clause, and leaves external registers unchanged if a later supported-subset check fails. A straight-line shader subset accepts explicit absolute constant-file vectors and connects ALU clauses to normal export materialization with caller-provided initial GPRs. Fetch shader execution, ALU.Trans/PS, kcache/literal reads, other opcodes, relative addressing, general control flow, draw integration, Vulkan use, and Latte-hardware validation are absent. |
 | Vertex/pixel shader translation | Missing | Stage interfaces, exports, constants, textures, and SPIR-V backend |
 | Guest shader integration with Vulkan draws | Missing | Shader modules, pipeline cache, descriptor binding, render-target path |
 | WWHD shader requirements | Unknown in Affogato | Existing recorded WWHD runs stop before a guest draw is captured |
@@ -514,10 +515,11 @@ PV forwarding, inline constant bit patterns, integer logical truth tables,
 wrapping integer arithmetic boundaries, signed/unsigned min/max ordering, and
 rejection without partial register writes.
 The group behavior follows the R700-family reference and the assembled fixture;
-it is not independently verified against Latte hardware. PS, literal and
-constant-file reads, other groups/opcodes, clause execution, shader IR, and
-translation remain absent. The pass-through shader does not establish complete
-shader decoding.
+it is not independently verified against Latte hardware. Absolute constant-file
+reads are implemented for selectors 256 through 511 using an explicit caller-provided
+vector span. PS, literal and kcache reads, relative addressing, other
+groups/opcodes, shader IR, and translation remain absent. The pass-through
+shader does not establish complete shader decoding.
 
 For the integer logic subset, the R700 manual documents `AND_INT` as
 `src0 & src1` (Chapter 9, “AND Bitwise”), `NOT_INT` as `~src0` (Chapter 9,
@@ -580,9 +582,18 @@ The R700 microcode table assigns selectors `248`–`252` to the inline constants
 `0.0`, `1.0`, integer `1`, integer `-1`, and `0.5`; selector `254` is PV and
 `255` is PS (Chapter 10, `ALU_WORD0`). Affogato returns the exact 32-bit
 patterns for those inline constants and accepts PV only when the caller
-supplies the preceding supported vector-group result. Selector `253` literals,
-constant files, and selector `255` PS remain unsupported; PS requires a scalar
-ALU.Trans implementation that Affogato does not yet have.
+supplies the preceding supported vector-group result. The R700 source-address
+table assigns selectors `256 through 511` to absolute constant-file vectors
+`c[0, 255]` (Chapter 4.7.1). The bounded CPU executor now accepts those vectors
+as an explicit caller-provided span and reads the selected component for its
+supported OP2 operations. The caller must provide the selected vector; missing
+entries fail explicitly. Selector `253` literals, kcache selectors
+`128 through 191`, relative addressing, and selector `255` PS remain unsupported.
+This absolute constant-file mapping is R700-family behavior and has not been
+validated on Latte hardware. Although GX2 uniform-register uploads are now
+captured into draw-time raw register snapshots, no adapter yet builds stage
+constant vectors from those snapshots or calls the shader subset for normal
+guest draws.
 
 The R700 `ALU_WORD1_OP2` field table places `SRC0_ABS` at bit 0 and `SRC1_ABS`
 at bit 1 (Chapter 10, page 10-18). It describes absolute value before
