@@ -1324,9 +1324,13 @@ fragment SPIR-V subsets use logical/arithmetic shift operations, clamp the
 backend shift operand to 31 before evaluation, and select the documented
 overflow result for counts outside the guest range. Fixtures check sign bits,
 count 31, 32, and 33, and generated vertex/fragment modules pass `spirv-val`.
-This verifies Affogato's selected reference interpretation and module
-validity; no Latte hardware trace or Vulkan framebuffer result for these
-integer operations has yet been recorded.
+Controlled matched-fragment guest draws also exercise each shift by one on
+the `1.0F` bit pattern and verify black output from the small positive right
+shift results and saturated white for left shift through Vulkan framebuffer
+readback. This verifies
+Affogato's selected reference interpretation and Vulkan lowering for that
+constant case; it does not establish Latte hardware conformance or arbitrary
+runtime-value equivalence.
 
 This follows Affogato's decoded `SPI_PS_INPUT_CNTL_n` linkage model and is
 consistent with the issue report for Cemu [#2029](https://github.com/cemu-project/Cemu/issues/2029),

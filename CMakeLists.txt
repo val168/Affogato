@@ -686,6 +686,21 @@ if(BUILD_TESTING)
                 --gx2-guest-triangle-matched-varying-xor-zero-smoke-test
         )
         add_test(
+            NAME affogato_vulkan_guest_matched_varying_ashr_readback
+            COMMAND affogato_frontend
+                --gx2-guest-triangle-matched-varying-ashr-readback-test
+        )
+        add_test(
+            NAME affogato_vulkan_guest_matched_varying_lshr_readback
+            COMMAND affogato_frontend
+                --gx2-guest-triangle-matched-varying-lshr-readback-test
+        )
+        add_test(
+            NAME affogato_vulkan_guest_matched_varying_lshl_readback
+            COMMAND affogato_frontend
+                --gx2-guest-triangle-matched-varying-lshl-readback-test
+        )
+        add_test(
             NAME affogato_vulkan_guest_matched_varying_signed_max_readback
             COMMAND affogato_frontend
                 --gx2-guest-triangle-matched-varying-signed-max-readback-test

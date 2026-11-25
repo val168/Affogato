@@ -8,8 +8,13 @@ positive and negative source values; the opcode-specific R700 descriptions
 define zero or sign-fill for counts above 31. The vertex and matched-fragment
 SPIR-V emitters lower these operations with bounded shift counts and explicit
 overflow selection. Their generated modules pass `spirv-val`, and the Debug
-CPU/Latte SPIR-V tests pass 30/30. Vulkan framebuffer output for the shift
-family and Latte hardware conformance are not verified. The R700 guide's
+CPU/Latte SPIR-V tests pass 30/30. Controlled diagnostic guest draws also
+exercise each operation through the matched fragment SPIR-V path and Vulkan
+framebuffer readback. They shift the `1.0F` bit pattern by one: right shifts
+produce a small positive value that quantizes to black, while the left shift
+produces a large finite color that saturates to white. This verifies the
+emitted Vulkan path for this constant case; Latte hardware conformance and
+WWHD shader compatibility are not verified. The R700 guide's
 summary table mentions a related component-wise, low-five-bit behavior that
 does not cleanly match its per-opcode descriptions; that behavior remains
 unsupported until its Latte encoding is established.
