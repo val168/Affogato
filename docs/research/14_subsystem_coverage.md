@@ -1,6 +1,6 @@
 # Affogato subsystem coverage audit
 
-**Audited commit:** `611238b` (`main`, 2026-11-22 project checkpoint).
+**Audited commit:** `e69c35d` (`main`, 2026-11-25 project checkpoint).
 This is an implementation audit, not a title-compatibility claim. A registered
 callback, captured register, or successful backend smoke test does not by itself
 mean the guest behavior is implemented.
@@ -39,7 +39,7 @@ mean the guest behavior is implemented.
 
 | Feature | Status | Evidence / limitation |
 | --- | --- | --- |
-| Raw GPU command ring/PM4 decoder | Missing as a full subsystem | GX2 HLE emits typed `Gx2Command` records; no guest ring-buffer packet processor/retirement path. A bounded Type-2/Type-3 `SET_CONTEXT_REG` subset serves `GX2SetContextState`; see [`15_latte_command_processor.md`](15_latte_command_processor.md). |
+| Raw GPU command ring/PM4 decoder | Partial | A bounded parser handles Type-0 context-window writes, Type-2 filler, Type-3 NOP, and Type-3 `SET_CONTEXT_REG` in context restore/direct-call HLE paths. There is no ring processor, draw packet execution, indirect-buffer recursion, or retirement path; see [`15_latte_command_processor.md`](15_latte_command_processor.md). |
 | GX2 command ordering | Partial, tested | HLE pending command vector and frontend batch handoff preserve selected operation order; not equivalent to asynchronous Latte FIFO/fence execution. |
 | Register shadow | Partial | `Gx2RegisterState` retains selected raw context/resource/sampler state and draw-time snapshots. `SQ_VTX_SEMANTIC_CLEAR` applies its verified 32-entry mask side effect; other special Latte register semantics are not generally modeled. |
 | Color/depth render-target descriptors | Partial | HLE reads and records descriptors, binding and selected registers; broad hardware surface semantics are not provided. |
@@ -61,7 +61,7 @@ mean the guest behavior is implemented.
 | Feature | Status | Evidence / limitation |
 | --- | --- | --- |
 | GX2 exports and ABI | Partial | `gx2_hle.cpp` registers numerous functions with argument/descriptor handling; callback presence does not establish full behavior for all modes. Compare each path to WUT declarations and tests. |
-| GX2 display-list lifecycle/submission | Missing | WUT's `displaylist.h` declares begin/end, queued/direct calls, and copy; Affogato has no registrations or guest dword capture/submission path. |
+| GX2 display-list lifecycle/submission | Partial | `GX2DirectCallDisplayList` validates and copies a guest stream, then queues only the supported context-register writes. Begin/end recording, queued `GX2CallDisplayList`, copy/query APIs, draw execution, and GPU retirement remain missing. |
 | GX2 initialization/state | Partial | Selected runtime defaults, register shadows, surfaces, shaders and scanout state are modeled; no hardware command processor. |
 | Guest pointer/structure validation | Implemented in tested paths | HLE uses checked guest memory and big-endian field reads for implemented structures; audit must remain function-specific. |
 | Guest threads/synchronization | Partial | Selected coreinit thread/context/mutex/semaphore/event behavior supports a single-core HLE runtime; OS scheduler/interrupt behavior is incomplete. |
@@ -98,8 +98,9 @@ mean the guest behavior is implemented.
    primitive.
 2. Audit frontend worker/UI synchronization and give command execution, guest
    memory visibility, renderer submission, and readback explicit ownership.
-3. Build a documented Latte register/packet model (or prove which typed HLE
-   events are sufficient for the target compatibility model).
+3. Extend the PM4 packet model with verified draw/state operations and
+   indirect-buffer address handling while preserving guest order and owned
+   command bytes.
 4. Add a shared, independently tested surface-address/format subsystem before
    attempting guest draw writes or additional tiled scanout formats.
 5. Decode a narrow shader family from verified binaries into a small IR and

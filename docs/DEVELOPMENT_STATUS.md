@@ -2,17 +2,17 @@
 
 ## Current implementation checkpoint (2026-11-25)
 
-`GX2SetContextState` now decodes and queues a bounded PM4 context-display-list
-subset: Type-2 filler and Type-3 `SET_CONTEXT_REG` packets. Guest big-endian
-words, packet sizes, predication/reserved bits, and context-register bounds are
-checked before typed register commands are appended. Unsupported packet
-types/opcodes and malformed lists fail without partially changing the pending
-command stream or active context. This is not a raw ring-buffer command
-processor: Type-0, other Type-3 operations, indirect buffers, display-list
-generation, and GPU retirement remain unsupported. Debug/Release builds and
-CTest passed 2/2 in each configuration. The detailed interface and packet
-research is in
+`GX2SetContextState` and `GX2DirectCallDisplayList` now share a bounded PM4
+state-write decoder. It accepts Type-0 context-window writes, Type-2 filler,
+Type-3 NOP, and Type-3 `SET_CONTEXT_REG`. Direct-call input is validated and
+copied from guest memory before decoding; malformed or unsupported streams do
+not append partial command batches. The HLE queues typed register updates; it
+does not execute GPU draws. Type-3 draw/state operations outside the subset,
+indirect-buffer recursion, list recording/copy APIs, raw ring processing, and
+GPU retirement remain unsupported. Debug/Release builds and CTest passed 2/2
+in each configuration. The detailed interface and packet research is in
 [`research/15_latte_command_processor.md`](research/15_latte_command_processor.md).
+The implementation is pushed through `e69c35d`.
 
 ## Documentation-driven subsystem audit (2026-11-24)
 
@@ -207,8 +207,16 @@ side effects remain unmodeled.
 Debug and Release builds succeeded, and CTest passed 2/2 in both build trees.
 This does not add raw command-ring execution or guest draw submission.
 
-## GX2 display-list submission audit (2026-11-25)
+## GX2 display-list submission research (2026-11-25)
 
-WUT's [`include/gx2/displaylist.h`](https://github.com/devkitPro/wut/blob/master/include/gx2/displaylist.h) declares the guest ABI for begin/end recording, queued `GX2CallDisplayList`, direct `GX2DirectCallDisplayList`, and `GX2CopyDisplayList`. Cemu's [`GX2_Command.cpp`](https://github.com/cemu-project/Cemu/blob/main/src/Cafe/OS/libs/gx2/GX2_Command.cpp) distinguishes queued indirect-buffer submission from direct TCL submission; Decaf's PM4 processor recursively processes nested indirect buffers with a depth bound. Affogato currently registers none of these exports and cannot observe raw PM4 dwords written or modified by a guest.
+WUT's [`include/gx2/displaylist.h`](https://github.com/devkitPro/wut/blob/master/include/gx2/displaylist.h) declares the guest ABI for begin/end recording, queued `GX2CallDisplayList`, direct `GX2DirectCallDisplayList`, and `GX2CopyDisplayList`. Cemu's [`GX2_Command.cpp`](https://github.com/cemu-project/Cemu/blob/main/src/Cafe/OS/libs/gx2/GX2_Command.cpp) distinguishes queued indirect-buffer submission from direct TCL submission; Decaf's PM4 processor recursively processes nested indirect buffers with a depth bound. At the time of this initial audit, Affogato registered none of these exports and could not observe raw guest PM4 dwords.
 
-The next command-processing milestone is an owned, bounded raw-stream submission path with direct and indirect semantics, guest-range validation, a total-dword/depth limit, and deterministic tests. Do not implement recording by mirroring host typed commands alone: guest code may patch dwords in recorded memory. Before wiring it to rendering, capture or construct an independently checked stream fixture and define how frontend handoff preserves submission-time contents and order. This audit does not establish WWHD's use of these APIs or guest draw execution.
+The initial audit identified owned guest dwords, direct/indirect distinction,
+range validation, recursion bounds, and command ordering as requirements.
+Since then, `GX2DirectCallDisplayList` has been added for a limited supported
+state-write subset. It copies bytes at call time, validates mapped guest
+memory, rejects unsupported stateful opcodes, and queues decoded register
+updates in order. It does not implement indirect recursion, recording APIs,
+draw execution, or GPU completion. The fixtures are synthetic and
+cross-checked against related-family packet definitions; no Latte-produced
+stream or WWHD use of these APIs has been verified.
