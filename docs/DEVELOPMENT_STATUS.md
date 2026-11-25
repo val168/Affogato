@@ -1,5 +1,22 @@
 # Affogato Development Status
 
+## Guest draw-to-scanout ordering audit (2026-11-25)
+
+Source inspection found why a Vulkan target alone cannot complete guest draw
+rendering. `GX2CopyColorBufferToScanBuffer` reads the source from guest memory
+and writes scanout bytes inside its HLE callback. The frontend worker runs up
+to one million guest instructions per chunk and captures scanout before
+publishing that chunk's GX2 command vector; the UI thread consumes draw
+commands afterward. Normal guest execution remains capture-only, while the
+diagnostic draw route targets the host swapchain. Therefore a draw and copy in
+one chunk leave guest scanout stale even if a later UI submission renders the
+draw. No code behavior changed in this audit. Cemu's Latte command processor
+and render-target update tracking, and WUT's `libwhb/gfx.c` clear/draw/flush/
+copy flow, corroborate the need for ordered command execution and explicit
+guest-memory visibility. The next milestone is an ordered worker-to-renderer
+handoff with completion/writeback before guest HLE copy reads the target. See
+[`research/11_graphics.md`](research/11_graphics.md#guest-draw-guest-memory-and-scanout-ordering).
+
 ## Diagnostic Vulkan pixel readback for the Latte MOV vertex subset (2026-11-25)
 
 The explicit guest-triangle diagnostic can request swapchain transfer-source

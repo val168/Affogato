@@ -164,6 +164,66 @@ renderer does not allocate readback buffers or synchronously wait for GPU
 completion. Swapchain readback is limited to four-channel RGBA/BGRA 8-bit
 formats; the test reports unsupported swapchain usage explicitly.
 
+### Guest draw, guest memory, and scanout ordering
+
+The source audit confirms that the current frontend cannot observe a GPU draw
+before a later HLE color-buffer copy in the same `Emulator::run()` chunk:
+
+- `GX2ClearColor` calls `clear_rgba8_color_buffer()` inside the CPU HLE
+  callback, which writes the guest color-buffer bytes immediately.
+- `GX2CopyColorBufferToScanBuffer` calls
+  `copy_color_buffer_to_tv_scan_buffer()` inside its HLE callback. That helper
+  reads the color-buffer guest bytes, converts them, and writes the configured
+  guest scan-buffer slot before it queues a descriptive command record.
+- The frontend worker calls `emulator.run()` in chunks of up to one million
+  instructions. After each chunk returns, it snapshots guest scanout from
+  `GuestMemory`, then appends the captured GX2 commands to a shared vector.
+- The UI thread later drains that vector and calls
+  `VulkanRenderer::consume_guest_commands()`. Normal mode uses
+  `GuestDrawPolicy::capture_only`; the diagnostic mode submits to the host
+  swapchain and has no guest-memory output path.
+
+Therefore, simply creating a Vulkan render target from the draw-time
+`Gx2ColorBufferBinding` will not make the next guest scanout copy see the draw.
+The draw must execute in an ordered graphics path, and any host-image result
+needed by a CPU HLE read must become guest-visible before that read. A later
+scanout replacement alone would hide stale guest memory from subsequent CPU
+reads and is not a complete fix.
+
+Reference architecture corroborates this dependency. Cemu's
+[`LatteCommandProcessor.cpp`](https://github.com/cemu-project/Cemu/blob/main/src/Cafe/HW/Latte/Core/LatteCommandProcessor.cpp)
+processes ordered GPU command packets and dispatches draw work; its
+[`LatteRenderTarget.cpp`](https://github.com/cemu-project/Cemu/blob/main/src/Cafe/HW/Latte/Core/LatteRenderTarget.cpp)
+tracks texture updates made by GPU writes, obtains current texture contents
+before backbuffer output, and handles HLE clear/copy operations against cached
+Latte textures. This is evidence for a command-order and resource-coherence
+boundary, not code to transplant. WUT's
+[`libwhb` graphics example](https://github.com/devkitPro/wut/blob/master/libraries/libwhb/src/gfx.c)
+sets the color/depth targets, performs rendering/clears, requests swap, flushes
+and waits for draw completion, then copies color buffers to scanout; it
+corroborates the guest API ordering but is not a complete hardware
+specification.
+
+#### Required next design boundary
+
+Introduce one ordered guest graphics execution boundary that can consume
+captured draw-time target state before a dependent HLE copy reads guest memory.
+The first implementation can deliberately synchronize at a GX2 boundary, but
+it must specify how the emulator worker hands work to the Vulkan owner, how
+completion is acknowledged, and how bounded render-target readback updates
+guest memory before guest execution resumes. Preserve the existing UI-thread
+ownership of the window and Vulkan presentation; do not access mutable guest
+memory from the renderer thread. A future asynchronous path can reduce these
+synchronization points only after its guest-memory visibility rules are
+explicit.
+
+The acceptance test must execute guest PPC calls in order: bind a supported
+color buffer, issue a controlled draw, invoke the GX2 color-buffer-to-scanout
+copy, swap, and verify both the guest color-buffer bytes and presented/readback
+pixels. It must also verify that the same color-buffer bytes are visible to a
+subsequent guest CPU read. A draw that only appears in the Vulkan swapchain
+does not satisfy guest render-target integration.
+
 ## Important state, formats, and invariants
 
 - `Gx2DrawCall` holds primitive mode, element count, indexed flag, index type,
