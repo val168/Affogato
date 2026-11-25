@@ -43,6 +43,7 @@ enum class LattePm4DisplayListCommandType
 {
     register_write,
     draw_index_auto,
+    draw_index_2,
 };
 
 struct LattePm4RegisterWrite
@@ -60,6 +61,8 @@ struct LattePm4DisplayListCommand
     LattePm4RegisterWrite register_write{};
     std::uint32_t index_count{};
     std::uint32_t draw_initiator{};
+    std::uint32_t max_index_count{};
+    std::uint64_t index_address{};
 
     bool operator==(const LattePm4DisplayListCommand&) const = default;
 };
@@ -79,7 +82,7 @@ struct LattePm4DisplayListDecodeResult
 // Input words are host-order values decoded from guest big-endian memory.
 // Only bounded config/context/control register writes, Type-2 filler,
 // Type-3 NOP, register-set packets, INDEX_TYPE, NUM_INSTANCES, and
-// unpredicated DRAW_INDEX_AUTO packets are accepted.
+// unpredicated DRAW_INDEX_AUTO and DRAW_INDEX_2 packets are accepted.
 [[nodiscard]] inline LattePm4DisplayListDecodeResult
 decode_latte_pm4_display_list(
     std::span<const std::uint32_t> words)
@@ -96,6 +99,7 @@ decode_latte_pm4_display_list(
     constexpr std::uint32_t type3_nop_opcode = 0x10U;
     constexpr std::uint32_t index_type_opcode = 0x2AU;
     constexpr std::uint32_t draw_index_auto_opcode = 0x2DU;
+    constexpr std::uint32_t draw_index_2_opcode = 0x27U;
     constexpr std::uint32_t num_instances_opcode = 0x2FU;
     constexpr std::uint32_t packet_count_shift = 16U;
     constexpr std::uint32_t packet_count_mask = 0x3FFFU;
@@ -289,6 +293,32 @@ decode_latte_pm4_display_list(
                 {},
                 words[word_offset],
                 words[word_offset + 1U]});
+            word_offset += payload_word_count;
+            continue;
+        }
+
+        if (opcode == draw_index_2_opcode)
+        {
+            if (payload_word_count != 5U)
+            {
+                result.error =
+                    LattePm4DisplayListError::invalid_packet_payload_length;
+                result.error_word_offset = packet_header_offset;
+                result.commands.clear();
+                return result;
+            }
+
+            const std::uint64_t index_address =
+                static_cast<std::uint64_t>(words[word_offset + 1U]) |
+                (static_cast<std::uint64_t>(words[word_offset + 2U] & 0xFFU)
+                 << 32U);
+            result.commands.push_back({
+                LattePm4DisplayListCommandType::draw_index_2,
+                {},
+                words[word_offset + 3U],
+                words[word_offset + 4U],
+                words[word_offset],
+                index_address});
             word_offset += payload_word_count;
             continue;
         }

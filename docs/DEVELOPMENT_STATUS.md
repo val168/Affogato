@@ -5,31 +5,35 @@
 `GX2SetContextState` and `GX2DirectCallDisplayList` share a bounded PM4
 decoder. It accepts Type-0 writes in supported config/context and
 control-constant windows, Type-2 filler, Type-3 NOP, register-set packets,
-`INDEX_TYPE`, `NUM_INSTANCES`, and a bounded unpredicated `DRAW_INDEX_AUTO`
-subset. The draw requires primitive mode, instance count, and base vertex to
-have been set earlier in the same list. Direct-call input is validated and
-copied from guest memory before decoding; malformed or unsupported streams do
-not append partial command batches. When draw-byte capture is enabled, the
-direct-call HLE snapshots referenced non-indexed vertex data at call time.
-This queues a draw record; it does not establish Latte shader or guest
-render-target execution. Predicated and indexed draw packets, unresolved zero
-instance counts, other state operations, indirect-buffer recursion, list
-recording/copy APIs, raw ring processing, and GPU retirement remain
-unsupported. The initial direct-call slice also requires a zero draw initiator;
-other values fail explicitly. Debug and Release builds passed, and CTest passed
-2/2 in each configuration. The hidden guest-triangle smoke test now includes
-an unpredicated `GX2DirectCallDisplayList` auto-index draw; its command snapshot
-and diagnostic Vulkan submission passed on an NVIDIA GeForce RTX 5070 Laptop
-GPU. Its output uses a host shader and does not verify visible window output or
-Latte shader execution.
+`INDEX_TYPE`, `NUM_INSTANCES`, unpredicated `DRAW_INDEX_AUTO`, and a bounded
+`DRAW_INDEX_2` subset. Draw packets require primitive mode, instance count,
+and base vertex earlier in the same list; indexed packets also require
+`INDEX_TYPE`. Direct-call input is validated and copied from guest memory
+before decoding; malformed or unsupported streams do not append partial
+command batches. Indexed draws currently accept only zero-high-byte addresses
+that resolve to a bounded range in flat guest physical backing memory, and
+reject counts greater than `MAX_SIZE`. Indexed PM4 diagnostic draws currently
+require base vertex zero because the draw record does not separately represent
+base vertex and index byte offset. When draw-byte capture is enabled, the HLE
+snapshots index bytes and referenced vertex data at call time. This queues
+draw records; it does not establish Latte shader or guest render-target
+execution. Predicated draws, GPU address translation, other state operations,
+indirect-buffer recursion, list recording/copy APIs, raw ring processing, and
+GPU retirement remain unsupported. Both supported PM4 draw forms require a
+zero draw initiator; other values fail explicitly. Debug and Release builds
+passed, with CTest 2/2 in both configurations. The hidden guest-triangle smoke
+test passed in Debug and Release. It includes unpredicated auto-index and
+indexed display-list draws, validating their command snapshots and diagnostic
+Vulkan submission on an NVIDIA GeForce RTX 5070 Laptop GPU. Its output uses
+host shaders and does not verify Latte shader execution.
 The packet research is cross-checked against AMD's R6xx/R7xx family guides,
 Cemu, and Decaf; there is still no Latte-produced fixture. References disagree
 on whether `INDEX_TYPE` updates one or two shadow slots and whether a zero
 `NUM_INSTANCES` becomes one, so Affogato preserves raw packet state pending
 Latte-specific evidence. Details are in
 [`research/15_latte_command_processor.md`](research/15_latte_command_processor.md).
-The previous implementation and research updates are at `4edac26` and
-`be6b69c`; the draw-capture change is ready for its own commit.
+The current PM4 packet implementation and research details are in
+[`research/15_latte_command_processor.md`](research/15_latte_command_processor.md).
 Reference research confirms that normal Cemu `GX2DrawEx` uses a predicate-bit
 `DRAW_INDEX_AUTO`; predicate evaluation and its reset state remain unsupported,
 so that common packet form remains rejected pending verified semantics.

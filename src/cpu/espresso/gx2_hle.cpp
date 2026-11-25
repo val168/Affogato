@@ -928,7 +928,7 @@ std::vector<Gx2Command> read_gx2_context_restore_commands(
 std::vector<Gx2Command> decode_gx2_pm4_display_list_commands(
     std::span<const std::uint8_t> display_list_bytes,
     const char* api_name,
-    bool allow_draw_index_auto = false)
+    bool allow_pm4_draw_packets = false)
 {
     if ((display_list_bytes.size() % sizeof(std::uint32_t)) != 0U)
     {
@@ -1000,6 +1000,7 @@ std::vector<Gx2Command> decode_gx2_pm4_display_list_commands(
 
     std::optional<std::uint32_t> primitive_mode;
     std::optional<std::uint32_t> instance_count;
+    std::optional<std::uint32_t> index_type;
     std::optional<std::uint32_t> base_vertex;
     std::uint32_t base_instance = 0U;
     std::vector<Gx2Command> commands;
@@ -1007,10 +1008,13 @@ std::vector<Gx2Command> decode_gx2_pm4_display_list_commands(
     for (const affogato::gpu::LattePm4DisplayListCommand& decoded_command :
          decoded.commands)
     {
-        if (decoded_command.type ==
-            affogato::gpu::LattePm4DisplayListCommandType::draw_index_auto)
+        const bool is_auto_draw = decoded_command.type ==
+            affogato::gpu::LattePm4DisplayListCommandType::draw_index_auto;
+        const bool is_indexed_draw = decoded_command.type ==
+            affogato::gpu::LattePm4DisplayListCommandType::draw_index_2;
+        if (is_auto_draw || is_indexed_draw)
         {
-            if (!allow_draw_index_auto)
+            if (!allow_pm4_draw_packets)
             {
                 throw HleExecutionError(
                     std::string("gx2::") + api_name +
@@ -1020,40 +1024,72 @@ std::vector<Gx2Command> decode_gx2_pm4_display_list_commands(
             {
                 throw HleExecutionError(
                     std::string("gx2::") + api_name +
-                    ": DRAW_INDEX_AUTO is missing primitive, instance-count, "
+                    ": PM4 draw is missing primitive, instance-count, "
                     "or base-vertex state in this list");
+            }
+            if (is_indexed_draw && !index_type)
+            {
+                throw HleExecutionError(
+                    std::string("gx2::") + api_name +
+                    ": DRAW_INDEX_2 is missing INDEX_TYPE state in this list");
+            }
+            if (is_indexed_draw && *base_vertex != 0U)
+            {
+                throw HleExecutionError(
+                    std::string("gx2::") + api_name +
+                    ": DRAW_INDEX_2 with nonzero base vertex is unsupported");
             }
             if (*instance_count == 0U)
             {
                 throw HleExecutionError(
                     std::string("gx2::") + api_name +
-                    ": DRAW_INDEX_AUTO uses an unresolved zero instance count");
+                    ": PM4 draw uses an unresolved zero instance count");
             }
             if (decoded_command.draw_initiator != 0U)
             {
                 throw HleExecutionError(
                     std::string("gx2::") + api_name +
-                    ": DRAW_INDEX_AUTO uses an unsupported draw initiator value");
+                    ": PM4 draw uses an unsupported draw initiator value");
+            }
+
+            if (is_indexed_draw && decoded_command.index_address >
+                std::numeric_limits<std::uint32_t>::max())
+            {
+                throw HleExecutionError(
+                    std::string("gx2::") + api_name +
+                    ": DRAW_INDEX_2 address exceeds the supported 32-bit guest "
+                    "physical-memory range");
+            }
+
+            if (is_indexed_draw &&
+                decoded_command.index_count > decoded_command.max_index_count)
+            {
+                throw HleExecutionError(
+                    std::string("gx2::") + api_name +
+                    ": DRAW_INDEX_2 index count exceeds its declared maximum");
             }
 
             const Gx2DrawCall draw_call{
                 *primitive_mode,
                 decoded_command.index_count,
-                false,
-                0U,
-                0U,
+                is_indexed_draw,
+                is_indexed_draw ? *index_type : 0U,
+                is_indexed_draw
+                    ? static_cast<std::uint32_t>(decoded_command.index_address)
+                    : 0U,
                 *base_vertex,
                 *instance_count,
                 base_instance,
                 decoded_command.draw_initiator};
-            commands.push_back({
+            Gx2Command command{
                 Gx2CommandType::draw,
                 0U,
                 0U,
                 0U,
                 0U,
                 0U,
-                draw_call});
+                draw_call};
+            commands.push_back(std::move(command));
             continue;
         }
 
@@ -1083,6 +1119,11 @@ std::vector<Gx2Command> decode_gx2_pm4_display_list_commands(
                  write.address == num_instances_register)
         {
             instance_count = write.value;
+        }
+        else if (write.space == affogato::gpu::LatteRegisterSpace::context &&
+                 write.address == affogato::gpu::latte_vgt_dma_index_type_register_address)
+        {
+            index_type = write.value;
         }
         else if (write.space == affogato::gpu::LatteRegisterSpace::control &&
                  write.address == base_vertex_register)
@@ -5634,7 +5675,9 @@ void register_gx2_hle(HleDispatcher& dispatcher)
     dispatcher.register_function(
         "gx2",
         "GX2DirectCallDisplayList",
-        [capture_non_indexed_vertex_data](EspressoCore& core) {
+        [capture_non_indexed_vertex_data,
+         capture_indexed_draw_data,
+         capture_indexed_vertex_data](EspressoCore& core) {
             constexpr const char* api_name = "GX2DirectCallDisplayList";
             if (!core.gx2.initialized)
             {
@@ -5700,14 +5743,69 @@ void register_gx2_hle(HleDispatcher& dispatcher)
             {
                 if (command.type == Gx2CommandType::draw && command.draw_call)
                 {
-                    command.draw_vertex_data = capture_non_indexed_vertex_data(
-                        core, *command.draw_call);
+                    if (command.draw_call->indexed)
+                    {
+                        std::uint32_t index_size_bytes = 0U;
+                        switch (command.draw_call->index_type)
+                        {
+                        case 0U:
+                        case 4U:
+                            index_size_bytes = sizeof(std::uint16_t);
+                            break;
+                        case 1U:
+                        case 9U:
+                            index_size_bytes = sizeof(std::uint32_t);
+                            break;
+                        default:
+                            throw HleExecutionError(
+                                "gx2::GX2DirectCallDisplayList: DRAW_INDEX_2 "
+                                "uses an unsupported index type");
+                        }
+
+                        const std::uint64_t physical_address =
+                            command.draw_call->element_address;
+                        const std::uint64_t byte_count =
+                            static_cast<std::uint64_t>(
+                                command.draw_call->element_count) * index_size_bytes;
+                        if ((physical_address % index_size_bytes) != 0U ||
+                            physical_address > core.memory.size() ||
+                            byte_count > core.memory.size() - physical_address)
+                        {
+                            throw HleExecutionError(
+                                "gx2::GX2DirectCallDisplayList: DRAW_INDEX_2 "
+                                "index range is outside flat guest physical memory "
+                                "or is misaligned");
+                        }
+
+                        if (core.gx2.capture_draw_vertex_data && byte_count != 0U)
+                        {
+                            command.draw_index_data = capture_indexed_draw_data(
+                                core, *command.draw_call);
+                            if (!command.draw_index_data ||
+                                !command.draw_index_data->is_valid)
+                            {
+                                throw HleExecutionError(
+                                    "gx2::GX2DirectCallDisplayList: DRAW_INDEX_2 "
+                                    "index data could not be captured");
+                            }
+                            command.draw_vertex_data =
+                                capture_indexed_vertex_data(
+                                    core,
+                                    *command.draw_call,
+                                    *command.draw_index_data);
+                        }
+                    }
+                    else
+                    {
+                        command.draw_vertex_data = capture_non_indexed_vertex_data(
+                            core, *command.draw_call);
+                    }
                 }
             }
 
             // The frontend consumes the copied, decoded register commands in
-            // guest order, including supported DRAW_INDEX_AUTO packets.
-            // Predicated and indexed draw opcodes remain explicit errors.
+            // guest order, including supported unpredicated PM4 draw packets.
+            // Predicated draws and unsupported address modes remain errors.
             auto& pending_commands = core.gx2.pending_commands;
             pending_commands.reserve(
                 pending_commands.size() + display_list_commands.size());
