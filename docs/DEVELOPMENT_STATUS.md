@@ -536,11 +536,14 @@ table entries, ignores the all-ones clear marker, and maps a match at index
 `n` to `VS_GPR_BASE + 1 + n`. Duplicate matches, oversized tables, and
 destination overflow are rejected. Tests cover a match with unrelated high
 bits, absent and cleared entries, duplicate IDs, table bounds, and overflow.
-The mapping is based on Sections 2.5.1 and 2.5.3 of AMD's R6xx/R7xx 3D Engine
-Programming Guide; it remains a GPU-family reference rather than direct Wii U
-hardware validation. The resolver is not yet used to populate shader inputs,
-and system-generated vertex/instance inputs are not modeled. Debug and Release
-builds succeeded and CTest passed 2/2 in both configurations.
+The mapping follows Sections 2.5.1 and 2.5.3 of AMD's R6xx/R7xx 3D Engine
+Programming Guide; it remains family-reference behavior rather than direct Wii
+U hardware validation. The R6xx register reference describes the fetch
+semantic ID as eight bits, while the R700 ISA manual says nine bits; Latte
+applicability is unresolved. The resolver does not decode guest fetch fields or
+populate shader inputs, and system-generated vertex/instance inputs are not
+modeled. Debug and Release builds succeeded and CTest passed 2/2 in both
+configurations.
 
 ## Draw-time Latte semantic-table extraction (2026-11-25)
 

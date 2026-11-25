@@ -104,14 +104,19 @@ real shader fixtures before implementation.
 
 The AMD [R6xx/R7xx 3D Engine Programming Guide, revision 1.0](https://www.x.org/docs/AMD/old/R6xx_R7xx_3D.pdf)
 describes fetch-shader-to-vertex-shader linkage in Sections 2.5.1 and 2.5.3.
-The semantic table has 32 entries, each with an 8-bit `semanticID`; a matching
-entry at table index `n` routes fetched data to `VS_GPR_BASE + 1 + n`. The
-offset reserves the first input vector for system-generated vertex and
-instance IDs. A fetch semantic absent from the table is unused by the vertex
-shader and its fetch is terminated. This is an AMD R6xx/R7xx family reference,
-not direct Wii U hardware verification; Affogato uses these semantics only in
-a bounded resolver and has not yet modeled system-generated inputs or linked
-the resolver to captured draw state.
+It specifies a 32-entry table with an 8-bit `semanticID`; a match at table
+index `n` routes fetched data to `VS_GPR_BASE + 1 + n`. The offset reserves
+the first input vector for system-generated vertex and instance IDs. A fetch
+semantic absent from the table is unused by the vertex shader and its fetch is
+terminated. However, the AMD [R700 ISA manual](https://docs.amd.com/v/u/en-US/R700-Family_Instruction_Set_Architecture),
+Chapter 5, describes the fetch instruction's semantic ID as nine bits, while
+the [R6xx register reference](https://www.x.org/docs/AMD/old/R6xx_3D_Registers.pdf),
+Chapter 4's `SQ_VTX_WORD1_SEM` description, specifies eight bits for that
+field. This width disagreement is unresolved for Wii U Latte. The Affogato
+resolver currently models only the 8-bit table/register view; it does not
+decode a guest fetch instruction's semantic field or prove that the mapping
+matches Latte hardware. It also does not model system-generated inputs or
+populate draw shader inputs.
 
 ### Reference emulator research
 
@@ -209,7 +214,7 @@ the resolver to captured draw state.
 | Capability | Status | Evidence / dependency |
 | --- | --- | --- |
 | GX2 vertex/pixel/geometry descriptor capture | Implemented and tested as capture | HLE descriptor/program range checks and draw-time state snapshots |
-| Fetch-shader parsing and semantic linkage | Narrow diagnostic subset | `latte_vertex_fetch.hpp` decodes generated VTX programs, extracts a complete correctly typed 32-entry `SQ_VTX_SEMANTIC` table from a draw snapshot, and resolves 8-bit semantic IDs to `VS_GPR_BASE + 1 + table index`. The extracted table is not yet used to populate shader invocation inputs; system-generated inputs and arbitrary guest fetch programs remain unsupported. Behavior is based on the AMD R6xx/R7xx guide, not Wii U hardware verification. |
+| Fetch-shader parsing and semantic linkage | Narrow diagnostic subset | `latte_vertex_fetch.hpp` decodes generated VTX programs, extracts a complete correctly typed 32-entry `SQ_VTX_SEMANTIC` table from a draw snapshot, and resolves 8-bit table IDs to `VS_GPR_BASE + 1 + table index`. AMD's R6xx register reference describes an 8-bit fetch semantic, while the R700 ISA manual says nine bits; applicability to Latte is unresolved. The helper does not decode guest fetch semantic fields or populate shader invocation inputs. System-generated inputs and arbitrary guest fetch programs remain unsupported. No Wii U hardware verification. |
 | Latte shader control-flow decoding | Partial | `latte_shader_decoder.hpp` decodes fixture-verified `CALL_FS`, `EXPORT`, `EXPORT_DONE`, and `ALU` clause headers, including EOP, bounded clause ranges, and normal export metadata (type, GPRs, burst count, and component selectors). Unknown opcodes and malformed streams fail explicitly. Export values are not applied to stage outputs; branch/loop execution is absent. |
 | Latte ALU decoding/execution | Experimental subset | OP2 fields and LAST-delimited no-literal groups are decoded. A bounded clause executor runs sequential four-slot X/Y/Z/W groups with MOV and selected integer operations, forwards PV between groups within the clause, and leaves external registers unchanged if a later supported-subset check fails. A straight-line shader subset connects ALU clauses to normal export materialization with caller-provided initial GPRs. Fetch shader execution, ALU.Trans/PS, constant-file/literal reads, other opcodes, general control flow, Vulkan use, and Latte-hardware validation are absent. |
 | Vertex/pixel shader translation | Missing | Stage interfaces, exports, constants, textures, and SPIR-V backend |
