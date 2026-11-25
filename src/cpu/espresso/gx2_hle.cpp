@@ -974,6 +974,9 @@ std::vector<Gx2Command> decode_gx2_pm4_register_display_list(
         case affogato::gpu::LattePm4DisplayListError::missing_register_data:
             reason = "contains a register packet without register data";
             break;
+        case affogato::gpu::LattePm4DisplayListError::invalid_packet_payload_length:
+            reason = "contains a packet with an invalid payload length";
+            break;
         case affogato::gpu::LattePm4DisplayListError::register_range_out_of_bounds:
             reason = "writes outside a supported register window";
             break;

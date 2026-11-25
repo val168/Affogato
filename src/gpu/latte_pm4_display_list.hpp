@@ -17,6 +17,7 @@ enum class LattePm4DisplayListError
     truncated_packet,
     unsupported_opcode,
     missing_register_data,
+    invalid_packet_payload_length,
     register_range_out_of_bounds,
 };
 
@@ -66,6 +67,8 @@ decode_latte_pm4_display_list(
     constexpr std::uint32_t type3_opcode_shift = 8U;
     constexpr std::uint32_t type3_opcode_mask = 0x0000FF00U;
     constexpr std::uint32_t type3_nop_opcode = 0x10U;
+    constexpr std::uint32_t index_type_opcode = 0x2AU;
+    constexpr std::uint32_t num_instances_opcode = 0x2FU;
     constexpr std::uint32_t packet_count_shift = 16U;
     constexpr std::uint32_t packet_count_mask = 0x3FFFU;
     // R7xx SET_* register packets use dword offsets.
@@ -77,6 +80,8 @@ decode_latte_pm4_display_list(
     constexpr std::uint32_t config_register_end = 0xAC00U;
     constexpr std::uint32_t context_register_base = 0x28000U;
     constexpr std::uint32_t context_register_end = 0x29000U;
+    constexpr std::uint32_t vgt_dma_index_type_address = 0x28A7CU;
+    constexpr std::uint32_t vgt_dma_num_instances_address = 0x28A88U;
     // Decaf's Latte map identifies base-vertex and base-instance control
     // registers as the complete currently modeled control-constant range.
     constexpr std::uint32_t control_constant_base = 0x3CFF0U;
@@ -198,6 +203,39 @@ decode_latte_pm4_display_list(
         {
             // A PM4 NOP consumes its declared payload but changes no state.
             word_offset += payload_word_count;
+            continue;
+        }
+
+        if (opcode == index_type_opcode || opcode == num_instances_opcode)
+        {
+            if (payload_word_count != 1U)
+            {
+                result.error =
+                    LattePm4DisplayListError::invalid_packet_payload_length;
+                result.error_word_offset = packet_header_offset;
+                result.register_writes.clear();
+                return result;
+            }
+
+            const std::uint32_t register_address =
+                opcode == index_type_opcode
+                    ? vgt_dma_index_type_address
+                    : vgt_dma_num_instances_address;
+            if (register_address < context_register_base ||
+                register_address >= context_register_end)
+            {
+                result.error =
+                    LattePm4DisplayListError::register_range_out_of_bounds;
+                result.error_word_offset = packet_header_offset;
+                result.register_writes.clear();
+                return result;
+            }
+
+            result.register_writes.push_back({
+                LatteRegisterSpace::context,
+                register_address,
+                words[word_offset]});
+            ++word_offset;
             continue;
         }
 

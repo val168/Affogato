@@ -39,7 +39,7 @@ mean the guest behavior is implemented.
 
 | Feature | Status | Evidence / limitation |
 | --- | --- | --- |
-| Raw GPU command ring/PM4 decoder | Partial | A bounded parser handles Type-0 config/context/control writes, Type-2 filler, Type-3 NOP, `SET_CONFIG_REG`, `SET_CONTEXT_REG`, and `SET_CTL_CONST` in context restore/direct-call HLE paths. There is no ring processor, draw packet execution, indirect-buffer recursion, or retirement path; see [`15_latte_command_processor.md`](15_latte_command_processor.md). |
+| Raw GPU command ring/PM4 decoder | Partial | A bounded parser handles Type-0 config/context/control writes, Type-2 filler, Type-3 NOP, register-set packets, `INDEX_TYPE`, and `NUM_INSTANCES` in context restore/direct-call HLE paths. There is no ring processor, draw packet execution, indirect-buffer recursion, or retirement path; see [`15_latte_command_processor.md`](15_latte_command_processor.md). |
 | GX2 command ordering | Partial, tested | HLE pending command vector and frontend batch handoff preserve selected operation order; not equivalent to asynchronous Latte FIFO/fence execution. |
 | Register shadow | Partial | `Gx2RegisterState` retains selected raw context/resource/sampler state and draw-time snapshots. `SQ_VTX_SEMANTIC_CLEAR` applies its verified 32-entry mask side effect; other special Latte register semantics are not generally modeled. |
 | Color/depth render-target descriptors | Partial | HLE reads and records descriptors, binding and selected registers; broad hardware surface semantics are not provided. |

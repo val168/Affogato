@@ -80,12 +80,14 @@ shows the ordinary `GX2DrawEx` packet sequence: `SET_CTL_CONST` for the base
 vertex, `SET_CONFIG_REG` for `VGT_PRIMITIVE_TYPE`, `INDEX_TYPE`,
 `NUM_INSTANCES`, and a predicate-bit `DRAW_INDEX_AUTO`. Its indexed path uses
 `DRAW_INDEX_2` and enables the same predicate bit. This establishes a useful
-reference sequence, but Affogato currently rejects `INDEX_TYPE`,
-`NUM_INSTANCES`, draw opcodes, and every predicate-bit Type-3 header. Its first
+reference sequence, but Affogato currently rejects draw opcodes and every
+predicate-bit Type-3 header. Its bounded parser captures `SET_CTL_CONST`,
+`INDEX_TYPE`, and `NUM_INSTANCES` state, but not a draw record. Its first
 `SET_CTL_CONST` writes are now captured for the reference-identified base-
-vertex/base-instance pair at `0x3CFF0` and `0x3CFF4`. This state capture is not sufficient
-to accept or execute a normal Cemu-shaped draw stream. The PM4 predicate
-source/state semantics must be verified before relaxing that rejection.
+vertex/base-instance pair at `0x3CFF0` and `0x3CFF4`. This state capture is
+not sufficient to accept or execute a normal Cemu-shaped draw stream. The
+PM4 predicate source/state semantics must be verified before relaxing that
+rejection.
 
 AMD's [Evergreen/Cayman guide §9.1.4](https://www.x.org/docs/AMD/old/evergreen_cayman_programming_guide.pdf)
 identifies Type-3 header bit 0 as `PREDICATE` and bit 1 as `SHADER_TYPE`; the
@@ -120,8 +122,10 @@ and copies the guest bytes at call time, then queues supported config/context/
 control register writes in order. The shared decoder accepts bounded Type-0
 writes in the config, context, or currently modeled control-constant windows,
 Type-2 filler, Type-3 NOP, Type-3 `SET_CONFIG_REG`, `SET_CONTEXT_REG`, and
-`SET_CTL_CONST`. Other opcodes, including draw packets, fail explicitly. This
-is state submission through the current HLE queue, not GPU execution.
+`SET_CTL_CONST`, `INDEX_TYPE`, and `NUM_INSTANCES`. Other opcodes, including
+draw packets, fail explicitly. The two draw-setup opcodes require exactly one
+payload dword. This is state submission through the current HLE queue, not GPU
+execution.
 `GX2BeginDisplayListEx`,
 `GX2EndDisplayList`, `GX2CallDisplayList` and `GX2CopyDisplayList` remain
 unregistered; queued indirect calls and guest-authored recording therefore
@@ -165,10 +169,11 @@ verified against a Latte fixture or Wii U behavior.
   restore packets. `GX2GetContextStateDisplayList` returns that embedded
   buffer and size. `GX2SetContextState` restores Affogato's captured register
   shadow when the size is zero. A bounded nonempty subset decodes Type-2 filler,
-  Type-3 NOP, config/context/control Type-0 writes, and Type-3 `SET_CONFIG_REG` /
-  `SET_CONTEXT_REG` / `SET_CTL_CONST` packets into typed register commands; other packet
-  types/opcodes, predication, truncation, and out-of-window writes fail
-  explicitly. Queuing these values does not execute GPU work or retire a fence.
+  Type-3 NOP, config/context/control Type-0 writes, Type-3 register sets, and
+  one-word `INDEX_TYPE` / `NUM_INSTANCES` packets into typed register commands;
+  other packet types/opcodes, predication, truncation, and out-of-window writes
+  fail explicitly. Queuing these values does not execute GPU work or retire a
+  fence.
 - `tests/cpu_test.cpp` covers command-pool attributes, context-state setup,
   zero-length display-list results, shadow restoration, big-endian packet
   playback, Type-3 NOP payload advancement, ordered Type-0 sequential and
@@ -202,9 +207,9 @@ lists and guest-written command streams remain unsupported.
 | Typed GX2 HLE event ordering | Partial and tested | `pending_commands`, register shadow and frontend drain |
 | PM4 packet framing | Partial and tested | Type-0 payload lengths, Type-2 filler and Type-3 lengths; Type-1 remains unsupported |
 | PM4 register writes | Partial and tested | Type-0 sequential writes and Type-3 config/context/control register sets are bounded to supported byte windows |
-| Type-3 operations | Partial and tested | `NOP`, `SET_CONFIG_REG`, `SET_CONTEXT_REG`, and `SET_CTL_CONST`; other opcodes are rejected |
+| Type-3 operations | Partial and tested | `NOP`, register sets, `INDEX_TYPE`, and `NUM_INSTANCES`; draw and other opcodes are rejected |
 | Indirect buffers / nested lists | Missing | Guest bounds, alignment, recursion limit, lifetime and ordering |
-| Context display-list generation/decoding | Partial | generation leaves size zero; empty lists restore the register shadow; bounded Type-0 config/context/control writes and Type-2/Type-3 config/context/control register lists decode into typed writes; GPU packet execution is not implemented |
+| Context display-list generation/decoding | Partial | generation leaves size zero; empty lists restore the register shadow; bounded Type-0 config/context/control writes, Type-2/Type-3 register sets, `INDEX_TYPE`, and `NUM_INSTANCES` decode into typed writes; GPU packet execution is not implemented |
 | GPU completion and waits | Partial / not renderer-backed | Must follow actual submission, fence, and memory-visibility semantics |
 
 ## Design constraints for a first implementation

@@ -28764,13 +28764,21 @@ void gx2_set_context_state_hle_tests()
         context_state + display_list_offset + 32U, 0x00000003U);
     core.memory.write32_be(
         context_state + display_list_offset + 36U, 0x00000004U);
-    core.memory.write32_be(context_state + display_list_size_offset, 40U);
+    core.memory.write32_be(
+        context_state + display_list_offset + 40U, 0xC0002A00U);
+    core.memory.write32_be(
+        context_state + display_list_offset + 44U, 0x1U);
+    core.memory.write32_be(
+        context_state + display_list_offset + 48U, 0xC0002F00U);
+    core.memory.write32_be(
+        context_state + display_list_offset + 52U, 0x2U);
+    core.memory.write32_be(context_state + display_list_size_offset, 56U);
     const std::size_t commands_before_config_writes =
         core.gx2.pending_commands.size();
     const RunResult config_write_result = core.run(1U);
     assert(config_write_result.reason == StopReason::instruction_limit);
     assert(core.gx2.pending_commands.size() ==
-           commands_before_config_writes + 5U);
+           commands_before_config_writes + 7U);
     assert((core.gx2.pending_commands[commands_before_config_writes] ==
             Gx2Command{
                 Gx2CommandType::set_config_register,
@@ -28796,6 +28804,16 @@ void gx2_set_context_state_hle_tests()
                 Gx2CommandType::set_control_constant,
                 0x3CFF4U,
                 0x00000004U}));
+    assert((core.gx2.pending_commands[commands_before_config_writes + 5U] ==
+            Gx2Command{
+                Gx2CommandType::set_context_register,
+                0x28A7CU,
+                0x1U}));
+    assert((core.gx2.pending_commands[commands_before_config_writes + 6U] ==
+            Gx2Command{
+                Gx2CommandType::set_context_register,
+                0x28A88U,
+                0x2U}));
 
     // The bounded control-constant subset consists of the two reference-
     // identified words; a write crossing its end must not append a batch.
@@ -28817,6 +28835,26 @@ void gx2_set_context_state_hle_tests()
     assert(invalid_control_write.reason == StopReason::hle_error);
     assert(core.gx2.pending_commands.size() ==
            commands_before_invalid_control_write);
+
+    // INDEX_TYPE and NUM_INSTANCES each have exactly one payload dword.
+    core.state.cia = core.hle.bind_import("gx2", "GX2SetContextState");
+    core.state.lr = return_address;
+    core.state.gpr[3] = context_state;
+    core.memory.write32_be(
+        context_state + display_list_offset, 0xC0012A00U);
+    core.memory.write32_be(
+        context_state + display_list_offset + 4U, 0x1U);
+    core.memory.write32_be(
+        context_state + display_list_offset + 8U, 0x2U);
+    core.memory.write32_be(context_state + display_list_size_offset, 12U);
+    const std::size_t commands_before_invalid_draw_state =
+        core.gx2.pending_commands.size();
+    const RunResult invalid_draw_state = core.run(1U);
+    assert(invalid_draw_state.reason == StopReason::hle_error);
+    assert(invalid_draw_state.detail.find(
+               "packet with an invalid payload length") != std::string::npos);
+    assert(core.gx2.pending_commands.size() ==
+           commands_before_invalid_draw_state);
 
     // Type-0 BASE_INDEX addresses consecutive register dwords. Reject the
     // packet if its final register would leave the context window.
