@@ -32295,6 +32295,8 @@ void latte_control_flow_decoder_tests()
     using affogato::gpu::evaluate_latte_normal_export;
     using affogato::gpu::execute_latte_shader_subset;
     using affogato::gpu::execute_latte_vertex_shader_subset;
+    using affogato::gpu::execute_latte_vertex_shader_program_subset;
+    using affogato::gpu::LatteControlFlowCondition;
     using affogato::gpu::LatteExportType;
     using affogato::gpu::evaluate_latte_alu_move_value;
     using affogato::gpu::execute_latte_alu_op2_clause;
@@ -32318,6 +32320,12 @@ void latte_control_flow_decoder_tests()
     assert(records[0U].word1 == 0x09800000U);
     assert(records[0U].opcode == LatteControlFlowOpcode::call_fetch_shader);
     assert(!records[0U].end_of_program);
+    assert(records[0U].call_fetch_fields ==
+        (affogato::gpu::LatteCallFetchFields{
+            0U,
+            0U,
+            LatteControlFlowCondition::active,
+            0U}));
     assert(records[1U].word_offset == 2U);
     assert(records[1U].word0 == 0x0000A03CU);
     assert(records[1U].word1 == 0x94000688U);
@@ -32509,8 +32517,8 @@ void latte_control_flow_decoder_tests()
     Gx2ProgramShaderBinding vertex_shader_binding{};
     vertex_shader_binding.stage = Gx2ProgramStage::vertex;
     vertex_shader_binding.program_words.assign(
-        linear_shader_words.begin(),
-        linear_shader_words.end());
+        captured_guest_words.begin(),
+        captured_guest_words.end());
     Gx2Command set_vertex_shader_command{};
     set_vertex_shader_command.type = Gx2CommandType::set_program_shader;
     set_vertex_shader_command.program_shader = vertex_shader_binding;
@@ -32551,12 +32559,17 @@ void latte_control_flow_decoder_tests()
         1U,
         draw_shader_registers);
     assert(draw_shader_result.fetched_attribute_count == 1U);
-    assert(draw_shader_result.shader_execution.registers[3U] ==
+    assert(draw_shader_result.shader_execution.exports.size() == 2U);
+    assert(draw_shader_result.shader_execution.registers[1U] ==
         (LatteShaderRegister{
             0xC0000000U,
             0x3FC00000U,
             0U,
             0xDEADBEEFU}));
+    assert(draw_shader_result.shader_execution.exports[0U].values[0U].type ==
+        LatteExportType::position);
+    assert(draw_shader_result.shader_execution.exports[0U].values[0U].components[0U] ==
+        draw_shader_result.shader_execution.registers[1U][0U]);
 
     bool rejected_fetch_shader_call = false;
     try
@@ -32570,6 +32583,61 @@ void latte_control_flow_decoder_tests()
         rejected_fetch_shader_call = true;
     }
     assert(rejected_fetch_shader_call);
+
+    const auto fetch_preexecuted_shader_result =
+        execute_latte_vertex_shader_program_subset(
+            captured_guest_words,
+            shader_registers);
+    assert(fetch_preexecuted_shader_result.exports.size() == 2U);
+    assert(fetch_preexecuted_shader_result.exports[0U].values[0U].type ==
+        LatteExportType::position);
+    assert(fetch_preexecuted_shader_result.exports[0U].values[0U].components[0U] ==
+        shader_registers[1U][0U]);
+
+    auto conditional_fetch_call = captured_guest_words;
+    conditional_fetch_call[1U] = std::byteswap(0x09800100U);
+    bool rejected_conditional_fetch_call = false;
+    try
+    {
+        static_cast<void>(execute_latte_vertex_shader_program_subset(
+            conditional_fetch_call,
+            shader_registers));
+    }
+    catch (const std::runtime_error&)
+    {
+        rejected_conditional_fetch_call = true;
+    }
+    assert(rejected_conditional_fetch_call);
+
+    auto offset_fetch_call = captured_guest_words;
+    offset_fetch_call[0U] = std::byteswap(1U);
+    bool rejected_offset_fetch_call = false;
+    try
+    {
+        static_cast<void>(execute_latte_vertex_shader_program_subset(
+            offset_fetch_call,
+            shader_registers));
+    }
+    catch (const std::runtime_error&)
+    {
+        rejected_offset_fetch_call = true;
+    }
+    assert(rejected_offset_fetch_call);
+
+    auto nested_fetch_call = captured_guest_words;
+    nested_fetch_call[1U] = std::byteswap(0x09802000U);
+    bool rejected_nested_fetch_call = false;
+    try
+    {
+        static_cast<void>(execute_latte_vertex_shader_program_subset(
+            nested_fetch_call,
+            shader_registers));
+    }
+    catch (const std::runtime_error&)
+    {
+        rejected_nested_fetch_call = true;
+    }
+    assert(rejected_nested_fetch_call);
 
     const auto position_export = evaluate_latte_normal_export(
         *records[1U].export_fields,

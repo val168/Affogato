@@ -30,6 +30,24 @@ enum class LatteExportType : std::uint8_t
     unused
 };
 
+enum class LatteControlFlowCondition : std::uint8_t
+{
+    active = 0U,
+    false_predicate = 1U,
+    boolean_constant = 2U,
+    inverse_boolean_constant = 3U,
+};
+
+struct LatteCallFetchFields
+{
+    std::uint32_t address_8byte_units{};
+    std::uint8_t pop_count{};
+    LatteControlFlowCondition condition{};
+    std::uint8_t call_count{};
+
+    bool operator==(const LatteCallFetchFields&) const = default;
+};
+
 struct LatteExportFields
 {
     LatteExportType type{};
@@ -55,6 +73,7 @@ struct LatteControlFlowRecord
     bool end_of_program{};
     std::uint32_t clause_address_8byte_units{};
     std::uint32_t alu_slot_count{};
+    std::optional<LatteCallFetchFields> call_fetch_fields;
     std::optional<LatteExportFields> export_fields;
 
     bool operator==(const LatteControlFlowRecord&) const = default;
@@ -89,6 +108,17 @@ struct LatteControlFlowRecord
         uses_buffer_encoding,
         ((word1 >> 22U) & 1U) != 0U,
         ((word1 >> 30U) & 1U) != 0U};
+}
+
+[[nodiscard]] inline LatteCallFetchFields decode_latte_call_fetch_fields(
+    std::uint32_t word0,
+    std::uint32_t word1)
+{
+    return {
+        word0,
+        static_cast<std::uint8_t>(word1 & 0x07U),
+        static_cast<LatteControlFlowCondition>((word1 >> 8U) & 0x03U),
+        static_cast<std::uint8_t>((word1 >> 13U) & 0x3FU)};
 }
 
 struct LatteAluClauseSlot
@@ -233,8 +263,15 @@ decode_latte_control_flow(
             end_of_program,
             clause_address_8byte_units,
             alu_slot_count,
+            std::nullopt,
             std::nullopt};
 
+        if (opcode == LatteControlFlowOpcode::call_fetch_shader)
+        {
+            record.call_fetch_fields = decode_latte_call_fetch_fields(
+                word0,
+                word1);
+        }
         if (opcode == LatteControlFlowOpcode::export_data ||
             opcode == LatteControlFlowOpcode::export_done)
         {

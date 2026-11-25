@@ -47,7 +47,7 @@ execute_latte_vertex_shader_subset(
 
     return {
         fetched_attribute_count,
-        execute_latte_shader_subset(
+        execute_latte_vertex_shader_program_subset(
             guest_big_endian_shader_words,
             shader_registers)};
 }

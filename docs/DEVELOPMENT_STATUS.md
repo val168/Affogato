@@ -523,9 +523,11 @@ supported ALU clauses and normal export records in CF order, using caller-
 supplied initial GPRs, and returns the final GPR file plus ordered export
 batches. The assembled fixture verifies a MOV clause writing GPR 3 followed by
 a position export from that register. `CALL_FS` is rejected explicitly, as
-are other unsupported CF operations; the subset does not generate stage inputs,
-translate shaders to SPIR-V, or participate in guest draw submission. Debug
-and Release builds succeeded and CTest passed 2/2 in both configurations.
+are other unsupported CF operations by the generic executor; the vertex-
+specific executor has a bounded path for a separately processed leading fetch
+call. The subset does not translate shaders to SPIR-V or participate in normal
+guest draw submission. Debug and Release builds succeeded and CTest passed 2/2
+in both configurations.
 
 ## Latte vertex semantic linkage (2026-11-25)
 
@@ -642,3 +644,17 @@ generate Vulkan shaders. Debug and Release builds succeeded and CTest passed
 it still uses host diagnostic shaders. The visible-window test was not run
 because the Windows capture tool failed during initialization (`failed to
 write kernel assets`), so no new visual verification is claimed.
+
+## Bounded Latte fetch-call handoff (2026-11-25)
+
+`decode_latte_control_flow()` now records the `CALL_FS` address in 8-byte
+units, pop count, condition, and call count. A vertex-specific shader executor
+can consume a single leading call only when its address is zero, its condition
+is active, and both pop count and call count are zero. The draw-snapshot path
+first processes the bound HLE-generated fetch subset, then executes the vertex
+program with that call elided. Tests verify the decoded fields, successful
+execution of the captured `CALL_FS` fixture after fetch processing, rejection
+by the generic executor, and rejection of conditional calls. This follows the
+R700-family reference and Cemu's separate fetch-shader lowering architecture;
+the base-register linkage and behavior have not been verified on Wii U
+hardware. It remains CPU-only and is not wired to normal Vulkan draws.

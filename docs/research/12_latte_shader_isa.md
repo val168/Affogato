@@ -113,12 +113,16 @@ The R700 manual's `CALL_FS` entry (Chapter 9, p. 9-10) describes a fetch
 subroutine call whose address is relative to a host-configured register; it
 also enters fetch-program mode until the corresponding `RETURN`. Only a
 vertex shader may make this call, and the instruction includes condition and
-nesting fields. Affogato currently recognizes the opcode for structural
-decoding but does not retain or execute those call semantics. The CPU
-fetch-to-shader helper therefore tests a straight-line ALU program without a
-`CALL_FS`; it must not skip a real call merely because a GX2 fetch-shader
-binding is available. The base-register/address relationship and Latte call
-behavior remain to be verified before normal-draw integration.
+nesting fields. Affogato now decodes its relative address, pop count,
+condition, and call count. After it separately processes the bound
+HLE-generated fetch subset, the vertex-shader CPU path permits only one leading
+`CALL_FS` with address 0, pop count 0, active condition, and call count 0;
+other call forms are rejected. Cemu's pinned implementation provides an
+architectural precedent for lowering the fetch program separately from the
+vertex program, but this specific supported call form remains an R700-family
+reference plus fixture evidence, not Wii U hardware verification. The
+call-target/base relationship remains unverified, so this path is not yet
+connected to normal Vulkan draw dispatch.
 
 Cemu at commit
 [`2f49c079da1d50b85cea0ed99aedda58846b3523`](https://github.com/cemu-project/Cemu/commit/2f49c079da1d50b85cea0ed99aedda58846b3523)
@@ -291,7 +295,7 @@ arbitrary guest fetch programs or claiming Latte hardware verification.
 | --- | --- | --- |
 | GX2 vertex/pixel/geometry descriptor capture | Implemented and tested as capture | HLE descriptor/program range checks and draw-time state snapshots |
 | Fetch-shader parsing and semantic linkage | Narrow CPU subset | `latte_vertex_fetch.hpp` recognizes Affogato-generated semantic VTX records, decodes supported formats, applies destination selectors (component swizzles, 0.0, 1.0, and masked writes), extracts a complete correctly typed 32-entry `SQ_VTX_SEMANTIC` table from a draw snapshot, and maps attributes plus immutable vertex snapshots into a caller-provided register file at an explicit vertex index and `VS_GPR_BASE + 1 + table index`. `execute_latte_vertex_shader_subset()` passes this input file to the supported CPU shader subset in one deterministic test path. Writes are validated transactionally. AMD references differ on semantic-field width (R6xx: 8; R700 ISA Chapter 5: 9, while its Chapter 9 semantic-format table says 8); Latte applicability remains unresolved. Arbitrary guest fetch programs are not executed, normal draw dispatch is not connected, and system-generated inputs remain unsupported. No Wii U hardware verification. |
-| Latte shader control-flow decoding | Partial | `latte_shader_decoder.hpp` decodes fixture-verified `CALL_FS`, `EXPORT`, `EXPORT_DONE`, and `ALU` clause headers, including EOP, bounded clause ranges, and normal export metadata (type, GPRs, burst count, and component selectors). Unknown opcodes and malformed streams fail explicitly. Export values are not applied to stage outputs; branch/loop execution is absent. |
+| Latte shader control-flow decoding | Partial | `latte_shader_decoder.hpp` decodes fixture-verified `CALL_FS`, `EXPORT`, `EXPORT_DONE`, and `ALU` clause headers, including EOP, bounded clause ranges, normal export metadata, and `CALL_FS` address/pop/condition/nesting fields. The generic straight-line executor rejects calls. A vertex-specific path accepts one leading canonical call only after separately processing the captured HLE fetch subset. Other call forms, branches, and loops remain unsupported; exports are typed values and are not connected to stage outputs. This behavior is not Wii U hardware-verified. |
 | Latte ALU decoding/execution | Experimental subset | OP2 fields and LAST-delimited no-literal groups are decoded. A bounded clause executor runs sequential four-slot X/Y/Z/W groups with MOV and selected integer operations, forwards PV between groups within the clause, and leaves external registers unchanged if a later supported-subset check fails. A straight-line shader subset connects ALU clauses to normal export materialization with caller-provided initial GPRs. Fetch shader execution, ALU.Trans/PS, constant-file/literal reads, other opcodes, general control flow, Vulkan use, and Latte-hardware validation are absent. |
 | Vertex/pixel shader translation | Missing | Stage interfaces, exports, constants, textures, and SPIR-V backend |
 | Guest shader integration with Vulkan draws | Missing | Shader modules, pipeline cache, descriptor binding, render-target path |
