@@ -32,6 +32,11 @@ Reference emulator architecture:
 - The register map and known GX2 interfaces are summarized by
   [WiiUBrew Hardware/GX2](https://wiiubrew.org/wiki/Hardware/GX2). That page
   also notes the lack of a perfectly matching public card document.
+- AMD's R6xx/R7xx guide, section 5.2.1, defines Type-0 as sequential DWORD
+  writes: BASE_INDEX is a DWORD register address and COUNT is the number of
+  payload DWORDs minus one. This packet format is used here as family-level
+  evidence; the supported destination is deliberately limited to Latte's
+  documented context-register window.
 
 These implementations establish useful subsystem boundaries, not proof that
 all packet behavior or register side effects match Latte.
@@ -121,7 +126,8 @@ verified against a Latte fixture or Wii U behavior.
   explicitly. Queuing these values does not execute GPU work or retire a fence.
 - `tests/cpu_test.cpp` covers command-pool attributes, context-state setup,
   zero-length display-list results, shadow restoration, big-endian packet
-  playback, ordered register writes, and malformed/unsupported-list rejection.
+  playback, ordered Type-0 sequential and Type-3 context register writes,
+  out-of-window Type-0 rejection, and malformed/unsupported-list rejection.
 - `Gx2RegisterState::apply` models writes to `SQ_VTX_SEMANTIC_CLEAR` at
   `0x288E0`: each set bit clears the matching entry in the 32-word semantic
   table beginning at `0x28380`, storing `0xFFFFFFFF` in the shadow. The clear
@@ -146,11 +152,11 @@ lists and guest-written command streams remain unsupported.
 | GX2 command-pool registration | Partial and tested | Bounds/alignment/ownership checks in `initialize_gx2` |
 | GX2 display-list API lifecycle and submission | Missing | WUT declares begin/end, queued/direct call, and copy APIs, but Affogato has no registrations or guest dword ownership model; see the reference comparison above. |
 | Typed GX2 HLE event ordering | Partial and tested | `pending_commands`, register shadow and frontend drain |
-| PM4 packet framing | Partial and tested | Type-2 filler and Type-3 lengths; Type-0/Type-1 remain unsupported |
-| PM4 register writes | Partial and tested | Type-3 `SET_CONTEXT_REG` maps bounded dword offsets to the context register byte range |
+| PM4 packet framing | Partial and tested | Type-0 payload lengths, Type-2 filler and Type-3 lengths; Type-1 remains unsupported |
+| PM4 register writes | Partial and tested | Type-0 sequential writes and Type-3 `SET_CONTEXT_REG` are bounded to the context-register byte range |
 | Type-3 operations | Partial | `SET_CONTEXT_REG` only; all other opcodes are rejected |
 | Indirect buffers / nested lists | Missing | Guest bounds, alignment, recursion limit, lifetime and ordering |
-| Context display-list generation/decoding | Partial | generation leaves size zero; empty lists restore the register shadow; bounded Type-2/`SET_CONTEXT_REG` lists decode into typed writes; GPU packet execution is not implemented |
+| Context display-list generation/decoding | Partial | generation leaves size zero; empty lists restore the register shadow; bounded Type-0 context writes and Type-2/Type-3 `SET_CONTEXT_REG` lists decode into typed writes; GPU packet execution is not implemented |
 | GPU completion and waits | Partial / not renderer-backed | Must follow actual submission, fence, and memory-visibility semantics |
 
 ## Design constraints for a first implementation
@@ -177,9 +183,10 @@ lists and guest-written command streams remain unsupported.
 
 ## Acceptance tests
 
-- Current fixtures cover Type-2 filler and Type-3 count/opcode/register-offset
-  behavior. Before Type-0 support is added, add count/base-index fixtures
-  cross-checked against AMD's guide and a known Latte stream.
+- Current fixtures cover Type-0 count/base-index and sequential-write behavior,
+  Type-2 filler, and Type-3 count/opcode/register-offset behavior. The Type-0
+  packet layout is cross-checked against AMD R6xx/R7xx guide section 5.2.1;
+  no independent Latte-produced Type-0 stream fixture is available yet.
 - Big-endian dword decoding, empty/truncated streams, count overflow, unknown
   type/opcode, invalid register range, and exact cursor advancement.
 - Tests proving malformed packets do not partially mutate the register shadow

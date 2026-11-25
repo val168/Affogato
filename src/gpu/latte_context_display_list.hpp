@@ -41,13 +41,15 @@ struct LatteContextDisplayListDecodeResult
 };
 
 // The input contains host-order values previously read from guest big-endian
-// memory. This intentionally supports only Type-2 filler and Type-3
-// SET_CONTEXT_REG packets captured from bounded GX2 context display lists.
+// memory. This intentionally supports Type-2 filler, Type-0 writes to the
+// context-register window, and Type-3 SET_CONTEXT_REG packets captured from
+// bounded GX2 context display lists.
 [[nodiscard]] inline LatteContextDisplayListDecodeResult
 decode_latte_context_display_list(
     std::span<const std::uint32_t> words)
 {
     constexpr std::uint32_t packet_type_mask = 0xC0000000U;
+    constexpr std::uint32_t packet_type0 = 0x00000000U;
     constexpr std::uint32_t packet_type2 = 0x80000000U;
     constexpr std::uint32_t packet_type3 = 0xC0000000U;
     constexpr std::uint32_t type2_reserved_mask = 0x3FFFFFFFU;
@@ -86,7 +88,7 @@ decode_latte_context_display_list(
             continue;
         }
 
-        if (packet_type != packet_type3)
+        if (packet_type != packet_type0 && packet_type != packet_type3)
         {
             result.error = LatteContextDisplayListError::unsupported_packet_type;
             result.error_word_offset = packet_header_offset;
@@ -94,8 +96,9 @@ decode_latte_context_display_list(
             return result;
         }
 
-        if ((header & type3_reserved_mask) != 0U ||
-            (header & type3_predicate_mask) != 0U)
+        if (packet_type == packet_type3 &&
+            ((header & type3_reserved_mask) != 0U ||
+             (header & type3_predicate_mask) != 0U))
         {
             result.error = LatteContextDisplayListError::invalid_type3_header;
             result.error_word_offset = packet_header_offset;
@@ -111,6 +114,38 @@ decode_latte_context_display_list(
             result.error_word_offset = packet_header_offset;
             result.register_writes.clear();
             return result;
+        }
+
+        if (packet_type == packet_type0)
+        {
+            // Type-0 BASE_INDEX is a register dword index. Restrict this
+            // context restore path to the window it can safely model.
+            const std::uint32_t register_address =
+                (header & 0x0000FFFFU) * register_stride;
+            if (register_address < context_register_base ||
+                register_address >= context_register_end ||
+                payload_word_count >
+                    (context_register_end - register_address) /
+                        register_stride)
+            {
+                result.error =
+                    LatteContextDisplayListError::register_range_out_of_bounds;
+                result.error_word_offset = packet_header_offset;
+                result.register_writes.clear();
+                return result;
+            }
+
+            for (std::uint32_t register_index = 0U;
+                 register_index < payload_word_count;
+                 ++register_index)
+            {
+                result.register_writes.push_back({
+                    register_address + register_index * register_stride,
+                    words[word_offset + register_index]});
+            }
+
+            word_offset += payload_word_count;
+            continue;
         }
 
         const std::uint32_t opcode =

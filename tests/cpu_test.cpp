@@ -28706,6 +28706,50 @@ void gx2_set_context_state_hle_tests()
                 0x28104U,
                 0xE5F60718U}));
 
+    // Type-0 BASE_INDEX addresses consecutive register dwords. The decoder
+    // accepts writes only when the complete range remains in context space.
+    core.state.cia = core.hle.bind_import("gx2", "GX2SetContextState");
+    core.state.lr = return_address;
+    core.state.gpr[3] = context_state;
+    core.memory.write32_be(
+        context_state + display_list_offset, 0x0001A040U);
+    core.memory.write32_be(
+        context_state + display_list_offset + 4U, 0x10203040U);
+    core.memory.write32_be(
+        context_state + display_list_offset + 8U, 0x50607080U);
+    core.memory.write32_be(context_state + display_list_size_offset, 12U);
+    const std::size_t commands_before_type0 =
+        core.gx2.pending_commands.size();
+    const RunResult type0_result = core.run(1U);
+    assert(type0_result.reason == StopReason::instruction_limit);
+    assert(core.gx2.pending_commands.size() == commands_before_type0 + 2U);
+    assert((core.gx2.pending_commands[commands_before_type0] ==
+            Gx2Command{
+                Gx2CommandType::set_context_register,
+                0x28100U,
+                0x10203040U}));
+    assert((core.gx2.pending_commands[commands_before_type0 + 1U] ==
+            Gx2Command{
+                Gx2CommandType::set_context_register,
+                0x28104U,
+                0x50607080U}));
+
+    core.state.cia = core.hle.bind_import("gx2", "GX2SetContextState");
+    core.state.lr = return_address;
+    core.state.gpr[3] = context_state;
+    core.memory.write32_be(
+        context_state + display_list_offset, 0x0001A3FFU);
+    core.memory.write32_be(
+        context_state + display_list_offset + 4U, 0xAABBCCDDU);
+    core.memory.write32_be(
+        context_state + display_list_offset + 8U, 0xEEFF0011U);
+    core.memory.write32_be(context_state + display_list_size_offset, 12U);
+    const std::size_t commands_before_invalid_type0 =
+        core.gx2.pending_commands.size();
+    const RunResult invalid_type0_result = core.run(1U);
+    assert(invalid_type0_result.reason == StopReason::hle_error);
+    assert(core.gx2.pending_commands.size() == commands_before_invalid_type0);
+
     // The PM4 restore path feeds the same register shadow that models
     // SQ_VTX_SEMANTIC_CLEAR's per-entry side effect.
     core.state.cia = core.hle.bind_import("gx2", "GX2SetContextState");
