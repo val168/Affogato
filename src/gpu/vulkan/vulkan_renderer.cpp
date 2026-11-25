@@ -1,6 +1,7 @@
 #include "gpu/vulkan/vulkan_renderer.hpp"
 
 #include "gpu/vulkan/diagnostic_shader_spirv.hpp"
+#include "gpu/latte_draw.hpp"
 #include "gpu/latte_vertex_fetch.hpp"
 
 #include <algorithm>
@@ -201,35 +202,7 @@ std::vector<DiagnosticVertex> decode_diagnostic_float2_draw(
             "Vulkan float2 diagnostic received an invalid or unsupported vertex-buffer snapshot");
     }
 
-    std::optional<std::size_t> index_size_bytes;
-    if (draw.indexed)
-    {
-        switch (draw.index_type)
-        {
-        case 0U: // GX2_INDEX_TYPE_U16_LE
-        case 4U: // GX2_INDEX_TYPE_U16
-            index_size_bytes = sizeof(std::uint16_t);
-            break;
-        case 1U: // GX2_INDEX_TYPE_U32_LE
-        case 9U: // GX2_INDEX_TYPE_U32
-            index_size_bytes = sizeof(std::uint32_t);
-            break;
-        default:
-            throw std::runtime_error(
-                "Vulkan float2 diagnostic does not support this GX2 index type");
-        }
-        if (!command.draw_index_data ||
-            !command.draw_index_data->is_valid ||
-            command.draw_index_data->index_type != draw.index_type ||
-            command.draw_index_data->byte_offset != draw.element_offset ||
-            command.draw_index_data->bytes.size() !=
-                static_cast<std::size_t>(draw.element_count) * *index_size_bytes)
-        {
-            throw std::runtime_error(
-                "Vulkan float2 diagnostic received an invalid indexed draw snapshot");
-        }
-    }
-    else
+    if (!draw.indexed)
     {
         const std::uint64_t expected_offset =
             static_cast<std::uint64_t>(draw.element_offset) *
@@ -245,54 +218,13 @@ std::vector<DiagnosticVertex> decode_diagnostic_float2_draw(
         }
     }
 
-    const auto read_index = [&command, &draw, &index_size_bytes](
-        std::size_t index_number) {
-        if (!draw.indexed)
-        {
-            return static_cast<std::uint32_t>(draw.element_offset + index_number);
-        }
-
-        const cpu::espresso::Gx2IndexBufferSnapshot& index_snapshot =
-            *command.draw_index_data;
-        const std::size_t byte_offset = index_number * *index_size_bytes;
-        const bool little_endian = draw.index_type == 0U || draw.index_type == 1U;
-        std::uint32_t value = 0U;
-        for (std::size_t byte_number = 0U;
-             byte_number < *index_size_bytes;
-             ++byte_number)
-        {
-            const std::size_t shift = little_endian
-                ? byte_number * 8U
-                : (*index_size_bytes - byte_number - 1U) * 8U;
-            value |= static_cast<std::uint32_t>(
-                index_snapshot.bytes[byte_offset + byte_number]) << shift;
-        }
-        const std::uint64_t vertex_index =
-            static_cast<std::uint64_t>(value) + draw.base_vertex;
-        if (vertex_index > std::numeric_limits<std::uint32_t>::max())
-        {
-            throw std::runtime_error(
-                "Vulkan float2 diagnostic index plus base vertex exceeds 32-bit range");
-        }
-        return static_cast<std::uint32_t>(vertex_index);
-    };
+    const std::vector<std::uint32_t> vertex_indices =
+        decode_latte_draw_vertex_indices(command);
 
     std::vector<DiagnosticVertex> source_vertices(draw.element_count);
     for (std::size_t index = 0U; index < source_vertices.size(); ++index)
     {
-        const std::uint32_t vertex_index = read_index(index);
-        if (draw.indexed)
-        {
-            const std::uint32_t primitive_restart_index =
-                *index_size_bytes == sizeof(std::uint16_t)
-                ? std::numeric_limits<std::uint16_t>::max()
-                : std::numeric_limits<std::uint32_t>::max();
-            if (vertex_index == primitive_restart_index)
-            {
-                throw std::runtime_error(
-                    "Vulkan float2 diagnostic cannot process primitive-restart indices");
-            }
-        }
+        const std::uint32_t vertex_index = vertex_indices[index];
         const std::uint64_t vertex_byte_address =
             static_cast<std::uint64_t>(vertex_index) * snapshot.binding.stride;
         if (vertex_byte_address < snapshot.byte_offset)

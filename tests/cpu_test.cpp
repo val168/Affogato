@@ -14,6 +14,7 @@
 #include "cpu_state_test.hpp"
 #include "emulator.hpp"
 #include "gpu/gx2_register_state.hpp"
+#include "gpu/latte_draw.hpp"
 #include "gpu/latte_shader_decoder.hpp"
 #include "gpu/latte_shader_interpreter.hpp"
 #include "gpu/latte_shader_program.hpp"
@@ -32285,6 +32286,96 @@ void latte_vertex_fetch_decoder_tests()
     assert(rejected_unsupported_format);
 }
 
+void latte_draw_vertex_index_tests()
+{
+    using affogato::gpu::decode_latte_draw_vertex_indices;
+
+    Gx2Command non_indexed_command{};
+    non_indexed_command.type = Gx2CommandType::draw;
+    non_indexed_command.draw_call = Gx2DrawCall{
+        4U, 3U, false, 0U, 0U, 7U, 1U, 0U, 0U, 0U};
+    assert((decode_latte_draw_vertex_indices(non_indexed_command) ==
+        std::vector<std::uint32_t>{7U, 8U, 9U}));
+
+    const auto decode_indexed = [](
+        std::uint32_t index_type,
+        std::vector<std::uint8_t> index_bytes,
+        std::uint32_t base_vertex)
+    {
+        Gx2Command command{};
+        command.type = Gx2CommandType::draw;
+        command.draw_call = Gx2DrawCall{
+            4U, 2U, true, index_type, 0x400U, 0x20U, 1U, 0U, 0U,
+            base_vertex};
+        command.draw_index_data = Gx2IndexBufferSnapshot{
+            index_type, 0x20U, true, std::move(index_bytes)};
+        return decode_latte_draw_vertex_indices(command);
+    };
+
+    assert((decode_indexed(0U, {2U, 0U, 4U, 0U}, 3U) ==
+        std::vector<std::uint32_t>{5U, 7U}));
+    assert((decode_indexed(4U, {0U, 2U, 0U, 4U}, 3U) ==
+        std::vector<std::uint32_t>{5U, 7U}));
+    assert((decode_indexed(1U, {2U, 0U, 0U, 0U, 4U, 0U, 0U, 0U}, 3U) ==
+        std::vector<std::uint32_t>{5U, 7U}));
+    assert((decode_indexed(9U, {0U, 0U, 0U, 2U, 0U, 0U, 0U, 4U}, 3U) ==
+        std::vector<std::uint32_t>{5U, 7U}));
+
+    Gx2Command invalid_snapshot_command{};
+    invalid_snapshot_command.type = Gx2CommandType::draw;
+    invalid_snapshot_command.draw_call = Gx2DrawCall{
+        4U, 1U, true, 0U, 0U, 0U, 1U, 0U, 0U, 0U};
+    bool rejected_invalid_snapshot = false;
+    try
+    {
+        static_cast<void>(
+            decode_latte_draw_vertex_indices(invalid_snapshot_command));
+    }
+    catch (const std::runtime_error&)
+    {
+        rejected_invalid_snapshot = true;
+    }
+    assert(rejected_invalid_snapshot);
+
+    bool rejected_primitive_restart = false;
+    try
+    {
+        static_cast<void>(decode_indexed(
+            0U,
+            {0xFFU, 0xFFU, 0U, 0U},
+            1U));
+    }
+    catch (const std::runtime_error&)
+    {
+        rejected_primitive_restart = true;
+    }
+    assert(rejected_primitive_restart);
+
+    Gx2Command overflowing_command{};
+    overflowing_command.type = Gx2CommandType::draw;
+    overflowing_command.draw_call = Gx2DrawCall{
+        4U,
+        2U,
+        false,
+        0U,
+        0U,
+        std::numeric_limits<std::uint32_t>::max(),
+        1U,
+        0U,
+        0U,
+        0U};
+    bool rejected_overflowing_range = false;
+    try
+    {
+        static_cast<void>(decode_latte_draw_vertex_indices(overflowing_command));
+    }
+    catch (const std::runtime_error&)
+    {
+        rejected_overflowing_range = true;
+    }
+    assert(rejected_overflowing_range);
+}
+
 void latte_control_flow_decoder_tests()
 {
     using affogato::gpu::LatteControlFlowOpcode;
@@ -44041,6 +44132,7 @@ int main(int argc, char* argv[])
     gx2_draw_done_hle_tests();
     gx2_draw_ex_hle_tests();
     latte_vertex_fetch_decoder_tests();
+    latte_draw_vertex_index_tests();
     latte_control_flow_decoder_tests();
     gx2_gpu_time_to_cpu_time_hle_tests();
     gx2_set_gpu_fence_hle_tests();

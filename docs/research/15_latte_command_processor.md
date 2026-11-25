@@ -144,6 +144,15 @@ fixtures remain unsupported or unavailable. This subset is based on related
 AMD-family documentation and Cemu/Decaf behavior; it has not yet been verified
 against a command stream captured from Wii U hardware.
 
+The explicit diagnostic renderer expands draw-time index snapshots through
+[`decode_latte_draw_vertex_indices()`](../../src/gpu/latte_draw.hpp). The
+helper supports the WUT enum values U16_LE/U32_LE (0/1) and U16/U32 (4/9),
+expands non-indexed first-vertex ranges, applies the captured base vertex, and
+rejects invalid snapshots, restart sentinels, and overflow. Deterministic tests
+exercise each endian-qualified format. The renderer smoke test passed after
+this extraction, but uses a fixed diagnostic Vulkan shader and does not
+establish guest shader execution or visually verified output.
+
 Decaf's GPL-3.0 [`DrawIndex2` packet structure](https://github.com/decaf-emu/decaf-emu/blob/master/src/libgpu/latte/latte_pm4_commands.h#L348-L367)
 serializes those fields in that order and models the base as `phys_addr`;
 Cemu's [`GX2DrawIndexedEx`](https://github.com/cemu-project/Cemu/blob/main/src/Cafe/OS/libs/gx2/GX2_Draw.cpp#L679-L724)

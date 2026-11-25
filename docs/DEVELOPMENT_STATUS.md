@@ -658,3 +658,21 @@ by the generic executor, and rejection of conditional calls. This follows the
 R700-family reference and Cemu's separate fetch-shader lowering architecture;
 the base-register linkage and behavior have not been verified on Wii U
 hardware. It remains CPU-only and is not wired to normal Vulkan draws.
+
+## GX2 draw vertex-index resolution (2026-11-25)
+
+Added `decode_latte_draw_vertex_indices()` in
+[`latte_draw.hpp`](../src/gpu/latte_draw.hpp) and routed the existing
+diagnostic Vulkan path through it. It expands non-indexed first-vertex ranges
+and captured U16/U32 index buffers for GX2's little- and big-endian index type
+values, then applies the captured base vertex. Invalid snapshots, unsupported
+index types, primitive-restart values, and 32-bit range overflow are rejected.
+Tests cover all four index encodings, non-indexed ranges, base-vertex addition,
+invalid snapshots, restart indices, and overflow. The helper does not execute
+vertex shaders, handle instancing, or broaden the diagnostic renderer's
+supported topology. WUT's public GX2 enum defines the four index-type values;
+its source supports the numeric mapping, while Affogato fixtures verify the
+byte-order interpretation. Debug and Release builds succeeded, CTest passed
+2/2 in both configurations, and `--gx2-guest-triangle-smoke-test` passed on an
+NVIDIA GeForce RTX 5070 Laptop GPU using the diagnostic Vulkan shader. This
+does not verify visual presentation or Latte shader execution.
