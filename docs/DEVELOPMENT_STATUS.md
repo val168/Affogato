@@ -344,5 +344,19 @@ addresses in eight-byte units and slot counts, checks clause ranges against the
 captured program, and stops at EOP. Tests use Decaf-assembler-produced GSH
 fixtures and cover malformed pairs, unsupported opcodes, missing EOP, and an
 out-of-range clause. Debug and Release builds succeeded; CTest passed 2/2 in
-both configurations. `git diff --check` is clean. The decoder does not inspect
-ALU slots, execute shaders, generate SPIR-V, or render through guest shaders.
+both configurations. `git diff --check` is clean. At that checkpoint, ALU slot
+payloads were not extracted or interpreted; shader execution, SPIR-V, and
+guest-shader rendering were absent.
+
+## Latte ALU slot extraction (2026-11-25)
+
+Added `decode_latte_alu_clause_slots()` to extract the bounded raw 64-bit slots
+referenced by a decoded ALU clause. It preserves the byte-swapped Latte DWORD
+pairing and each slot's location in the captured program, rejects non-ALU
+records and out-of-range inputs, and intentionally interprets no instruction
+fields. The test materializes the assembled fixture's control-flow and slot
+words at their captured offsets in a zero-filled program span, then checks the
+first and last slot, rejects a non-ALU record, and covers truncated and
+out-of-range input. Debug and Release builds succeeded; CTest passed 2/2 in
+both configurations. `git diff --check` is clean. This is structural access
+only; ALU opcode semantics and shader execution remain unimplemented.

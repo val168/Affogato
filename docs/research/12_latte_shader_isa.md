@@ -100,6 +100,11 @@ real shader fixtures before implementation.
   count accessor reads bits 24:18 and adds one. This agrees with the R700
   family manual's ALU count description, but remains reference-emulator
   evidence rather than an independent Latte hardware measurement.
+  Its `LatteClauseInstruction_ALU` accessors also treat each clause address
+  unit as eight bytes and the payload as consecutive 64-bit slots. The
+  controlled fixture confirms those offsets and the slot word order for one
+  assembled MOV vector group. This supports extracting raw slots, but does not
+  establish instruction semantics or all shader byte-order cases.
 - Decaf keeps its GPU implementation under
   [`src/libgpu`](https://github.com/decaf-emu/decaf-emu/tree/master/src/libgpu)
   and its GFD raw shader-block reader at
@@ -234,8 +239,9 @@ snapshot/coherence requirements.
 
 The non-executing CF record decoder currently supports the pass-through
 fixture's `CALL_FS` and export records, plus a separately assembled ALU
-fixture's clause header. The ALU header uses the upper four opcode bits
-combined with `0x40`; the supported fixture resolves to opcode `0x48`. Its
+fixture's clause header and raw slot extraction. The ALU header uses the upper
+four opcode bits combined with `0x40`; the supported fixture resolves to opcode
+`0x48`. Its
 22-bit `word0` address is measured in eight-byte units, and the seven-bit
 `word1` count field is encoded as slot count minus one. The fixture places four
 64-bit slots at address `0x20`, ending exactly at the 288-byte program boundary.
@@ -246,10 +252,13 @@ range fits in the captured program but does not decode clause contents.
 Tests cover the Affogato-captured guest words, byte-swapped field words, opcode
 fields, EOP, incomplete records, unsupported CF and ALU opcodes, missing EOP,
 and an out-of-range ALU clause. Do not execute clauses, infer omitted slot
-behavior, or generate SPIR-V in this step.
+behavior, interpret ALU opcode fields, or generate SPIR-V in this step. Raw
+slot extraction validates that its input record is an ALU clause and rechecks
+that the clause range fits the captured program.
 
-Next implementation work can begin by decoding ALU clause slots using an
-assembled instruction fixture and verified field semantics. The pass-through
-shader alone does not establish complete shader decoding. Do not start SPIR-V
-emission until decoding, slot grouping, and expected architectural outputs
-have deterministic tests.
+Next implementation work should specify and test an initial ALU instruction
+family from assembled fixtures and cross-check the bitfields against Cemu's
+`LatteClauseInstruction_ALU` definitions and the R700-family manual. The
+pass-through shader alone does not establish complete shader decoding. Do not
+start SPIR-V emission until opcode decoding, slot grouping, and expected
+architectural outputs have deterministic tests.

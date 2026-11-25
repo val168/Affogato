@@ -31947,6 +31947,7 @@ void latte_vertex_fetch_decoder_tests()
 void latte_control_flow_decoder_tests()
 {
     using affogato::gpu::LatteControlFlowOpcode;
+    using affogato::gpu::decode_latte_alu_clause_slots;
     using affogato::gpu::decode_latte_control_flow;
 
     // Captured with read32_be() from the assembled GFD pass-through vertex
@@ -31977,8 +31978,8 @@ void latte_control_flow_decoder_tests()
     assert(records[2U].opcode == LatteControlFlowOpcode::export_done);
     assert(records[2U].end_of_program);
 
-    // An assembled ALU fixture places a four-slot clause at DWORD offset
-    // 0x100 (32 eight-byte units) and ends the program after the clause.
+    // The assembled ALU fixture's control-flow and slot words are materialized
+    // at their captured offsets in a zero-filled 288-byte program span.
     std::array<std::uint32_t, 72U> captured_alu_guest_words{};
     captured_alu_guest_words[1U] = 0x00008009U;
     captured_alu_guest_words[2U] = 0x20000000U;
@@ -32007,6 +32008,58 @@ void latte_control_flow_decoder_tests()
     assert(!alu_records[1U].end_of_program);
     assert(alu_records[2U].opcode == LatteControlFlowOpcode::export_done);
     assert(alu_records[2U].end_of_program);
+
+    const auto alu_slots = decode_latte_alu_clause_slots(
+        captured_alu_guest_words,
+        alu_records[1U]);
+    assert(alu_slots.size() == 4U);
+    assert(alu_slots[0U].word_offset == 64U);
+    assert(alu_slots[0U].word0 == 0x00000001U);
+    assert(alu_slots[0U].word1 == 0x00600C90U);
+    assert(alu_slots[3U].word_offset == 70U);
+    assert(alu_slots[3U].word0 == 0x80000C01U);
+    assert(alu_slots[3U].word1 == 0x60600C90U);
+
+    bool rejected_non_alu_record = false;
+    try
+    {
+        static_cast<void>(
+            decode_latte_alu_clause_slots(captured_alu_guest_words, records[0U]));
+    }
+    catch (const std::runtime_error&)
+    {
+        rejected_non_alu_record = true;
+    }
+    assert(rejected_non_alu_record);
+
+    bool rejected_incomplete_alu_slot = false;
+    try
+    {
+        static_cast<void>(decode_latte_alu_clause_slots(
+            std::span<const std::uint32_t>(captured_alu_guest_words).first(71U),
+            alu_records[1U]));
+    }
+    catch (const std::runtime_error&)
+    {
+        rejected_incomplete_alu_slot = true;
+    }
+    assert(rejected_incomplete_alu_slot);
+
+    bool rejected_out_of_range_alu_slot = false;
+    try
+    {
+        auto out_of_range_clause = alu_records[1U];
+        out_of_range_clause.clause_address_8byte_units = 0x20U;
+        out_of_range_clause.alu_slot_count = 8U;
+        static_cast<void>(decode_latte_alu_clause_slots(
+            captured_alu_guest_words,
+            out_of_range_clause));
+    }
+    catch (const std::runtime_error&)
+    {
+        rejected_out_of_range_alu_slot = true;
+    }
+    assert(rejected_out_of_range_alu_slot);
 
     bool rejected_incomplete_record = false;
     try
