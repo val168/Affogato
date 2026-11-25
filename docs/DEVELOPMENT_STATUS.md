@@ -2,29 +2,37 @@
 
 ## Current implementation checkpoint (2026-11-25)
 
-`GX2SetContextState` and `GX2DirectCallDisplayList` now share a bounded PM4
-state-write decoder. It accepts Type-0 writes in supported config/context and
-control-constant windows, Type-2 filler, Type-3 NOP, `SET_CONFIG_REG`,
-`SET_CONTEXT_REG`, `SET_CTL_CONST` for base vertex/instance, and one-dword
-`INDEX_TYPE` / `NUM_INSTANCES` state updates. Draw packets are still rejected.
-Direct-call input is validated and copied from guest memory before decoding;
-malformed or unsupported streams do not append partial command batches. The
-HLE queues typed register updates; it does not execute GPU draws. Type-3 draw
-and other state operations outside the subset, indirect-buffer recursion,
-list recording/copy APIs, raw ring processing, and GPU retirement remain
-unsupported. Debug/Release builds and CTest passed 2/2 in each configuration
-for the source change at `4edac26`; the current follow-up is documentation-only.
+`GX2SetContextState` and `GX2DirectCallDisplayList` share a bounded PM4
+decoder. It accepts Type-0 writes in supported config/context and
+control-constant windows, Type-2 filler, Type-3 NOP, register-set packets,
+`INDEX_TYPE`, `NUM_INSTANCES`, and a bounded unpredicated `DRAW_INDEX_AUTO`
+subset. The draw requires primitive mode, instance count, and base vertex to
+have been set earlier in the same list. Direct-call input is validated and
+copied from guest memory before decoding; malformed or unsupported streams do
+not append partial command batches. When draw-byte capture is enabled, the
+direct-call HLE snapshots referenced non-indexed vertex data at call time.
+This queues a draw record; it does not establish Latte shader or guest
+render-target execution. Predicated and indexed draw packets, unresolved zero
+instance counts, other state operations, indirect-buffer recursion, list
+recording/copy APIs, raw ring processing, and GPU retirement remain
+unsupported. The initial direct-call slice also requires a zero draw initiator;
+other values fail explicitly. Debug and Release builds passed, and CTest passed
+2/2 in each configuration. The hidden guest-triangle smoke test now includes
+an unpredicated `GX2DirectCallDisplayList` auto-index draw; its command snapshot
+and diagnostic Vulkan submission passed on an NVIDIA GeForce RTX 5070 Laptop
+GPU. Its output uses a host shader and does not verify visible window output or
+Latte shader execution.
 The packet research is cross-checked against AMD's R6xx/R7xx family guides,
 Cemu, and Decaf; there is still no Latte-produced fixture. References disagree
 on whether `INDEX_TYPE` updates one or two shadow slots and whether a zero
 `NUM_INSTANCES` becomes one, so Affogato preserves raw packet state pending
 Latte-specific evidence. Details are in
 [`research/15_latte_command_processor.md`](research/15_latte_command_processor.md).
-This update builds on the implementation pushed through `4edac26`, and the
-research clarification was pushed as `be6b69c`.
+The previous implementation and research updates are at `4edac26` and
+`be6b69c`; the draw-capture change is ready for its own commit.
 Reference research confirms that normal Cemu `GX2DrawEx` uses a predicate-bit
 `DRAW_INDEX_AUTO`; predicate evaluation and its reset state remain unsupported,
-so the packet decoder rejects it pending verified semantics.
+so that common packet form remains rejected pending verified semantics.
 
 At `be6b69c`, `build/debug/AffogatoFrontend.exe --gx2-guest-triangle-smoke-test`
 completed successfully on an NVIDIA GeForce

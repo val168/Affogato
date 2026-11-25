@@ -29130,6 +29130,94 @@ void gx2_direct_call_display_list_hle_tests()
     const RunResult empty_list = invoke(0U, 0U);
     assert(empty_list.reason == StopReason::instruction_limit);
     assert(core.gx2.pending_commands == commands_before_invalid_list);
+
+    // A self-contained, unpredicated DRAW_INDEX_AUTO stream reaches the
+    // ordinary ordered GX2 command queue with draw-time guest bytes captured.
+    constexpr std::array<std::uint32_t, 13U> draw_packet_words{
+        0xC0016F00U, 0U, 0U,                 // base vertex = 0
+        0xC0016800U, 0x256U, 4U,              // triangle-list primitive
+        0xC0002A00U, 9U,                      // index type state
+        0xC0002F00U, 1U,                      // one instance
+        0xC0012D00U, 3U, 0U};                  // count and draw initiator
+    for (std::size_t index = 0U; index < draw_packet_words.size(); ++index)
+    {
+        core.memory.write32_be(
+            display_list_address +
+                static_cast<std::uint32_t>(index * sizeof(std::uint32_t)),
+            draw_packet_words[index]);
+    }
+    core.gx2.capture_draw_vertex_data = true;
+    core.gx2.vertex_buffers[0U] =
+        Gx2VertexBufferBinding{0U, 24U, 8U, 0x400U};
+    for (std::uint32_t vertex_index = 0U; vertex_index < 6U; ++vertex_index)
+    {
+        core.memory.write32_be(0x400U + vertex_index * 4U, vertex_index);
+    }
+
+    const std::size_t commands_before_draw = core.gx2.pending_commands.size();
+    const RunResult decoded_draw = invoke(
+        display_list_address,
+        static_cast<std::uint32_t>(draw_packet_words.size() *
+                                   sizeof(std::uint32_t)));
+    assert(decoded_draw.reason == StopReason::instruction_limit);
+    assert(core.gx2.pending_commands.size() == commands_before_draw + 5U);
+    assert(core.gx2.pending_commands[commands_before_draw].type ==
+           Gx2CommandType::set_control_constant);
+    assert(core.gx2.pending_commands[commands_before_draw + 1U].type ==
+           Gx2CommandType::set_config_register);
+    assert(core.gx2.pending_commands[commands_before_draw + 2U].register_address ==
+           0x28A7CU);
+    assert(core.gx2.pending_commands[commands_before_draw + 3U].register_address ==
+           0x28A88U);
+    const Gx2Command& draw_command =
+        core.gx2.pending_commands[commands_before_draw + 4U];
+    assert(draw_command.type == Gx2CommandType::draw);
+    assert((draw_command.draw_call ==
+            std::optional<Gx2DrawCall>{Gx2DrawCall{
+                4U, 3U, false, 0U, 0U, 0U, 1U, 0U, 0U}}));
+    assert(draw_command.draw_vertex_data.size() == 1U);
+    assert(draw_command.draw_vertex_data[0U].is_valid);
+    assert(draw_command.draw_vertex_data[0U].bytes.size() == 24U);
+
+    const auto commands_before_invalid_draw = core.gx2.pending_commands;
+    core.memory.write32_be(display_list_address, 0xC0002D00U);
+    core.memory.write32_be(display_list_address + 4U, 3U);
+    const RunResult invalid_draw_payload = invoke(display_list_address, 8U);
+    assert(invalid_draw_payload.reason == StopReason::hle_error);
+    assert(invalid_draw_payload.detail.find(
+               "invalid payload length") != std::string::npos);
+    assert(core.gx2.pending_commands == commands_before_invalid_draw);
+
+    core.memory.write32_be(display_list_address, 0xC0012D00U);
+    core.memory.write32_be(display_list_address + 4U, 3U);
+    core.memory.write32_be(display_list_address + 8U, 0U);
+    const RunResult missing_draw_state = invoke(display_list_address, 12U);
+    assert(missing_draw_state.reason == StopReason::hle_error);
+    assert(missing_draw_state.detail.find(
+               "missing primitive, instance-count") !=
+           std::string::npos);
+    assert(core.gx2.pending_commands == commands_before_invalid_draw);
+
+    std::array<std::uint32_t, draw_packet_words.size()>
+        unsupported_draw_initiator_words = draw_packet_words;
+    unsupported_draw_initiator_words.back() = 1U;
+    for (std::size_t index = 0U;
+         index < unsupported_draw_initiator_words.size();
+         ++index)
+    {
+        core.memory.write32_be(
+            display_list_address +
+                static_cast<std::uint32_t>(index * sizeof(std::uint32_t)),
+            unsupported_draw_initiator_words[index]);
+    }
+    const RunResult unsupported_draw_initiator = invoke(
+        display_list_address,
+        static_cast<std::uint32_t>(unsupported_draw_initiator_words.size() *
+                                   sizeof(std::uint32_t)));
+    assert(unsupported_draw_initiator.reason == StopReason::hle_error);
+    assert(unsupported_draw_initiator.detail.find(
+               "unsupported draw initiator value") != std::string::npos);
+    assert(core.gx2.pending_commands == commands_before_invalid_draw);
 }
 
 void gx2_draw_done_hle_tests()

@@ -8,6 +8,17 @@
 namespace affogato::gpu
 {
 
+inline constexpr std::uint32_t latte_vgt_primitive_type_register_address =
+    0x8958U;
+inline constexpr std::uint32_t latte_vgt_dma_index_type_register_address =
+    0x28A7CU;
+inline constexpr std::uint32_t latte_vgt_dma_num_instances_register_address =
+    0x28A88U;
+inline constexpr std::uint32_t latte_sq_vtx_base_vtx_loc_register_address =
+    0x3CFF0U;
+inline constexpr std::uint32_t latte_sq_vtx_start_inst_loc_register_address =
+    0x3CFF4U;
+
 enum class LattePm4DisplayListError
 {
     none,
@@ -28,6 +39,12 @@ enum class LatteRegisterSpace
     control,
 };
 
+enum class LattePm4DisplayListCommandType
+{
+    register_write,
+    draw_index_auto,
+};
+
 struct LattePm4RegisterWrite
 {
     LatteRegisterSpace space{};
@@ -37,9 +54,19 @@ struct LattePm4RegisterWrite
     bool operator==(const LattePm4RegisterWrite&) const = default;
 };
 
+struct LattePm4DisplayListCommand
+{
+    LattePm4DisplayListCommandType type{};
+    LattePm4RegisterWrite register_write{};
+    std::uint32_t index_count{};
+    std::uint32_t draw_initiator{};
+
+    bool operator==(const LattePm4DisplayListCommand&) const = default;
+};
+
 struct LattePm4DisplayListDecodeResult
 {
-    std::vector<LattePm4RegisterWrite> register_writes;
+    std::vector<LattePm4DisplayListCommand> commands;
     LattePm4DisplayListError error{LattePm4DisplayListError::none};
     std::size_t error_word_offset{};
 
@@ -51,8 +78,8 @@ struct LattePm4DisplayListDecodeResult
 
 // Input words are host-order values decoded from guest big-endian memory.
 // Only bounded config/context/control register writes, Type-2 filler,
-// Type-3 NOP, SET_CONFIG_REG, SET_CONTEXT_REG, and SET_CTL_CONST packets are
-// accepted.
+// Type-3 NOP, register-set packets, INDEX_TYPE, NUM_INSTANCES, and
+// unpredicated DRAW_INDEX_AUTO packets are accepted.
 [[nodiscard]] inline LattePm4DisplayListDecodeResult
 decode_latte_pm4_display_list(
     std::span<const std::uint32_t> words)
@@ -68,6 +95,7 @@ decode_latte_pm4_display_list(
     constexpr std::uint32_t type3_opcode_mask = 0x0000FF00U;
     constexpr std::uint32_t type3_nop_opcode = 0x10U;
     constexpr std::uint32_t index_type_opcode = 0x2AU;
+    constexpr std::uint32_t draw_index_auto_opcode = 0x2DU;
     constexpr std::uint32_t num_instances_opcode = 0x2FU;
     constexpr std::uint32_t packet_count_shift = 16U;
     constexpr std::uint32_t packet_count_mask = 0x3FFFU;
@@ -80,8 +108,6 @@ decode_latte_pm4_display_list(
     constexpr std::uint32_t config_register_end = 0xAC00U;
     constexpr std::uint32_t context_register_base = 0x28000U;
     constexpr std::uint32_t context_register_end = 0x29000U;
-    constexpr std::uint32_t vgt_dma_index_type_address = 0x28A7CU;
-    constexpr std::uint32_t vgt_dma_num_instances_address = 0x28A88U;
     // Decaf's Latte map identifies base-vertex and base-instance control
     // registers as the complete currently modeled control-constant range.
     constexpr std::uint32_t control_constant_base = 0x3CFF0U;
@@ -103,7 +129,7 @@ decode_latte_pm4_display_list(
             {
                 result.error = LattePm4DisplayListError::invalid_type2_header;
                 result.error_word_offset = packet_header_offset;
-                result.register_writes.clear();
+                result.commands.clear();
                 return result;
             }
 
@@ -114,7 +140,7 @@ decode_latte_pm4_display_list(
         {
             result.error = LattePm4DisplayListError::unsupported_packet_type;
             result.error_word_offset = packet_header_offset;
-            result.register_writes.clear();
+            result.commands.clear();
             return result;
         }
 
@@ -124,7 +150,7 @@ decode_latte_pm4_display_list(
         {
             result.error = LattePm4DisplayListError::invalid_type3_header;
             result.error_word_offset = packet_header_offset;
-            result.register_writes.clear();
+            result.commands.clear();
             return result;
         }
 
@@ -134,7 +160,7 @@ decode_latte_pm4_display_list(
         {
             result.error = LattePm4DisplayListError::truncated_packet;
             result.error_word_offset = packet_header_offset;
-            result.register_writes.clear();
+            result.commands.clear();
             return result;
         }
 
@@ -169,7 +195,7 @@ decode_latte_pm4_display_list(
                 result.error =
                     LattePm4DisplayListError::register_range_out_of_bounds;
                 result.error_word_offset = packet_header_offset;
-                result.register_writes.clear();
+                result.commands.clear();
                 return result;
             }
 
@@ -179,7 +205,7 @@ decode_latte_pm4_display_list(
                 result.error =
                     LattePm4DisplayListError::register_range_out_of_bounds;
                 result.error_word_offset = packet_header_offset;
-                result.register_writes.clear();
+                result.commands.clear();
                 return result;
             }
 
@@ -187,10 +213,14 @@ decode_latte_pm4_display_list(
                  register_index < payload_word_count;
                  ++register_index)
             {
-                result.register_writes.push_back({
-                    register_space,
-                    register_address + register_index * register_stride,
-                    words[word_offset + register_index]});
+                result.commands.push_back({
+                    LattePm4DisplayListCommandType::register_write,
+                    {
+                        register_space,
+                        register_address + register_index * register_stride,
+                        words[word_offset + register_index]},
+                    0U,
+                    0U});
             }
 
             word_offset += payload_word_count;
@@ -213,29 +243,53 @@ decode_latte_pm4_display_list(
                 result.error =
                     LattePm4DisplayListError::invalid_packet_payload_length;
                 result.error_word_offset = packet_header_offset;
-                result.register_writes.clear();
+                result.commands.clear();
                 return result;
             }
 
             const std::uint32_t register_address =
                 opcode == index_type_opcode
-                    ? vgt_dma_index_type_address
-                    : vgt_dma_num_instances_address;
+                    ? latte_vgt_dma_index_type_register_address
+                    : latte_vgt_dma_num_instances_register_address;
             if (register_address < context_register_base ||
                 register_address >= context_register_end)
             {
                 result.error =
                     LattePm4DisplayListError::register_range_out_of_bounds;
                 result.error_word_offset = packet_header_offset;
-                result.register_writes.clear();
+                result.commands.clear();
                 return result;
             }
 
-            result.register_writes.push_back({
-                LatteRegisterSpace::context,
-                register_address,
-                words[word_offset]});
+            result.commands.push_back({
+                LattePm4DisplayListCommandType::register_write,
+                {
+                    LatteRegisterSpace::context,
+                    register_address,
+                    words[word_offset]},
+                0U,
+                0U});
             ++word_offset;
+            continue;
+        }
+
+        if (opcode == draw_index_auto_opcode)
+        {
+            if (payload_word_count != 2U)
+            {
+                result.error =
+                    LattePm4DisplayListError::invalid_packet_payload_length;
+                result.error_word_offset = packet_header_offset;
+                result.commands.clear();
+                return result;
+            }
+
+            result.commands.push_back({
+                LattePm4DisplayListCommandType::draw_index_auto,
+                {},
+                words[word_offset],
+                words[word_offset + 1U]});
+            word_offset += payload_word_count;
             continue;
         }
 
@@ -245,7 +299,7 @@ decode_latte_pm4_display_list(
         {
             result.error = LattePm4DisplayListError::unsupported_opcode;
             result.error_word_offset = packet_header_offset;
-            result.register_writes.clear();
+            result.commands.clear();
             return result;
         }
 
@@ -253,7 +307,7 @@ decode_latte_pm4_display_list(
         {
             result.error = LattePm4DisplayListError::missing_register_data;
             result.error_word_offset = packet_header_offset;
-            result.register_writes.clear();
+            result.commands.clear();
             return result;
         }
 
@@ -282,7 +336,7 @@ decode_latte_pm4_display_list(
             result.error =
                 LattePm4DisplayListError::register_range_out_of_bounds;
             result.error_word_offset = packet_header_offset;
-            result.register_writes.clear();
+            result.commands.clear();
             return result;
         }
 
@@ -292,11 +346,15 @@ decode_latte_pm4_display_list(
         {
             const std::size_t value_index =
                 word_offset + 1U + register_index;
-            result.register_writes.push_back({
-                register_space,
-                register_window_base +
-                    (register_offset + register_index) * register_stride,
-                words[value_index]});
+            result.commands.push_back({
+                LattePm4DisplayListCommandType::register_write,
+                {
+                    register_space,
+                    register_window_base +
+                        (register_offset + register_index) * register_stride,
+                    words[value_index]},
+                0U,
+                0U});
         }
 
         word_offset += payload_word_count;

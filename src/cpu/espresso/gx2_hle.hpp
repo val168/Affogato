@@ -50,6 +50,8 @@ struct Gx2DrawCall
     std::uint32_t element_offset{};
     std::uint32_t instance_count{};
     std::uint32_t base_instance{};
+    // Raw PM4 DRAW_INITIATOR payload; GX2 HLE draw APIs leave this at zero.
+    std::uint32_t draw_initiator{};
 
     constexpr bool operator==(const Gx2DrawCall&) const = default;
 };

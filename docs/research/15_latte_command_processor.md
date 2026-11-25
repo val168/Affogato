@@ -80,24 +80,26 @@ shows the ordinary `GX2DrawEx` packet sequence: `SET_CTL_CONST` for the base
 vertex, `SET_CONFIG_REG` for `VGT_PRIMITIVE_TYPE`, `INDEX_TYPE`,
 `NUM_INSTANCES`, and a predicate-bit `DRAW_INDEX_AUTO`. Its indexed path uses
 `DRAW_INDEX_2` and enables the same predicate bit. This establishes a useful
-reference sequence, but Affogato currently rejects draw opcodes and every
-predicate-bit Type-3 header. Its bounded parser captures `SET_CTL_CONST`,
-`INDEX_TYPE`, and `NUM_INSTANCES` state, but not a draw record. Its first
-`SET_CTL_CONST` writes are now captured for the reference-identified base-
-vertex/base-instance pair at `0x3CFF0` and `0x3CFF4`. This state capture is
-not sufficient to accept or execute a normal Cemu-shaped draw stream. The
-PM4 predicate source/state semantics must be verified before relaxing that
-rejection.
+reference sequence. Affogato accepts only an unpredicated
+`DRAW_INDEX_AUTO` packet in `GX2DirectCallDisplayList`; predicate-bit Type-3
+headers remain rejected. This subset requires primitive mode, instance count,
+and base vertex to be written earlier in the same list, and captures the
+packet's count and zero draw-initiator word in an ordered `Gx2Command` draw
+record; nonzero initiator values fail explicitly.
+If enabled, the HLE snapshots non-indexed guest vertex bytes at call time. The
+draw record can reach the explicit diagnostic renderer path, but does not
+establish guest shader execution or normal Latte render-target behavior.
+Cemu's common GX2 draw packets set the predicate bit, so they remain
+unsupported until predicate source/state semantics are verified.
 
 AMD's [R7xx/Evergreen/Cayman programming guide, §§9.3.4 and 9.3.9](https://docs.amd.com/api/khub/documents/ApP4PzuRytQl9QLD9lgkmA/content)
 describes `DRAW_INDEX_AUTO` as a two-DWORD payload containing index count and
 draw initiator. It also says `INDEX_TYPE` belongs to the draw packet sequence
 and is not shadowed. This is generation-family evidence, not a Latte-specific
-specification. The current Affogato subset therefore captures the packet value
-in its register shadow for analysis, but a future draw implementation should
-model its draw-time role explicitly rather than assume it is ordinary
-persistent context state. The same guide describes `NUM_INSTANCES` only as a
-one-DWORD command packet; it does not establish Latte's zero-count behavior.
+specification. Affogato currently records the packet's draw-initiator word;
+the subset does not decode its bitfields. The same guide describes
+`NUM_INSTANCES` only as a one-DWORD command packet; it does not establish
+Latte's zero-count behavior.
 
 The references differ on the effects used to represent `INDEX_TYPE`:
 Cemu's [`LatteCP_itIndexType`](https://github.com/cemu-project/Cemu/blob/main/src/Cafe/HW/Latte/Core/LatteCommandProcessor.cpp#L405-L409)
@@ -146,13 +148,17 @@ single host callback: constructing a guest display list, queuing an indirect
 call into a command stream, and submitting a display-list buffer directly.
 Affogato registers `GX2DirectCallDisplayList` for a narrow subset: it validates
 and copies the guest bytes at call time, then queues supported config/context/
-control register writes in order. The shared decoder accepts bounded Type-0
-writes in the config, context, or currently modeled control-constant windows,
-Type-2 filler, Type-3 NOP, Type-3 `SET_CONFIG_REG`, `SET_CONTEXT_REG`, and
-`SET_CTL_CONST`, `INDEX_TYPE`, and `NUM_INSTANCES`. Other opcodes, including
-draw packets, fail explicitly. The two draw-setup opcodes require exactly one
-payload dword. This is state submission through the current HLE queue, not GPU
-execution.
+control register writes and unpredicated `DRAW_INDEX_AUTO` records in guest
+order. A self-contained auto-draw requires preceding `VGT_PRIMITIVE_TYPE`,
+`NUM_INSTANCES`, and base-vertex writes in that list; absent base-instance
+state is treated as zero for this bounded GX2DrawEx-shaped form. A zero
+instance count is rejected because Cemu normalizes zero to one while Decaf
+stores it raw. Non-indexed vertex bytes are captured at HLE call time only
+when the existing diagnostic capture option is enabled. Predicated headers,
+indexed draws, and all other unsupported opcodes fail explicitly. This is an
+ordered command capture path; only the diagnostic policy may submit its
+supported float2 subset, and no guest Latte shader or guest render-target
+behavior is implied.
 `GX2BeginDisplayListEx`,
 `GX2EndDisplayList`, `GX2CallDisplayList` and `GX2CopyDisplayList` remain
 unregistered; queued indirect calls and guest-authored recording therefore
@@ -198,15 +204,20 @@ verified against a Latte fixture or Wii U behavior.
   shadow when the size is zero. A bounded nonempty subset decodes Type-2 filler,
   Type-3 NOP, config/context/control Type-0 writes, Type-3 register sets, and
   one-word `INDEX_TYPE` / `NUM_INSTANCES` packets into typed register commands;
-  other packet types/opcodes, predication, truncation, and out-of-window writes
-  fail explicitly. Queuing these values does not execute GPU work or retire a
-  fence.
+  `GX2SetContextState` rejects draw packets. `GX2DirectCallDisplayList` also
+  captures an unpredicated two-word `DRAW_INDEX_AUTO` when its required setup
+  state occurs earlier in the same list. It rejects predicated headers,
+  indexed draws, zero instance counts, truncation, and unsupported operations.
+  Vertex bytes are copied at HLE time when diagnostic capture is enabled.
+  Queuing/capturing these values does not execute guest Latte shaders or
+  retire a fence.
 - `tests/cpu_test.cpp` covers command-pool attributes, context-state setup,
   zero-length display-list results, shadow restoration, big-endian packet
   playback, Type-3 NOP payload advancement, ordered Type-0 sequential and
   Type-3 config/context/control register writes, and range and malformed-list
-  rejection. The direct-call test also verifies
-  call-time guest-byte capture, unsupported-opcode atomicity, alignment and
+  rejection. The direct-call test also verifies an ordered unpredicated
+  `DRAW_INDEX_AUTO`, draw-time guest-byte capture, malformed-payload and
+  missing-state atomicity, unsupported-opcode atomicity, alignment and
   guest-memory errors, and empty-list behavior.
 - `Gx2RegisterState::apply` models writes to `SQ_VTX_SEMANTIC_CLEAR` at
   `0x288E0`: each set bit clears the matching entry in the 32-word semantic
@@ -234,7 +245,7 @@ lists and guest-written command streams remain unsupported.
 | Typed GX2 HLE event ordering | Partial and tested | `pending_commands`, register shadow and frontend drain |
 | PM4 packet framing | Partial and tested | Type-0 payload lengths, Type-2 filler and Type-3 lengths; Type-1 remains unsupported |
 | PM4 register writes | Partial and tested | Type-0 sequential writes and Type-3 config/context/control register sets are bounded to supported byte windows |
-| Type-3 operations | Partial and tested | `NOP`, register sets, `INDEX_TYPE`, and `NUM_INSTANCES`; draw and other opcodes are rejected |
+| Type-3 operations | Partial and tested | `NOP`, register sets, `INDEX_TYPE`, `NUM_INSTANCES`, and a self-contained unpredicated `DRAW_INDEX_AUTO`; predicated/indexed draws and other opcodes are rejected |
 | Indirect buffers / nested lists | Missing | Guest bounds, alignment, recursion limit, lifetime and ordering |
 | Context display-list generation/decoding | Partial | generation leaves size zero; empty lists restore the register shadow; bounded Type-0 config/context/control writes, Type-2/Type-3 register sets, `INDEX_TYPE`, and `NUM_INSTANCES` decode into typed writes; GPU packet execution is not implemented |
 | GPU completion and waits | Partial / not renderer-backed | Must follow actual submission, fence, and memory-visibility semantics |

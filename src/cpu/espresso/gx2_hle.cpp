@@ -925,9 +925,10 @@ std::vector<Gx2Command> read_gx2_context_restore_commands(
     return commands;
 }
 
-std::vector<Gx2Command> decode_gx2_pm4_register_display_list(
+std::vector<Gx2Command> decode_gx2_pm4_display_list_commands(
     std::span<const std::uint8_t> display_list_bytes,
-    const char* api_name)
+    const char* api_name,
+    bool allow_draw_index_auto = false)
 {
     if ((display_list_bytes.size() % sizeof(std::uint32_t)) != 0U)
     {
@@ -988,11 +989,76 @@ std::vector<Gx2Command> decode_gx2_pm4_register_display_list(
             std::to_string(decoded.error_word_offset));
     }
 
+    constexpr std::uint32_t primitive_type_register =
+        affogato::gpu::latte_vgt_primitive_type_register_address;
+    constexpr std::uint32_t num_instances_register =
+        affogato::gpu::latte_vgt_dma_num_instances_register_address;
+    constexpr std::uint32_t base_vertex_register =
+        affogato::gpu::latte_sq_vtx_base_vtx_loc_register_address;
+    constexpr std::uint32_t base_instance_register =
+        affogato::gpu::latte_sq_vtx_start_inst_loc_register_address;
+
+    std::optional<std::uint32_t> primitive_mode;
+    std::optional<std::uint32_t> instance_count;
+    std::optional<std::uint32_t> base_vertex;
+    std::uint32_t base_instance = 0U;
     std::vector<Gx2Command> commands;
-    commands.reserve(decoded.register_writes.size());
-    for (const affogato::gpu::LattePm4RegisterWrite& write :
-         decoded.register_writes)
+    commands.reserve(decoded.commands.size());
+    for (const affogato::gpu::LattePm4DisplayListCommand& decoded_command :
+         decoded.commands)
     {
+        if (decoded_command.type ==
+            affogato::gpu::LattePm4DisplayListCommandType::draw_index_auto)
+        {
+            if (!allow_draw_index_auto)
+            {
+                throw HleExecutionError(
+                    std::string("gx2::") + api_name +
+                    ": PM4 context restore list contains a draw packet");
+            }
+            if (!primitive_mode || !instance_count || !base_vertex)
+            {
+                throw HleExecutionError(
+                    std::string("gx2::") + api_name +
+                    ": DRAW_INDEX_AUTO is missing primitive, instance-count, "
+                    "or base-vertex state in this list");
+            }
+            if (*instance_count == 0U)
+            {
+                throw HleExecutionError(
+                    std::string("gx2::") + api_name +
+                    ": DRAW_INDEX_AUTO uses an unresolved zero instance count");
+            }
+            if (decoded_command.draw_initiator != 0U)
+            {
+                throw HleExecutionError(
+                    std::string("gx2::") + api_name +
+                    ": DRAW_INDEX_AUTO uses an unsupported draw initiator value");
+            }
+
+            const Gx2DrawCall draw_call{
+                *primitive_mode,
+                decoded_command.index_count,
+                false,
+                0U,
+                0U,
+                *base_vertex,
+                *instance_count,
+                base_instance,
+                decoded_command.draw_initiator};
+            commands.push_back({
+                Gx2CommandType::draw,
+                0U,
+                0U,
+                0U,
+                0U,
+                0U,
+                draw_call});
+            continue;
+        }
+
+        const affogato::gpu::LattePm4RegisterWrite& write =
+            decoded_command.register_write;
         Gx2CommandType command_type = Gx2CommandType::set_context_register;
         if (write.space == affogato::gpu::LatteRegisterSpace::config)
         {
@@ -1007,6 +1073,27 @@ std::vector<Gx2Command> decode_gx2_pm4_register_display_list(
             command_type,
             write.address,
             write.value});
+
+        if (write.space == affogato::gpu::LatteRegisterSpace::config &&
+            write.address == primitive_type_register)
+        {
+            primitive_mode = write.value;
+        }
+        else if (write.space == affogato::gpu::LatteRegisterSpace::context &&
+                 write.address == num_instances_register)
+        {
+            instance_count = write.value;
+        }
+        else if (write.space == affogato::gpu::LatteRegisterSpace::control &&
+                 write.address == base_vertex_register)
+        {
+            base_vertex = write.value;
+        }
+        else if (write.space == affogato::gpu::LatteRegisterSpace::control &&
+                 write.address == base_instance_register)
+        {
+            base_instance = write.value;
+        }
     }
     return commands;
 }
@@ -5528,7 +5615,7 @@ void register_gx2_hle(HleDispatcher& dispatcher)
             }
             else
             {
-                restore_commands = decode_gx2_pm4_register_display_list(
+                restore_commands = decode_gx2_pm4_display_list_commands(
                     std::span<const std::uint8_t>(context_bytes).subspan(
                         gx2_context_display_list_offset, display_list_size),
                     api_name);
@@ -5547,7 +5634,7 @@ void register_gx2_hle(HleDispatcher& dispatcher)
     dispatcher.register_function(
         "gx2",
         "GX2DirectCallDisplayList",
-        [](EspressoCore& core) {
+        [capture_non_indexed_vertex_data](EspressoCore& core) {
             constexpr const char* api_name = "GX2DirectCallDisplayList";
             if (!core.gx2.initialized)
             {
@@ -5605,17 +5692,26 @@ void register_gx2_hle(HleDispatcher& dispatcher)
                     "mapped guest memory");
             }
 
-            std::vector<Gx2Command> register_commands =
-                decode_gx2_pm4_register_display_list(
-                    display_list_bytes, api_name);
+            std::vector<Gx2Command> display_list_commands =
+                decode_gx2_pm4_display_list_commands(
+                    display_list_bytes, api_name, true);
+
+            for (Gx2Command& command : display_list_commands)
+            {
+                if (command.type == Gx2CommandType::draw && command.draw_call)
+                {
+                    command.draw_vertex_data = capture_non_indexed_vertex_data(
+                        core, *command.draw_call);
+                }
+            }
 
             // The frontend consumes the copied, decoded register commands in
-            // guest order. Draw and other stateful PM4 opcodes remain explicit
-            // decoder errors until their execution semantics are implemented.
+            // guest order, including supported DRAW_INDEX_AUTO packets.
+            // Predicated and indexed draw opcodes remain explicit errors.
             auto& pending_commands = core.gx2.pending_commands;
             pending_commands.reserve(
-                pending_commands.size() + register_commands.size());
-            for (Gx2Command& command : register_commands)
+                pending_commands.size() + display_list_commands.size());
+            for (Gx2Command& command : display_list_commands)
             {
                 pending_commands.push_back(std::move(command));
             }

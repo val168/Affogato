@@ -39,7 +39,7 @@ mean the guest behavior is implemented.
 
 | Feature | Status | Evidence / limitation |
 | --- | --- | --- |
-| Raw GPU command ring/PM4 decoder | Partial | A bounded parser handles Type-0 config/context/control writes, Type-2 filler, Type-3 NOP, register-set packets, `INDEX_TYPE`, and `NUM_INSTANCES` in context restore/direct-call HLE paths. There is no ring processor, draw packet execution, indirect-buffer recursion, or retirement path; see [`15_latte_command_processor.md`](15_latte_command_processor.md). |
+| Raw GPU command ring/PM4 decoder | Partial | A bounded parser handles Type-0 config/context/control writes, Type-2 filler, Type-3 NOP, register-set packets, `INDEX_TYPE`, `NUM_INSTANCES`, and a self-contained unpredicated `DRAW_INDEX_AUTO` in direct-call HLE. Predicate-bit draws, indexed draws, ring processing, indirect-buffer recursion, and retirement remain unsupported; see [`15_latte_command_processor.md`](15_latte_command_processor.md). |
 | GX2 command ordering | Partial, tested | HLE pending command vector and frontend batch handoff preserve selected operation order; not equivalent to asynchronous Latte FIFO/fence execution. |
 | Register shadow | Partial | `Gx2RegisterState` retains selected raw context/resource/sampler state and draw-time snapshots. `SQ_VTX_SEMANTIC_CLEAR` applies its verified 32-entry mask side effect; other special Latte register semantics are not generally modeled. |
 | Color/depth render-target descriptors | Partial | HLE reads and records descriptors, binding and selected registers; broad hardware surface semantics are not provided. |
@@ -61,7 +61,7 @@ mean the guest behavior is implemented.
 | Feature | Status | Evidence / limitation |
 | --- | --- | --- |
 | GX2 exports and ABI | Partial | `gx2_hle.cpp` registers numerous functions with argument/descriptor handling; callback presence does not establish full behavior for all modes. Compare each path to WUT declarations and tests. |
-| GX2 display-list lifecycle/submission | Partial | `GX2DirectCallDisplayList` validates and copies a guest stream, then queues only the supported context-register writes. Begin/end recording, queued `GX2CallDisplayList`, copy/query APIs, draw execution, and GPU retirement remain missing. |
+| GX2 display-list lifecycle/submission | Partial | `GX2DirectCallDisplayList` validates and copies a guest stream, then queues supported register writes and one bounded draw-packet form. Begin/end recording, queued `GX2CallDisplayList`, copy/query APIs, guest shader execution, and GPU retirement remain missing. |
 | GX2 initialization/state | Partial | Selected runtime defaults, register shadows, surfaces, shaders and scanout state are modeled; no hardware command processor. |
 | Guest pointer/structure validation | Implemented in tested paths | HLE uses checked guest memory and big-endian field reads for implemented structures; audit must remain function-specific. |
 | Guest threads/synchronization | Partial | Selected coreinit thread/context/mutex/semaphore/event behavior supports a single-core HLE runtime; OS scheduler/interrupt behavior is incomplete. |
