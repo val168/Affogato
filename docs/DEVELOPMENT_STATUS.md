@@ -12,15 +12,26 @@ malformed or unsupported streams do not append partial command batches. The
 HLE queues typed register updates; it does not execute GPU draws. Type-3 draw
 and other state operations outside the subset, indirect-buffer recursion,
 list recording/copy APIs, raw ring processing, and GPU retirement remain
-unsupported. Debug/Release builds and CTest passed 2/2 in each configuration.
-The packet research is cross-checked against the AMD R6xx/R7xx guide and Cemu's
-GX2 draw packet construction; no Latte-produced fixture is available. Details
-are in
+unsupported. Debug/Release builds and CTest passed 2/2 in each configuration
+for the source change at `4edac26`; the current follow-up is documentation-only.
+The packet research is cross-checked against AMD's R6xx/R7xx family guides,
+Cemu, and Decaf; there is still no Latte-produced fixture. References disagree
+on whether `INDEX_TYPE` updates one or two shadow slots and whether a zero
+`NUM_INSTANCES` becomes one, so Affogato preserves raw packet state pending
+Latte-specific evidence. Details are in
 [`research/15_latte_command_processor.md`](research/15_latte_command_processor.md).
-This update builds on the implementation pushed through `e69c35d`.
+This update builds on the implementation pushed through `4edac26`, and the
+research clarification was pushed as `be6b69c`.
 Reference research confirms that normal Cemu `GX2DrawEx` uses a predicate-bit
 `DRAW_INDEX_AUTO`; predicate evaluation and its reset state remain unsupported,
 so the packet decoder rejects it pending verified semantics.
+
+At `be6b69c`, `build/debug/AffogatoFrontend.exe --gx2-guest-triangle-smoke-test`
+completed successfully on an NVIDIA GeForce
+RTX 5070 Laptop GPU. It submits captured guest-memory geometry through the
+diagnostic host shader; this is not guest Latte shader execution. The visible
+display test was not verified because the Windows computer-use runtime failed
+to initialize, so no claim is made about the triangle's visible output.
 
 ## Documentation-driven subsystem audit (2026-11-24)
 
