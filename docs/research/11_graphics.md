@@ -227,6 +227,46 @@ render-target readback must update guest memory before a dependent HLE copy
 resumes. A future asynchronous path can reduce these synchronization points
 only after its guest-memory visibility rules are explicit.
 
+#### Bounded offscreen-target prototype
+
+The first diagnostic target prototype should support one captured color target
+only, and should accept it only when its draw-time descriptor passes the
+existing RGBA8, single-sample, base-level, single-slice validation. To preserve
+pixels outside the diagnostic geometry, the renderer needs the guest target
+contents captured at the HLE draw boundary and must load them into an offscreen
+`VK_FORMAT_R8G8B8A8_UNORM` image. Do not initialize a target from the current
+swapchain image or from the presentation clear color.
+
+The offscreen image needs color-attachment and transfer-source usage. It also
+needs transfer-destination usage when initial guest bytes are uploaded. After
+rendering, record the image-to-buffer copy outside the render pass, synchronize
+the attachment writes with transfer reads, wait for the relevant submission
+before host readback, and convert the tightly packed RGBA result back through
+`write_rgba8_surface()` using the captured pitch and supported tile mode. Only
+after the emulator worker applies those bytes should it resume and allow a
+following HLE color-buffer copy to execute. Unsupported target state must
+produce a diagnostic failure and no guest-memory write.
+
+This is an explicitly diagnostic first step: a fixed host fragment shader and
+the existing bounded diagnostic vertex policy can prove the target/load/draw/
+readback/writeback ordering, but cannot establish guest pixel-shader behavior.
+The first acceptance fixture should initialize target bytes with a known
+pattern, issue one controlled draw, and verify both untouched pattern pixels
+and diagnostic draw pixels in guest memory before invoking scanout copy. The
+swapchain output remains an independent presentation of the diagnostic draw.
+
+This design follows Vulkan's color-attachment storage and transfer-source
+usage constraints ([render-pass attachment rules](https://docs.vulkan.org/spec/latest/chapters/renderpass.html#renderpass-attachments),
+[copy commands](https://docs.vulkan.org/spec/latest/chapters/copies.html),
+[synchronization](https://docs.vulkan.org/spec/latest/chapters/synchronization.html))
+and Cemu's resource-based handling: `LatteRenderTarget_trackUpdates()` marks
+render-target textures as GPU-written, and its force-readback command updates
+the texture to the latest contents and waits for the readback transfer in
+`LatteAsyncCommands_checkAndExecute()` ([render-target source](https://github.com/cemu-project/Cemu/blob/main/src/Cafe/HW/Latte/Core/LatteRenderTarget.cpp),
+[async command source](https://github.com/cemu-project/Cemu/blob/main/src/Cafe/HW/Latte/Core/LatteAsyncCommands.cpp)).
+These references motivate the resource-coherence model; the Affogato prototype
+remains intentionally synchronous and restricted to its tested RGBA8 layouts.
+
 The acceptance test must execute guest PPC calls in order: bind a supported
 color buffer, issue a controlled draw, invoke the GX2 color-buffer-to-scanout
 copy, swap, and verify both the guest color-buffer bytes and presented/readback

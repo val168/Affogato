@@ -109,11 +109,13 @@ mean the guest behavior is implemented.
    register writes do not alter earlier draw snapshots. The view is invalidated
    by a later `Gx2RegisterState::apply`; it is not a cross-thread ownership
    primitive.
-2. Add real supported draw execution into the captured guest color buffer and
-   read it back to guest memory before a dependent GX2 copy HLE callback. The
-   diagnostic-only worker/UI acknowledgement is a submission boundary, not
-   GPU completion or memory visibility. Preserve renderer-thread ownership and
-   explicit completion handoff.
+2. Implement the bounded offscreen-target prototype in
+   [`11_graphics.md`](11_graphics.md#bounded-offscreen-target-prototype):
+   capture supported RT0 RGBA8 guest bytes at HLE draw time, load them into an
+   offscreen Vulkan attachment, render only through the explicit diagnostic
+   policy, read back after synchronization, and hand bytes to the paused
+   emulator worker before dependent HLE copies resume. The existing diagnostic
+   UI acknowledgement alone is not GPU completion or memory visibility.
 3. Extend the PM4 packet model with verified draw/state operations and
    indirect-buffer address handling while preserving guest order and owned
    command bytes.
