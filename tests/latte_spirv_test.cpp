@@ -1,4 +1,5 @@
 #include "gpu/latte_spirv_vertex_subset.hpp"
+#include "gpu/latte_spirv_fragment_subset.hpp"
 
 #include <array>
 #include <cassert>
@@ -45,6 +46,45 @@ namespace
         LatteShaderIrAluClause{{move_group}, {}, {}});
     program.instructions.emplace_back(
         LatteShaderIrExport{true, position_export});
+    return program;
+}
+
+[[nodiscard]] affogato::gpu::LatteShaderIrProgram create_fragment_program()
+{
+    using namespace affogato::gpu;
+
+    constexpr std::array<std::uint16_t, 4U> color_selectors{
+        latte_alu_source_one_float_selector,
+        latte_alu_source_zero_selector,
+        latte_alu_source_one_float_selector,
+        latte_alu_source_one_float_selector};
+
+    LatteAluOp2InstructionGroup color_group{};
+    color_group.instructions.reserve(color_selectors.size());
+    for (std::uint8_t component = 0U; component < color_selectors.size(); ++component)
+    {
+        LatteAluOp2Instruction move{};
+        move.opcode = latte_alu_op2_move_opcode;
+        move.source0_selector = color_selectors[component];
+        move.destination_gpr = 2U;
+        move.destination_component = component;
+        move.write_mask = true;
+        move.last_in_group = component == 3U;
+        color_group.instructions.push_back(move);
+    }
+
+    LatteExportFields pixel_export{};
+    pixel_export.type = LatteExportType::pixel;
+    pixel_export.array_base = 0U;
+    pixel_export.read_write_gpr = 2U;
+    pixel_export.burst_count = 1U;
+    pixel_export.component_selectors = {0U, 1U, 2U, 3U};
+
+    LatteShaderIrProgram program{};
+    program.instructions.emplace_back(
+        LatteShaderIrAluClause{{color_group}, {}, {}});
+    program.instructions.emplace_back(
+        LatteShaderIrExport{true, pixel_export});
     return program;
 }
 
@@ -479,7 +519,51 @@ int main(int argc, char* argv[])
     }
     assert(rejected_relative_add_source);
 
-    if (argc == 12 && std::string_view(argv[1]) == "--write-modules")
+    const auto fragment_program = create_fragment_program();
+    const std::vector<std::uint32_t> fragment_module =
+        affogato::gpu::emit_latte_spirv_fragment_constant_color_subset(
+            fragment_program);
+    assert(fragment_module[0U] == 0x07230203U);
+    assert(module_contains_opcode(fragment_module, 15U));
+    assert(module_contains_opcode(fragment_module, 16U));
+    assert(module_contains_opcode(fragment_module, 44U));
+    assert(module_contains_opcode(fragment_module, 62U));
+
+    auto unsupported_fragment = fragment_program;
+    auto& unsupported_fragment_clause = std::get<
+        affogato::gpu::LatteShaderIrAluClause>(
+            unsupported_fragment.instructions[0U]);
+    unsupported_fragment_clause.groups[0U].instructions[0U].source0_selector = 1U;
+    bool rejected_fragment_register_input = false;
+    try
+    {
+        static_cast<void>(
+            affogato::gpu::emit_latte_spirv_fragment_constant_color_subset(
+                unsupported_fragment));
+    }
+    catch (const std::runtime_error&)
+    {
+        rejected_fragment_register_input = true;
+    }
+    assert(rejected_fragment_register_input);
+
+    unsupported_fragment = fragment_program;
+    std::get<affogato::gpu::LatteShaderIrExport>(
+        unsupported_fragment.instructions[1U]).fields.array_base = 1U;
+    bool rejected_nonzero_mrt = false;
+    try
+    {
+        static_cast<void>(
+            affogato::gpu::emit_latte_spirv_fragment_constant_color_subset(
+                unsupported_fragment));
+    }
+    catch (const std::runtime_error&)
+    {
+        rejected_nonzero_mrt = true;
+    }
+    assert(rejected_nonzero_mrt);
+
+    if (argc == 13 && std::string_view(argv[1]) == "--write-modules")
     {
         write_module(argv[2], module);
         write_module(argv[3], modified_module);
@@ -491,6 +575,7 @@ int main(int argc, char* argv[])
         write_module(argv[9], integer_conditional_move_module);
         write_module(argv[10], mixed_module);
         write_module(argv[11], integer_alu_module);
+        write_module(argv[12], fragment_module);
     }
     return 0;
 }

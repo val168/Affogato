@@ -1153,3 +1153,30 @@ builds succeeded, and CTest passed 2/2 in each configuration. The diagnostic
 Vulkan smoke test passed with its host shader. No guest shader is executed by
 the renderer, and this does not complete normal GX2 draw dispatch or establish
 guest-generated Vulkan pixels.
+
+## Controlled Latte constant fragment output (2026-11-25)
+
+Added `latte_spirv_fragment_subset.hpp`, which translates four-lane OP2 MOV
+groups from inline float zero/one/one-half constants and one completed,
+identity-swizzled MRT0 export into a SPIR-V fragment module. Unsupported
+operations, modifiers, exports, and unwritten output components are rejected.
+The Vulkan diagnostic policy pairs that module with the existing bounded
+Latte vertex module for both the test swapchain and the guest color-buffer
+rendering/readback path.
+
+The new `--gx2-guest-triangle-pixel-spirv-smoke-test` installs its synthetic
+pixel shader using the emulated guest `GX2SetPixelShader` call, issues the
+existing guest `GX2DrawEx` calls, captures draw-time shader state, and verifies
+the magenta output in color-buffer and presented scanout readback. It is an
+explicit controlled test policy; ordinary emulation does not silently replace
+unsupported pixel shaders. The generated fragment module passes `spirv-val`,
+and the dedicated Vulkan CTest passes on the local NVIDIA GPU. After adding
+the test, the full Debug and Release CTest suites both passed 29/29, including
+the fragment module validation and guest pixel readback.
+
+This only constant-folds the described shader pattern. Fragment inputs,
+general ALU, texture sampling, blending/depth state, general render-target
+execution, and WWHD graphics remain unsupported. The AMD R700 export reference
+and SPIR-V interface rules are recorded in
+[`research/12_latte_shader_isa.md`](research/12_latte_shader_isa.md); the AMD
+material is family-level evidence rather than direct Latte verification.

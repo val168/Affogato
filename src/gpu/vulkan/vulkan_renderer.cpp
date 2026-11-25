@@ -2,6 +2,7 @@
 
 #include "gpu/vulkan/diagnostic_shader_spirv.hpp"
 #include "gpu/latte_draw.hpp"
+#include "gpu/latte_spirv_fragment_subset.hpp"
 #include "gpu/latte_spirv_vertex_subset.hpp"
 #include "gpu/latte_surface_staging.hpp"
 #include "gpu/latte_vertex_fetch.hpp"
@@ -508,6 +509,33 @@ std::vector<DiagnosticVertex> decode_diagnostic_latte_spirv_vertex_draw(
         draw.primitive_mode);
 }
 
+void decode_diagnostic_latte_spirv_pixel_shader(
+    const Gx2DrawSnapshotView& draw_snapshot,
+    std::vector<std::uint32_t>& pixel_shader_code)
+{
+    constexpr std::size_t pixel_shader_stage_index =
+        static_cast<std::size_t>(cpu::espresso::Gx2ProgramStage::pixel);
+    const auto& pixel_shader =
+        draw_snapshot.program_shaders[pixel_shader_stage_index];
+    if (!pixel_shader.has_value() ||
+        pixel_shader->stage != cpu::espresso::Gx2ProgramStage::pixel)
+    {
+        throw std::runtime_error(
+            "Vulkan Latte fragment diagnostic lacks a captured pixel shader");
+    }
+
+    const LatteShaderIrProgram shader_ir = decode_latte_shader_ir_subset(
+        pixel_shader->program_words);
+    std::vector<std::uint32_t> decoded_shader_code =
+        emit_latte_spirv_fragment_constant_color_subset(shader_ir);
+    if (!pixel_shader_code.empty() && pixel_shader_code != decoded_shader_code)
+    {
+        throw std::runtime_error(
+            "Vulkan Latte fragment diagnostic batch contains different pixel shaders");
+    }
+    pixel_shader_code = std::move(decoded_shader_code);
+}
+
 }
 
 VulkanRenderer::VulkanRenderer(bool visible, bool enable_frame_readback)
@@ -716,6 +744,7 @@ void VulkanRenderer::consume_guest_commands(
     std::vector<DiagnosticVertex> diagnostic_vertices;
     std::vector<DiagnosticDrawRange> diagnostic_draw_ranges;
     std::vector<std::uint32_t> translated_vertex_shader_code;
+    std::vector<std::uint32_t> translated_fragment_shader_code;
     std::size_t draw_index = first_draw_index;
     for (const cpu::espresso::Gx2Command& command : commands)
     {
@@ -749,6 +778,19 @@ void VulkanRenderer::consume_guest_commands(
             draw_vertices = decode_diagnostic_latte_spirv_vertex_draw(
                 *draw_snapshot,
                 translated_vertex_shader_code);
+        }
+        else if (draw_policy == GuestDrawPolicy::
+                     diagnostic_latte_vertex_fragment_spirv_position_base_zero)
+        {
+            draw_vertices = decode_diagnostic_latte_spirv_vertex_draw(
+                *draw_snapshot,
+                translated_vertex_shader_code);
+            decode_diagnostic_latte_spirv_pixel_shader(
+                *draw_snapshot,
+                translated_fragment_shader_code);
+            set_latte_graphics_pipeline(
+                translated_vertex_shader_code,
+                translated_fragment_shader_code);
         }
         else
         {
@@ -784,7 +826,12 @@ void VulkanRenderer::consume_guest_commands(
 
                 cpu::espresso::Gx2ColorBufferSnapshot updated_snapshot =
                     render_guest_color_buffer_diagnostic(
-                        input_snapshot, draw_vertices);
+                        input_snapshot,
+                        draw_vertices,
+                        draw_policy == GuestDrawPolicy::
+                                diagnostic_latte_vertex_fragment_spirv_position_base_zero
+                            ? latte_guest_color_buffer_pipeline_
+                            : guest_color_buffer_diagnostic_pipeline_);
                 if (existing_update == guest_color_buffer_updates_.end())
                 {
                     guest_color_buffer_updates_.push_back(
@@ -823,18 +870,28 @@ void VulkanRenderer::consume_guest_commands(
     {
         set_latte_vertex_pipeline(translated_vertex_shader_code);
     }
+    else if (draw_policy == GuestDrawPolicy::
+                 diagnostic_latte_vertex_fragment_spirv_position_base_zero)
+    {
+        set_latte_graphics_pipeline(
+            translated_vertex_shader_code,
+            translated_fragment_shader_code);
+    }
     set_guest_diagnostic_vertices(diagnostic_vertices);
     diagnostic_draw_ranges_ = std::move(diagnostic_draw_ranges);
     diagnostic_draw_policy_active_ = true;
     diagnostic_draw_uses_latte_vertex_pipeline_ =
         draw_policy == GuestDrawPolicy::
-            diagnostic_latte_vertex_spirv_position_base_zero;
+            diagnostic_latte_vertex_spirv_position_base_zero ||
+        draw_policy == GuestDrawPolicy::
+            diagnostic_latte_vertex_fragment_spirv_position_base_zero;
 }
 
 cpu::espresso::Gx2ColorBufferSnapshot
 VulkanRenderer::render_guest_color_buffer_diagnostic(
     const cpu::espresso::Gx2ColorBufferSnapshot& snapshot,
-    std::span<const DiagnosticVertex> vertices)
+    std::span<const DiagnosticVertex> vertices,
+    VkPipeline pipeline)
 {
     using cpu::espresso::Gx2ColorBufferSnapshotStatus;
 
@@ -1214,7 +1271,7 @@ VulkanRenderer::render_guest_color_buffer_diagnostic(
         vkCmdBindPipeline(
             command_buffer,
             VK_PIPELINE_BIND_POINT_GRAPHICS,
-            guest_color_buffer_diagnostic_pipeline_);
+            pipeline);
         const VkDeviceSize vertex_offset = 0U;
         vkCmdBindVertexBuffers(
             command_buffer, 0U, 1U, &vertex_buffer.buffer, &vertex_offset);
@@ -2407,6 +2464,17 @@ VkPipeline VulkanRenderer::create_diagnostic_graphics_pipeline(
 VkPipeline VulkanRenderer::create_latte_vertex_pipeline(
     std::span<const std::uint32_t> vertex_code) const
 {
+    return create_latte_graphics_pipeline(
+        vertex_code,
+        detail::diagnostic_fragment_shader_spirv,
+        render_pass_);
+}
+
+VkPipeline VulkanRenderer::create_latte_graphics_pipeline(
+    std::span<const std::uint32_t> vertex_code,
+    std::span<const std::uint32_t> fragment_code,
+    VkRenderPass render_pass) const
+{
     const VkShaderModule vertex_module = create_shader_module(
         vertex_code,
         "vkCreateShaderModule(Latte vertex subset)");
@@ -2414,12 +2482,12 @@ VkPipeline VulkanRenderer::create_latte_vertex_pipeline(
     try
     {
         fragment_module = create_shader_module(
-            detail::diagnostic_fragment_shader_spirv,
-            "vkCreateShaderModule(diagnostic fragment)");
+            fragment_code,
+            "vkCreateShaderModule(Latte fragment subset)");
         const VkPipeline pipeline = create_diagnostic_graphics_pipeline(
             vertex_module,
             fragment_module,
-            render_pass_);
+            render_pass);
         vkDestroyShaderModule(device_, vertex_module, nullptr);
         vkDestroyShaderModule(device_, fragment_module, nullptr);
         return pipeline;
@@ -2455,6 +2523,55 @@ void VulkanRenderer::set_latte_vertex_pipeline(
     }
     latte_vertex_pipeline_ = new_pipeline;
     latte_vertex_shader_code_.assign(vertex_code.begin(), vertex_code.end());
+}
+
+void VulkanRenderer::set_latte_graphics_pipeline(
+    std::span<const std::uint32_t> vertex_code,
+    std::span<const std::uint32_t> fragment_code)
+{
+    if (std::ranges::equal(latte_vertex_shader_code_, vertex_code) &&
+        std::ranges::equal(latte_fragment_shader_code_, fragment_code))
+    {
+        return;
+    }
+
+    if (latte_vertex_pipeline_ != VK_NULL_HANDLE ||
+        latte_guest_color_buffer_pipeline_ != VK_NULL_HANDLE)
+    {
+        check(vkDeviceWaitIdle(device_),
+            "vkDeviceWaitIdle(Latte graphics pipeline replacement)");
+    }
+
+    const VkPipeline swapchain_pipeline = create_latte_graphics_pipeline(
+        vertex_code,
+        fragment_code,
+        render_pass_);
+    VkPipeline color_buffer_pipeline = VK_NULL_HANDLE;
+    try
+    {
+        color_buffer_pipeline = create_latte_graphics_pipeline(
+            vertex_code,
+            fragment_code,
+            guest_color_buffer_render_pass_);
+    }
+    catch (...)
+    {
+        vkDestroyPipeline(device_, swapchain_pipeline, nullptr);
+        throw;
+    }
+
+    if (latte_vertex_pipeline_ != VK_NULL_HANDLE)
+    {
+        vkDestroyPipeline(device_, latte_vertex_pipeline_, nullptr);
+    }
+    if (latte_guest_color_buffer_pipeline_ != VK_NULL_HANDLE)
+    {
+        vkDestroyPipeline(device_, latte_guest_color_buffer_pipeline_, nullptr);
+    }
+    latte_vertex_pipeline_ = swapchain_pipeline;
+    latte_guest_color_buffer_pipeline_ = color_buffer_pipeline;
+    latte_vertex_shader_code_.assign(vertex_code.begin(), vertex_code.end());
+    latte_fragment_shader_code_.assign(fragment_code.begin(), fragment_code.end());
 }
 
 void VulkanRenderer::create_framebuffers()
@@ -2923,6 +3040,13 @@ void VulkanRenderer::destroy_swapchain() noexcept
         vkDestroyPipeline(device_, latte_vertex_pipeline_, nullptr);
         latte_vertex_pipeline_ = VK_NULL_HANDLE;
     }
+    if (latte_guest_color_buffer_pipeline_ != VK_NULL_HANDLE)
+    {
+        vkDestroyPipeline(device_, latte_guest_color_buffer_pipeline_, nullptr);
+        latte_guest_color_buffer_pipeline_ = VK_NULL_HANDLE;
+    }
+    latte_vertex_shader_code_.clear();
+    latte_fragment_shader_code_.clear();
     if (diagnostic_pipeline_layout_ != VK_NULL_HANDLE)
     {
         vkDestroyPipelineLayout(device_, diagnostic_pipeline_layout_, nullptr);

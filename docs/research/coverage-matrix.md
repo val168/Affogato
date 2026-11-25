@@ -26,13 +26,13 @@ imply title compatibility or full hardware conformance. See
 | Surface/texture addressing | Partially implemented | Explicit staging supports selected UNORM formats and linear-aligned, 1D thin1, and narrow 2D thin1 layouts. Other tiling, depth, compressed, mip, array, and swizzle cases reject or remain absent. |
 | Guest clear, color copy, and scanout | Implemented and verified for a narrow subset | Matching-size single-sample RGBA8 paths update guest memory and scan buffers; controlled guest scanout tests and display test exist. Unsupported descriptors fail explicitly. |
 | GX2 draw capture | Implemented and verified as capture | Selected draw calls preserve vertex/index/program/register/target snapshots. Normal guest draw execution does not follow from capture. |
-| Diagnostic draw rendering | Implemented and verified in controlled tests | Bounded triangle topologies, selected vertex formats, optional Latte vertex SPIR-V, fixed diagnostic fragment shader, and Vulkan readback are covered. This remains diagnostic output, not ordinary guest rendering or Latte hardware validation. |
+| Diagnostic draw rendering | Implemented and verified in controlled tests | Bounded triangle topologies, selected vertex formats, optional Latte vertex SPIR-V, fixed diagnostic fragment shader, or the separate constant-only Latte fragment subset are covered by readback tests. This remains opt-in diagnostic output, not ordinary guest rendering or Latte hardware validation. |
 | General vertex fetch | Partially implemented | A narrow HLE-generated fetch subset maps selected attributes into shader input registers. Arbitrary guest fetch programs, system inputs, and general instance behavior are absent. |
-| Latte shader decoding/execution | Experimental subset | Structural CF/ALU decoding and CPU/SPIR-V subsets cover selected MOV, arithmetic, comparisons, integer logic, min/max, and conditional moves. Literals, general control flow, textures, full interfaces, and many operations are missing. See [`12_latte_shader_isa.md`](12_latte_shader_isa.md). |
-| Guest pixel shaders and texture sampling | Missing | No guest pixel shader translation or shader texture sampling path is connected to Vulkan. |
-| Guest render-target draw writes | Diagnostic only | The opted-in diagnostic route can CPU-rasterize supported triangles into captured color-buffer snapshots. Normal Latte draw output is not written to guest render targets. |
+| Latte shader decoding/execution | Experimental subset | Structural CF/ALU decoding and CPU/SPIR-V subsets cover selected MOV, arithmetic, comparisons, integer logic, min/max, and conditional moves. The fragment path only constant-folds inline-constant MOV groups before MRT0 export. Literals, general control flow, textures, full interfaces, and many operations are missing. See [`12_latte_shader_isa.md`](12_latte_shader_isa.md). |
+| Guest pixel shaders and texture sampling | Narrow controlled fragment subset verified | A synthetic GX2 pixel shader captured through `GX2SetPixelShader` and draw-time state produces validated fragment SPIR-V and magenta Vulkan readback. Guest fragment inputs, non-constant ALU, other targets, and texture sampling are unsupported. |
+| Guest render-target draw writes | Diagnostic route with guest constant fragment subset | The opted-in diagnostic route renders supported triangles into a temporary Vulkan image, reads pixels back into the captured color-buffer layout, and the existing scanout path presents them. It is not normal Latte draw execution; general pixel shaders, target formats, and synchronization remain unsupported. |
 | GPU command processor and synchronization | Partially implemented | GX2-originated typed commands are applied in order to a CPU shadow; general PM4 packet execution, asynchronous GPU ordering, and hardware fence behavior are absent. |
-| Vulkan presentation | Implemented and verified | Swapchain presentation and guest scanout are covered. Diagnostic pixel readback validates selected generated vertex shaders with a fixed fragment shader; visible current shader-mode output was not re-verified. |
+| Vulkan presentation | Implemented and verified | Swapchain presentation and guest scanout are covered. Diagnostic pixel readback validates selected generated vertex shaders with a fixed fragment shader and the constant-only Latte fragment subset; no visible window capture was made for the new mode. |
 
 ## Cafe OS and runtime
 
@@ -45,11 +45,11 @@ imply title compatibility or full hardware conformance. See
 
 ## Highest-value next work
 
-The current highest-value graphics dependency is to make draw execution consume
-captured state and produce guest-visible render-target results without using a
-diagnostic host fragment shader or bypassing guest surface layout rules. Before
-expanding shader opcodes, connect one narrow, tested draw subset to the existing
-guest target and scanout path. Separately, investigate the reproduced WWHD null
+The current highest-value graphics dependency is to make ordinary draw
+execution consume captured state and produce guest-visible render-target
+results without the explicit diagnostic policy or bypassing guest surface
+layout rules. Expand fragment translation only with documented operations and
+real shader fixtures. Separately, investigate the reproduced WWHD null
 indirect-call target from its guest memory/runtime state; do not infer or
 fabricate a callback. Neither path currently establishes WWHD rendering.
 

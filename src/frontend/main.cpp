@@ -1967,7 +1967,8 @@ enum class GuestTriangleShader
     spirv_integer_conditional_move,
     spirv_mixed_conditional_move,
     spirv_integer_compare_clip_z,
-    spirv_integer_alu_identity
+    spirv_integer_alu_identity,
+    spirv_constant_pixel_color
 };
 
 int run_gx2_guest_triangle_test(
@@ -1975,6 +1976,8 @@ int run_gx2_guest_triangle_test(
     GuestTriangleShader shader = GuestTriangleShader::cpu_mov)
 {
     const bool use_latte_spirv = shader != GuestTriangleShader::cpu_mov;
+    const bool use_latte_pixel_spirv =
+        shader == GuestTriangleShader::spirv_constant_pixel_color;
     constexpr std::uint32_t vertex_buffer_address = 0x10000U;
     constexpr std::uint32_t index_buffer_address = 0x4000U;
     constexpr std::uint32_t big_endian_index_buffer_address = 0x5000U;
@@ -1985,6 +1988,8 @@ int run_gx2_guest_triangle_test(
     constexpr std::uint32_t attribute_stream_address = 0x3200U;
     constexpr std::uint32_t vertex_shader_descriptor_address = 0x3300U;
     constexpr std::uint32_t vertex_shader_program_address = 0x3400U;
+    constexpr std::uint32_t pixel_shader_descriptor_address = 0x3500U;
+    constexpr std::uint32_t pixel_shader_program_address = 0x3600U;
     constexpr std::uint32_t color_buffer_descriptor_address = 0x7000U;
     constexpr std::uint32_t color_buffer_image_address = 0x20000U;
     constexpr std::uint32_t color_buffer_scanout_address = 0x500000U;
@@ -2324,6 +2329,64 @@ int run_gx2_guest_triangle_test(
     }
     invoke("GX2SetVertexShader", std::array<std::uint32_t, 1U>{
         vertex_shader_descriptor_address});
+
+    if (use_latte_pixel_spirv)
+    {
+        constexpr std::array<std::uint16_t, 4U> color_selectors{
+            affogato::gpu::latte_alu_source_one_float_selector,
+            affogato::gpu::latte_alu_source_zero_selector,
+            affogato::gpu::latte_alu_source_one_float_selector,
+            affogato::gpu::latte_alu_source_one_float_selector};
+        std::array<std::uint32_t, 0xE8U / sizeof(std::uint32_t)>
+            pixel_shader_descriptor{};
+        pixel_shader_descriptor[0xA4U / sizeof(std::uint32_t)] = 72U * 4U;
+        pixel_shader_descriptor[0xA8U / sizeof(std::uint32_t)] =
+            pixel_shader_program_address;
+
+        std::array<std::uint32_t, 72U> pixel_shader_program{};
+        pixel_shader_program[0U] = 0x20000000U;
+        pixel_shader_program[1U] = 0x00000CA0U;
+        pixel_shader_program[2U] = 0x00000100U;
+        pixel_shader_program[3U] = 0x88062014U;
+        for (std::uint32_t component = 0U; component < 4U; ++component)
+        {
+            const std::uint32_t slot = 64U + component * 2U;
+            const std::uint32_t source_word =
+                color_selectors[component] |
+                (component << 10U) |
+                (component == 3U ? 0x80000000U : 0U);
+            const std::uint32_t destination_word =
+                0x00400010U |
+                (static_cast<std::uint32_t>(
+                     affogato::gpu::latte_alu_op2_move_opcode)
+                 << 7U) |
+                (component << 29U);
+            pixel_shader_program[slot] = std::byteswap(source_word);
+            pixel_shader_program[slot + 1U] =
+                std::byteswap(destination_word);
+        }
+
+        for (std::size_t index = 0U;
+             index < pixel_shader_descriptor.size();
+             ++index)
+        {
+            core.memory.write32_be(
+                pixel_shader_descriptor_address + static_cast<std::uint32_t>(
+                    index * sizeof(std::uint32_t)),
+                pixel_shader_descriptor[index]);
+        }
+        for (std::size_t index = 0U;
+             index < pixel_shader_program.size();
+             ++index)
+        {
+            core.memory.write32_be(
+                pixel_shader_program_address + static_cast<std::uint32_t>(
+                    index * sizeof(std::uint32_t)),
+                pixel_shader_program[index]);
+        }
+        invoke("GX2SetPixelShader", std::array<std::uint32_t, 1U>{
+            pixel_shader_descriptor_address});
+    }
 
     invoke("GX2SetAttribBuffer", std::array<std::uint32_t, 4U>{
         vertex_buffer_index,
@@ -2740,11 +2803,14 @@ int run_gx2_guest_triangle_test(
     affogato::gpu::vulkan::VulkanRenderer renderer(visible_window, true);
     renderer.consume_guest_commands(
         commands,
-        use_latte_spirv
+        use_latte_pixel_spirv
             ? affogato::gpu::vulkan::GuestDrawPolicy::
-                diagnostic_latte_vertex_spirv_position_base_zero
-            : affogato::gpu::vulkan::GuestDrawPolicy::
-                diagnostic_latte_vertex_position_base_zero);
+                diagnostic_latte_vertex_fragment_spirv_position_base_zero
+            : (use_latte_spirv
+                   ? affogato::gpu::vulkan::GuestDrawPolicy::
+                         diagnostic_latte_vertex_spirv_position_base_zero
+                   : affogato::gpu::vulkan::GuestDrawPolicy::
+                         diagnostic_latte_vertex_position_base_zero));
     const auto color_buffer_updates =
         renderer.take_guest_color_buffer_updates();
     if (color_buffer_updates.size() != 1U ||
@@ -2774,8 +2840,10 @@ int run_gx2_guest_triangle_test(
         color_buffer_image_address +
             static_cast<std::uint32_t>(color_sample_offset),
         diagnostic_pixel);
-    const bool has_diagnostic_color =
-        diagnostic_pixel[0U] >= 200U && diagnostic_pixel[2U] <= 40U;
+    const bool has_diagnostic_color = use_latte_pixel_spirv
+        ? diagnostic_pixel[0U] >= 200U && diagnostic_pixel[1U] <= 40U &&
+              diagnostic_pixel[2U] >= 200U
+        : diagnostic_pixel[0U] >= 200U && diagnostic_pixel[2U] <= 40U;
     if (!has_diagnostic_color)
     {
         throw std::runtime_error(
@@ -2814,6 +2882,7 @@ int run_gx2_guest_triangle_test(
             "GX2 color-buffer copy did not produce readable RGBA8 scanout pixels");
     }
     const bool verify_shader_output =
+        shader == GuestTriangleShader::spirv_constant_pixel_color ||
         shader == GuestTriangleShader::spirv_add_one_x ||
         shader == GuestTriangleShader::spirv_add_negative_one_x ||
         shader == GuestTriangleShader::spirv_multiply_zero ||
@@ -2907,7 +2976,13 @@ int run_gx2_guest_triangle_test(
             const bool shader_sample_is_red =
                 shader_frame->pixels[shader_sample_offset] >= 200U &&
                 shader_frame->pixels[shader_sample_offset + 2U] <= 40U;
-            if (shader_sample_is_red != expect_red)
+            const bool shader_sample_is_magenta =
+                shader_frame->pixels[shader_sample_offset] >= 200U &&
+                shader_frame->pixels[shader_sample_offset + 1U] <= 40U &&
+                shader_frame->pixels[shader_sample_offset + 2U] >= 200U;
+            if (shader == GuestTriangleShader::spirv_constant_pixel_color
+                    ? !shader_sample_is_magenta
+                    : shader_sample_is_red != expect_red)
             {
                 throw std::runtime_error(
                     "Vulkan Latte shader output pixel at (" +
@@ -2973,9 +3048,12 @@ int run_gx2_guest_triangle_test(
         throw std::runtime_error(
             "Vulkan guest triangle readback is smaller than the expected shader sample");
     }
-    const bool presented_diagnostic_color =
-        rendered_frame->pixels[sample_offset] >= 200U &&
-        rendered_frame->pixels[sample_offset + 2U] <= 40U;
+    const bool presented_diagnostic_color = use_latte_pixel_spirv
+        ? rendered_frame->pixels[sample_offset] >= 200U &&
+              rendered_frame->pixels[sample_offset + 1U] <= 40U &&
+              rendered_frame->pixels[sample_offset + 2U] >= 200U
+        : rendered_frame->pixels[sample_offset] >= 200U &&
+              rendered_frame->pixels[sample_offset + 2U] <= 40U;
     if (!presented_diagnostic_color)
     {
         throw std::runtime_error(
@@ -3058,6 +3136,16 @@ int run_gx2_guest_triangle_test(
         shader_subset_description =
             "the bounded OP2 integer ALU position SPIR-V vertex subset";
     }
+    if (shader == GuestTriangleShader::spirv_constant_pixel_color)
+    {
+        shader_subset_description =
+            "the bounded MOV/inline-constant-to-MRT0 SPIR-V fragment subset";
+    }
+    const char* fragment_shader_status = use_latte_pixel_spirv
+        ? "the captured guest pixel shader subset was translated; general Latte "
+          "shader translation and WWHD graphics remain unsupported.\n"
+        : "the fragment shader remains diagnostic; general Latte shader "
+          "translation and WWHD graphics remain unsupported.\n";
     std::cout << "GX2 float32/float16/UNORM8x4 triangle-list, indexed, strip, and fan "
               << "geometry, "
               << "including unpredicated PM4 auto-index, indexed, and immediate-index "
@@ -3066,8 +3154,7 @@ int run_gx2_guest_triangle_test(
               << "; Vulkan readback and guest-memory writeback verified the "
                  "diagnostic color-buffer path on "
               << renderer.device_name()
-              << ". The fragment shader remains diagnostic; general Latte shader "
-                 "translation and WWHD graphics remain unsupported.\n";
+              << ". " << fragment_shader_status;
     return 0;
 }
 
@@ -3214,6 +3301,14 @@ int main(int argc, char* argv[])
                     false,
                     GuestTriangleShader::spirv_integer_alu_identity);
             }
+            if (std::string_view(argv[1]) ==
+                    "--gx2-guest-triangle-pixel-spirv-smoke-test" &&
+                argc == 2)
+            {
+                return run_gx2_guest_triangle_test(
+                    false,
+                    GuestTriangleShader::spirv_constant_pixel_color);
+            }
             if (std::string_view(argv[1]) == "--gx2-guest-triangle-display-test" &&
                 argc == 2)
             {
@@ -3240,6 +3335,7 @@ int main(int argc, char* argv[])
                          "       AffogatoFrontend.exe --gx2-guest-triangle-mixed-alu-spirv-smoke-test\n"
                          "       AffogatoFrontend.exe --gx2-guest-triangle-integer-compare-spirv-smoke-test\n"
                          "       AffogatoFrontend.exe --gx2-guest-triangle-integer-alu-spirv-smoke-test\n"
+                         "       AffogatoFrontend.exe --gx2-guest-triangle-pixel-spirv-smoke-test\n"
                          "       AffogatoFrontend.exe --gx2-guest-triangle-display-test\n";
             return 2;
         }

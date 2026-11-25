@@ -29,6 +29,7 @@ enum class GuestDrawPolicy
     diagnostic_float2_position,
     diagnostic_latte_vertex_position_base_zero,
     diagnostic_latte_vertex_spirv_position_base_zero,
+    diagnostic_latte_vertex_fragment_spirv_position_base_zero,
 };
 
 class VulkanRenderer
@@ -129,8 +130,15 @@ private:
         VkRenderPass render_pass) const;
     [[nodiscard]] VkPipeline create_latte_vertex_pipeline(
         std::span<const std::uint32_t> vertex_code) const;
+    [[nodiscard]] VkPipeline create_latte_graphics_pipeline(
+        std::span<const std::uint32_t> vertex_code,
+        std::span<const std::uint32_t> fragment_code,
+        VkRenderPass render_pass) const;
     void set_latte_vertex_pipeline(
         std::span<const std::uint32_t> vertex_code);
+    void set_latte_graphics_pipeline(
+        std::span<const std::uint32_t> vertex_code,
+        std::span<const std::uint32_t> fragment_code);
     void create_framebuffers();
     void create_guest_color_buffer_render_pass();
     void create_command_resources();
@@ -143,7 +151,8 @@ private:
     [[nodiscard]] cpu::espresso::Gx2ColorBufferSnapshot
     render_guest_color_buffer_diagnostic(
         const cpu::espresso::Gx2ColorBufferSnapshot& snapshot,
-        std::span<const DiagnosticVertex> vertices);
+        std::span<const DiagnosticVertex> vertices,
+        VkPipeline pipeline);
     void recreate_swapchain();
     void destroy_swapchain() noexcept;
     void destroy_uploaded_textures() noexcept;
@@ -176,7 +185,9 @@ private:
     VkPipeline diagnostic_pipeline_{};
     VkPipeline guest_color_buffer_diagnostic_pipeline_{};
     VkPipeline latte_vertex_pipeline_{};
+    VkPipeline latte_guest_color_buffer_pipeline_{};
     std::vector<std::uint32_t> latte_vertex_shader_code_;
+    std::vector<std::uint32_t> latte_fragment_shader_code_;
     std::vector<VkFramebuffer> framebuffers_;
     VkCommandPool command_pool_{};
     std::array<VkCommandBuffer, frames_in_flight> command_buffers_{};

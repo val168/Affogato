@@ -1000,3 +1000,36 @@ through scanout. Current tests cover OP2 arithmetic readback and OP3
 conditional-move module validation plus a controlled Vulkan readback case;
 broader randomized equivalence, guest render-target output, and normal draw
 integration tests remain future work.
+
+### Constant MRT0 fragment subset (2026-11-25)
+
+`latte_spirv_fragment_subset.hpp` accepts only four-lane OP2 MOV groups whose
+source 0 selectors are inline float zero, one, or one-half. It requires
+unmodified writes, tracks only GPRs written by those groups, and accepts one
+completed, identity-swizzled pixel export to target zero. It emits a SPIR-V
+Fragment module with `OriginUpperLeft` and a `Location 0` `vec4` output. Any
+missing color component, other ALU operation, unsupported modifier, extra
+export, or other target fails translation. This is constant folding of a
+narrow guest fragment program, not general pixel-shader execution.
+
+The [R700-family ISA manual](https://docs.amd.com/v/u/en-US/R700-Family_Instruction_Set_Architecture),
+section 3.4.1, documents pixel exports into the pixel cache and MRT selection
+through `ARRAY_BASE`; this is related AMD-family evidence, not direct Latte
+conformance. The [SPIR-V specification](https://registry.khronos.org/SPIR-V/specs/unified1/SPIRV.html)
+defines the Fragment execution model, `OriginUpperLeft`, and `Location`
+interface decorations used by the generated module. Cemu's
+[`LatteDecompiler.cpp`](https://github.com/cemu-project/Cemu/blob/main/src/Cafe/HW/Latte/LegacyShaderDecompiler/LatteDecompiler.cpp)
+and Decaf's
+[`spirv_export.cpp`](https://github.com/decaf-emu/decaf-emu/blob/master/src/libgpu/src/spirv/spirv_export.cpp)
+were reviewed for the existing separation between shader decoding and
+fragment-output lowering; no reference implementation code was copied.
+
+The controlled `--gx2-guest-triangle-pixel-spirv-smoke-test` installs a
+synthetic pixel shader through guest `GX2SetPixelShader` HLE, captures it with
+draw-time shader state, translates it, and uses its magenta output in the
+existing diagnostic Vulkan guest-color-buffer readback and scanout route. The
+fragment module passes `spirv-val`; its output passes a Vulkan framebuffer
+readback assertion. This does not establish general guest draw execution,
+Latte hardware semantics beyond these bounded encoding assumptions, or WWHD
+rendering. Guest fragment inputs, arbitrary ALU, MRTs beyond target zero,
+interpolation, depth/stencil, textures, and shader variants remain unsupported.
