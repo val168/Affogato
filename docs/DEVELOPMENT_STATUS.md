@@ -477,3 +477,40 @@ Results use the documented all-ones true mask and zero false mask. Four-lane
 tests cover signed and unsigned boundary comparisons. Debug and Release builds
 and CTest passed 2/2 in both configurations; Latte hardware behavior remains
 unverified.
+
+## Latte bounded OP2 clause execution (2026-11-25)
+
+Commit `dfcef2d` adds `execute_latte_alu_op2_clause()` for clauses composed
+only of supported four-slot X/Y/Z/W OP2 groups. PV forwards between groups in
+one clause and is reset at the next clause. Register writes are staged so an
+unsupported later group cannot leave partial caller state. Tests cover PV
+forwarding and rejection without partial writes. Debug and Release builds
+succeeded and CTest passed 2/2 in both configurations. This is a CPU-side
+experimental helper based on R700-family semantics; it is not wired into
+guest shader invocation or verified against Latte hardware.
+
+## Latte normal export decode and materialization (2026-11-25)
+
+Commits `b675e32` and `c58ca2f` decode normal `EXPORT`/`EXPORT_DONE` metadata
+and materialize supported absolute-GPR swizzle exports into typed CPU-side
+values. The assembled pass-through fixture identifies a position export from
+GPR 1 with XYZW selectors. Burst GPR reads, constant-zero/constant-one
+selectors, and masked components are tested; relative addressing, buffer
+encoding, reserved selectors, and out-of-range GPR access are rejected. Debug
+and Release builds succeeded and CTest passed 2/2 in both configurations.
+Exports are not yet connected to Vulkan stage outputs or an end-to-end guest
+shader executor.
+
+## Visible diagnostic triangle verification (2026-11-25)
+
+Ran `AffogatoFrontend.exe --gx2-guest-triangle-display-test` from the Debug
+build on the NVIDIA GeForce RTX 5070 Laptop GPU. The Vulkan window visibly
+displayed guest-memory-backed geometry over the controlled green clear,
+remained responsive after resizing, and closed cleanly. `VK_LAYER_KHRONOS_validation`
+was installed and enabled by the Debug renderer; no validation messages were
+emitted during this run. The test completion log confirmed float32, float16,
+and UNORM8x4 guest geometry across triangle-list, indexed, strip, and fan
+draws, including the supported PM4 draw forms, submitted with the fixed
+diagnostic host shader. This verifies the visible diagnostic draw route only;
+guest Latte shaders, guest render-target writes from normal draws, and WWHD
+graphics remain unverified.

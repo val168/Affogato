@@ -82,8 +82,14 @@ mean the guest behavior is implemented.
 - `--gx2-guest-scanout-smoke-test` validates guest HLE clear/copy/scanout bytes
   and Vulkan submission. It does not execute a guest draw.
 - `--gx2-guest-triangle-smoke-test` exercises controlled PPC/HLE draws and
-  guest-backed snapshots with diagnostic shaders. The Float16x2 extension's
-  hidden smoke test passed; its visual rerun was not verified.
+  guest-backed snapshots with diagnostic shaders. The visible
+  `--gx2-guest-triangle-display-test` was observed on the NVIDIA GeForce RTX
+  5070 Laptop GPU: the window displayed the guest-backed diagnostic geometry
+  over the controlled guest clear, remained responsive after resizing, and
+  closed cleanly. The Debug build enables `VK_LAYER_KHRONOS_validation` when
+  available; it was installed and emitted no validation messages during this
+  run. The rendering uses fixed host diagnostic shaders, not guest Latte
+  shaders, and does not establish WWHD output.
 - Recorded WWHD/BOTW startup runs did not reach guest draw submission. WWHD's
   shader/surface requirements and game-rendered output are therefore unknown.
 - No current performance comparison establishes gains or regressions for the
