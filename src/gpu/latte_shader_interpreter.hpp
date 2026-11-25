@@ -53,6 +53,97 @@ inline constexpr std::size_t latte_shader_register_component_count = 4U;
 using LatteShaderRegister =
     std::array<std::uint32_t, latte_shader_register_component_count>;
 
+struct LatteShaderExportValue
+{
+    LatteExportType type{};
+    std::uint32_t array_index{};
+    std::array<std::optional<std::uint32_t>, 4U> components{};
+
+    bool operator==(const LatteShaderExportValue&) const = default;
+};
+
+// Materialize the bounded normal-export swizzle form. This produces typed
+// guest output values only; it does not implement stage linking or Vulkan IO.
+[[nodiscard]] inline std::vector<LatteShaderExportValue>
+evaluate_latte_normal_export(
+    const LatteExportFields& export_fields,
+    std::span<const LatteShaderRegister> guest_registers)
+{
+    constexpr std::uint8_t maximum_burst_count = 0x0FU + 1U;
+    constexpr std::uint8_t zero_float_selector = 4U;
+    constexpr std::uint8_t one_float_selector = 5U;
+    constexpr std::uint8_t reserved_selector = 6U;
+    constexpr std::uint8_t masked_selector = 7U;
+    constexpr std::uint32_t one_float_bits = 0x3F800000U;
+
+    if (export_fields.type == LatteExportType::unused ||
+        export_fields.read_write_relative ||
+        export_fields.index_gpr != 0U ||
+        export_fields.uses_buffer_encoding ||
+        export_fields.burst_count == 0U ||
+        export_fields.burst_count > maximum_burst_count)
+    {
+        throw std::runtime_error(
+            "Latte normal export uses unsupported type or addressing");
+    }
+
+    if (export_fields.read_write_gpr >= guest_registers.size() ||
+        export_fields.burst_count >
+            guest_registers.size() - export_fields.read_write_gpr)
+    {
+        throw std::runtime_error(
+            "Latte normal export exceeds the shader GPR file");
+    }
+
+    for (const std::uint8_t selector : export_fields.component_selectors)
+    {
+        if (selector == reserved_selector || selector > masked_selector)
+        {
+            throw std::runtime_error(
+                "Latte normal export contains a reserved component selector");
+        }
+    }
+
+    std::vector<LatteShaderExportValue> values;
+    values.reserve(export_fields.burst_count);
+
+    for (std::uint8_t export_index = 0U;
+         export_index < export_fields.burst_count;
+         ++export_index)
+    {
+        const LatteShaderRegister& source =
+            guest_registers[export_fields.read_write_gpr + export_index];
+        LatteShaderExportValue value{};
+        value.type = export_fields.type;
+        value.array_index = export_fields.array_base + export_index;
+
+        for (std::size_t component = 0U;
+             component < export_fields.component_selectors.size();
+             ++component)
+        {
+            const std::uint8_t selector =
+                export_fields.component_selectors[component];
+            if (selector < latte_shader_register_component_count)
+            {
+                value.components[component] = source[selector];
+            }
+            else if (selector == zero_float_selector)
+            {
+                value.components[component] = 0U;
+            }
+            else if (selector == one_float_selector)
+            {
+                value.components[component] = one_float_bits;
+            }
+            // masked_selector leaves the destination component unset.
+        }
+
+        values.push_back(value);
+    }
+
+    return values;
+}
+
 [[nodiscard]] inline std::uint32_t read_latte_alu_source(
     std::uint16_t source_selector,
     std::uint8_t source_channel,

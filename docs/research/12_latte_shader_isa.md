@@ -34,9 +34,10 @@ Relevant local implementation:
 - `src/gpu/latte_shader_interpreter.hpp` evaluates MOV and selected integer
   OP2 values from absolute GPRs, inline constants, and prior-PV values. Its
   clause executor supports sequences of four-slot X/Y/Z/W groups and commits
-  guest-register updates only after all supported groups succeed. Shader
-  control flow, ALU.Trans/PS state, literal/constant-file reads, and other
-  opcodes remain unsupported.
+  guest-register updates only after all supported groups succeed. It also
+  materializes the supported normal-export swizzle form into typed output
+  records. Shader control flow, ALU.Trans/PS state, literal/constant-file
+  reads, and other opcodes remain unsupported.
 
 ## Evidence categories
 
@@ -412,7 +413,9 @@ export for a type is marked by `EXPORT_DONE`. Cemu's
 `LatteCFInstruction_EXPORT_IMPORT` accessors use matching fields, and the
 assembled pass-through vertex-shader fixture decodes its first export as
 position from GPR 1 with identity XYZW selectors. Affogato now exposes those
-fields on the decoded CF record. This step only decodes metadata: it does not
-read GPR exports into Vulkan stage outputs or implement export ordering,
-relative GPR addressing, or memory-buffer export semantics. R700/Cemu evidence
-is not independent Latte hardware validation.
+fields on the decoded CF record. `evaluate_latte_normal_export()` applies the
+absolute-GPR source, burst, and component-selector rules to produce typed
+CPU-side output records; it rejects relative addressing, buffer encoding, and
+invalid GPR ranges. It does not link these records to Vulkan stage outputs or
+implement CF export ordering, relative GPR addressing, or memory-buffer export
+semantics. R700/Cemu evidence is not independent Latte hardware validation.

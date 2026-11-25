@@ -31952,6 +31952,7 @@ void latte_control_flow_decoder_tests()
     using affogato::gpu::decode_latte_alu_op2_instruction;
     using affogato::gpu::decode_latte_alu_op2_groups;
     using affogato::gpu::decode_latte_control_flow;
+    using affogato::gpu::evaluate_latte_normal_export;
     using affogato::gpu::LatteExportType;
     using affogato::gpu::evaluate_latte_alu_move_value;
     using affogato::gpu::execute_latte_alu_op2_clause;
@@ -32091,6 +32092,106 @@ void latte_control_flow_decoder_tests()
         0x80000000U,
         0x7F800000U};
     shader_registers[3U].fill(0xDEADBEEFU);
+
+    const auto position_export = evaluate_latte_normal_export(
+        *records[1U].export_fields,
+        shader_registers);
+    assert(position_export.size() == 1U);
+    assert(position_export[0U].type == LatteExportType::position);
+    assert(position_export[0U].array_index == 0x3CU);
+    assert(position_export[0U].components[0U] == shader_registers[1U][0U]);
+    assert(position_export[0U].components[1U] == shader_registers[1U][1U]);
+    assert(position_export[0U].components[2U] == shader_registers[1U][2U]);
+    assert(position_export[0U].components[3U] == shader_registers[1U][3U]);
+
+    auto burst_export_fields = *records[1U].export_fields;
+    burst_export_fields.array_base = 5U;
+    burst_export_fields.burst_count = 2U;
+    shader_registers[2U] = {
+        0x00000011U,
+        0x00000022U,
+        0x00000033U,
+        0x00000044U};
+    const auto burst_exports = evaluate_latte_normal_export(
+        burst_export_fields,
+        shader_registers);
+    assert(burst_exports.size() == 2U);
+    assert(burst_exports[0U].array_index == 5U);
+    assert(burst_exports[0U].components[0U] == shader_registers[1U][0U]);
+    assert(burst_exports[1U].array_index == 6U);
+    assert(burst_exports[1U].components[0U] == shader_registers[2U][0U]);
+
+    auto swizzled_export_fields = *records[1U].export_fields;
+    swizzled_export_fields.component_selectors = {3U, 4U, 5U, 7U};
+    const auto swizzled_export = evaluate_latte_normal_export(
+        swizzled_export_fields,
+        shader_registers);
+    assert(swizzled_export[0U].components[0U] == shader_registers[1U][3U]);
+    assert(swizzled_export[0U].components[1U] == 0U);
+    assert(swizzled_export[0U].components[2U] == 0x3F800000U);
+    assert(!swizzled_export[0U].components[3U].has_value());
+
+    auto relative_export_fields = *records[1U].export_fields;
+    relative_export_fields.read_write_relative = true;
+    bool rejected_relative_export = false;
+    try
+    {
+        static_cast<void>(evaluate_latte_normal_export(
+            relative_export_fields,
+            shader_registers));
+    }
+    catch (const std::runtime_error&)
+    {
+        rejected_relative_export = true;
+    }
+    assert(rejected_relative_export);
+
+    auto buffer_export_fields = *records[1U].export_fields;
+    buffer_export_fields.uses_buffer_encoding = true;
+    bool rejected_buffer_export = false;
+    try
+    {
+        static_cast<void>(evaluate_latte_normal_export(
+            buffer_export_fields,
+            shader_registers));
+    }
+    catch (const std::runtime_error&)
+    {
+        rejected_buffer_export = true;
+    }
+    assert(rejected_buffer_export);
+
+    auto reserved_selector_fields = *records[1U].export_fields;
+    reserved_selector_fields.component_selectors[0U] = 6U;
+    bool rejected_reserved_export_selector = false;
+    try
+    {
+        static_cast<void>(evaluate_latte_normal_export(
+            reserved_selector_fields,
+            shader_registers));
+    }
+    catch (const std::runtime_error&)
+    {
+        rejected_reserved_export_selector = true;
+    }
+    assert(rejected_reserved_export_selector);
+
+    auto out_of_range_export_fields = *records[1U].export_fields;
+    out_of_range_export_fields.read_write_gpr =
+        static_cast<std::uint8_t>(shader_registers.size() - 1U);
+    out_of_range_export_fields.burst_count = 2U;
+    bool rejected_out_of_range_export = false;
+    try
+    {
+        static_cast<void>(evaluate_latte_normal_export(
+            out_of_range_export_fields,
+            shader_registers));
+    }
+    catch (const std::runtime_error&)
+    {
+        rejected_out_of_range_export = true;
+    }
+    assert(rejected_out_of_range_export);
 
     const auto previous_vector = execute_latte_alu_op2_vector_group(
         alu_groups[0U], shader_registers);
