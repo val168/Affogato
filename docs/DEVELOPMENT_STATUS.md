@@ -468,3 +468,12 @@ predicate/mask updates, nonzero bank swizzles, and predicated instructions
 rather than discarding shader state or read-cycle selection. Tests verify the
 field positions and rejection before writeback. These semantics are based on
 the R700-family field tables, not Latte hardware captures.
+
+## Latte integer comparisons (2026-11-25)
+
+Added the documented OP2 comparison subset `SETE_INT`, `SETNE_INT`,
+`SETGT_INT`, `SETGE_INT`, `SETGT_UINT`, and `SETGE_UINT` (`0x03A`–`0x03F`).
+Results use the documented all-ones true mask and zero false mask. Four-lane
+tests cover signed and unsigned boundary comparisons. Debug and Release builds
+and CTest passed 2/2 in both configurations; Latte hardware behavior remains
+unverified.

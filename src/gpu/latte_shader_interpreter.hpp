@@ -27,6 +27,18 @@ inline constexpr std::uint16_t latte_alu_op2_maximum_unsigned_integer_opcode =
     0x038U;
 inline constexpr std::uint16_t latte_alu_op2_minimum_unsigned_integer_opcode =
     0x039U;
+inline constexpr std::uint16_t latte_alu_op2_set_equal_integer_opcode =
+    0x03AU;
+inline constexpr std::uint16_t latte_alu_op2_set_greater_integer_opcode =
+    0x03BU;
+inline constexpr std::uint16_t
+    latte_alu_op2_set_greater_equal_integer_opcode = 0x03CU;
+inline constexpr std::uint16_t latte_alu_op2_set_not_equal_integer_opcode =
+    0x03DU;
+inline constexpr std::uint16_t latte_alu_op2_set_greater_unsigned_opcode =
+    0x03EU;
+inline constexpr std::uint16_t
+    latte_alu_op2_set_greater_equal_unsigned_opcode = 0x03FU;
 inline constexpr std::uint16_t latte_alu_source_zero_selector = 248U;
 inline constexpr std::uint16_t latte_alu_source_one_float_selector = 249U;
 inline constexpr std::uint16_t latte_alu_source_one_integer_selector = 250U;
@@ -168,7 +180,13 @@ using LatteShaderRegister =
         instruction.opcode != latte_alu_op2_maximum_signed_integer_opcode &&
         instruction.opcode != latte_alu_op2_minimum_signed_integer_opcode &&
         instruction.opcode != latte_alu_op2_maximum_unsigned_integer_opcode &&
-        instruction.opcode != latte_alu_op2_minimum_unsigned_integer_opcode)
+        instruction.opcode != latte_alu_op2_minimum_unsigned_integer_opcode &&
+        instruction.opcode != latte_alu_op2_set_equal_integer_opcode &&
+        instruction.opcode != latte_alu_op2_set_greater_integer_opcode &&
+        instruction.opcode != latte_alu_op2_set_greater_equal_integer_opcode &&
+        instruction.opcode != latte_alu_op2_set_not_equal_integer_opcode &&
+        instruction.opcode != latte_alu_op2_set_greater_unsigned_opcode &&
+        instruction.opcode != latte_alu_op2_set_greater_equal_unsigned_opcode)
     {
         throw std::runtime_error(
             "Latte integer evaluation received an unsupported opcode");
@@ -185,20 +203,20 @@ using LatteShaderRegister =
         !instruction.write_mask)
     {
         throw std::runtime_error(
-            "Latte integer logic evaluation received unsupported modifiers");
+            "Latte integer evaluation received unsupported modifiers");
     }
 
     if (instruction.destination_gpr >= guest_registers.size())
     {
         throw std::runtime_error(
-            "Latte integer logic destination is outside the register file");
+            "Latte integer destination is outside the register file");
     }
 
     if (instruction.destination_component >=
         latte_shader_register_component_count)
     {
         throw std::runtime_error(
-            "Latte integer logic destination is outside a four-component GPR");
+            "Latte integer destination is outside a four-component GPR");
     }
 
     const std::uint32_t source0 = read_latte_alu_source(
@@ -219,6 +237,7 @@ using LatteShaderRegister =
     constexpr std::uint32_t signed_order_bias = 0x80000000U;
     const std::uint32_t signed_order_source0 = source0 ^ signed_order_bias;
     const std::uint32_t signed_order_source1 = source1 ^ signed_order_bias;
+    bool comparison_result = false;
 
     switch (instruction.opcode)
     {
@@ -234,6 +253,24 @@ using LatteShaderRegister =
         return source0 >= source1 ? source0 : source1;
     case latte_alu_op2_minimum_unsigned_integer_opcode:
         return source0 <= source1 ? source0 : source1;
+    case latte_alu_op2_set_equal_integer_opcode:
+        comparison_result = source0 == source1;
+        break;
+    case latte_alu_op2_set_not_equal_integer_opcode:
+        comparison_result = source0 != source1;
+        break;
+    case latte_alu_op2_set_greater_integer_opcode:
+        comparison_result = signed_order_source0 > signed_order_source1;
+        break;
+    case latte_alu_op2_set_greater_equal_integer_opcode:
+        comparison_result = signed_order_source0 >= signed_order_source1;
+        break;
+    case latte_alu_op2_set_greater_unsigned_opcode:
+        comparison_result = source0 > source1;
+        break;
+    case latte_alu_op2_set_greater_equal_unsigned_opcode:
+        comparison_result = source0 >= source1;
+        break;
     case latte_alu_op2_and_integer_opcode:
         return source0 & source1;
     case latte_alu_op2_or_integer_opcode:
@@ -242,8 +279,10 @@ using LatteShaderRegister =
         return source0 ^ source1;
     default:
         throw std::runtime_error(
-            "Latte integer logic evaluation received an unsupported opcode");
+            "Latte integer evaluation received an unsupported opcode");
     }
+
+    return comparison_result ? 0xFFFFFFFFU : 0x00000000U;
 }
 
 // Execute a supported four-slot X/Y/Z/W OP2 group. Source values are gathered
@@ -297,6 +336,12 @@ execute_latte_alu_op2_vector_group(
         case latte_alu_op2_minimum_signed_integer_opcode:
         case latte_alu_op2_maximum_unsigned_integer_opcode:
         case latte_alu_op2_minimum_unsigned_integer_opcode:
+        case latte_alu_op2_set_equal_integer_opcode:
+        case latte_alu_op2_set_greater_integer_opcode:
+        case latte_alu_op2_set_greater_equal_integer_opcode:
+        case latte_alu_op2_set_not_equal_integer_opcode:
+        case latte_alu_op2_set_greater_unsigned_opcode:
+        case latte_alu_op2_set_greater_equal_unsigned_opcode:
             group_vector[component] =
                 evaluate_latte_alu_integer_value(
                     instruction,

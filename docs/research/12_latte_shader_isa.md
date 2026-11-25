@@ -308,12 +308,13 @@ unterminated final group. This does not parse literal payload slots or execute
 groups. The pass-through fixture contains one four-slot group and no literals.
 
 `execute_latte_alu_op2_vector_group()` supports four ordered X/Y/Z/W slots with
-MOV or integer AND/OR/XOR/NOT/ADD_INT/SUB_INT/MAX_INT/MIN_INT/MAX_UINT/MIN_UINT,
-absolute GPR or explicitly supplied previous-PV sources, inline constants
-`248`–`252`, write masks enabled, and no other modifiers. The OP2 decoder
-records `SRC0_ABS` and `SRC1_ABS` from word1 bits 0 and 1. MOV applies its
-source absolute and negate flags as binary32 sign-bit operations, in that
-order; the integer evaluator rejects both flags.
+MOV, integer bitwise AND/OR/XOR/NOT, integer ADD/SUB, signed/unsigned integer
+MAX/MIN, and integer set comparisons. Sources are absolute GPRs, explicitly
+supplied previous-PV values, or inline constants `248`–`252`; write masks must
+be enabled and other modifiers are rejected. The OP2 decoder records
+`SRC0_ABS` and `SRC1_ABS` from word1 bits 0 and 1. MOV applies its source
+absolute and negate flags as binary32 sign-bit operations, in that order; the
+integer evaluator rejects both flags.
 This follows the R700 instruction-family semantics and retains all non-sign
 bits, but it has not been checked against Latte hardware. The executor gathers
 all sources before updating destination lanes and returns the resulting vector
@@ -362,6 +363,15 @@ implementation maps signed order to unsigned order by flipping bit 31 in each
 operand, then returns the original selected operand. Tests cover values across
 the signed boundary and unsigned high-bit cases. This is reference-derived and
 not verified against Latte hardware.
+
+The R700 OP2 table assigns `SETE_INT`, `SETGT_INT`, `SETGE_INT`, `SETNE_INT`,
+`SETGT_UINT`, and `SETGE_UINT` opcodes `0x03A`–`0x03F`. The Chapter 9
+descriptions define signed or unsigned comparisons and write `0xFFFFFFFF` for
+true or zero for false. Affogato implements equality/inequality, signed greater
+and greater-or-equal using the same sign-bit order mapping as integer min/max,
+and unsigned greater/greater-or-equal using unsigned comparison. Tests exercise
+raw opcode decoding, both truth values, and comparisons across the signed and
+unsigned boundaries. This is not validated on Latte hardware.
 
 The R700 microcode table assigns selectors `248`–`252` to the inline constants
 `0.0`, `1.0`, integer `1`, integer `-1`, and `0.5`; selector `254` is PV and

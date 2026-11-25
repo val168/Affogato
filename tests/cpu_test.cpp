@@ -32353,6 +32353,102 @@ void latte_control_flow_decoder_tests()
     assert((integer_minmax_result == expected_integer_minmax));
     assert((shader_registers[5U] == expected_integer_minmax));
 
+    using affogato::gpu::latte_alu_op2_set_equal_integer_opcode;
+    using affogato::gpu::latte_alu_op2_set_greater_equal_integer_opcode;
+    using affogato::gpu::latte_alu_op2_set_greater_equal_unsigned_opcode;
+    using affogato::gpu::latte_alu_op2_set_greater_integer_opcode;
+    using affogato::gpu::latte_alu_op2_set_greater_unsigned_opcode;
+    using affogato::gpu::latte_alu_op2_set_not_equal_integer_opcode;
+    constexpr std::array<std::uint16_t, 4U> signed_compare_opcodes{
+        latte_alu_op2_set_equal_integer_opcode,
+        latte_alu_op2_set_not_equal_integer_opcode,
+        latte_alu_op2_set_greater_integer_opcode,
+        latte_alu_op2_set_greater_equal_integer_opcode};
+    auto signed_compare_slots = alu_slots;
+    for (std::size_t component = 0U;
+         component < signed_compare_slots.size();
+         ++component)
+    {
+        auto& slot = signed_compare_slots[component];
+        slot.word0 = (slot.word0 & ~(0x1FFU << 13U)) | (2U << 13U);
+        slot.word0 = (slot.word0 & ~(0x03U << 10U)) |
+            (static_cast<std::uint32_t>(component) << 10U);
+        slot.word0 = (slot.word0 & ~(0x03U << 23U)) |
+            (static_cast<std::uint32_t>(component) << 23U);
+        slot.word1 = (slot.word1 & ~(0x7FFU << 7U)) |
+            (static_cast<std::uint32_t>(signed_compare_opcodes[component])
+             << 7U);
+        slot.word1 = (slot.word1 & ~(0x7FU << 21U)) | (6U << 21U);
+    }
+    const auto signed_compare_groups =
+        decode_latte_alu_op2_groups(signed_compare_slots);
+    assert(signed_compare_groups.size() == 1U);
+    shader_registers[1U] = {
+        0x00000005U,
+        0xFFFFFFFFU,
+        0x7FFFFFFFU,
+        0x80000000U};
+    shader_registers[2U] = {
+        0x00000005U,
+        0x00000000U,
+        0xFFFFFFFFU,
+        0x00000000U};
+    const LatteShaderRegister expected_signed_compare{
+        0xFFFFFFFFU,
+        0xFFFFFFFFU,
+        0xFFFFFFFFU,
+        0x00000000U};
+    const auto signed_compare_result = execute_latte_alu_op2_vector_group(
+        signed_compare_groups[0U],
+        shader_registers);
+    assert((signed_compare_result == expected_signed_compare));
+    assert((shader_registers[6U] == expected_signed_compare));
+
+    constexpr std::array<std::uint16_t, 4U> unsigned_compare_opcodes{
+        latte_alu_op2_set_greater_unsigned_opcode,
+        latte_alu_op2_set_greater_equal_unsigned_opcode,
+        latte_alu_op2_set_greater_unsigned_opcode,
+        latte_alu_op2_set_greater_equal_unsigned_opcode};
+    auto unsigned_compare_slots = alu_slots;
+    for (std::size_t component = 0U;
+         component < unsigned_compare_slots.size();
+         ++component)
+    {
+        auto& slot = unsigned_compare_slots[component];
+        slot.word0 = (slot.word0 & ~(0x1FFU << 13U)) | (2U << 13U);
+        slot.word0 = (slot.word0 & ~(0x03U << 10U)) |
+            (static_cast<std::uint32_t>(component) << 10U);
+        slot.word0 = (slot.word0 & ~(0x03U << 23U)) |
+            (static_cast<std::uint32_t>(component) << 23U);
+        slot.word1 = (slot.word1 & ~(0x7FFU << 7U)) |
+            (static_cast<std::uint32_t>(unsigned_compare_opcodes[component])
+             << 7U);
+        slot.word1 = (slot.word1 & ~(0x7FU << 21U)) | (7U << 21U);
+    }
+    const auto unsigned_compare_groups =
+        decode_latte_alu_op2_groups(unsigned_compare_slots);
+    assert(unsigned_compare_groups.size() == 1U);
+    shader_registers[1U] = {
+        0xFFFFFFFFU,
+        0x7FFFFFFFU,
+        0x00000005U,
+        0x00000009U};
+    shader_registers[2U] = {
+        0x00000000U,
+        0x80000000U,
+        0x00000005U,
+        0x0000000AU};
+    const LatteShaderRegister expected_unsigned_compare{
+        0xFFFFFFFFU,
+        0x00000000U,
+        0x00000000U,
+        0x00000000U};
+    const auto unsigned_compare_result = execute_latte_alu_op2_vector_group(
+        unsigned_compare_groups[0U],
+        shader_registers);
+    assert((unsigned_compare_result == expected_unsigned_compare));
+    assert((shader_registers[7U] == expected_unsigned_compare));
+
     auto move_modifier_slots = alu_slots;
     move_modifier_slots[0U].word1 |= 1U;
     move_modifier_slots[1U].word0 |= 1U << 12U;
