@@ -551,9 +551,9 @@ bits as a direct-GPR destination. AMD's ISA reference treats these as
 alternative layouts. `GX2SetFetchShader` captures the bytes without emitting
 semantic-table writes. Resolve this mismatch against a verified Wii U fetch
 program or cross-checked reference-emulator path before implementing shader
-input population; no behavior has been guessed or changed here.
+input population; no behavior had been guessed or changed at that audit point.
 
-## Draw-time Latte semantic-table extraction (2026-11-25)
+## Draw-time Latte semantic-table capture and GX2 population (2026-11-25)
 
 Added `capture_latte_vertex_semantic_table()` in
 [`latte_vertex_fetch.hpp`](../src/gpu/latte_vertex_fetch.hpp). It extracts the
@@ -561,7 +561,13 @@ Added `capture_latte_vertex_semantic_table()` in
 existing register base address. It requires every entry to be present as a
 context-register write and rejects duplicate or wrongly typed entries instead
 of assuming reset values. Tests verify extraction and semantic resolution,
-and reject incomplete or wrongly typed snapshots. The table is now available
-from draw-time state, but it is not yet used to populate shader invocation
-inputs. Debug and Release builds succeeded and CTest passed 2/2 in both
-configurations.
+and reject incomplete or wrongly typed snapshots. A follow-up source audit
+cross-checked the GX2 descriptor layout and update sequence against Decaf's
+`gx2_shaders.h` structure assertions and `GX2SetVertexShader` implementation.
+That HLE now queues the semantic-clear register and declared table writes from
+descriptor offsets `0x3C`, `0x40`, and `0x44`; it rejects counts above the
+32-entry Latte table. Regression coverage checks the emitted command sequence
+and extracts the table from a subsequent draw snapshot. This is reference
+cross-checking, not Wii U hardware verification. The resolver is still not
+connected to shader invocation inputs, and fetch-instruction decoding remains
+unresolved.

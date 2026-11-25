@@ -168,6 +168,12 @@ constexpr std::uint32_t gx2_fetch_shader_struct_size = 0x20U;
 constexpr std::uint32_t gx2_vertex_shader_struct_size = 0x134U;
 constexpr std::uint32_t gx2_vertex_shader_program_size_offset = 0xD0U;
 constexpr std::uint32_t gx2_vertex_shader_program_address_offset = 0xD4U;
+constexpr std::uint32_t gx2_vertex_shader_semantic_clear_offset = 0x3CU;
+constexpr std::uint32_t gx2_vertex_shader_semantic_count_offset = 0x40U;
+constexpr std::uint32_t gx2_vertex_shader_semantic_values_offset = 0x44U;
+constexpr std::uint32_t gx2_vertex_shader_semantic_register_base = 0x00028380U;
+constexpr std::uint32_t gx2_vertex_shader_semantic_clear_register = 0x000288E0U;
+constexpr std::uint32_t gx2_vertex_shader_semantic_count = 32U;
 // GX2PixelShader ends with a 16-byte GX2RBuffer at offset 0xD8.
 constexpr std::uint32_t gx2_pixel_shader_struct_size = 0xE8U;
 constexpr std::uint32_t gx2_pixel_shader_program_size_offset = 0xA4U;
@@ -6386,6 +6392,17 @@ void register_gx2_hle(HleDispatcher& dispatcher)
                 gx2_vertex_shader_program_address_offset,
                 "gx2::GX2SetVertexShader");
 
+            constexpr std::uint32_t register_stride = sizeof(std::uint32_t);
+            const std::uint32_t semantic_count = binding.descriptor_words[
+                gx2_vertex_shader_semantic_count_offset / sizeof(std::uint32_t)];
+            if (semantic_count > gx2_vertex_shader_semantic_count)
+            {
+                throw HleExecutionError(
+                    "gx2::GX2SetVertexShader: semantic count exceeds the 32-entry Latte table");
+            }
+
+            core.gx2.pending_commands.reserve(
+                core.gx2.pending_commands.size() + semantic_count + 2U);
             core.gx2.pending_commands.push_back({
                 Gx2CommandType::set_program_shader,
                 0U,
@@ -6397,6 +6414,30 @@ void register_gx2_hle(HleDispatcher& dispatcher)
                 std::nullopt,
                 std::nullopt,
                 binding});
+
+            const std::uint32_t semantic_clear = binding.descriptor_words[
+                gx2_vertex_shader_semantic_clear_offset / sizeof(std::uint32_t)];
+            core.gx2.pending_commands.push_back({
+                Gx2CommandType::set_context_register,
+                gx2_vertex_shader_semantic_clear_register,
+                semantic_clear});
+
+            for (std::uint32_t semantic_index = 0U;
+                 semantic_index < semantic_count;
+                 ++semantic_index)
+            {
+                const std::size_t descriptor_word =
+                    gx2_vertex_shader_semantic_values_offset / sizeof(std::uint32_t) +
+                    semantic_index;
+                const std::uint32_t semantic_register =
+                    gx2_vertex_shader_semantic_register_base +
+                    semantic_index * register_stride;
+                core.gx2.pending_commands.push_back({
+                    Gx2CommandType::set_context_register,
+                    semantic_register,
+                    binding.descriptor_words[descriptor_word]});
+            }
+
             core.gx2.program_shaders[
                 static_cast<std::size_t>(Gx2ProgramStage::vertex)] =
                 std::move(binding);

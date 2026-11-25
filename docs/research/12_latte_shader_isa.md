@@ -126,15 +126,25 @@ decode a guest fetch instruction's semantic field or prove that the mapping
 matches Latte hardware. It also does not model system-generated inputs or
 populate draw shader inputs.
 
-Affogato's own fetch-shader HLE has a second unresolved point: its generated
-word 0 is tagged as `VTX_INST_SEMANTIC`, while the word-1 low bits are described
-in code as a direct-GPR destination. The R700 ISA manual specifies these as
-alternative word-1 layouts. `GX2SetFetchShader` currently captures the bytes
-but does not synthesize semantic-table writes. Neither the generated HLE
-program nor the isolated semantic resolver is evidence that arbitrary guest
-fetch instructions are decoded correctly. Resolve this with a verified Wii U
-fetch-shader fixture or a directly cross-checked Cemu/Decaf path before wiring
-guest vertex bytes into shader GPRs.
+Decaf's GX2 reference implementation clarifies the table population path:
+[`gx2_shaders.h`](https://github.com/decaf-emu/decaf-emu/blob/master/src/libdecaf/src/cafe/libraries/gx2/gx2_shaders.h)
+places `sq_vtx_semantic_clear`, `num_sq_vtx_semantic`, and the 32-entry
+`sq_vtx_semantic` array at descriptor offsets `0x3C`, `0x40`, and `0x44`.
+Its `GX2SetVertexShader` implementation in
+[`gx2_shaders.cpp`](https://github.com/decaf-emu/decaf-emu/blob/master/src/libdecaf/src/cafe/libraries/gx2/gx2_shaders.cpp)
+emits the clear register followed by the declared table values. Affogato now
+captures those descriptor words, rejects a count above 32, and queues the
+corresponding register writes after the shader binding. Tests verify command
+ordering and that a draw snapshot contains the resulting table. This is
+cross-checked reference behavior, not Wii U hardware verification.
+
+The fetch-shader instruction encoding remains separate and unresolved:
+Affogato's `GX2InitFetchShaderEx` generated word 0 is tagged
+`VTX_INST_SEMANTIC`, while its word-1 low bits are described in code as a
+direct-GPR destination. The R700 ISA manual specifies these as alternative
+word-1 layouts. `GX2SetFetchShader` captures the bytes but does not decode them
+or populate shader GPRs. The semantic-table helper therefore does not yet
+establish arbitrary guest fetch behavior or populate guest shader inputs.
 
 ### Reference emulator research
 
