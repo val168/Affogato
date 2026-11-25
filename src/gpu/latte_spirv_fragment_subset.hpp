@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <initializer_list>
 #include <optional>
+#include <span>
 #include <stdexcept>
 #include <unordered_map>
 #include <vector>
@@ -334,14 +335,24 @@ public:
 
     [[nodiscard]] std::vector<std::uint32_t> emit(
         const LatteShaderIrProgram& program,
-        const LatteLinkedPixelShaderInput& linked_input)
+        std::span<const LatteLinkedPixelShaderInput> linked_inputs)
     {
-        validate_linked_input(linked_input);
-        create_module_declarations(linked_input.pixel_input_index);
+        validate_linked_inputs(linked_inputs);
+        create_module_declarations(linked_inputs);
         append_instruction(function_body_, 54U, {
             void_type_id_, function_id_, 0U, function_type_id_});
         append_instruction(function_body_, 248U, {label_id_});
-        load_input_register(linked_input.pixel_input_index);
+        for (const LatteLinkedPixelShaderInput& linked_input : linked_inputs)
+        {
+            if (linked_input.source == LattePixelInputSource::vertex_parameter)
+            {
+                load_input_register(linked_input.pixel_input_index);
+            }
+            else
+            {
+                load_default_input_register(linked_input);
+            }
+        }
 
         std::optional<LatteShaderIrExport> pixel_export;
         for (const LatteShaderIrInstruction& instruction : program.instructions)
@@ -387,18 +398,46 @@ public:
 private:
     static constexpr std::uint16_t input_gpr_count = 32U;
 
-    static void validate_linked_input(
-        const LatteLinkedPixelShaderInput& linked_input)
+    static void validate_linked_inputs(
+        std::span<const LatteLinkedPixelShaderInput> linked_inputs)
     {
-        if (linked_input.source != LattePixelInputSource::vertex_parameter ||
-            !linked_input.vertex_export_index.has_value() ||
-            linked_input.pixel_input_index >= input_gpr_count ||
-            linked_input.flat_shade || linked_input.centroid ||
-            linked_input.linear || linked_input.point_sprite_texture ||
-            linked_input.sample)
+        std::array<bool, input_gpr_count> assigned_registers{};
+        bool has_vertex_varying = false;
+        for (const LatteLinkedPixelShaderInput& linked_input : linked_inputs)
+        {
+            if (linked_input.pixel_input_index >= input_gpr_count ||
+                assigned_registers[linked_input.pixel_input_index])
+            {
+                throw std::invalid_argument(
+                    "Latte fragment SPIR-V subset received an invalid or duplicate input GPR");
+            }
+            assigned_registers[linked_input.pixel_input_index] = true;
+
+            if (linked_input.source == LattePixelInputSource::vertex_parameter)
+            {
+                if (!linked_input.vertex_export_index.has_value() ||
+                    linked_input.flat_shade || linked_input.centroid ||
+                    linked_input.linear || linked_input.point_sprite_texture ||
+                    linked_input.sample)
+                {
+                    throw std::invalid_argument(
+                        "Latte fragment SPIR-V subset requires perspective vertex inputs");
+                }
+                has_vertex_varying = true;
+                continue;
+            }
+            if (linked_input.source != LattePixelInputSource::default_value ||
+                linked_input.vertex_export_index.has_value())
+            {
+                throw std::invalid_argument(
+                    "Latte fragment SPIR-V subset received an unsupported input source");
+            }
+        }
+
+        if (!has_vertex_varying)
         {
             throw std::invalid_argument(
-                "Latte fragment SPIR-V subset requires one matched perspective input");
+                "Latte fragment SPIR-V matched-input subset requires a vertex varying");
         }
     }
 
@@ -413,6 +452,22 @@ private:
         std::initializer_list<std::uint32_t> operands)
     {
         const std::size_t word_count = operands.size() + 1U;
+        words.push_back(
+            (static_cast<std::uint32_t>(word_count) << 16U) | opcode);
+        words.insert(words.end(), operands.begin(), operands.end());
+    }
+
+    static void append_instruction(
+        std::vector<std::uint32_t>& words,
+        std::uint16_t opcode,
+        const std::vector<std::uint32_t>& operands)
+    {
+        const std::size_t word_count = operands.size() + 1U;
+        if (word_count > 0xFFFFU)
+        {
+            throw std::runtime_error(
+                "SPIR-V instruction exceeds the word-count limit");
+        }
         words.push_back(
             (static_cast<std::uint32_t>(word_count) << 16U) | opcode);
         words.insert(words.end(), operands.begin(), operands.end());
@@ -511,7 +566,8 @@ private:
         return result_id;
     }
 
-    void create_module_declarations(std::size_t input_location)
+    void create_module_declarations(
+        std::span<const LatteLinkedPixelShaderInput> linked_inputs)
     {
         void_type_id_ = allocate_id();
         function_type_id_ = allocate_id();
@@ -524,17 +580,32 @@ private:
         output_pointer_type_id_ = allocate_id();
         function_id_ = allocate_id();
         label_id_ = allocate_id();
-        input_variable_id_ = allocate_id();
         output_variable_id_ = allocate_id();
 
         append_instruction(capabilities_, 17U, {1U});
         append_instruction(memory_model_, 14U, {0U, 1U});
-        append_instruction(entry_point_, 15U, {
-            4U, function_id_, 0x6E69616DU, 0U,
-            input_variable_id_, output_variable_id_});
+        std::vector<std::uint32_t> entry_point_operands{
+            4U, function_id_, 0x6E69616DU, 0U};
+        for (const LatteLinkedPixelShaderInput& linked_input : linked_inputs)
+        {
+            if (linked_input.source != LattePixelInputSource::vertex_parameter)
+            {
+                continue;
+            }
+
+            const std::uint32_t input_variable_id = allocate_id();
+            input_variable_ids_[linked_input.pixel_input_index] =
+                input_variable_id;
+            entry_point_operands.push_back(input_variable_id);
+            append_instruction(annotations_, 71U, {
+                input_variable_id, 30U,
+                static_cast<std::uint32_t>(linked_input.pixel_input_index)});
+            append_instruction(globals_, 59U, {
+                input_pointer_type_id_, input_variable_id, 1U});
+        }
+        entry_point_operands.push_back(output_variable_id_);
+        append_instruction(entry_point_, 15U, entry_point_operands);
         append_instruction(execution_modes_, 16U, {function_id_, 7U});
-        append_instruction(annotations_, 71U, {
-            input_variable_id_, 30U, static_cast<std::uint32_t>(input_location)});
         append_instruction(annotations_, 71U, {
             output_variable_id_, 30U, 0U});
 
@@ -552,16 +623,16 @@ private:
         append_instruction(types_, 32U, {
             output_pointer_type_id_, 3U, vector_type_id_});
         append_instruction(globals_, 59U, {
-            input_pointer_type_id_, input_variable_id_, 1U});
-        append_instruction(globals_, 59U, {
             output_pointer_type_id_, output_variable_id_, 3U});
     }
 
     void load_input_register(std::size_t input_index)
     {
+        const std::uint32_t input_variable_id =
+            input_variable_ids_[input_index];
         const std::uint32_t input_vector_id = allocate_id();
         append_instruction(function_body_, 61U, {
-            vector_type_id_, input_vector_id, input_variable_id_});
+            vector_type_id_, input_vector_id, input_variable_id});
         for (std::uint32_t component = 0U; component < 4U; ++component)
         {
             const std::uint32_t float_component_id = allocate_id();
@@ -572,6 +643,18 @@ private:
             append_instruction(function_body_, 124U, {
                 uint_type_id_, register_value_id, float_component_id});
             registers_[input_index][component] = register_value_id;
+        }
+    }
+
+    void load_default_input_register(
+        const LatteLinkedPixelShaderInput& linked_input)
+    {
+        for (std::size_t component = 0U;
+             component < linked_input.default_component_bits.size();
+             ++component)
+        {
+            registers_[linked_input.pixel_input_index][component] =
+                constant(linked_input.default_component_bits[component]);
         }
     }
 
@@ -921,8 +1004,8 @@ private:
     std::uint32_t output_pointer_type_id_{};
     std::uint32_t function_id_{};
     std::uint32_t label_id_{};
-    std::uint32_t input_variable_id_{};
     std::uint32_t output_variable_id_{};
+    std::array<std::uint32_t, input_gpr_count> input_variable_ids_{};
     RegisterValues registers_{};
     std::unordered_map<std::uint32_t, std::uint32_t> constant_ids_;
     std::vector<std::uint32_t> capabilities_;
@@ -1052,7 +1135,17 @@ emit_latte_spirv_fragment_matched_alu_subset(
 {
     return detail::LatteSpirvFragmentMatchedAluBuilder{}.emit(
         program,
-        linked_input);
+        std::span<const LatteLinkedPixelShaderInput>(&linked_input, 1U));
+}
+
+[[nodiscard]] inline std::vector<std::uint32_t>
+emit_latte_spirv_fragment_matched_alu_subset(
+    const LatteShaderIrProgram& program,
+    std::span<const LatteLinkedPixelShaderInput> linked_inputs)
+{
+    return detail::LatteSpirvFragmentMatchedAluBuilder{}.emit(
+        program,
+        linked_inputs);
 }
 
 // Translate only constant-only OP2 MOV groups and a completed MRT0 pixel

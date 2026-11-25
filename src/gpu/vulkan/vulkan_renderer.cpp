@@ -608,17 +608,22 @@ decode_diagnostic_latte_spirv_pixel_shader(
                 pixel_input_controls);
         if (use_varying_passthrough)
         {
-            if (linked_inputs.size() != 1U ||
-                linked_inputs.front().source !=
-                    LattePixelInputSource::vertex_parameter)
+            const bool has_vertex_varying = std::ranges::any_of(
+                linked_inputs,
+                [](const LatteLinkedPixelShaderInput& linked_input)
+                {
+                    return linked_input.source ==
+                        LattePixelInputSource::vertex_parameter;
+                });
+            if (!has_vertex_varying)
             {
                 throw std::runtime_error(
-                    "Vulkan varying passthrough requires exactly one matched guest pixel input");
+                    "Vulkan matched fragment subset requires a guest vertex varying");
             }
             decoded_shader_code =
                 emit_latte_spirv_fragment_matched_alu_subset(
                     shader_ir,
-                    linked_inputs.front());
+                    linked_inputs);
         }
         else
         {
@@ -902,17 +907,25 @@ void VulkanRenderer::consume_guest_commands(
                     *draw_snapshot,
                     translated_fragment_shader_code,
                     true);
-            if (linked_inputs.size() != 1U ||
-                !linked_inputs.front().vertex_export_index.has_value())
+            std::vector<LatteSpirvVertexParameterOutput> parameter_outputs;
+            parameter_outputs.reserve(linked_inputs.size());
+            for (const LatteLinkedPixelShaderInput& linked_input : linked_inputs)
             {
-                throw std::runtime_error(
-                    "Vulkan varying diagnostic has no unique vertex parameter export");
-            }
-            const std::array<LatteSpirvVertexParameterOutput, 1U>
-                parameter_outputs{{{
-                    *linked_inputs.front().vertex_export_index,
+                if (linked_input.source !=
+                    LattePixelInputSource::vertex_parameter)
+                {
+                    continue;
+                }
+                if (!linked_input.vertex_export_index.has_value())
+                {
+                    throw std::runtime_error(
+                        "Vulkan varying diagnostic has no vertex parameter export");
+                }
+                parameter_outputs.push_back({
+                    *linked_input.vertex_export_index,
                     static_cast<std::uint32_t>(
-                        linked_inputs.front().pixel_input_index)}}};
+                        linked_input.pixel_input_index)});
+            }
             draw_vertices = decode_diagnostic_latte_spirv_vertex_draw(
                 *draw_snapshot,
                 translated_vertex_shader_code,

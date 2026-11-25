@@ -1208,9 +1208,37 @@ evidence rather than direct Latte validation. The helper accepts already
 interpolated parameter vectors and does not perform interpolation.
 `execute_latte_pixel_shader_subset()` feeds the resolved, contiguous PS GPR
 inputs into Affogato's existing straight-line CPU shader subset and returns
-its registers and normal exports. It remains a CPU reference path; no
-fragment SPIR-V inputs are emitted and it is not connected to the Vulkan
-pipeline.
+its registers and normal exports. It remains a separate CPU reference path;
+the Vulkan fragment emitter consumes the same linked input description through
+its own bounded lowering path.
+
+### Matched fragment input sets (2026-11-25)
+
+The diagnostic matched-input fragment emitter now accepts the complete linked
+pixel-input span. For each input GPR, a matched vertex parameter becomes a
+fragment `Input` variable whose `Location` is that `SPI_PS_INPUT_CNTL_n` index;
+an unmatched semantic becomes four raw binary32 component constants from its
+captured `DEFAULT_VAL`. This keeps the fragment shader's GPR numbering aligned
+with the input-control index and avoids declaring unmatched Vulkan stage inputs.
+Only perspective matched inputs are accepted: flat, centroid, linear,
+point-sprite, and sample modes still fail explicitly. Existing selected OP2
+ALU and MRT0 limits are unchanged.
+
+The Vulkan diagnostic draw policy now emits vertex parameter outputs for every
+matched input while retaining captured defaults for unmatched inputs. Tests
+cover a mixed matched-varying/default shader module, duplicate GPR rejection,
+and `spirv-val` validation. Existing one-varying guest-color-buffer readbacks
+still pass. Multi-varying and mixed-default framebuffer readback has not yet
+been added; this is not ordinary Latte draw execution or WWHD rendering.
+
+This follows Affogato's decoded `SPI_PS_INPUT_CNTL_n` linkage model and is
+consistent with the issue report for Cemu [#2029](https://github.com/cemu-project/Cemu/issues/2029),
+which describes missing producer semantics as inputs populated from
+`DEFAULT_VAL`. The issue is implementation evidence, not a hardware
+specification. AMD's related [R700 register documentation](https://docs.amd.com/api/khub/documents/2ZrqL_eSnIV39R0_tg_OwQ/content)
+describes pixel inputs supplied through interpolation and parameter-cache
+state; this cross-family material does not independently establish Espresso
+interpolation behavior.
 
 Cemu's [`LatteShader_CreatePSInputTable()`](https://github.com/cemu-project/Cemu/blob/main/src/Cafe/HW/Latte/Core/LatteShader.cpp#L209)
 is a useful architectural comparison: it walks active PS input controls,

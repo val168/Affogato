@@ -1,5 +1,21 @@
 # Affogato Development Status
 
+## Matched fragment input sets in SPIR-V (2026-11-25)
+
+The matched vertex/fragment diagnostic path now accepts the complete linked
+pixel-input set. Each perspective vertex parameter maps to a fragment input
+location and corresponding vertex output; inputs without a producer are
+folded from their captured `DEFAULT_VAL` bits into fragment GPR constants.
+Duplicate/out-of-range PS GPR mappings and unsupported interpolation modes
+remain explicit errors. The guest ALU subset and MRT0 export constraints are
+unchanged.
+
+Synthetic modules with multiple varyings and with a varying plus a default
+input pass `spirv-val`, and duplicate-input rejection is covered. Existing
+one-varying Vulkan readbacks pass. The combined and multi-varying output has
+not yet been exercised through framebuffer readback, nor does this establish
+ordinary Latte draw execution or WWHD rendering.
+
 ## GX2 renderer draw-snapshot batch lifetime (2026-11-25)
 
 `VulkanRenderer::consume_guest_commands()` clears its prior draw snapshots

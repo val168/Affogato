@@ -152,6 +152,29 @@ void write_module(const char* path, std::span<const std::uint32_t> module)
     return false;
 }
 
+[[nodiscard]] bool module_contains_constant_bits(
+    std::span<const std::uint32_t> module,
+    std::uint32_t expected_bits)
+{
+    for (std::size_t word_offset = 5U; word_offset < module.size();)
+    {
+        const std::uint32_t instruction = module[word_offset];
+        const std::size_t word_count = instruction >> 16U;
+        if (word_count == 0U || word_count > module.size() - word_offset)
+        {
+            return false;
+        }
+        if (static_cast<std::uint16_t>(instruction & 0xFFFFU) == 43U &&
+            word_count == 4U &&
+            module[word_offset + 3U] == expected_bits)
+        {
+            return true;
+        }
+        word_offset += word_count;
+    }
+    return false;
+}
+
 [[nodiscard]] std::vector<std::uint32_t> read_float_constants(
     std::span<const std::uint32_t> module)
 {
@@ -721,6 +744,65 @@ int main(int argc, char* argv[])
     assert(module_contains_opcode(matched_move_module, 62U));
     assert(module_contains_location(matched_move_module, 1U));
 
+    const std::array<affogato::gpu::LatteLinkedPixelShaderInput, 2U>
+        matched_and_default_inputs{{
+            matched_varying_input,
+            {2U, 0x32U,
+                affogato::gpu::LattePixelInputSource::default_value,
+                std::nullopt,
+                {0x3F000000U, 0x3F000000U, 0x3F000000U, 0x3F800000U},
+                false, false, false, false, false}}};
+    auto mixed_input_program = matched_move_program;
+    auto& mixed_input_clause = std::get<
+        affogato::gpu::LatteShaderIrAluClause>(
+            mixed_input_program.instructions[0U]);
+    for (affogato::gpu::LatteAluOp2Instruction& operation :
+         mixed_input_clause.groups[0U].instructions)
+    {
+        operation.opcode = affogato::gpu::latte_alu_op2_add_float_opcode;
+        operation.source1_selector = 2U;
+    }
+    const std::vector<std::uint32_t> mixed_input_module =
+        affogato::gpu::emit_latte_spirv_fragment_matched_alu_subset(
+            mixed_input_program,
+            matched_and_default_inputs);
+    assert(module_contains_location(mixed_input_module, 1U));
+    assert(!module_contains_location(mixed_input_module, 2U));
+    assert(module_contains_constant_bits(mixed_input_module, 0x3F000000U));
+    assert(module_contains_constant_bits(mixed_input_module, 0x3F800000U));
+    assert(module_contains_opcode(mixed_input_module, 129U));
+
+    const std::array<affogato::gpu::LatteLinkedPixelShaderInput, 2U>
+        multiple_varying_inputs{{
+            matched_varying_input,
+            {2U, 0x32U,
+                affogato::gpu::LattePixelInputSource::vertex_parameter,
+                3U, {}, false, false, false, false, false}}};
+    const std::vector<std::uint32_t> multiple_varying_module =
+        affogato::gpu::emit_latte_spirv_fragment_matched_alu_subset(
+            mixed_input_program,
+            multiple_varying_inputs);
+    assert(module_contains_location(multiple_varying_module, 1U));
+    assert(module_contains_location(multiple_varying_module, 2U));
+
+    bool rejected_duplicate_matched_input = false;
+    try
+    {
+        const std::array<affogato::gpu::LatteLinkedPixelShaderInput, 2U>
+            duplicate_inputs{{
+                matched_varying_input,
+                matched_varying_input}};
+        static_cast<void>(
+            affogato::gpu::emit_latte_spirv_fragment_matched_alu_subset(
+                mixed_input_program,
+                duplicate_inputs));
+    }
+    catch (const std::invalid_argument&)
+    {
+        rejected_duplicate_matched_input = true;
+    }
+    assert(rejected_duplicate_matched_input);
+
     auto matched_add_program = matched_move_program;
     auto& matched_add_clause = std::get<
         affogato::gpu::LatteShaderIrAluClause>(
@@ -1008,7 +1090,7 @@ int main(int argc, char* argv[])
     }
     assert(rejected_nonzero_mrt);
 
-    if (argc == 24 && std::string_view(argv[1]) == "--write-modules")
+    if (argc == 26 && std::string_view(argv[1]) == "--write-modules")
     {
         write_module(argv[2], module);
         write_module(argv[3], modified_module);
@@ -1032,6 +1114,8 @@ int main(int argc, char* argv[])
         write_module(argv[21], matched_integer_arithmetic_module);
         write_module(argv[22], matched_integer_logic_module);
         write_module(argv[23], matched_integer_comparison_module);
+        write_module(argv[24], mixed_input_module);
+        write_module(argv[25], multiple_varying_module);
     }
     return 0;
 }
