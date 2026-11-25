@@ -120,6 +120,18 @@ fetch-to-shader helper therefore tests a straight-line ALU program without a
 binding is available. The base-register/address relationship and Latte call
 behavior remain to be verified before normal-draw integration.
 
+Cemu provides a useful architecture comparison: its
+[`LatteDecompiler_ParseCFInstruction`](https://github.com/cemu-project/Cemu/blob/main/src/Cafe/HW/Latte/LegacyShaderDecompiler/LatteDecompiler.cpp)
+accepts `CALL_FS` as a no-op in the vertex-program lowering, while its shader
+context carries a separate parsed fetch-shader object. Its
+[`FetchShader.cpp`](https://github.com/cemu-project/Cemu/blob/main/src/Cafe/HW/Latte/Core/FetchShader.cpp)
+parses that fetch program independently. This is a translation boundary, not
+evidence that the hardware call has no effect. It supports a future design in
+which Affogato separately resolves the bound fetch program and only elides a
+validated `CALL_FS` after its fetch behavior has been modeled. No Cemu code was
+copied, and its treatment does not resolve Latte-specific call-target or
+condition behavior.
+
 These are **R700-family reference facts**, not yet verified Latte decoding
 rules. In particular, they do not establish how a GX2 shader's guest bytes map
 to decoder dwords on this implementation, nor which R700 encodings Latte
