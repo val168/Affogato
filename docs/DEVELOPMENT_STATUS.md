@@ -22,9 +22,10 @@ indirect-buffer recursion, list recording/copy APIs, raw ring processing, and
 GPU retirement remain unsupported. All supported PM4 draw forms require a
 zero draw initiator; other values fail explicitly. Debug and Release builds
 passed, with CTest 2/2 in both configurations. The hidden guest-triangle smoke
-test passed in Debug and Release. It includes unpredicated auto-index and
-indexed display-list draws, validating their command snapshots and diagnostic
-Vulkan submission on an NVIDIA GeForce RTX 5070 Laptop GPU. Its output uses
+test passed in Debug and Release. It includes unpredicated auto-index,
+memory-indexed, and immediate-indexed display-list draws, validating their
+command snapshots and diagnostic Vulkan submission on an NVIDIA GeForce RTX
+5070 Laptop GPU. Its output uses
 host shaders and does not verify Latte shader execution.
 The packet research is cross-checked against AMD's R6xx/R7xx family guides,
 Cemu, and Decaf; there is still no Latte-produced fixture. References disagree
