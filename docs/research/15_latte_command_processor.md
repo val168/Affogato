@@ -120,10 +120,11 @@ also models the count, initiator, and embedded index span. Cemu's
 `GX2DrawIndexedImmediateEx` helper provides implementation evidence for the
 payload packing, including separate U16 and U32 handling, but write-gather
 endian conversion is command-buffer specific. Affogato accepts only
-unpredicated `DRAW_INDEX_IMMD` with U32 index types 1 or 9. It reconstructs the
-original guest payload bytes from decoded DWORDs and reuses the existing
-synchronous index/vertex snapshot path; it does not interpret those bytes as
-Latte shader or render-target behavior. U16 immediate packets,
+unpredicated `DRAW_INDEX_IMMD` with U32 index types 1 or 9. It validates the
+embedded DWORD count in all modes; only diagnostic draw capture reconstructs
+the original guest payload bytes and uses the existing synchronous
+index/vertex snapshot path. It does not interpret those bytes as Latte shader
+or render-target behavior. U16 immediate packets,
 `DRAW_INDEX_IMMD_BE`, predicate evaluation, and Latte-produced packet fixtures
 remain unsupported or unverified. This implementation boundary is narrower
 than packet formats documented for related AMD generations.

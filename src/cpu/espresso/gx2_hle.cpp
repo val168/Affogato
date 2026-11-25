@@ -928,7 +928,8 @@ std::vector<Gx2Command> read_gx2_context_restore_commands(
 std::vector<Gx2Command> decode_gx2_pm4_display_list_commands(
     std::span<const std::uint8_t> display_list_bytes,
     const char* api_name,
-    bool allow_pm4_draw_packets = false)
+    bool allow_pm4_draw_packets = false,
+    bool capture_immediate_index_data = false)
 {
     if ((display_list_bytes.size() % sizeof(std::uint32_t)) != 0U)
     {
@@ -949,7 +950,8 @@ std::vector<Gx2Command> decode_gx2_pm4_display_list_commands(
             static_cast<std::uint32_t>(display_list_bytes[byte_offset + 3U]);
     }
 
-    const auto decoded = affogato::gpu::decode_latte_pm4_display_list(words);
+    const auto decoded = affogato::gpu::decode_latte_pm4_display_list(
+        words, capture_immediate_index_data);
     if (!decoded.succeeded())
     {
         const char* reason = "contains an unsupported packet";
@@ -1059,7 +1061,7 @@ std::vector<Gx2Command> decode_gx2_pm4_display_list_commands(
             }
 
             if (is_immediate_indexed_draw &&
-                decoded_command.immediate_index_words.size() !=
+                decoded_command.immediate_index_word_count !=
                     decoded_command.index_count)
             {
                 throw HleExecutionError(
@@ -1109,7 +1111,7 @@ std::vector<Gx2Command> decode_gx2_pm4_display_list_commands(
                 0U,
                 0U,
                 draw_call};
-            if (is_immediate_indexed_draw)
+            if (is_immediate_indexed_draw && capture_immediate_index_data)
             {
                 Gx2IndexBufferSnapshot index_snapshot{};
                 index_snapshot.index_type = *index_type;
@@ -5782,7 +5784,10 @@ void register_gx2_hle(HleDispatcher& dispatcher)
 
             std::vector<Gx2Command> display_list_commands =
                 decode_gx2_pm4_display_list_commands(
-                    display_list_bytes, api_name, true);
+                    display_list_bytes,
+                    api_name,
+                    true,
+                    core.gx2.capture_draw_vertex_data);
 
             for (Gx2Command& command : display_list_commands)
             {

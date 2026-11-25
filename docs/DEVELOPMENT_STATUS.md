@@ -34,11 +34,12 @@ on whether `INDEX_TYPE` updates one or two shadow slots and whether a zero
 Latte-specific evidence. Details are in
 [`research/15_latte_command_processor.md`](research/15_latte_command_processor.md).
 The PM4 decoder also accepts unpredicated `DRAW_INDEX_IMMD` packets for the
-32-bit index forms represented by GX2 index types 1 and 9. The embedded
-payload is snapshotted from the copied command words and follows the existing
-draw-time index and vertex snapshot path; the implementation rejects 16-bit
-immediate indices and payload/count mismatches. A focused HLE regression test
-verifies the captured bytes, base-vertex range, and rejection behavior. This
+32-bit index forms represented by GX2 index types 1 and 9. Packet structure
+and index counts are validated in all modes, while embedded index bytes and
+referenced vertex bytes are copied only when diagnostic draw capture is
+enabled. The implementation rejects 16-bit immediate indices and
+payload/count mismatches. A focused HLE regression test verifies captured
+bytes, base-vertex range, capture-disabled behavior, and rejection behavior. This
 remains a bounded command-capture feature: it does not execute guest shaders
 or render into a guest color buffer.
 The current PM4 packet implementation and research details are in

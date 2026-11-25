@@ -29267,6 +29267,20 @@ void gx2_direct_call_display_list_hle_tests()
     assert(immediate_draw_command.draw_vertex_data.front().byte_offset == 8U);
     assert(immediate_draw_command.draw_vertex_data.front().bytes.size() == 24U);
 
+    core.gx2.capture_draw_vertex_data = false;
+    const std::size_t commands_before_uncaptured_immediate_draw =
+        core.gx2.pending_commands.size();
+    const RunResult uncaptured_immediate_draw = invoke(
+        display_list_address,
+        static_cast<std::uint32_t>(immediate_indexed_draw_words.size() *
+                                   sizeof(std::uint32_t)));
+    assert(uncaptured_immediate_draw.reason == StopReason::instruction_limit);
+    assert(core.gx2.pending_commands.size() ==
+           commands_before_uncaptured_immediate_draw + 5U);
+    assert(!core.gx2.pending_commands.back().draw_index_data);
+    assert(core.gx2.pending_commands.back().draw_vertex_data.empty());
+    core.gx2.capture_draw_vertex_data = true;
+
     const auto commands_before_invalid_immediate_draw =
         core.gx2.pending_commands;
     auto mismatched_immediate_draw_words = immediate_indexed_draw_words;

@@ -65,6 +65,7 @@ struct LattePm4DisplayListCommand
     std::uint32_t draw_initiator{};
     std::uint32_t max_index_count{};
     std::uint64_t index_address{};
+    std::uint32_t immediate_index_word_count{};
     std::vector<std::uint32_t> immediate_index_words;
 
     bool operator==(const LattePm4DisplayListCommand&) const = default;
@@ -89,7 +90,8 @@ struct LattePm4DisplayListDecodeResult
 // are accepted.
 [[nodiscard]] inline LattePm4DisplayListDecodeResult
 decode_latte_pm4_display_list(
-    std::span<const std::uint32_t> words)
+    std::span<const std::uint32_t> words,
+    bool capture_immediate_indices = false)
 {
     constexpr std::uint32_t packet_type_mask = 0xC0000000U;
     constexpr std::uint32_t packet_type0 = 0x00000000U;
@@ -232,6 +234,7 @@ decode_latte_pm4_display_list(
                     0U,
                     0U,
                     0U,
+                    0U,
                     {}});
             }
 
@@ -283,6 +286,7 @@ decode_latte_pm4_display_list(
                 0U,
                 0U,
                 0U,
+                0U,
                 {}});
             ++word_offset;
             continue;
@@ -304,6 +308,7 @@ decode_latte_pm4_display_list(
                 {},
                 words[word_offset],
                 words[word_offset + 1U],
+                0U,
                 0U,
                 0U,
                 {}});
@@ -333,6 +338,7 @@ decode_latte_pm4_display_list(
                 words[word_offset + 4U],
                 words[word_offset],
                 index_address,
+                0U,
                 {}});
             word_offset += payload_word_count;
             continue;
@@ -354,10 +360,14 @@ decode_latte_pm4_display_list(
                 LattePm4DisplayListCommandType::draw_index_immediate;
             command.index_count = words[word_offset];
             command.draw_initiator = words[word_offset + 1U];
-            command.immediate_index_words.assign(
-                words.begin() + static_cast<std::ptrdiff_t>(word_offset + 2U),
-                words.begin() + static_cast<std::ptrdiff_t>(
-                    word_offset + payload_word_count));
+            command.immediate_index_word_count = payload_word_count - 2U;
+            if (capture_immediate_indices)
+            {
+                command.immediate_index_words.assign(
+                    words.begin() + static_cast<std::ptrdiff_t>(word_offset + 2U),
+                    words.begin() + static_cast<std::ptrdiff_t>(
+                        word_offset + payload_word_count));
+            }
             result.commands.push_back(std::move(command));
             word_offset += payload_word_count;
             continue;
@@ -423,6 +433,7 @@ decode_latte_pm4_display_list(
                     register_window_base +
                         (register_offset + register_index) * register_stride,
                     words[value_index]},
+                0U,
                 0U,
                 0U,
                 0U,
