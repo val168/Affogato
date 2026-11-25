@@ -87,11 +87,18 @@ real shader fixtures before implementation.
   source locations are
   [`LatteShader.cpp`](https://github.com/cemu-project/Cemu/blob/main/src/Cafe/HW/Latte/Core/LatteShader.cpp),
   [`LatteShader.h`](https://github.com/cemu-project/Cemu/blob/main/src/Cafe/HW/Latte/Core/LatteShader.h),
+  [`LatteInstructions.h`](https://github.com/cemu-project/Cemu/blob/main/src/Cafe/HW/Latte/ISA/LatteInstructions.h),
   `src/Cafe/HW/Latte/LegacyShaderDecompiler/`, and
   `src/Cafe/HW/Latte/ISA/`. These files are reference material, not code to
-  transplant.
+  transplant. The current CF record decoder checks the wider 7-bit opcode
+  before falling back to the overlapping 4-bit ALU opcode; its ALU-clause
+  count accessor reads bits 24:18 and adds one. This agrees with the R700
+  family manual's ALU count description, but remains reference-emulator
+  evidence rather than an independent Latte hardware measurement.
 - Decaf keeps its GPU implementation under
   [`src/libgpu`](https://github.com/decaf-emu/decaf-emu/tree/master/src/libgpu)
+  and its GFD raw shader-block reader at
+  [`gfd_read.cpp`](https://github.com/decaf-emu/decaf-emu/blob/master/src/libgfd/src/gfd_read.cpp)
   and publishes a separate
   [Wii U test repository](https://github.com/decaf-emu/wiiu-tests). Its
   architecture and test assumptions need review before any fixture is adapted.
@@ -111,6 +118,16 @@ real shader fixtures before implementation.
   Latte assembly and the `latte-assembler assemble` workflow. The author labels
   the guide incomplete; use it to construct a controlled workload, not as the
   authority for instruction encodings or full GX2 ABI semantics.
+- The Decaf Windows release publishes `latte-assembler.exe` alongside the
+  emulator ([release assets](https://github.com/decaf-emu/decaf-emu/releases)).
+  It was downloaded to a temporary directory and used to assemble the guide's
+  minimal pass-through VS/PS source into a GSH. The vertex program is stored
+  in a `VertexShaderProgram` GFD block (Decaf's `src/libgfd/src/gfd_read.cpp`
+  copies that block as raw bytes). This supplies a reproducible source-to-GSH
+  fixture without adding a build dependency or copying third-party code.
+  The inspected raw block begins `00 00 80 09 3C A0 00 00 88 06 00 94 ...`.
+  That observation is a generated-file fact; it does not by itself prove how
+  Affogato's captured `read32_be()` words map to Cemu's typed CF fields.
 - The [Decaf Wii U tests](https://github.com/decaf-emu/wiiu-tests) include
   shader-oriented guest tests, but their README requires `latte-assembler`,
   AMD GPU ShaderAnalyzer, and devkitPro with WUT. The repository is GPL-3.0.
@@ -186,16 +203,19 @@ snapshot/coherence requirements.
   guest workloads.
 - Which shader families an available WUT test actually emits and whether the
   current toolchain can build and run that test in this environment.
-- Whether a reproducible standalone Latte assembler is available through a
-  compatible license and usable without the Wii U RPX build toolchain.
+- How the assembled GSH instruction bytes map through the Wii U guest-memory
+  representation and Affogato's captured big-endian words to the typed CF
+  fields used by reference implementations. This must be proven with a
+  fixture-level decoder test before adopting the candidate word order.
 - Whether the R700 ALU clause address and count interpretation applies without
   Latte-specific adjustment to shader words captured by Affogato.
 
-The next shader milestone is a non-executing control-flow record decoder only
-after a known Latte fixture independently confirms word order, the end-of-
-program marker, ALU clause address units, and count encoding. Its initial
-contract should preserve raw words and reject unknown CF opcodes; it should not
-attempt to execute clauses, infer omitted slot behavior, or generate SPIR-V.
+The next shader milestone is a non-executing control-flow record decoder using
+the assembled pass-through shader as its first byte-order fixture. Test raw
+GSH bytes, Affogato-captured words, and decoded fields as separate stages. Add
+ALU clause address/count fixtures before decoding ALU headers. The decoder
+should preserve raw words and reject unknown CF opcodes; it should not execute
+clauses, infer omitted slot behavior, or generate SPIR-V.
 
 Next implementation work should begin with a source-backed decoder
 specification and fixtures for a small, fully understood instruction family.

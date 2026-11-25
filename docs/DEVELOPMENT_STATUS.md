@@ -328,7 +328,8 @@ with structural facts from AMD's R700-family manual and explicit limits on
 applying them to Latte. Shader program capture currently stores checked guest
 memory words via `read32_be()` and snapshots them with draw state; it does not
 establish the GPU microcode dword order. No `latte-assembler` or devkitPPC tool
-was found in the configured environment. A decoder is therefore deferred until
-a known Latte fixture verifies ordering, end-of-program, and clause addressing
-and count semantics. This is a research update only; no shader execution
-capability was added.
+is installed in the configured environment. A temporary copy of the published
+Decaf Windows release assembler produced the guide's pass-through GSH fixture;
+its raw shader block is now recorded in the research notes. This makes a
+fixture-level byte-order test possible, but the file bytes alone do not prove
+the mapping to decoder fields. No shader execution capability was added.
