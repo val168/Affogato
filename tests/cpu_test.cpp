@@ -31977,6 +31977,37 @@ void latte_control_flow_decoder_tests()
     assert(records[2U].opcode == LatteControlFlowOpcode::export_done);
     assert(records[2U].end_of_program);
 
+    // An assembled ALU fixture places a four-slot clause at DWORD offset
+    // 0x100 (32 eight-byte units) and ends the program after the clause.
+    std::array<std::uint32_t, 72U> captured_alu_guest_words{};
+    captured_alu_guest_words[1U] = 0x00008009U;
+    captured_alu_guest_words[2U] = 0x20000000U;
+    captured_alu_guest_words[3U] = 0x00000CA0U;
+    captured_alu_guest_words[4U] = 0x3CA00100U;
+    captured_alu_guest_words[5U] = 0x88062094U;
+
+    // The four 64-bit ALU slots begin at byte offset 0x100.
+    captured_alu_guest_words[64U] = 0x01000000U;
+    captured_alu_guest_words[65U] = 0x900C6000U;
+    captured_alu_guest_words[66U] = 0x01040000U;
+    captured_alu_guest_words[67U] = 0x900C6020U;
+    captured_alu_guest_words[68U] = 0x01080000U;
+    captured_alu_guest_words[69U] = 0x900C6040U;
+    captured_alu_guest_words[70U] = 0x010C0080U;
+    captured_alu_guest_words[71U] = 0x900C6060U;
+
+    const auto alu_records =
+        decode_latte_control_flow(captured_alu_guest_words);
+    assert(alu_records.size() == 3U);
+    assert(alu_records[1U].opcode == LatteControlFlowOpcode::alu_clause);
+    assert(alu_records[1U].word0 == 0x00000020U);
+    assert(alu_records[1U].word1 == 0xA00C0000U);
+    assert(alu_records[1U].clause_address_8byte_units == 0x20U);
+    assert(alu_records[1U].alu_slot_count == 4U);
+    assert(!alu_records[1U].end_of_program);
+    assert(alu_records[2U].opcode == LatteControlFlowOpcode::export_done);
+    assert(alu_records[2U].end_of_program);
+
     bool rejected_incomplete_record = false;
     try
     {
@@ -32001,6 +32032,40 @@ void latte_control_flow_decoder_tests()
         rejected_unknown_opcode = true;
     }
     assert(rejected_unknown_opcode);
+
+    bool rejected_unknown_alu_clause = false;
+    try
+    {
+        constexpr std::array<std::uint32_t, 4U> unsupported_alu_program{
+            0U,
+            std::byteswap(0x09800000U),
+            std::byteswap(0U),
+            std::byteswap(0xA40C0000U)};
+        static_cast<void>(decode_latte_control_flow(unsupported_alu_program));
+    }
+    catch (const std::runtime_error&)
+    {
+        rejected_unknown_alu_clause = true;
+    }
+    assert(rejected_unknown_alu_clause);
+
+    bool rejected_out_of_range_alu_clause = false;
+    try
+    {
+        constexpr std::array<std::uint32_t, 6U> out_of_range_alu_program{
+            0U,
+            std::byteswap(0x09800000U),
+            std::byteswap(0x00000004U),
+            std::byteswap(0xA00C0000U),
+            std::byteswap(0x00014000U),
+            std::byteswap(0x14200688U)};
+        static_cast<void>(decode_latte_control_flow(out_of_range_alu_program));
+    }
+    catch (const std::runtime_error&)
+    {
+        rejected_out_of_range_alu_clause = true;
+    }
+    assert(rejected_out_of_range_alu_clause);
 
     bool rejected_missing_end_marker = false;
     try

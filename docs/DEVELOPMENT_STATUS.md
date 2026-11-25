@@ -334,14 +334,15 @@ Cemu's legacy parser (`word1[29:23]` opcode, EOP at bit 21). Affogato's
 `std::byteswap` per DWORD. This establishes the capture conversion for the
 controlled fixture; no shader execution capability was added.
 
-## Latte control-flow record subset (2026-11-25)
+## Latte control-flow and ALU-clause header subset (2026-11-25)
 
 Added [`src/gpu/latte_shader_decoder.hpp`](../src/gpu/latte_shader_decoder.hpp)
-with a structural decoder for fixture-verified `CALL_FS`, `EXPORT`, and
-`EXPORT_DONE` records. It converts captured big-endian CPU words to Latte
-DWORDs, records word offsets and raw fields, and stops at EOP. Incomplete pairs,
-unknown opcodes, and missing EOP fail explicitly. Tests use the assembled
-pass-through GSH word sequence and cover those malformed cases. Debug and
-Release builds succeeded; CTest passed 2/2 in both configurations. This does
-not execute the shader, decode ALU clauses, generate SPIR-V, or render through
-guest shaders.
+with a structural decoder for fixture-verified `CALL_FS`, `EXPORT`,
+`EXPORT_DONE`, and ALU clause headers. It converts captured big-endian CPU
+words to Latte DWORDs, records word offsets/raw fields, extracts ALU clause
+addresses in eight-byte units and slot counts, checks clause ranges against the
+captured program, and stops at EOP. Tests use Decaf-assembler-produced GSH
+fixtures and cover malformed pairs, unsupported opcodes, missing EOP, and an
+out-of-range clause. Debug and Release builds succeeded; CTest passed 2/2 in
+both configurations. `git diff --check` is clean. The decoder does not inspect
+ALU slots, execute shaders, generate SPIR-V, or render through guest shaders.

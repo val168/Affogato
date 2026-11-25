@@ -6,11 +6,11 @@ Latte shaders are guest programs associated with GX2 vertex, geometry, and
 pixel stages. Affogato currently captures the stage descriptors and bounded
 program words when `GX2SetVertexShader`, `GX2SetGeometryShader`, or
 `GX2SetPixelShader` runs. `Gx2RegisterState::apply()` snapshots those bindings
-at each draw. A small structural control-flow record decoder now recognizes
-only the fixture-verified `CALL_FS`, `EXPORT`, and `EXPORT_DONE` subset; there
-is no ALU decoder, shader IR, guest shader executor, or SPIR-V generator. The
-diagnostic Vulkan triangle uses fixed host shaders and does not execute these
-captured guest programs.
+at each draw. A small structural control-flow record decoder recognizes
+fixture-verified `CALL_FS`, `EXPORT`, `EXPORT_DONE`, and one ALU-clause header
+encoding. There is no ALU slot decoder, shader IR, guest shader executor, or
+SPIR-V generator. The diagnostic Vulkan triangle uses fixed host shaders and
+does not execute these captured guest programs.
 
 Relevant local implementation:
 
@@ -28,8 +28,8 @@ Relevant local implementation:
   guest vertex/pixel shader ISA.
 - `src/gpu/latte_shader_decoder.hpp` converts the captured big-endian words
   to the little-endian Latte DWORD values represented in GFD shader code, then
-  decodes a narrow structural control-flow subset. It does not execute records
-  or decode ALU clauses.
+  decodes a narrow structural control-flow subset. It checks ALU clause header
+  ranges but does not decode or execute clause payloads.
 
 ## Evidence categories
 
@@ -168,7 +168,7 @@ real shader fixtures before implementation.
 | --- | --- | --- |
 | GX2 vertex/pixel/geometry descriptor capture | Implemented and tested as capture | HLE descriptor/program range checks and draw-time state snapshots |
 | Fetch-shader parsing | Narrow diagnostic subset | `latte_vertex_fetch.hpp`; generated VTX programs only |
-| Latte shader control-flow decoding | Partial | `latte_shader_decoder.hpp` decodes fixture-verified `CALL_FS`, `EXPORT`, and `EXPORT_DONE` records, including EOP; unknown opcodes and malformed streams fail explicitly. No branch, loop, clause execution, or ALU-header decoding yet. |
+| Latte shader control-flow decoding | Partial | `latte_shader_decoder.hpp` decodes fixture-verified `CALL_FS`, `EXPORT`, `EXPORT_DONE`, and `ALU` clause headers, including EOP and bounded clause ranges. Unknown opcodes and malformed streams fail explicitly. No branch/loop decoding or clause execution. |
 | Latte ALU decoding/execution | Missing | VLIW slot, writeback, predicate, and PV/PS semantics |
 | Vertex/pixel shader translation | Missing | Stage interfaces, exports, constants, textures, and SPIR-V backend |
 | Guest shader integration with Vulkan draws | Missing | Shader modules, pipeline cache, descriptor binding, render-target path |
@@ -233,15 +233,23 @@ snapshot/coherence requirements.
   Latte-specific adjustment to shader words captured by Affogato.
 
 The non-executing CF record decoder currently supports the pass-through
-fixture's `CALL_FS` and export records. Tests cover the Affogato-captured guest
-words, byte-swapped field words, opcode fields, EOP, incomplete records,
-unsupported opcodes, and missing EOP. Next, extend structural decoding to
-ALU-clause headers after adding an assembled ALU fixture for address/count
-fields. Do not execute clauses, infer omitted slot behavior, or generate
-SPIR-V in that step.
+fixture's `CALL_FS` and export records, plus a separately assembled ALU
+fixture's clause header. The ALU header uses the upper four opcode bits
+combined with `0x40`; the supported fixture resolves to opcode `0x48`. Its
+22-bit `word0` address is measured in eight-byte units, and the seven-bit
+`word1` count field is encoded as slot count minus one. The fixture places four
+64-bit slots at address `0x20`, ending exactly at the 288-byte program boundary.
+This is cross-checked against Cemu's current CF opcode/count/address extraction
+and the Decaf assembler output. The decoder checks that the referenced clause
+range fits in the captured program but does not decode clause contents.
 
-Next implementation work can begin with the verified fixture conversion and a
-source-backed decoder for this small CF subset. The pass-through shader alone
-does not establish complete shader decoding. Do not start SPIR-V emission until
-decoding, slot grouping, and expected architectural outputs have deterministic
-tests.
+Tests cover the Affogato-captured guest words, byte-swapped field words, opcode
+fields, EOP, incomplete records, unsupported CF and ALU opcodes, missing EOP,
+and an out-of-range ALU clause. Do not execute clauses, infer omitted slot
+behavior, or generate SPIR-V in this step.
+
+Next implementation work can begin by decoding ALU clause slots using an
+assembled instruction fixture and verified field semantics. The pass-through
+shader alone does not establish complete shader decoding. Do not start SPIR-V
+emission until decoding, slot grouping, and expected architectural outputs
+have deterministic tests.

@@ -15,7 +15,8 @@ enum class LatteControlFlowOpcode : std::uint8_t
 {
     call_fetch_shader = 0x13U,
     export_data = 0x27U,
-    export_done = 0x28U
+    export_done = 0x28U,
+    alu_clause = 0x48U
 };
 
 struct LatteControlFlowRecord
@@ -25,6 +26,8 @@ struct LatteControlFlowRecord
     std::uint32_t word1{};
     LatteControlFlowOpcode opcode{};
     bool end_of_program{};
+    std::uint32_t clause_address_8byte_units{};
+    std::uint32_t alu_slot_count{};
 
     bool operator==(const LatteControlFlowRecord&) const = default;
 };
@@ -59,8 +62,11 @@ decode_latte_control_flow(
             std::byteswap(guest_big_endian_words[word_offset]);
         const std::uint32_t word1 =
             std::byteswap(guest_big_endian_words[word_offset + 1U]);
-        const std::uint32_t raw_opcode =
+        const std::uint32_t raw_cf_opcode =
             (word1 >> opcode_shift) & opcode_mask;
+        const std::uint32_t raw_opcode = raw_cf_opcode < 0x40U
+            ? raw_cf_opcode
+            : (((word1 >> 26U) & 0x0FU) | 0x40U);
 
         LatteControlFlowOpcode opcode{};
         switch (raw_opcode)
@@ -75,6 +81,9 @@ decode_latte_control_flow(
         case static_cast<std::uint32_t>(LatteControlFlowOpcode::export_done):
             opcode = LatteControlFlowOpcode::export_done;
             break;
+        case static_cast<std::uint32_t>(LatteControlFlowOpcode::alu_clause):
+            opcode = LatteControlFlowOpcode::alu_clause;
+            break;
         default:
             throw std::runtime_error(
                 "Unsupported Latte shader control-flow opcode " +
@@ -82,9 +91,42 @@ decode_latte_control_flow(
                 std::to_string(word_offset));
         }
 
-        const bool end_of_program =
+        const bool is_alu_clause = opcode == LatteControlFlowOpcode::alu_clause;
+        const bool end_of_program = !is_alu_clause &&
             ((word1 >> end_of_program_shift) & 1U) != 0U;
-        records.push_back({word_offset, word0, word1, opcode, end_of_program});
+        std::uint32_t clause_address_8byte_units = 0U;
+        std::uint32_t alu_slot_count = 0U;
+
+        if (is_alu_clause)
+        {
+            constexpr std::uint32_t clause_address_mask = 0x003FFFFFU;
+            constexpr std::uint32_t alu_slot_count_shift = 18U;
+            constexpr std::uint32_t alu_slot_count_mask = 0x7FU;
+
+            clause_address_8byte_units = word0 & clause_address_mask;
+            alu_slot_count =
+                ((word1 >> alu_slot_count_shift) & alu_slot_count_mask) + 1U;
+
+            const std::uint64_t clause_end_8byte_units =
+                static_cast<std::uint64_t>(clause_address_8byte_units) +
+                alu_slot_count;
+            const std::uint64_t program_size_8byte_units =
+                guest_big_endian_words.size() / words_per_record;
+            if (clause_end_8byte_units > program_size_8byte_units)
+            {
+                throw std::runtime_error(
+                    "Latte shader ALU clause exceeds the captured program");
+            }
+        }
+
+        records.push_back({
+            word_offset,
+            word0,
+            word1,
+            opcode,
+            end_of_program,
+            clause_address_8byte_units,
+            alu_slot_count});
 
         if (end_of_program)
         {
