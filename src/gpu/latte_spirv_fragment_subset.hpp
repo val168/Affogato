@@ -18,6 +18,102 @@ namespace affogato::gpu
 namespace detail
 {
 
+class LatteSpirvFragmentVaryingPassthroughBuilder
+{
+public:
+    [[nodiscard]] std::vector<std::uint32_t> build(
+        const LatteLinkedPixelShaderInput& linked_input) const
+    {
+        if (linked_input.source != LattePixelInputSource::vertex_parameter ||
+            !linked_input.vertex_export_index.has_value() ||
+            linked_input.pixel_input_index >= 32U ||
+            linked_input.flat_shade || linked_input.centroid ||
+            linked_input.linear || linked_input.point_sprite_texture ||
+            linked_input.sample)
+        {
+            throw std::invalid_argument(
+                "Latte fragment varying passthrough requires one matched perspective input");
+        }
+
+        constexpr std::uint32_t void_type_id = 1U;
+        constexpr std::uint32_t function_type_id = 2U;
+        constexpr std::uint32_t float_type_id = 3U;
+        constexpr std::uint32_t vector_type_id = 4U;
+        constexpr std::uint32_t input_pointer_type_id = 5U;
+        constexpr std::uint32_t output_pointer_type_id = 6U;
+        constexpr std::uint32_t function_id = 7U;
+        constexpr std::uint32_t label_id = 8U;
+        constexpr std::uint32_t input_variable_id = 9U;
+        constexpr std::uint32_t output_variable_id = 10U;
+        constexpr std::uint32_t input_value_id = 11U;
+        constexpr std::uint32_t module_bound = 12U;
+
+        std::vector<std::uint32_t> module{
+            0x07230203U, 0x00010000U, 0U, module_bound, 0U};
+        append_instruction(module, 17U, {1U});
+        append_instruction(module, 14U, {0U, 1U});
+        append_instruction(module, 15U, {
+            4U, function_id, 0x6E69616DU, 0U,
+            input_variable_id, output_variable_id});
+        append_instruction(module, 16U, {function_id, 7U});
+        append_instruction(module, 71U, {
+            input_variable_id, 30U,
+            static_cast<std::uint32_t>(linked_input.pixel_input_index)});
+        append_instruction(module, 71U, {output_variable_id, 30U, 0U});
+        append_instruction(module, 19U, {void_type_id});
+        append_instruction(module, 33U, {
+            function_type_id, void_type_id});
+        append_instruction(module, 22U, {float_type_id, 32U});
+        append_instruction(module, 23U, {
+            vector_type_id, float_type_id, 4U});
+        append_instruction(module, 32U, {
+            input_pointer_type_id, 1U, vector_type_id});
+        append_instruction(module, 32U, {
+            output_pointer_type_id, 3U, vector_type_id});
+        append_instruction(module, 59U, {
+            input_pointer_type_id, input_variable_id, 1U});
+        append_instruction(module, 59U, {
+            output_pointer_type_id, output_variable_id, 3U});
+        append_instruction(module, 54U, {
+            void_type_id, function_id, 0U, function_type_id});
+        append_instruction(module, 248U, {label_id});
+        append_instruction(module, 61U, {
+            vector_type_id, input_value_id, input_variable_id});
+        append_instruction(module, 62U, {
+            output_variable_id, input_value_id});
+        append_instruction(module, 253U, {});
+        append_instruction(module, 56U, {});
+        return module;
+    }
+
+private:
+    static void append_instruction(
+        std::vector<std::uint32_t>& words,
+        std::uint16_t opcode,
+        std::initializer_list<std::uint32_t> operands)
+    {
+        const std::size_t word_count = operands.size() + 1U;
+        words.push_back(
+            (static_cast<std::uint32_t>(word_count) << 16U) | opcode);
+        words.insert(words.end(), operands.begin(), operands.end());
+    }
+};
+
+} // namespace detail
+
+// Diagnostic-only module that reads one linked perspective varying and
+// writes it to MRT0. It does not execute the guest fragment program.
+[[nodiscard]] inline std::vector<std::uint32_t>
+emit_latte_spirv_fragment_varying_passthrough_subset(
+    const LatteLinkedPixelShaderInput& linked_input)
+{
+    return detail::LatteSpirvFragmentVaryingPassthroughBuilder{}.build(
+        linked_input);
+}
+
+namespace detail
+{
+
 class LatteSpirvFragmentSubsetBuilder
 {
 public:

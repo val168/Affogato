@@ -120,6 +120,16 @@ interface and interpolation requirements are documented in the
 [Vulkan GLSL variable specification](https://docs.vulkan.org/glsl/latest/chapters/variables.html)
 and [Vulkan rasterization specification](https://docs.vulkan.org/spec/latest/chapters/primsrast.html).
 
+The explicit
+`emit_latte_spirv_fragment_varying_passthrough_subset()` fixture now emits a
+fragment `Input` at the linked pixel-input location, loads its `float4`, and
+writes it to MRT0. The fixture pairs that location with the producer-side
+parameter output and validates both modules using `spirv-val`. It rejects flat,
+no-perspective, centroid, sample, and point-sprite inputs until their GX2
+semantics are mapped. This is an explicit diagnostic passthrough, not guest
+pixel-shader execution; separately validating modules does not yet prove
+pipeline linkage or interpolated framebuffer pixels.
+
 ## Evidence categories
 
 ### Documented interfaces

@@ -1,5 +1,16 @@
 # Affogato Development Status
 
+## Explicit fragment varying passthrough module (2026-11-25)
+
+A diagnostic-only fragment module can now consume one semantic-linked vertex
+parameter at the pixel input's location and write the interpolated `float4` to
+MRT0. It accepts only the default perspective interpolation mode; flat,
+no-perspective, centroid, sample, and point-sprite inputs fail explicitly. The
+test confirms producer and consumer modules use the same location and validates
+both with `spirv-val`. The modules are not yet combined in a Vulkan pipeline,
+and framebuffer interpolation, guest fragment shader execution, ordinary draw
+routing, and WWHD output remain unverified.
+
 ## Vertex shader parameter exports to SPIR-V (2026-11-25)
 
 The bounded vertex SPIR-V subset now optionally emits selected, completed

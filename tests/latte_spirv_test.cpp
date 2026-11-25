@@ -128,6 +128,30 @@ void write_module(const char* path, std::span<const std::uint32_t> module)
     return false;
 }
 
+[[nodiscard]] bool module_contains_location(
+    std::span<const std::uint32_t> module,
+    std::uint32_t location)
+{
+    for (std::size_t word_offset = 5U; word_offset < module.size();)
+    {
+        const std::uint32_t instruction = module[word_offset];
+        const std::size_t word_count = instruction >> 16U;
+        if (word_count == 0U || word_count > module.size() - word_offset)
+        {
+            return false;
+        }
+        if (static_cast<std::uint16_t>(instruction & 0xFFFFU) == 71U &&
+            word_count == 4U &&
+            module[word_offset + 2U] == 30U &&
+            module[word_offset + 3U] == location)
+        {
+            return true;
+        }
+        word_offset += word_count;
+    }
+    return false;
+}
+
 [[nodiscard]] std::vector<std::uint32_t> read_float_constants(
     std::span<const std::uint32_t> module)
 {
@@ -649,6 +673,35 @@ int main(int argc, char* argv[])
     }
     assert(rejected_matched_fragment_input);
 
+    const affogato::gpu::LatteLinkedPixelShaderInput matched_varying_input{
+        1U, 0x31U,
+        affogato::gpu::LattePixelInputSource::vertex_parameter,
+        2U, {}, false, false, false, false, false};
+    const std::vector<std::uint32_t> varying_passthrough_module =
+        affogato::gpu::emit_latte_spirv_fragment_varying_passthrough_subset(
+            matched_varying_input);
+    assert(module_contains_opcode(varying_passthrough_module, 15U));
+    assert(module_contains_opcode(varying_passthrough_module, 16U));
+    assert(module_contains_opcode(varying_passthrough_module, 61U));
+    assert(module_contains_opcode(varying_passthrough_module, 62U));
+    assert(module_contains_location(parameter_output_module, 1U));
+    assert(module_contains_location(varying_passthrough_module, 1U));
+
+    bool rejected_flat_varying_passthrough = false;
+    try
+    {
+        auto flat_input = matched_varying_input;
+        flat_input.flat_shade = true;
+        static_cast<void>(
+            affogato::gpu::emit_latte_spirv_fragment_varying_passthrough_subset(
+                flat_input));
+    }
+    catch (const std::invalid_argument&)
+    {
+        rejected_flat_varying_passthrough = true;
+    }
+    assert(rejected_flat_varying_passthrough);
+
     auto swizzled_fragment = fragment_program;
     auto& swizzled_export = std::get<
         affogato::gpu::LatteShaderIrExport>(
@@ -741,7 +794,7 @@ int main(int argc, char* argv[])
     }
     assert(rejected_nonzero_mrt);
 
-    if (argc == 15 && std::string_view(argv[1]) == "--write-modules")
+    if (argc == 16 && std::string_view(argv[1]) == "--write-modules")
     {
         write_module(argv[2], module);
         write_module(argv[3], modified_module);
@@ -756,6 +809,7 @@ int main(int argc, char* argv[])
         write_module(argv[12], fragment_module);
         write_module(argv[13], default_input_fragment_module);
         write_module(argv[14], parameter_output_module);
+        write_module(argv[15], varying_passthrough_module);
     }
     return 0;
 }
