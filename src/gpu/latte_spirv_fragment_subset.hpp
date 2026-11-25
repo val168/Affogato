@@ -416,7 +416,7 @@ private:
             if (linked_input.source == LattePixelInputSource::vertex_parameter)
             {
                 if (!linked_input.vertex_export_index.has_value() ||
-                    linked_input.flat_shade || linked_input.centroid ||
+                    linked_input.flat_shade ||
                     linked_input.point_sprite_texture ||
                     linked_input.sample)
                 {
@@ -604,6 +604,11 @@ private:
             {
                 append_instruction(annotations_, 71U, {
                     input_variable_id, 13U});
+            }
+            if (linked_input.centroid)
+            {
+                append_instruction(annotations_, 71U, {
+                    input_variable_id, 16U});
             }
             append_instruction(globals_, 59U, {
                 input_pointer_type_id_, input_variable_id, 1U});

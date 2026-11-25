@@ -1220,9 +1220,9 @@ fragment `Input` variable whose `Location` is that `SPI_PS_INPUT_CNTL_n` index;
 an unmatched semantic becomes four raw binary32 component constants from its
 captured `DEFAULT_VAL`. This keeps the fragment shader's GPR numbering aligned
 with the input-control index and avoids declaring unmatched Vulkan stage inputs.
-Perspective and decoded linear interpolation are supported. Flat, centroid,
-point-sprite, and sample modes still fail explicitly. Existing selected OP2
-ALU and MRT0 limits are unchanged.
+Perspective, decoded linear interpolation, and centroid sampling are supported.
+Flat, point-sprite, and sample modes still fail explicitly. Existing selected
+OP2 ALU and MRT0 limits are unchanged.
 
 The Vulkan diagnostic draw policy now emits vertex parameter outputs for every
 matched input while retaining captured defaults for unmatched inputs. Tests
@@ -1249,9 +1249,23 @@ SPIR-V fixtures for both stages pass `spirv-val`, and a controlled guest draw
 with the decoded `SEL_LINEAR` bit passes the Vulkan color-buffer readback. Its
 vertices have equal clip-space W, so the test verifies descriptor decoding,
 stage linkage, and execution but does not distinguish linear from
-perspective-correct numerical interpolation. Flat shading remains deferred
-until Affogato captures and matches the guest provoking-vertex convention.
-Centroid, sample, and point-sprite inputs also remain unsupported. The Vulkan
+perspective-correct numerical interpolation.
+
+### Centroid interpolation position (2026-11-25)
+
+The decoded `SEL_CENTROID` input-control bit now decorates the corresponding
+fragment `Input` with SPIR-V `Centroid`. The AMD [Evergreen 3D register
+reference](https://www.amd.com/content/dam/amd/en/documents/radeon-tech-docs/programmer-references/evergreen_3D_registers_v2.pdf)
+documents `SEL_CENTROID` as selecting IJ data sampled at the pixel centroid;
+this is related-family evidence, not direct Espresso confirmation. Vulkan's
+shader specification defines the `Centroid` constraint on the fragment input.
+Generated SPIR-V passes `spirv-val`, and a controlled guest draw reaches Vulkan
+buffer readback with the qualifier enabled. This does not compare covered-edge
+sample positions against pixel-center interpolation.
+
+Flat shading remains deferred until Affogato captures and matches the guest
+provoking-vertex convention. Sample and point-sprite inputs also remain
+unsupported. The Vulkan
 [shader interface and interpolation rules](https://docs.vulkan.org/spec/latest/chapters/shaders.html)
 and [SPIR-V `NoPerspective` decoration](https://registry.khronos.org/SPIR-V/specs/unified1/SPIRV.html)
 were used as backend requirements.
