@@ -167,6 +167,18 @@ Wii U hardware. See [`research/12_latte_shader_isa.md`](research/12_latte_shader
 
 ## Current implementation checkpoint (2026-11-25)
 
+Opt-in draw capture now snapshots the supported RGBA8 contents of bound GX2
+color target 0 at the HLE draw boundary. The snapshot travels with its draw
+command, so later guest writes cannot change the renderer's source bytes. The
+capture policy is disabled by default and is preserved across `GX2Init`.
+Unsupported descriptors and inaccessible guest image ranges are carried as
+explicit failed snapshot statuses. Direct GX2 draw HLE calls and decoded PM4
+display-list draws both capture this data when enabled. Tests cover successful
+capture, immutability, unsupported layout, and unmapped guest memory. Debug and
+Release builds succeeded and CTest passed 6/6 in each configuration. This only
+provides draw-time input for a future offscreen-target path: draws still do not
+write results back to guest color-buffer memory.
+
 `GX2SetContextState` and `GX2DirectCallDisplayList` share a bounded PM4
 decoder. It accepts Type-0 writes in supported config/context and
 control-constant windows, Type-2 filler, Type-3 NOP, register-set packets,

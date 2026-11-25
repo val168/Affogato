@@ -903,6 +903,49 @@ std::uint64_t validate_rgba8_color_buffer(
     return source_size;
 }
 
+[[nodiscard]] Gx2ColorBufferSnapshot capture_color_buffer_snapshot(
+    const EspressoCore& core,
+    std::uint32_t target,
+    const Gx2ColorBufferState& color_buffer)
+{
+    Gx2ColorBufferSnapshot snapshot{};
+    snapshot.target = target;
+    snapshot.descriptor = color_buffer;
+
+    std::uint64_t image_size = 0U;
+    try
+    {
+        image_size = validate_rgba8_color_buffer(
+            color_buffer, "gx2 draw color-buffer snapshot");
+    }
+    catch (const HleExecutionError&)
+    {
+        snapshot.status = Gx2ColorBufferSnapshotStatus::unsupported_layout;
+        return snapshot;
+    }
+
+    if (image_size > std::numeric_limits<std::size_t>::max())
+    {
+        snapshot.status = Gx2ColorBufferSnapshotStatus::invalid_guest_memory;
+        return snapshot;
+    }
+
+    snapshot.bytes.resize(static_cast<std::size_t>(image_size));
+    try
+    {
+        core.memory.read_bytes(color_buffer.image_address, snapshot.bytes);
+    }
+    catch (const GuestMemoryFault&)
+    {
+        snapshot.bytes.clear();
+        snapshot.status = Gx2ColorBufferSnapshotStatus::invalid_guest_memory;
+        return snapshot;
+    }
+
+    snapshot.status = Gx2ColorBufferSnapshotStatus::captured;
+    return snapshot;
+}
+
 [[nodiscard]] std::uint8_t quantize_unorm8(float value, const char* api_name)
 {
     if (std::isnan(value))
@@ -2979,6 +3022,20 @@ Gx2RuntimeState initialize_gx2(EspressoCore& core, std::uint32_t attribute_addre
 
 void register_gx2_hle(HleDispatcher& dispatcher)
 {
+    const auto capture_draw_color_buffer_data = [](
+        const EspressoCore& core) {
+        std::vector<Gx2ColorBufferSnapshot> snapshots;
+        if (!core.gx2.capture_draw_color_buffer_data ||
+            !core.gx2.color_buffer_descriptors[0U])
+        {
+            return snapshots;
+        }
+
+        snapshots.push_back(capture_color_buffer_snapshot(
+            core, 0U, *core.gx2.color_buffer_descriptors[0U]));
+        return snapshots;
+    };
+
     const auto capture_non_indexed_vertex_data = [](
         const EspressoCore& core,
         const Gx2DrawCall& draw_call) {
@@ -3191,6 +3248,7 @@ void register_gx2_hle(HleDispatcher& dispatcher)
     };
 
     const auto submit_supported_display_list = [
+        capture_draw_color_buffer_data,
         capture_non_indexed_vertex_data,
         capture_indexed_draw_data,
         capture_indexed_vertex_data](EspressoCore& core, const char* api_name) {
@@ -3261,6 +3319,9 @@ void register_gx2_hle(HleDispatcher& dispatcher)
             {
                 continue;
             }
+
+            command.draw_color_buffer_data =
+                capture_draw_color_buffer_data(core);
 
             if (!command.draw_call->indexed)
             {
@@ -3924,12 +3985,16 @@ void register_gx2_hle(HleDispatcher& dispatcher)
                 core.gx2.host_vsync_pacing_enabled;
             const bool capture_draw_vertex_data =
                 core.gx2.capture_draw_vertex_data;
+            const bool capture_draw_color_buffer_data =
+                core.gx2.capture_draw_color_buffer_data;
             Gx2RuntimeState initialized = initialize_gx2(core, attributes);
             // These host execution policies are configured by the launch path,
             // not by guest GX2 initialization; preserve them across state setup.
             initialized.host_vsync_pacing_enabled =
                 host_vsync_pacing_enabled;
             initialized.capture_draw_vertex_data = capture_draw_vertex_data;
+            initialized.capture_draw_color_buffer_data =
+                capture_draw_color_buffer_data;
             core.gx2 = initialized;
             // GX2Init is void: preserve all guest GPRs including r3.
         });
@@ -6870,7 +6935,8 @@ void register_gx2_hle(HleDispatcher& dispatcher)
     dispatcher.register_function(
         "gx2",
         "GX2DrawEx",
-        [capture_non_indexed_vertex_data](EspressoCore& core) {
+        [capture_draw_color_buffer_data,
+         capture_non_indexed_vertex_data](EspressoCore& core) {
             // Snapshot bound vertex bytes now; the frontend consumes the
             // command asynchronously after guest memory may have changed.
             const Gx2DrawCall draw_call{
@@ -6886,13 +6952,17 @@ void register_gx2_hle(HleDispatcher& dispatcher)
                 draw_call};
             command.draw_vertex_data =
                 capture_non_indexed_vertex_data(core, draw_call);
+            command.draw_color_buffer_data =
+                capture_draw_color_buffer_data(core);
             core.gx2.pending_commands.push_back(std::move(command));
         });
 
     dispatcher.register_function(
         "gx2",
         "GX2DrawIndexedEx",
-        [capture_indexed_draw_data, capture_indexed_vertex_data](EspressoCore& core) {
+        [capture_draw_color_buffer_data,
+         capture_indexed_draw_data,
+         capture_indexed_vertex_data](EspressoCore& core) {
             const Gx2DrawCall draw_call{
                 core.state.gpr[3], core.state.gpr[4], true,
                 core.state.gpr[5], core.state.gpr[6], 0U,
@@ -6911,13 +6981,16 @@ void register_gx2_hle(HleDispatcher& dispatcher)
                 command.draw_vertex_data = capture_indexed_vertex_data(
                     core, draw_call, *command.draw_index_data);
             }
+            command.draw_color_buffer_data =
+                capture_draw_color_buffer_data(core);
             core.gx2.pending_commands.push_back(std::move(command));
         });
 
     dispatcher.register_function(
         "gx2",
         "GX2DrawEx2",
-        [capture_non_indexed_vertex_data](EspressoCore& core) {
+        [capture_draw_color_buffer_data,
+         capture_non_indexed_vertex_data](EspressoCore& core) {
             // Preserve the base-instance value with the same draw-time bytes
             // captured for GX2DrawEx.
             const Gx2DrawCall draw_call{
@@ -6933,13 +7006,17 @@ void register_gx2_hle(HleDispatcher& dispatcher)
                 draw_call};
             command.draw_vertex_data =
                 capture_non_indexed_vertex_data(core, draw_call);
+            command.draw_color_buffer_data =
+                capture_draw_color_buffer_data(core);
             core.gx2.pending_commands.push_back(std::move(command));
         });
 
     dispatcher.register_function(
         "gx2",
         "GX2DrawIndexedEx2",
-        [capture_indexed_draw_data, capture_indexed_vertex_data](EspressoCore& core) {
+        [capture_draw_color_buffer_data,
+         capture_indexed_draw_data,
+         capture_indexed_vertex_data](EspressoCore& core) {
             const Gx2DrawCall draw_call{
                 core.state.gpr[3], core.state.gpr[4], true,
                 core.state.gpr[5], core.state.gpr[6], 0U,
@@ -6959,13 +7036,17 @@ void register_gx2_hle(HleDispatcher& dispatcher)
                 command.draw_vertex_data = capture_indexed_vertex_data(
                     core, draw_call, *command.draw_index_data);
             }
+            command.draw_color_buffer_data =
+                capture_draw_color_buffer_data(core);
             core.gx2.pending_commands.push_back(std::move(command));
         });
 
     dispatcher.register_function(
         "gx2",
         "GX2DrawIndexedImmediateEx",
-        [capture_indexed_draw_data, capture_indexed_vertex_data](EspressoCore& core) {
+        [capture_draw_color_buffer_data,
+         capture_indexed_draw_data,
+         capture_indexed_vertex_data](EspressoCore& core) {
             // Capture the immediate index bytes and referenced vertices before
             // the asynchronous frontend can observe later guest writes.
             const Gx2DrawCall draw_call{
@@ -6986,6 +7067,8 @@ void register_gx2_hle(HleDispatcher& dispatcher)
                 command.draw_vertex_data = capture_indexed_vertex_data(
                     core, draw_call, *command.draw_index_data);
             }
+            command.draw_color_buffer_data =
+                capture_draw_color_buffer_data(core);
             core.gx2.pending_commands.push_back(std::move(command));
         });
 

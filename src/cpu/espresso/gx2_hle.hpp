@@ -173,6 +173,24 @@ struct Gx2ColorBufferState
     bool operator==(const Gx2ColorBufferState&) const = default;
 };
 
+enum class Gx2ColorBufferSnapshotStatus
+{
+    captured,
+    unsupported_layout,
+    invalid_guest_memory
+};
+
+struct Gx2ColorBufferSnapshot
+{
+    std::uint32_t target{};
+    Gx2ColorBufferState descriptor;
+    Gx2ColorBufferSnapshotStatus status{
+        Gx2ColorBufferSnapshotStatus::unsupported_layout};
+    std::vector<std::uint8_t> bytes;
+
+    bool operator==(const Gx2ColorBufferSnapshot&) const = default;
+};
+
 struct Gx2ColorBufferBinding
 {
     std::uint32_t target{};
@@ -262,6 +280,7 @@ struct Gx2Command
     std::optional<Gx2ClearColorRequest> clear_color;
     std::vector<Gx2VertexBufferSnapshot> draw_vertex_data;
     std::optional<Gx2IndexBufferSnapshot> draw_index_data;
+    std::vector<Gx2ColorBufferSnapshot> draw_color_buffer_data;
     std::optional<Gx2ShaderModeRequest> shader_mode;
 
     constexpr Gx2Command() = default;
@@ -282,7 +301,8 @@ struct Gx2Command
         std::optional<Gx2ClearColorRequest> command_clear_color = std::nullopt,
         std::vector<Gx2VertexBufferSnapshot> command_draw_vertex_data = {},
         std::optional<Gx2IndexBufferSnapshot> command_draw_index_data = std::nullopt,
-        std::optional<Gx2ShaderModeRequest> command_shader_mode = std::nullopt)
+        std::optional<Gx2ShaderModeRequest> command_shader_mode = std::nullopt,
+        std::vector<Gx2ColorBufferSnapshot> command_draw_color_buffer_data = {})
         : type(command_type),
           register_address(command_register_address),
           value(command_value),
@@ -299,6 +319,7 @@ struct Gx2Command
           clear_color(command_clear_color),
           draw_vertex_data(std::move(command_draw_vertex_data)),
           draw_index_data(std::move(command_draw_index_data)),
+          draw_color_buffer_data(std::move(command_draw_color_buffer_data)),
           shader_mode(command_shader_mode)
     {
     }
@@ -347,6 +368,9 @@ struct Gx2RuntimeState
     // Copy draw-referenced vertex bytes at HLE time only when a consumer needs
     // immutable data. Disabled by default to avoid allocations in hot paths.
     bool capture_draw_vertex_data{};
+    // Capture supported color target 0 at draw time for the diagnostic GPU
+    // path. Disabled by default because each draw copies the target contents.
+    bool capture_draw_color_buffer_data{};
     bool gx2r_uses_default_allocator{};
     std::uint32_t gx2r_allocate_function{};
     std::uint32_t gx2r_free_function{};

@@ -30456,6 +30456,81 @@ void gx2_draw_ex_hle_tests()
     snapshot_core.memory.write8(snapshot_address + 8U, 0xFFU);
     assert(vertex_snapshot.bytes.front() == 9U);
 
+    snapshot_core.gx2.capture_draw_color_buffer_data = true;
+    constexpr std::uint32_t color_image_address = 0xA00U;
+    Gx2ColorBufferState color_buffer{};
+    color_buffer.dimension = 1U;
+    color_buffer.width = 2U;
+    color_buffer.height = 2U;
+    color_buffer.depth = 1U;
+    color_buffer.mip_levels = 1U;
+    color_buffer.format = 0x1AU;
+    color_buffer.use = 0x02U;
+    color_buffer.image_size = 16U;
+    color_buffer.image_address = color_image_address;
+    color_buffer.tile_mode =
+        affogato::gpu::gx2_tile_mode_linear_aligned;
+    color_buffer.alignment = 1U;
+    color_buffer.pitch = 2U;
+    color_buffer.view_num_slices = 1U;
+    snapshot_core.gx2.color_buffer_descriptors[0U] = color_buffer;
+    constexpr std::array<std::uint8_t, 16U> color_image_bytes{
+        0x10U, 0x20U, 0x30U, 0xFFU,
+        0x40U, 0x50U, 0x60U, 0xFFU,
+        0x70U, 0x80U, 0x90U, 0xFFU,
+        0xA0U, 0xB0U, 0xC0U, 0xFFU};
+    snapshot_core.memory.write_bytes(color_image_address, color_image_bytes);
+    snapshot_core.state.gpr[3] = 4U;
+    snapshot_core.state.gpr[4] = 1U;
+    snapshot_core.state.gpr[5] = 0U;
+    snapshot_core.state.gpr[6] = 0U;
+    snapshot_core.state.lr = return_address;
+    snapshot_core.state.cia = snapshot_core.hle.bind_import("gx2", "GX2DrawEx");
+    assert(snapshot_core.run(1U).reason == StopReason::instruction_limit);
+    const auto color_snapshot_commands = take_gx2_commands(snapshot_core.gx2);
+    assert(color_snapshot_commands.size() == 1U);
+    const Gx2Command& color_snapshot_command =
+        color_snapshot_commands.front();
+    assert(color_snapshot_command.draw_color_buffer_data.size() == 1U);
+    const Gx2ColorBufferSnapshot& color_snapshot =
+        color_snapshot_command.draw_color_buffer_data.front();
+    assert(color_snapshot.target == 0U);
+    assert(color_snapshot.descriptor == color_buffer);
+    assert(color_snapshot.status == Gx2ColorBufferSnapshotStatus::captured);
+    assert(color_snapshot.bytes == std::vector<std::uint8_t>(
+        color_image_bytes.begin(), color_image_bytes.end()));
+    snapshot_core.memory.write8(color_image_address, 0xFFU);
+    assert(color_snapshot.bytes.front() == 0x10U);
+
+    color_buffer.tile_mode = 0xFFFFFFFFU;
+    snapshot_core.gx2.color_buffer_descriptors[0U] = color_buffer;
+    snapshot_core.state.cia = snapshot_core.hle.bind_import("gx2", "GX2DrawEx");
+    assert(snapshot_core.run(1U).reason == StopReason::instruction_limit);
+    const auto unsupported_color_commands = take_gx2_commands(snapshot_core.gx2);
+    assert(unsupported_color_commands.size() == 1U);
+    assert(unsupported_color_commands.front().draw_color_buffer_data.size() == 1U);
+    assert(unsupported_color_commands.front()
+               .draw_color_buffer_data.front().status ==
+           Gx2ColorBufferSnapshotStatus::unsupported_layout);
+    assert(unsupported_color_commands.front()
+               .draw_color_buffer_data.front().bytes.empty());
+
+    color_buffer.tile_mode =
+        affogato::gpu::gx2_tile_mode_linear_aligned;
+    color_buffer.image_address = 0x1000U;
+    color_buffer.alignment = 1U;
+    snapshot_core.gx2.color_buffer_descriptors[0U] = color_buffer;
+    snapshot_core.state.cia = snapshot_core.hle.bind_import("gx2", "GX2DrawEx");
+    assert(snapshot_core.run(1U).reason == StopReason::instruction_limit);
+    const auto invalid_color_commands = take_gx2_commands(snapshot_core.gx2);
+    assert(invalid_color_commands.size() == 1U);
+    assert(invalid_color_commands.front().draw_color_buffer_data.size() == 1U);
+    assert(invalid_color_commands.front()
+               .draw_color_buffer_data.front().status ==
+           Gx2ColorBufferSnapshotStatus::invalid_guest_memory);
+    assert(invalid_color_commands.front()
+               .draw_color_buffer_data.front().bytes.empty());
+
     snapshot_core.state.gpr[3] = 4U;
     snapshot_core.state.gpr[4] = 5U;
     snapshot_core.state.gpr[5] = 1U;
