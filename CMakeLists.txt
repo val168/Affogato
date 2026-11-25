@@ -424,6 +424,11 @@ if(BUILD_TESTING)
             COMMAND affogato_frontend
                 --gx2-guest-triangle-mixed-alu-spirv-smoke-test
         )
+        add_test(
+            NAME affogato_vulkan_guest_integer_compare_readback
+            COMMAND affogato_frontend
+                --gx2-guest-triangle-integer-compare-spirv-smoke-test
+        )
     endif()
 
     add_executable(affogato_recompiler_benchmark

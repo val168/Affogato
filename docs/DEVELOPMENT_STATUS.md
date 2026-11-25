@@ -1,5 +1,16 @@
 # Affogato Development Status
 
+## Integer comparison shader Vulkan readback (2026-11-25)
+
+Added a controlled guest-word shader path that executes OP2 `SETGT_INT` with
+inline integer operands `0` and `1`, writes its false result to the position
+Z component, and preserves the guest X/Y/W inputs. The Vulkan test verifies the
+expected triangle pixels through framebuffer readback, exercising bytecode
+decode, SPIR-V generation, and shader execution. It uses the existing
+diagnostic fragment shader and controlled harness; it does not demonstrate
+ordinary GX2 draw routing, Latte hardware equivalence, or WWHD rendering.
+Debug and Release builds passed; both full CTest suites passed 26/26.
+
 ## OP2 integer ALU SPIR-V lowering (2026-11-25)
 
 The experimental vertex SPIR-V emitter now lowers OP2 integer AND/OR/XOR/NOT,
