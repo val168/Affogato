@@ -326,7 +326,7 @@ private:
     RegisterValues registers_{};
 };
 
-class LatteSpirvFragmentMatchedMoveBuilder
+class LatteSpirvFragmentMatchedAluBuilder
 {
 public:
     using RegisterValues =
@@ -356,7 +356,7 @@ public:
             if (pixel_export.has_value())
             {
                 throw std::runtime_error(
-                    "Latte fragment SPIR-V MOV subset supports one pixel export");
+                "Latte fragment SPIR-V subset supports one pixel export");
             }
             pixel_export = std::get<LatteShaderIrExport>(instruction);
         }
@@ -364,7 +364,7 @@ public:
         if (!pixel_export.has_value())
         {
             throw std::runtime_error(
-                "Latte fragment SPIR-V MOV subset requires an MRT0 export");
+                "Latte fragment SPIR-V subset requires an MRT0 export");
         }
         store_pixel_export(*pixel_export);
         append_instruction(function_body_, 253U, {});
@@ -398,7 +398,7 @@ private:
             linked_input.sample)
         {
             throw std::invalid_argument(
-                "Latte fragment SPIR-V MOV subset requires one matched perspective input");
+                "Latte fragment SPIR-V subset requires one matched perspective input");
         }
     }
 
@@ -499,15 +499,16 @@ private:
         return constant_id;
     }
 
-    [[nodiscard]] std::uint32_t move_source(
-        const LatteAluOp2Instruction& operation)
+    [[nodiscard]] std::uint32_t source_value(
+        std::uint16_t selector,
+        std::uint8_t channel)
     {
-        if (operation.source0_channel >= 4U)
+        if (channel >= 4U)
         {
             throw std::runtime_error(
-                "Latte fragment SPIR-V MOV source channel is out of range");
+                "Latte fragment SPIR-V source channel is out of range");
         }
-        switch (operation.source0_selector)
+        switch (selector)
         {
         case latte_alu_source_zero_selector:
             return constant(0U);
@@ -523,15 +524,13 @@ private:
             break;
         }
 
-        if (operation.source0_selector >= registers_.size() ||
-            !registers_[operation.source0_selector][
-                operation.source0_channel].has_value())
+        if (selector >= registers_.size() ||
+            !registers_[selector][channel].has_value())
         {
             throw std::runtime_error(
-                "Latte fragment SPIR-V MOV reads an unsupported or uninitialized GPR");
+                "Latte fragment SPIR-V instruction reads an unsupported or uninitialized GPR");
         }
-        return *registers_[operation.source0_selector][
-            operation.source0_channel];
+        return *registers_[selector][channel];
     }
 
     void execute_clause(const LatteShaderIrAluClause& clause)
@@ -540,7 +539,7 @@ private:
             clause.groups.empty())
         {
             throw std::runtime_error(
-                "Latte fragment SPIR-V MOV subset requires OP2-only clauses");
+                "Latte fragment SPIR-V subset requires OP2-only clauses");
         }
 
         for (const LatteAluOp2InstructionGroup& group : clause.groups)
@@ -548,7 +547,7 @@ private:
             if (group.instructions.size() != 4U)
             {
                 throw std::runtime_error(
-                    "Latte fragment SPIR-V MOV subset requires four-lane groups");
+                    "Latte fragment SPIR-V subset requires four-lane groups");
             }
             std::array<std::uint32_t, 4U> lane_values{};
             std::array<std::uint8_t, 4U> destination_gprs{};
@@ -556,7 +555,11 @@ private:
             {
                 const LatteAluOp2Instruction& operation =
                     group.instructions[lane];
-                if (operation.opcode != latte_alu_op2_move_opcode ||
+                const bool supported_opcode =
+                    operation.opcode == latte_alu_op2_move_opcode ||
+                    operation.opcode == latte_alu_op2_add_float_opcode ||
+                    operation.opcode == latte_alu_op2_multiply_ieee_opcode;
+                if (!supported_opcode ||
                     operation.destination_component != lane ||
                     operation.last_in_group != (lane == 3U) ||
                     operation.destination_gpr >= registers_.size() ||
@@ -572,9 +575,38 @@ private:
                     operation.index_mode != 0U || !operation.write_mask)
                 {
                     throw std::runtime_error(
-                        "Latte fragment SPIR-V MOV subset received an unsupported operation or modifier");
+                        "Latte fragment SPIR-V subset received an unsupported operation or modifier");
                 }
-                lane_values[lane] = move_source(operation);
+                const std::uint32_t source0_id = source_value(
+                    operation.source0_selector,
+                    operation.source0_channel);
+                if (operation.opcode == latte_alu_op2_move_opcode)
+                {
+                    lane_values[lane] = source0_id;
+                }
+                else
+                {
+                    const std::uint32_t source1_id = source_value(
+                        operation.source1_selector,
+                        operation.source1_channel);
+                    const std::uint32_t source0_float_id = allocate_id();
+                    append_instruction(function_body_, 124U, {
+                        float_type_id_, source0_float_id, source0_id});
+                    const std::uint32_t source1_float_id = allocate_id();
+                    append_instruction(function_body_, 124U, {
+                        float_type_id_, source1_float_id, source1_id});
+                    const std::uint32_t result_float_id = allocate_id();
+                    const std::uint16_t spirv_opcode =
+                        operation.opcode == latte_alu_op2_add_float_opcode
+                            ? 129U
+                            : 133U;
+                    append_instruction(function_body_, spirv_opcode, {
+                        float_type_id_, result_float_id,
+                        source0_float_id, source1_float_id});
+                    lane_values[lane] = allocate_id();
+                    append_instruction(function_body_, 124U, {
+                        uint_type_id_, lane_values[lane], result_float_id});
+                }
                 destination_gprs[lane] = operation.destination_gpr;
             }
 
@@ -598,7 +630,7 @@ private:
             fields.valid_pixel_mode || fields.whole_quad_mode)
         {
             throw std::runtime_error(
-                "Latte fragment SPIR-V MOV subset requires a completed MRT0 export");
+                "Latte fragment SPIR-V subset requires a completed MRT0 export");
         }
 
         std::array<std::uint32_t, 4U> color_components{};
@@ -784,14 +816,14 @@ private:
 
 } // namespace detail
 
-// Translate the captured guest pixel MOV subset with one matched perspective
-// input, preserving its SPIR-V stage location and guest MRT0 swizzle.
+// Translate matched-input MOV/ADD/MUL guest pixel subsets with one perspective
+// input, preserving its SPIR-V location and guest MRT0 swizzle.
 [[nodiscard]] inline std::vector<std::uint32_t>
-emit_latte_spirv_fragment_matched_move_subset(
+emit_latte_spirv_fragment_matched_alu_subset(
     const LatteShaderIrProgram& program,
     const LatteLinkedPixelShaderInput& linked_input)
 {
-    return detail::LatteSpirvFragmentMatchedMoveBuilder{}.emit(
+    return detail::LatteSpirvFragmentMatchedAluBuilder{}.emit(
         program,
         linked_input);
 }

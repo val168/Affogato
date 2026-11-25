@@ -1,6 +1,6 @@
 # Affogato Development Status
 
-## Matched varying and guest MOV through Vulkan readback (2026-11-25)
+## Matched varying and guest MOV/ADD/MUL through Vulkan readback (2026-11-25)
 
 The new `--gx2-guest-triangle-matched-varying-move-smoke-test` runs a controlled
 guest PPC/GX2 setup whose vertex shader exports a parameter with semantic
@@ -12,17 +12,21 @@ deterministic readback verifies a green gradient in the emulated color buffer
 and swapchain frame, and the scanout copy path remains in the test. This
 executes the tested guest MOV subset, while other guest pixel operations,
 ordinary game draw routing, and WWHD rendering remain unsupported.
-Full Debug and Release CTest passed 35/35.
+The matched fragment emitter also supports float ADD and IEEE MUL. Controlled
+guest shader fixtures execute MOV, ADD-by-zero, and MUL-by-one, each passing
+Vulkan readback for the same interpolated gradient. Their generated modules
+pass `spirv-val`. This verifies the bounded operations on these inputs, not
+general Latte arithmetic behavior. Full Debug and Release CTest passed 39/39.
 
 ## Fragment varying interface fixture (2026-11-25)
 
 An explicit fragment passthrough module remains as an interface fixture and
 accepts only the default perspective interpolation mode; flat, no-perspective,
 centroid, sample, and point-sprite inputs fail explicitly. The separate matched
-MOV module now consumes one linked `float4`, executes the captured four-lane
-guest MOV group, and applies the guest MRT0 swizzle. Both modules have
-`spirv-val` fixtures; only the MOV module is used by the controlled graphics
-integration.
+matched-input module consumes one linked `float4`, executes supported
+four-lane guest MOV, float ADD, or IEEE MUL groups, and applies the guest MRT0
+swizzle. Each generated module has a `spirv-val` fixture. The guest integration
+tests verify MOV, ADD-by-zero, and MUL-by-one through Vulkan readback.
 
 ## Vertex shader parameter exports to SPIR-V (2026-11-25)
 

@@ -712,7 +712,7 @@ int main(int argc, char* argv[])
         move.source0_selector = 1U;
     }
     const std::vector<std::uint32_t> matched_move_module =
-        affogato::gpu::emit_latte_spirv_fragment_matched_move_subset(
+        affogato::gpu::emit_latte_spirv_fragment_matched_alu_subset(
             matched_move_program,
             matched_varying_input);
     assert(module_contains_opcode(matched_move_module, 15U));
@@ -721,17 +721,54 @@ int main(int argc, char* argv[])
     assert(module_contains_opcode(matched_move_module, 62U));
     assert(module_contains_location(matched_move_module, 1U));
 
+    auto matched_add_program = matched_move_program;
+    auto& matched_add_clause = std::get<
+        affogato::gpu::LatteShaderIrAluClause>(
+            matched_add_program.instructions[0U]);
+    for (affogato::gpu::LatteAluOp2Instruction& operation :
+         matched_add_clause.groups[0U].instructions)
+    {
+        operation.opcode = affogato::gpu::latte_alu_op2_add_float_opcode;
+        operation.source1_selector =
+            affogato::gpu::latte_alu_source_zero_selector;
+        operation.source1_channel = operation.destination_component;
+    }
+    const std::vector<std::uint32_t> matched_add_module =
+        affogato::gpu::emit_latte_spirv_fragment_matched_alu_subset(
+            matched_add_program,
+            matched_varying_input);
+    assert(module_contains_opcode(matched_add_module, 129U));
+
+    auto matched_multiply_program = matched_move_program;
+    auto& matched_multiply_clause = std::get<
+        affogato::gpu::LatteShaderIrAluClause>(
+            matched_multiply_program.instructions[0U]);
+    for (affogato::gpu::LatteAluOp2Instruction& operation :
+         matched_multiply_clause.groups[0U].instructions)
+    {
+        operation.opcode =
+            affogato::gpu::latte_alu_op2_multiply_ieee_opcode;
+        operation.source1_selector =
+            affogato::gpu::latte_alu_source_one_float_selector;
+        operation.source1_channel = operation.destination_component;
+    }
+    const std::vector<std::uint32_t> matched_multiply_module =
+        affogato::gpu::emit_latte_spirv_fragment_matched_alu_subset(
+            matched_multiply_program,
+            matched_varying_input);
+    assert(module_contains_opcode(matched_multiply_module, 133U));
+
     auto unsupported_matched_move_program = matched_move_program;
     auto& unsupported_matched_move_clause = std::get<
         affogato::gpu::LatteShaderIrAluClause>(
             unsupported_matched_move_program.instructions[0U]);
     unsupported_matched_move_clause.groups[0U].instructions[0U].opcode =
-        affogato::gpu::latte_alu_op2_add_float_opcode;
+        affogato::gpu::latte_alu_op2_maximum_dx10_opcode;
     bool rejected_unsupported_matched_pixel_operation = false;
     try
     {
         static_cast<void>(
-            affogato::gpu::emit_latte_spirv_fragment_matched_move_subset(
+            affogato::gpu::emit_latte_spirv_fragment_matched_alu_subset(
                 unsupported_matched_move_program,
                 matched_varying_input));
     }
@@ -833,7 +870,7 @@ int main(int argc, char* argv[])
     }
     assert(rejected_nonzero_mrt);
 
-    if (argc == 17 && std::string_view(argv[1]) == "--write-modules")
+    if (argc == 19 && std::string_view(argv[1]) == "--write-modules")
     {
         write_module(argv[2], module);
         write_module(argv[3], modified_module);
@@ -850,6 +887,8 @@ int main(int argc, char* argv[])
         write_module(argv[14], parameter_output_module);
         write_module(argv[15], varying_passthrough_module);
         write_module(argv[16], matched_move_module);
+        write_module(argv[17], matched_add_module);
+        write_module(argv[18], matched_multiply_module);
     }
     return 0;
 }

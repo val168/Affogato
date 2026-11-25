@@ -119,8 +119,15 @@ The explicit
 fragment `Input` at the linked pixel-input location, loads its `float4`, and
 writes it to MRT0. It remains a diagnostic interface module and rejects flat,
 no-perspective, centroid, sample, and point-sprite inputs until their GX2
-semantics are mapped. A separate matched-input MOV emitter translates the
-bounded guest pixel program instead of substituting this passthrough module.
+semantics are mapped. A separate matched-input ALU emitter translates bounded
+guest MOV, ADD, and MUL_IEEE operations instead of substituting this
+passthrough module. The emitter interprets register values as IEEE-754 float32
+for ADD and MUL_IEEE, using SPIR-V `OpFAdd` and `OpFMul`; it continues to reject
+source and destination modifiers. The R700 ISA guide describes ADD as floating
+point addition and distinguishes IEEE `MUL_IEEE` from non-IEEE `MUL` around
+zero operands. This is related GPU-family evidence rather than direct Latte
+conformance; the opcode values match Affogato's existing shader interpreter
+definitions in `latte_shader_interpreter.hpp`.
 
 ### Controlled matched-varying Vulkan integration (2026-11-25)
 
@@ -131,12 +138,14 @@ HLE fixture issues a parameter export at guest array index 0 with semantic
 `pixel_input_index`. The vertex module writes the selected guest GPR vector.
 The captured pixel program contains a four-lane OP2 MOV group from that input
 GPR to the MRT0 export GPR; the bounded fragment emitter translates those MOVs
-to SPIR-V. The controlled fixture checks a range of green values in Vulkan
-readback from both the guest color-buffer render and presented frame, then
-exercises scanout. This establishes Vulkan interface interpolation and guest
-MOV execution for that fixture, not independent Latte hardware semantics.
-Other guest pixel operations, other interpolation modes, ordinary game draw
-selection, and WWHD output remain unsupported.
+to SPIR-V. Deterministic MOV, ADD-by-zero, and IEEE-MUL-by-one modules pass
+`spirv-val`. Each guest PPC/GX2 fixture also routes the respective program
+through the same matched-input Vulkan pipeline and verifies the interpolated
+green gradient in framebuffer readback; the MOV variant additionally verifies
+the presented frame and scanout copy. This verifies these bounded operations
+for the fixtures, not independent Latte hardware conformance. Other guest
+pixel operations, other interpolation modes, ordinary game draw selection,
+and WWHD output remain unsupported.
 
 ## Evidence categories
 

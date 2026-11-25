@@ -1970,7 +1970,9 @@ enum class GuestTriangleShader
     spirv_integer_alu_identity,
     spirv_constant_pixel_color,
     spirv_default_pixel_input,
-    spirv_matched_varying_move
+    spirv_matched_varying_move,
+    spirv_matched_varying_add_zero,
+    spirv_matched_varying_multiply_one
 };
 
 [[nodiscard]] bool contains_interpolated_green_pixels(
@@ -2017,9 +2019,13 @@ int run_gx2_guest_triangle_test(
     const bool use_latte_pixel_spirv =
         shader == GuestTriangleShader::spirv_constant_pixel_color ||
         shader == GuestTriangleShader::spirv_default_pixel_input ||
-        shader == GuestTriangleShader::spirv_matched_varying_move;
+        shader == GuestTriangleShader::spirv_matched_varying_move ||
+        shader == GuestTriangleShader::spirv_matched_varying_add_zero ||
+        shader == GuestTriangleShader::spirv_matched_varying_multiply_one;
     const bool use_varying_passthrough =
-        shader == GuestTriangleShader::spirv_matched_varying_move;
+        shader == GuestTriangleShader::spirv_matched_varying_move ||
+        shader == GuestTriangleShader::spirv_matched_varying_add_zero ||
+        shader == GuestTriangleShader::spirv_matched_varying_multiply_one;
     constexpr std::uint32_t vertex_buffer_address = 0x10000U;
     constexpr std::uint32_t index_buffer_address = 0x4000U;
     constexpr std::uint32_t big_endian_index_buffer_address = 0x5000U;
@@ -2439,15 +2445,32 @@ int run_gx2_guest_triangle_test(
                         use_varying_passthrough
                     ? 0U
                     : color_selectors[component];
+            std::uint32_t source1_encoding = 0U;
+            std::uint16_t pixel_opcode =
+                affogato::gpu::latte_alu_op2_move_opcode;
+            if (shader == GuestTriangleShader::spirv_matched_varying_add_zero)
+            {
+                source1_encoding = static_cast<std::uint32_t>(
+                    affogato::gpu::latte_alu_source_zero_selector);
+                pixel_opcode = affogato::gpu::latte_alu_op2_add_float_opcode;
+            }
+            else if (shader ==
+                     GuestTriangleShader::spirv_matched_varying_multiply_one)
+            {
+                source1_encoding = static_cast<std::uint32_t>(
+                    affogato::gpu::latte_alu_source_one_float_selector);
+                pixel_opcode =
+                    affogato::gpu::latte_alu_op2_multiply_ieee_opcode;
+            }
             const std::uint32_t source_word =
                 source_selector |
+                (source1_encoding << 13U) |
                 (component << 10U) |
+                (component << 23U) |
                 (component == 3U ? 0x80000000U : 0U);
             const std::uint32_t destination_word =
                 0x00400010U |
-                (static_cast<std::uint32_t>(
-                     affogato::gpu::latte_alu_op2_move_opcode)
-                 << 7U) |
+                (static_cast<std::uint32_t>(pixel_opcode) << 7U) |
                 (component << 29U);
             pixel_shader_program[slot] = std::byteswap(source_word);
             pixel_shader_program[slot + 1U] =
@@ -3486,6 +3509,22 @@ int main(int argc, char* argv[])
                 return run_gx2_guest_triangle_test(
                     false,
                     GuestTriangleShader::spirv_matched_varying_move);
+            }
+            if (std::string_view(argv[1]) ==
+                    "--gx2-guest-triangle-matched-varying-add-zero-smoke-test" &&
+                argc == 2)
+            {
+                return run_gx2_guest_triangle_test(
+                    false,
+                    GuestTriangleShader::spirv_matched_varying_add_zero);
+            }
+            if (std::string_view(argv[1]) ==
+                    "--gx2-guest-triangle-matched-varying-multiply-one-smoke-test" &&
+                argc == 2)
+            {
+                return run_gx2_guest_triangle_test(
+                    false,
+                    GuestTriangleShader::spirv_matched_varying_multiply_one);
             }
             if (std::string_view(argv[1]) == "--gx2-guest-triangle-display-test" &&
                 argc == 2)

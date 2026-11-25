@@ -616,7 +616,7 @@ decode_diagnostic_latte_spirv_pixel_shader(
                     "Vulkan varying passthrough requires exactly one matched guest pixel input");
             }
             decoded_shader_code =
-                emit_latte_spirv_fragment_matched_move_subset(
+                emit_latte_spirv_fragment_matched_alu_subset(
                     shader_ir,
                     linked_inputs.front());
         }
