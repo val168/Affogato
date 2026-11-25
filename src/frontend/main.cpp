@@ -1969,8 +1969,45 @@ enum class GuestTriangleShader
     spirv_integer_compare_clip_z,
     spirv_integer_alu_identity,
     spirv_constant_pixel_color,
-    spirv_default_pixel_input
+    spirv_default_pixel_input,
+    spirv_varying_passthrough
 };
+
+[[nodiscard]] bool contains_interpolated_green_pixels(
+    std::span<const std::uint8_t> rgba_pixels)
+{
+    constexpr std::size_t bytes_per_pixel = 4U;
+    constexpr std::uint8_t maximum_channel_for_zero = 40U;
+    constexpr std::uint8_t minimum_varying_green = 50U;
+    constexpr std::uint8_t minimum_alpha = 200U;
+    std::uint8_t minimum_green = 255U;
+    std::uint8_t maximum_green = 0U;
+    std::size_t matching_pixel_count = 0U;
+
+    for (std::size_t pixel_offset = 0U;
+         pixel_offset + bytes_per_pixel <= rgba_pixels.size();
+         pixel_offset += bytes_per_pixel)
+    {
+        const std::uint8_t red = rgba_pixels[pixel_offset];
+        const std::uint8_t green = rgba_pixels[pixel_offset + 1U];
+        const std::uint8_t blue = rgba_pixels[pixel_offset + 2U];
+        const std::uint8_t alpha = rgba_pixels[pixel_offset + 3U];
+        if (red > maximum_channel_for_zero ||
+            green < minimum_varying_green ||
+            blue > maximum_channel_for_zero ||
+            alpha < minimum_alpha)
+        {
+            continue;
+        }
+
+        minimum_green = std::min(minimum_green, green);
+        maximum_green = std::max(maximum_green, green);
+        ++matching_pixel_count;
+    }
+
+    return matching_pixel_count > 50U &&
+        static_cast<unsigned int>(maximum_green - minimum_green) >= 20U;
+}
 
 int run_gx2_guest_triangle_test(
     bool visible_window = false,
@@ -1979,7 +2016,10 @@ int run_gx2_guest_triangle_test(
     const bool use_latte_spirv = shader != GuestTriangleShader::cpu_mov;
     const bool use_latte_pixel_spirv =
         shader == GuestTriangleShader::spirv_constant_pixel_color ||
-        shader == GuestTriangleShader::spirv_default_pixel_input;
+        shader == GuestTriangleShader::spirv_default_pixel_input ||
+        shader == GuestTriangleShader::spirv_varying_passthrough;
+    const bool use_varying_passthrough =
+        shader == GuestTriangleShader::spirv_varying_passthrough;
     constexpr std::uint32_t vertex_buffer_address = 0x10000U;
     constexpr std::uint32_t index_buffer_address = 0x4000U;
     constexpr std::uint32_t big_endian_index_buffer_address = 0x5000U;
@@ -2126,15 +2166,20 @@ int run_gx2_guest_triangle_test(
         vertex_shader_output_id_count_word_index] = 1U;
     vertex_shader_descriptor[
         vertex_shader_first_output_id_word_index] = 0U;
+    if (use_varying_passthrough)
+    {
+        vertex_shader_descriptor[
+            vertex_shader_first_output_id_word_index] = 0x31U;
+    }
     for (std::size_t semantic_index = 1U; semantic_index < 32U; ++semantic_index)
     {
         vertex_shader_descriptor[
             0x44U / sizeof(std::uint32_t) + semantic_index] = 0xFFFFFFFFU;
     }
-    vertex_shader_descriptor[0xD0U / sizeof(std::uint32_t)] = 72U * 4U;
+    vertex_shader_descriptor[0xD0U / sizeof(std::uint32_t)] = 76U * 4U;
     vertex_shader_descriptor[0xD4U / sizeof(std::uint32_t)] =
         vertex_shader_program_address;
-    std::array<std::uint32_t, 72U> vertex_shader_program{};
+    std::array<std::uint32_t, 76U> vertex_shader_program{};
     vertex_shader_program[0U] = 0x20000000U;
     vertex_shader_program[1U] = 0x00000CA0U;
     vertex_shader_program[2U] = 0x3CA00100U;
@@ -2147,6 +2192,15 @@ int run_gx2_guest_triangle_test(
     vertex_shader_program[69U] = 0x900C6040U;
     vertex_shader_program[70U] = 0x010C0080U;
     vertex_shader_program[71U] = 0x900C6060U;
+    if (use_varying_passthrough)
+    {
+        constexpr std::uint32_t parameter_export_word0 = 0x0001C000U;
+        constexpr std::uint32_t parameter_export_word1 = 0x13800688U;
+        vertex_shader_program[2U] = std::byteswap(parameter_export_word0);
+        vertex_shader_program[3U] = std::byteswap(parameter_export_word1);
+        vertex_shader_program[4U] = 0x3CA00100U;
+        vertex_shader_program[5U] = 0x88062094U;
+    }
     if (use_latte_spirv &&
         (shader == GuestTriangleShader::spirv_conditional_move ||
          shader == GuestTriangleShader::spirv_integer_conditional_move ||
@@ -2352,17 +2406,20 @@ int run_gx2_guest_triangle_test(
             affogato::gpu::latte_alu_source_one_float_selector};
         std::array<std::uint32_t, 0xE8U / sizeof(std::uint32_t)>
             pixel_shader_descriptor{};
-        if (shader == GuestTriangleShader::spirv_default_pixel_input)
+        if (shader == GuestTriangleShader::spirv_default_pixel_input ||
+            use_varying_passthrough)
         {
             constexpr std::uint32_t pixel_input_semantic = 0x31U;
-            constexpr std::uint32_t pixel_input_default_value_zero_rgb_one_alpha =
-                1U;
+            const std::uint32_t pixel_input_default_value =
+                shader == GuestTriangleShader::spirv_default_pixel_input
+                    ? 1U
+                    : 0U;
             constexpr std::uint32_t pixel_input_default_value_shift = 8U;
             pixel_shader_descriptor[pixel_shader_input_count_word_index] = 1U;
             pixel_shader_descriptor[
                 pixel_shader_first_input_control_word_index] =
                     pixel_input_semantic |
-                    (pixel_input_default_value_zero_rgb_one_alpha <<
+                    (pixel_input_default_value <<
                      pixel_input_default_value_shift);
         }
         pixel_shader_descriptor[0xA4U / sizeof(std::uint32_t)] = 72U * 4U;
@@ -2831,16 +2888,25 @@ int run_gx2_guest_triangle_test(
     }
 
     affogato::gpu::vulkan::VulkanRenderer renderer(visible_window, true);
-    renderer.consume_guest_commands(
-        commands,
-        use_latte_pixel_spirv
-            ? affogato::gpu::vulkan::GuestDrawPolicy::
-                diagnostic_latte_vertex_fragment_spirv_position_base_zero
-            : (use_latte_spirv
-                   ? affogato::gpu::vulkan::GuestDrawPolicy::
-                         diagnostic_latte_vertex_spirv_position_base_zero
-                   : affogato::gpu::vulkan::GuestDrawPolicy::
-                         diagnostic_latte_vertex_position_base_zero));
+    affogato::gpu::vulkan::GuestDrawPolicy draw_policy =
+        affogato::gpu::vulkan::GuestDrawPolicy::
+            diagnostic_latte_vertex_position_base_zero;
+    if (use_latte_spirv)
+    {
+        draw_policy = affogato::gpu::vulkan::GuestDrawPolicy::
+            diagnostic_latte_vertex_spirv_position_base_zero;
+    }
+    if (use_latte_pixel_spirv)
+    {
+        draw_policy = affogato::gpu::vulkan::GuestDrawPolicy::
+            diagnostic_latte_vertex_fragment_spirv_position_base_zero;
+    }
+    if (use_varying_passthrough)
+    {
+        draw_policy = affogato::gpu::vulkan::GuestDrawPolicy::
+            diagnostic_latte_vertex_varying_passthrough_base_zero;
+    }
+    renderer.consume_guest_commands(commands, draw_policy);
     const auto color_buffer_updates =
         renderer.take_guest_color_buffer_updates();
     if (color_buffer_updates.size() != 1U ||
@@ -2885,6 +2951,11 @@ int run_gx2_guest_triangle_test(
             diagnostic_pixel[0U] <= 40U &&
             diagnostic_pixel[1U] <= 40U &&
             diagnostic_pixel[2U] <= 40U;
+    }
+    if (use_varying_passthrough)
+    {
+        has_diagnostic_color = contains_interpolated_green_pixels(
+            color_buffer_updates.front().bytes);
     }
     if (!has_diagnostic_color)
     {
@@ -2935,7 +3006,8 @@ int run_gx2_guest_triangle_test(
         shader == GuestTriangleShader::spirv_integer_conditional_move ||
         shader == GuestTriangleShader::spirv_mixed_conditional_move ||
         shader == GuestTriangleShader::spirv_integer_compare_clip_z ||
-        shader == GuestTriangleShader::spirv_integer_alu_identity;
+        shader == GuestTriangleShader::spirv_integer_alu_identity ||
+        use_varying_passthrough;
     if (verify_shader_output)
     {
         renderer.render_frame();
@@ -3037,6 +3109,11 @@ int run_gx2_guest_triangle_test(
             {
                 shader_sample_matches = shader_sample_is_black;
             }
+            if (use_varying_passthrough)
+            {
+                shader_sample_matches = contains_interpolated_green_pixels(
+                    shader_frame->pixels);
+            }
             if (!shader_sample_matches)
             {
                 throw std::runtime_error(
@@ -3119,6 +3196,11 @@ int run_gx2_guest_triangle_test(
             rendered_frame->pixels[sample_offset] <= 40U &&
             rendered_frame->pixels[sample_offset + 1U] <= 40U &&
             rendered_frame->pixels[sample_offset + 2U] <= 40U;
+    }
+    if (use_varying_passthrough)
+    {
+        presented_diagnostic_color = contains_interpolated_green_pixels(
+            rendered_frame->pixels);
     }
     if (!presented_diagnostic_color)
     {
@@ -3212,11 +3294,19 @@ int run_gx2_guest_triangle_test(
         shader_subset_description =
             "the bounded MOV/default-input-to-MRT0 SPIR-V fragment subset";
     }
-    const char* fragment_shader_status = use_latte_pixel_spirv
+    if (use_varying_passthrough)
+    {
+        shader_subset_description =
+            "the bounded guest vertex shader position/parameter exports";
+    }
+    const char* fragment_shader_status = use_varying_passthrough
+        ? "an explicit diagnostic fragment passthrough read the matched guest "
+          "varying; guest pixel shader execution remains unsupported.\n"
+        : (use_latte_pixel_spirv
         ? "the captured guest pixel shader subset was translated; general Latte "
           "shader translation and WWHD graphics remain unsupported.\n"
         : "the fragment shader remains diagnostic; general Latte shader "
-          "translation and WWHD graphics remain unsupported.\n";
+          "translation and WWHD graphics remain unsupported.\n");
     std::cout << "GX2 float32/float16/UNORM8x4 triangle-list, indexed, strip, and fan "
               << "geometry, "
               << "including unpredicated PM4 auto-index, indexed, and immediate-index "
@@ -3388,6 +3478,14 @@ int main(int argc, char* argv[])
                     false,
                     GuestTriangleShader::spirv_default_pixel_input);
             }
+            if (std::string_view(argv[1]) ==
+                    "--gx2-guest-triangle-varying-passthrough-smoke-test" &&
+                argc == 2)
+            {
+                return run_gx2_guest_triangle_test(
+                    false,
+                    GuestTriangleShader::spirv_varying_passthrough);
+            }
             if (std::string_view(argv[1]) == "--gx2-guest-triangle-display-test" &&
                 argc == 2)
             {
@@ -3416,6 +3514,7 @@ int main(int argc, char* argv[])
                          "       AffogatoFrontend.exe --gx2-guest-triangle-integer-alu-spirv-smoke-test\n"
                          "       AffogatoFrontend.exe --gx2-guest-triangle-pixel-spirv-smoke-test\n"
                          "       AffogatoFrontend.exe --gx2-guest-triangle-pixel-default-spirv-smoke-test\n"
+                         "       AffogatoFrontend.exe --gx2-guest-triangle-varying-passthrough-smoke-test\n"
                          "       AffogatoFrontend.exe --gx2-guest-triangle-display-test\n";
             return 2;
         }

@@ -102,7 +102,7 @@ Relevant local implementation:
 ### Vertex parameter export SPIR-V groundwork (2026-11-25)
 
 `emit_latte_spirv_vertex_position_subset()` can additionally expose selected
-completed, identity-swizzled parameter exports as SPIR-V vertex `Output`
+identity-swizzled parameter exports as SPIR-V vertex `Output`
 variables at explicit `Location` values. Each requested guest export index
 must be present, unique, and within the currently supported 32-entry VS
 parameter interface; each output location must also be unique. The emitted
@@ -110,13 +110,7 @@ module includes those variables in `OpEntryPoint` and stores the selected GPR
 vector after the bounded ALU subset executes. A dedicated fixture passes
 `spirv-val` for Vulkan 1.0 and checks missing exports and duplicate requests.
 
-This is an isolated producer-side interface building block. The renderer does
-not yet supply linked export-to-location mappings, the fragment emitter still
-rejects matched varyings, and no interpolation or ordinary guest draw behavior
-is established by this test. The mapping must be driven by the decoded GX2
-semantic linkage, and the consumer side must apply supported interpolation
-qualifiers before a varying can be considered end to end. Vulkan's shader
-interface and interpolation requirements are documented in the
+Vulkan's shader interface and interpolation requirements are documented in the
 [Vulkan GLSL variable specification](https://docs.vulkan.org/glsl/latest/chapters/variables.html)
 and [Vulkan rasterization specification](https://docs.vulkan.org/spec/latest/chapters/primsrast.html).
 
@@ -127,8 +121,23 @@ writes it to MRT0. The fixture pairs that location with the producer-side
 parameter output and validates both modules using `spirv-val`. It rejects flat,
 no-perspective, centroid, sample, and point-sprite inputs until their GX2
 semantics are mapped. This is an explicit diagnostic passthrough, not guest
-pixel-shader execution; separately validating modules does not yet prove
-pipeline linkage or interpolated framebuffer pixels.
+pixel-shader execution.
+
+### Controlled matched-varying Vulkan integration (2026-11-25)
+
+The explicit `diagnostic_latte_vertex_varying_passthrough_base_zero` renderer
+policy connects captured VS/PS descriptor linkage to both SPIR-V modules. The
+HLE fixture issues a parameter export at guest array index 0 with semantic
+`0x31`, and one matched PS input is assigned the same Vulkan location using
+`pixel_input_index`. The vertex module writes the selected guest GPR vector;
+the fragment diagnostic module loads the matching `float4` input and writes it
+to MRT0. The controlled fixture checks a range of green values in Vulkan
+readback from both the guest color-buffer render and presented frame, then
+exercises scanout. This establishes the Vulkan interface and perspective
+interpolation for that fixture, not independent Latte hardware semantics. The
+captured guest pixel shader is deliberately bypassed; guest fragment
+instruction execution, other interpolation modes, ordinary game draw
+selection, and WWHD output remain unsupported.
 
 ## Evidence categories
 

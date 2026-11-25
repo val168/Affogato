@@ -903,8 +903,7 @@ private:
         constexpr std::array<std::uint8_t, 4U> identity_selectors{
             0U, 1U, 2U, 3U};
         const LatteExportFields& fields = shader_export.fields;
-        if (!shader_export.completes_type ||
-            fields.type != LatteExportType::parameter ||
+        if (fields.type != LatteExportType::parameter ||
             fields.burst_count != 1U || fields.read_write_relative ||
             fields.index_gpr != 0U || fields.uses_buffer_encoding ||
             fields.component_selectors != identity_selectors ||

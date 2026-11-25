@@ -487,6 +487,11 @@ if(BUILD_TESTING)
             COMMAND affogato_frontend
                 --gx2-guest-triangle-pixel-default-spirv-smoke-test
         )
+        add_test(
+            NAME affogato_vulkan_guest_varying_passthrough_readback
+            COMMAND affogato_frontend
+                --gx2-guest-triangle-varying-passthrough-smoke-test
+        )
     endif()
 
     add_executable(affogato_recompiler_benchmark

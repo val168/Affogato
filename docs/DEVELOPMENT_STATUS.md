@@ -1,5 +1,18 @@
 # Affogato Development Status
 
+## Matched varying through Vulkan readback (2026-11-25)
+
+The new `--gx2-guest-triangle-varying-passthrough-smoke-test` runs a controlled
+guest PPC/GX2 setup whose vertex shader exports a parameter with semantic
+`0x31`. Affogato captures the draw-time VS/PS descriptors, links that semantic,
+emits the guest VS position and parameter export at matching SPIR-V locations,
+and uses the explicit diagnostic fragment passthrough. Vulkan interpolates the
+varying; deterministic readback verifies a green gradient in the emulated color
+buffer and swapchain frame, and the scanout copy path remains in the test. Full
+Debug and Release CTest passed 34/34. This
+does not execute the guest pixel shader, support ordinary game draw routing, or
+establish WWHD rendering.
+
 ## Explicit fragment varying passthrough module (2026-11-25)
 
 A diagnostic-only fragment module can now consume one semantic-linked vertex
@@ -7,19 +20,19 @@ parameter at the pixel input's location and write the interpolated `float4` to
 MRT0. It accepts only the default perspective interpolation mode; flat,
 no-perspective, centroid, sample, and point-sprite inputs fail explicitly. The
 test confirms producer and consumer modules use the same location and validates
-both with `spirv-val`. The modules are not yet combined in a Vulkan pipeline,
-and framebuffer interpolation, guest fragment shader execution, ordinary draw
-routing, and WWHD output remain unverified.
+both with `spirv-val`. The later controlled integration combines the modules,
+exercises Vulkan interpolation, and verifies framebuffer readback. Guest
+fragment shader execution, ordinary draw routing, and WWHD output remain
+unverified.
 
 ## Vertex shader parameter exports to SPIR-V (2026-11-25)
 
-The bounded vertex SPIR-V subset now optionally emits selected, completed
-identity-swizzled parameter exports as output vectors at explicit SPIR-V
-locations. Tests validate the module with `spirv-val` and reject absent or
-duplicate export requests. This lays producer-side groundwork for Vulkan stage
-linkage; the renderer does not yet map GX2 semantics to these locations, and
-the fragment stage still cannot consume matched varyings. No new visible or
-ordinary guest draw capability is verified by this change.
+The bounded vertex SPIR-V subset now optionally emits selected identity-
+swizzled parameter exports as output vectors at explicit SPIR-V locations.
+Tests validate the module with `spirv-val` and reject absent or duplicate
+export requests. The later controlled diagnostic maps a captured GX2 semantic
+to a shared vertex/fragment location and verifies interpolation through
+Vulkan readback. It does not establish ordinary guest draw support.
 
 ## Pixel shader defaults through controlled Vulkan guest draw (2026-11-25)
 
@@ -33,15 +46,16 @@ controlled GX2 HLE fixture issues a draw with a guest pixel shader that reads
 black triangle, and guest color-buffer/scanout checks still pass. Cemu's current
 `LatteShader_CreatePSInputTable()` reads this field and asserts values are at
 most 1; the other two encodings remain based on related-family documentation
-and are not exercised end to end. A matched varying is explicitly rejected
-because stage interface variables and interpolation have not been
-implemented. The bounded MOV shader is evaluated on the host with constant
+and are not exercised end to end. This constant-folding path still rejects
+matched varyings; a separate opt-in diagnostic verifies one perspective
+varying through Vulkan using a fragment passthrough. The bounded MOV shader is evaluated on the host with constant
 inputs, and its color is emitted as a SPIR-V constant; this does not mean the
 Latte MOV executes in a Vulkan fragment shader. This verifies a controlled
 guest command and shader path under diagnostic policy; ordinary game draw
 routing, general PS ALU, Latte hardware behavior, visible output of this
-pixel-default path, and WWHD rendering remain unverified. Debug and Release
-builds succeeded; both full CTest suites passed 31/31, including `spirv-val`.
+pixel-default path, and WWHD rendering remain unverified. The current full
+Debug and Release CTest suites pass 34/34, including `spirv-val` and the varying
+readback integration.
 
 ## Visible diagnostic triangle retest (2026-11-25)
 

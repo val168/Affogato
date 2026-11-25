@@ -30,6 +30,7 @@ enum class GuestDrawPolicy
     diagnostic_latte_vertex_position_base_zero,
     diagnostic_latte_vertex_spirv_position_base_zero,
     diagnostic_latte_vertex_fragment_spirv_position_base_zero,
+    diagnostic_latte_vertex_varying_passthrough_base_zero,
 };
 
 class VulkanRenderer

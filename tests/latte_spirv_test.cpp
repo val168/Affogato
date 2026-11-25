@@ -223,7 +223,7 @@ int main(int argc, char* argv[])
     parameter_export.burst_count = 1U;
     parameter_export.component_selectors = {0U, 1U, 2U, 3U};
     parameter_output_program.instructions.emplace_back(
-        affogato::gpu::LatteShaderIrExport{true, parameter_export});
+        affogato::gpu::LatteShaderIrExport{false, parameter_export});
     const std::array<affogato::gpu::LatteSpirvVertexParameterOutput, 1U>
         parameter_outputs{{{2U, 1U}}};
     const std::vector<std::uint32_t> parameter_output_module =

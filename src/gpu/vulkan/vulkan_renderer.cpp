@@ -409,7 +409,8 @@ std::vector<DiagnosticVertex> decode_diagnostic_latte_vertex_shader_draw(
 
 std::vector<DiagnosticVertex> decode_diagnostic_latte_spirv_vertex_draw(
     const Gx2DrawSnapshotView& draw_snapshot,
-    std::vector<std::uint32_t>& vertex_shader_code)
+    std::vector<std::uint32_t>& vertex_shader_code,
+    std::span<const LatteSpirvVertexParameterOutput> parameter_outputs = {})
 {
     constexpr std::uint32_t gx2_primitive_mode_triangles = 4U;
     constexpr std::uint32_t gx2_primitive_mode_triangle_fan = 5U;
@@ -457,7 +458,8 @@ std::vector<DiagnosticVertex> decode_diagnostic_latte_spirv_vertex_draw(
     const std::vector<std::uint32_t> decoded_shader_code =
         emit_latte_spirv_vertex_position_subset(
             shader_ir,
-            {vertex_input_gpr, 0U});
+            {vertex_input_gpr, 0U},
+            parameter_outputs);
     if (!vertex_shader_code.empty() &&
         vertex_shader_code != decoded_shader_code)
     {
@@ -511,9 +513,11 @@ std::vector<DiagnosticVertex> decode_diagnostic_latte_spirv_vertex_draw(
         draw.primitive_mode);
 }
 
-void decode_diagnostic_latte_spirv_pixel_shader(
+std::vector<LatteLinkedPixelShaderInput>
+decode_diagnostic_latte_spirv_pixel_shader(
     const Gx2DrawSnapshotView& draw_snapshot,
-    std::vector<std::uint32_t>& pixel_shader_code)
+    std::vector<std::uint32_t>& pixel_shader_code,
+    bool use_varying_passthrough = false)
 {
     constexpr std::size_t pixel_shader_stage_index =
         static_cast<std::size_t>(cpu::espresso::Gx2ProgramStage::pixel);
@@ -531,8 +535,14 @@ void decode_diagnostic_latte_spirv_pixel_shader(
     const std::vector<LattePixelShaderInputControl> pixel_input_controls =
         decode_latte_pixel_shader_input_controls(*pixel_shader);
     std::vector<std::uint32_t> decoded_shader_code;
+    std::vector<LatteLinkedPixelShaderInput> linked_inputs;
     if (pixel_input_controls.empty())
     {
+        if (use_varying_passthrough)
+        {
+            throw std::runtime_error(
+                "Vulkan varying passthrough requires a matched pixel input");
+        }
         decoded_shader_code =
             emit_latte_spirv_fragment_constant_color_subset(shader_ir);
     }
@@ -592,14 +602,30 @@ void decode_diagnostic_latte_spirv_pixel_shader(
             }
         }
 
-        const std::vector<LatteLinkedPixelShaderInput> linked_inputs =
-            link_latte_pixel_shader_inputs(
+        linked_inputs = link_latte_pixel_shader_inputs(
                 vertex_output_interface,
                 vertex_parameter_exports,
                 pixel_input_controls);
-        decoded_shader_code = emit_latte_spirv_fragment_default_input_subset(
-            shader_ir,
-            linked_inputs);
+        if (use_varying_passthrough)
+        {
+            if (linked_inputs.size() != 1U ||
+                linked_inputs.front().source !=
+                    LattePixelInputSource::vertex_parameter)
+            {
+                throw std::runtime_error(
+                    "Vulkan varying passthrough requires exactly one matched guest pixel input");
+            }
+            decoded_shader_code =
+                emit_latte_spirv_fragment_varying_passthrough_subset(
+                    linked_inputs.front());
+        }
+        else
+        {
+            decoded_shader_code =
+                emit_latte_spirv_fragment_default_input_subset(
+                    shader_ir,
+                    linked_inputs);
+        }
     }
     if (!pixel_shader_code.empty() && pixel_shader_code != decoded_shader_code)
     {
@@ -607,6 +633,7 @@ void decode_diagnostic_latte_spirv_pixel_shader(
             "Vulkan Latte fragment diagnostic batch contains different pixel shaders");
     }
     pixel_shader_code = std::move(decoded_shader_code);
+    return linked_inputs;
 }
 
 }
@@ -865,6 +892,33 @@ void VulkanRenderer::consume_guest_commands(
                 translated_vertex_shader_code,
                 translated_fragment_shader_code);
         }
+        else if (draw_policy == GuestDrawPolicy::
+                     diagnostic_latte_vertex_varying_passthrough_base_zero)
+        {
+            const std::vector<LatteLinkedPixelShaderInput> linked_inputs =
+                decode_diagnostic_latte_spirv_pixel_shader(
+                    *draw_snapshot,
+                    translated_fragment_shader_code,
+                    true);
+            if (linked_inputs.size() != 1U ||
+                !linked_inputs.front().vertex_export_index.has_value())
+            {
+                throw std::runtime_error(
+                    "Vulkan varying diagnostic has no unique vertex parameter export");
+            }
+            const std::array<LatteSpirvVertexParameterOutput, 1U>
+                parameter_outputs{{{
+                    *linked_inputs.front().vertex_export_index,
+                    static_cast<std::uint32_t>(
+                        linked_inputs.front().pixel_input_index)}}};
+            draw_vertices = decode_diagnostic_latte_spirv_vertex_draw(
+                *draw_snapshot,
+                translated_vertex_shader_code,
+                parameter_outputs);
+            set_latte_graphics_pipeline(
+                translated_vertex_shader_code,
+                translated_fragment_shader_code);
+        }
         else
         {
             throw std::invalid_argument(
@@ -902,7 +956,9 @@ void VulkanRenderer::consume_guest_commands(
                         input_snapshot,
                         draw_vertices,
                         draw_policy == GuestDrawPolicy::
-                                diagnostic_latte_vertex_fragment_spirv_position_base_zero
+                                diagnostic_latte_vertex_fragment_spirv_position_base_zero ||
+                            draw_policy == GuestDrawPolicy::
+                                diagnostic_latte_vertex_varying_passthrough_base_zero
                             ? latte_guest_color_buffer_pipeline_
                             : guest_color_buffer_diagnostic_pipeline_);
                 if (existing_update == guest_color_buffer_updates_.end())
@@ -950,6 +1006,13 @@ void VulkanRenderer::consume_guest_commands(
             translated_vertex_shader_code,
             translated_fragment_shader_code);
     }
+    else if (draw_policy == GuestDrawPolicy::
+                 diagnostic_latte_vertex_varying_passthrough_base_zero)
+    {
+        set_latte_graphics_pipeline(
+            translated_vertex_shader_code,
+            translated_fragment_shader_code);
+    }
     set_guest_diagnostic_vertices(diagnostic_vertices);
     diagnostic_draw_ranges_ = std::move(diagnostic_draw_ranges);
     diagnostic_draw_policy_active_ = true;
@@ -958,6 +1021,10 @@ void VulkanRenderer::consume_guest_commands(
             diagnostic_latte_vertex_spirv_position_base_zero ||
         draw_policy == GuestDrawPolicy::
             diagnostic_latte_vertex_fragment_spirv_position_base_zero;
+    diagnostic_draw_uses_latte_vertex_pipeline_ =
+        diagnostic_draw_uses_latte_vertex_pipeline_ ||
+        draw_policy == GuestDrawPolicy::
+            diagnostic_latte_vertex_varying_passthrough_base_zero;
 }
 
 cpu::espresso::Gx2ColorBufferSnapshot
