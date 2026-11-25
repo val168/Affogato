@@ -9,9 +9,10 @@ program words when `GX2SetVertexShader`, `GX2SetGeometryShader`, or
 at each draw. Structural control-flow decoding recognizes fixture-verified
 `CALL_FS`, `EXPORT`, `EXPORT_DONE`, and one ALU-clause header encoding. Raw
 ALU slots, OP2 fields, no-literal OP2 groups, and a narrow four-lane shader
-execution subset are also implemented. A typed IR now represents the bounded CPU subset; SPIR-V
-generator, and the diagnostic Vulkan triangle uses fixed host shaders rather
-than these captured guest programs.
+execution subset are also implemented. A typed IR represents the bounded CPU
+subset; an experimental SPIR-V vertex emitter lowers MOV and binary32 ADD
+groups. The diagnostic Vulkan triangle still uses an explicit bounded shader
+test path rather than normal guest programs.
 
 Relevant local implementation:
 
@@ -414,7 +415,7 @@ arbitrary guest fetch programs or claiming Latte hardware verification.
 | Fetch-shader parsing and semantic linkage | Narrow CPU subset | `latte_vertex_fetch.hpp` recognizes Affogato-generated semantic VTX records, decodes supported formats, applies destination selectors (component swizzles, 0.0, 1.0, and masked writes), extracts a complete correctly typed 32-entry `SQ_VTX_SEMANTIC` table from a draw snapshot, and maps attributes plus immutable vertex snapshots into a caller-provided register file at an explicit vertex index and `VS_GPR_BASE + 1 + table index`. `execute_latte_vertex_shader_subset()` passes this input file to the supported CPU shader subset in one deterministic test path. Writes are validated transactionally. AMD references differ on semantic-field width (R6xx: 8; R700 ISA Chapter 5: 9, while its Chapter 9 semantic-format table says 8); Latte applicability remains unresolved. Arbitrary guest fetch programs are not executed, normal draw dispatch is not connected, and system-generated inputs remain unsupported. No Wii U hardware verification. |
 | Latte shader control-flow decoding | Partial | `latte_shader_decoder.hpp` decodes fixture-verified `CALL_FS`, `EXPORT`, `EXPORT_DONE`, and `ALU` clause headers, including EOP, bounded clause ranges, normal export metadata, and `CALL_FS` address/pop/condition/nesting fields. The generic straight-line executor rejects calls. A vertex-specific path accepts one leading canonical call only after separately processing the captured HLE fetch subset. Other call forms, branches, and loops remain unsupported; exports are typed values and are not connected to stage outputs. This behavior is not Wii U hardware-verified. |
 | Latte ALU decoding/execution | Experimental subset | OP2 fields and LAST-delimited no-literal groups are decoded. A bounded clause executor runs sequential four-slot X/Y/Z/W groups with MOV and selected floating/integer operations, forwards PV between groups within the clause, and leaves external registers unchanged if a later supported-subset check fails. A straight-line shader subset accepts explicit absolute constant-file vectors and connects ALU clauses to normal export materialization with caller-provided initial GPRs. Fetch shader execution, ALU.Trans/PS, kcache/literal reads, other opcodes, relative addressing, general control flow, draw integration, Vulkan use, and Latte-hardware validation are absent. |
-| Vertex/pixel shader translation | Missing | Stage interfaces, exports, constants, textures, and SPIR-V backend |
+| Vertex/pixel shader translation | Experimental vertex subset | `latte_spirv_vertex_subset.hpp` emits SPIR-V for no-literal MOV and binary32 ADD groups plus one identity position export. Pixel shader translation, general interfaces, constants, textures, and normal draw integration remain missing. |
 | Guest shader integration with Vulkan draws | Missing | Shader modules, pipeline cache, descriptor binding, render-target path |
 | WWHD shader requirements | Unknown in Affogato | Existing recorded WWHD runs stop before a guest draw is captured |
 
@@ -717,7 +718,7 @@ other callers. `latte_vertex_shader_subset.hpp` connects captured draw-time
 fetch inputs, semantic registers, shader words, and vertex constants for one
 selected vertex. `Gx2RegisterState::draw_snapshot()` provides a borrowed view
 over one draw's captured state. The controlled diagnostic path calls this CPU
-subset. A bounded MOV-to-position module generator now exists. An explicit
+subset. A bounded MOV/ADD-to-position module generator now exists. An explicit
 diagnostic policy creates a Vulkan pipeline from it and submits controlled
 guest triangle draws; there is no normal guest shader cache or renderer path.
 The IR currently represents only the existing
@@ -807,12 +808,20 @@ The translator must reuse the current decoder and its explicit rejection
 behavior rather than create a second opcode parser. `LatteShaderIrProgram` is
 now the initial boundary between bytecode decoding and backends, but its
 variant currently covers only OP2 clauses and normal exports. The CPU subset
-remains the semantic reference. The SPIR-V backend currently lowers only the
-MOV-to-position pass-through subset; future IR additions and SPIR-V lowering
-must reject every operation, control-flow form, source mode, or export they do
-not implement. Supported operations should be added in complete tested
-families, with CPU-versus-SPIR-V output comparisons for deterministic shader
-fixtures.
+remains the semantic reference. The SPIR-V backend currently lowers no-literal
+MOV and binary32 ADD groups to one position export. For ADD it accepts absolute
+GPR/PV/inline-constant sources, source absolute/negate modifiers, and
+unmodified destination writes; other source modes, modifiers, and outputs are
+rejected. The emitter uses SPIR-V `OpFAdd` (opcode 129) on binary32 values.
+AMD's [R700-family ISA manual](https://docs.amd.com/v/u/en-US/R700-Family_Instruction_Set_Architecture),
+section 9.2, describes OP2 ADD opcode `0x000` as floating-point
+`src0 + src1`; this is family-level evidence and has not been confirmed on
+Latte hardware. The
+[SPIR-V specification](https://registry.khronos.org/SPIR-V/specs/unified1/SPIRV.html)
+defines `OpFAdd` as floating-point addition. Continue to reject every
+operation, control-flow form, source mode, or export not implemented. Extend
+the supported set only with deterministic CPU-reference and `spirv-val`
+coverage.
 
 Translation variants must include all shader-affecting captured state, at
 minimum stage and bytecode, fetch program, vertex semantic linkage, relevant

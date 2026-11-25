@@ -234,6 +234,30 @@ private:
         return *source_registers[selector][channel];
     }
 
+    [[nodiscard]] std::uint32_t apply_source_modifiers(
+        std::uint32_t value,
+        bool absolute,
+        bool negate)
+    {
+        if (absolute)
+        {
+            const std::uint32_t absolute_id = allocate_id();
+            append_instruction(function_body_, 199U, {
+                uint_type_id_, absolute_id, value,
+                constant(0x7FFFFFFFU)});
+            value = absolute_id;
+        }
+        if (negate)
+        {
+            const std::uint32_t negate_id = allocate_id();
+            append_instruction(function_body_, 198U, {
+                uint_type_id_, negate_id, value,
+                constant(0x80000000U)});
+            value = negate_id;
+        }
+        return value;
+    }
+
     void execute_clause(const LatteShaderIrAluClause& clause)
     {
         if (clause.groups.empty())
@@ -258,7 +282,8 @@ private:
             {
                 const LatteAluOp2Instruction& operation =
                     group.instructions[lane];
-                if (operation.opcode != latte_alu_op2_move_opcode ||
+                if ((operation.opcode != latte_alu_op2_move_opcode &&
+                     operation.opcode != latte_alu_op2_add_float_opcode) ||
                     operation.destination_component != lane ||
                     operation.last_in_group != (lane == 3U) ||
                     operation.destination_gpr >= registers_.size() ||
@@ -269,32 +294,54 @@ private:
                     operation.destination_relative ||
                     operation.destination_clamp ||
                     operation.output_modifier != 0U ||
-                    operation.index_mode != 0U)
+                    operation.index_mode != 0U ||
+                    (operation.opcode == latte_alu_op2_move_opcode &&
+                     (operation.source1_relative ||
+                      operation.source1_absolute ||
+                      operation.source1_negate)) ||
+                    (operation.opcode == latte_alu_op2_add_float_opcode &&
+                     operation.source1_relative))
                 {
                     throw std::runtime_error(
-                        "Latte SPIR-V vertex subset supports only unpredicated MOV lanes");
+                        "Latte SPIR-V vertex subset received an unsupported ALU operation or modifier");
                 }
 
-                std::uint32_t result_id = source_value(
+                std::uint32_t source0_id = source_value(
                     operation.source0_selector,
                     operation.source0_channel,
                     source_registers,
                     previous_vector);
-                if (operation.source0_absolute)
+                source0_id = apply_source_modifiers(
+                    source0_id,
+                    operation.source0_absolute,
+                    operation.source0_negate);
+
+                std::uint32_t result_id = source0_id;
+                if (operation.opcode == latte_alu_op2_add_float_opcode)
                 {
-                    const std::uint32_t absolute_id = allocate_id();
-                    append_instruction(function_body_, 199U, {
-                        uint_type_id_, absolute_id, result_id,
-                        constant(0x7FFFFFFFU)});
-                    result_id = absolute_id;
-                }
-                if (operation.source0_negate)
-                {
-                    const std::uint32_t negate_id = allocate_id();
-                    append_instruction(function_body_, 198U, {
-                        uint_type_id_, negate_id, result_id,
-                        constant(0x80000000U)});
-                    result_id = negate_id;
+                    std::uint32_t source1_id = source_value(
+                        operation.source1_selector,
+                        operation.source1_channel,
+                        source_registers,
+                        previous_vector);
+                    source1_id = apply_source_modifiers(
+                        source1_id,
+                        operation.source1_absolute,
+                        operation.source1_negate);
+
+                    const std::uint32_t source0_float_id = allocate_id();
+                    append_instruction(function_body_, 124U, {
+                        float_type_id_, source0_float_id, source0_id});
+                    const std::uint32_t source1_float_id = allocate_id();
+                    append_instruction(function_body_, 124U, {
+                        float_type_id_, source1_float_id, source1_id});
+                    const std::uint32_t sum_float_id = allocate_id();
+                    append_instruction(function_body_, 129U, {
+                        float_type_id_, sum_float_id,
+                        source0_float_id, source1_float_id});
+                    result_id = allocate_id();
+                    append_instruction(function_body_, 124U, {
+                        uint_type_id_, result_id, sum_float_id});
                 }
                 group_result[lane] = result_id;
             }
@@ -388,10 +435,10 @@ private:
 
 } // namespace detail
 
-// Emit one float32x4 input, no-literal MOV groups, and one completed identity
-// position export. Unsupported shader behavior is rejected explicitly.
+// Emit one float32x4 input, no-literal MOV/ADD groups, and one completed
+// identity position export. Unsupported shader behavior is rejected explicitly.
 [[nodiscard]] inline std::vector<std::uint32_t>
-emit_latte_spirv_vertex_position_mov_subset(
+emit_latte_spirv_vertex_position_subset(
     const LatteShaderIrProgram& program,
     LatteSpirvVertexInput vertex_input)
 {
@@ -402,6 +449,14 @@ emit_latte_spirv_vertex_position_mov_subset(
     }
     detail::LatteSpirvVertexSubsetBuilder builder(vertex_input);
     return builder.emit(program);
+}
+
+[[nodiscard]] inline std::vector<std::uint32_t>
+emit_latte_spirv_vertex_position_mov_subset(
+    const LatteShaderIrProgram& program,
+    LatteSpirvVertexInput vertex_input)
+{
+    return emit_latte_spirv_vertex_position_subset(program, vertex_input);
 }
 
 } // namespace affogato::gpu

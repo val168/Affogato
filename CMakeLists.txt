@@ -237,11 +237,14 @@ if(BUILD_TESTING)
         "${CMAKE_CURRENT_BINARY_DIR}/latte_vertex_subset.spv")
     set(AFFOGATO_LATTE_SPIRV_MODIFIERS_TEST_MODULE
         "${CMAKE_CURRENT_BINARY_DIR}/latte_vertex_subset_modifiers.spv")
+    set(AFFOGATO_LATTE_SPIRV_ADD_TEST_MODULE
+        "${CMAKE_CURRENT_BINARY_DIR}/latte_vertex_subset_add.spv")
     add_test(NAME affogato_latte_spirv_tests
         COMMAND affogato_latte_spirv_tests
             --write-modules
             "${AFFOGATO_LATTE_SPIRV_TEST_MODULE}"
-            "${AFFOGATO_LATTE_SPIRV_MODIFIERS_TEST_MODULE}")
+            "${AFFOGATO_LATTE_SPIRV_MODIFIERS_TEST_MODULE}"
+            "${AFFOGATO_LATTE_SPIRV_ADD_TEST_MODULE}")
     set_tests_properties(affogato_latte_spirv_tests PROPERTIES
         FIXTURES_SETUP affogato_latte_spirv_module
     )
@@ -263,6 +266,13 @@ if(BUILD_TESTING)
                 --target-env vulkan1.0
                 "${AFFOGATO_LATTE_SPIRV_MODIFIERS_TEST_MODULE}")
         set_tests_properties(affogato_latte_spirv_modifier_validation PROPERTIES
+            FIXTURES_REQUIRED affogato_latte_spirv_module
+        )
+        add_test(NAME affogato_latte_spirv_add_validation
+            COMMAND "${AFFOGATO_SPIRV_VAL_EXECUTABLE}"
+                --target-env vulkan1.0
+                "${AFFOGATO_LATTE_SPIRV_ADD_TEST_MODULE}")
+        set_tests_properties(affogato_latte_spirv_add_validation PROPERTIES
             FIXTURES_REQUIRED affogato_latte_spirv_module
         )
     endif()

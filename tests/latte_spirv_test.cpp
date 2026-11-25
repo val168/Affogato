@@ -159,10 +159,52 @@ int main(int argc, char* argv[])
     }
     assert(rejected_unsupported_opcode);
 
-    if (argc == 4 && std::string_view(argv[1]) == "--write-modules")
+    auto add_program = program;
+    auto& add_clause = std::get<
+        affogato::gpu::LatteShaderIrAluClause>(
+            add_program.instructions[0U]);
+    for (auto& operation : add_clause.groups[0U].instructions)
+    {
+        operation.opcode = affogato::gpu::latte_alu_op2_add_float_opcode;
+        operation.source1_selector = 1U;
+        operation.source1_channel = operation.destination_component;
+    }
+    const std::vector<std::uint32_t> add_module =
+        affogato::gpu::emit_latte_spirv_vertex_position_subset(
+            add_program,
+            {1U, 0U});
+    assert(module_contains_opcode(add_module, 129U));
+    assert(module_contains_opcode(add_module, 124U));
+
+    add_clause.groups[0U].instructions[0U].source1_absolute = true;
+    add_clause.groups[0U].instructions[0U].source1_negate = true;
+    const std::vector<std::uint32_t> modified_add_module =
+        affogato::gpu::emit_latte_spirv_vertex_position_subset(
+            add_program,
+            {1U, 0U});
+    assert(module_contains_opcode(modified_add_module, 199U));
+    assert(module_contains_opcode(modified_add_module, 198U));
+
+    add_clause.groups[0U].instructions[0U].source1_relative = true;
+    bool rejected_relative_add_source = false;
+    try
+    {
+        static_cast<void>(
+            affogato::gpu::emit_latte_spirv_vertex_position_subset(
+                add_program,
+                {1U, 0U}));
+    }
+    catch (const std::runtime_error&)
+    {
+        rejected_relative_add_source = true;
+    }
+    assert(rejected_relative_add_source);
+
+    if (argc == 5 && std::string_view(argv[1]) == "--write-modules")
     {
         write_module(argv[2], module);
         write_module(argv[3], modified_module);
+        write_module(argv[4], add_module);
     }
     return 0;
 }

@@ -452,7 +452,7 @@ std::vector<DiagnosticVertex> decode_diagnostic_latte_spirv_vertex_draw(
         vertex_shader->program_words,
         true);
     const std::vector<std::uint32_t> decoded_shader_code =
-        emit_latte_spirv_vertex_position_mov_subset(
+        emit_latte_spirv_vertex_position_subset(
             shader_ir,
             {vertex_input_gpr, 0U});
     if (!vertex_shader_code.empty() &&

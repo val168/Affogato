@@ -1,5 +1,21 @@
 # Affogato Development Status
 
+## Bounded Latte binary32 ADD SPIR-V lowering (2026-11-25)
+
+The experimental vertex SPIR-V emitter now lowers no-literal OP2 ADD
+(`0x000`) lanes in addition to MOV lanes. It preserves bit-level source
+absolute/negate modifiers, converts binary32 source bits to SPIR-V floats,
+emits `OpFAdd`, and bitcasts the result back for PV/GPR propagation. Relative
+sources and other unsupported modifiers remain rejected. The encoding and
+`src0 + src1` operation are based on AMD's R700-family ISA manual, section 9.2;
+Latte hardware behavior has not been independently verified. CPU-only tests
+check emitted operations and modifier handling, and `spirv-val` validates the
+generated module. Debug and Release builds passed; CTest passed 7/7 in both,
+including the existing diagnostic Vulkan readback test. That Vulkan test still
+uses the MOV fixture: this checkpoint does not establish runtime execution of
+a guest ADD shader, ordinary guest draw rendering, guest pixel shaders, or
+WWHD. See [`research/12_latte_shader_isa.md`](research/12_latte_shader_isa.md).
+
 ## Guest draw-to-scanout ordering audit (2026-11-25)
 
 Source inspection found why a Vulkan target alone cannot complete guest draw
