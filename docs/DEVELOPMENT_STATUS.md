@@ -19,7 +19,7 @@ snapshots index bytes and referenced vertex data at call time. This queues
 draw records; it does not establish Latte shader or guest render-target
 execution. Predicated draws, GPU address translation, other state operations,
 indirect-buffer recursion, list recording/copy APIs, raw ring processing, and
-GPU retirement remain unsupported. Both supported PM4 draw forms require a
+GPU retirement remain unsupported. All supported PM4 draw forms require a
 zero draw initiator; other values fail explicitly. Debug and Release builds
 passed, with CTest 2/2 in both configurations. The hidden guest-triangle smoke
 test passed in Debug and Release. It includes unpredicated auto-index and
@@ -32,6 +32,14 @@ on whether `INDEX_TYPE` updates one or two shadow slots and whether a zero
 `NUM_INSTANCES` becomes one, so Affogato preserves raw packet state pending
 Latte-specific evidence. Details are in
 [`research/15_latte_command_processor.md`](research/15_latte_command_processor.md).
+The PM4 decoder also accepts unpredicated `DRAW_INDEX_IMMD` packets for the
+32-bit index forms represented by GX2 index types 1 and 9. The embedded
+payload is snapshotted from the copied command words and follows the existing
+draw-time index and vertex snapshot path; the implementation rejects 16-bit
+immediate indices and payload/count mismatches. A focused HLE regression test
+verifies the captured bytes, base-vertex range, and rejection behavior. This
+remains a bounded command-capture feature: it does not execute guest shaders
+or render into a guest color buffer.
 The current PM4 packet implementation and research details are in
 [`research/15_latte_command_processor.md`](research/15_latte_command_processor.md).
 Reference research confirms that normal Cemu `GX2DrawEx` uses a predicate-bit

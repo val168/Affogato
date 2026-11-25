@@ -81,10 +81,11 @@ vertex, `SET_CONFIG_REG` for `VGT_PRIMITIVE_TYPE`, `INDEX_TYPE`,
 `NUM_INSTANCES`, and a predicate-bit `DRAW_INDEX_AUTO`. Its indexed path uses
 `DRAW_INDEX_2` and enables the same predicate bit. This establishes a useful
 reference sequence. Affogato accepts unpredicated `DRAW_INDEX_AUTO` and
-`DRAW_INDEX_2` packets in `GX2DirectCallDisplayList`; predicate-bit Type-3
-headers remain rejected. Each packet requires primitive mode, instance count,
-and base vertex earlier in the same list; indexed packets also require a
-preceding `INDEX_TYPE`. Both draw kinds currently require a zero draw-initiator
+`DRAW_INDEX_2` and 32-bit `DRAW_INDEX_IMMD` packets in
+`GX2DirectCallDisplayList`; predicate-bit Type-3 headers remain rejected. Each
+packet requires primitive mode, instance count, and base vertex earlier in the
+same list; indexed packets also require a preceding `INDEX_TYPE`. All supported
+draw kinds currently require a zero draw-initiator
 word. Indexed packets must satisfy `count <= MAX_SIZE`, use an index type
 already understood by the existing draw snapshot path, and specify a
 low-32-bit physical address inside Affogato's flat guest-memory backing. The
@@ -108,6 +109,24 @@ Latte-specific specification. Affogato records the draw-initiator word but
 does not decode its bitfields. The same guide describes
 `NUM_INSTANCES` only as a one-DWORD command packet; it does not establish
 Latte's zero-count behavior.
+
+AMD's R6xx/R7xx guide, section 5.3.2.5, describes `DRAW_INDEX_IMMD` as a
+Type-3 packet containing index count, draw initiator, and embedded index data;
+it documents paired 16-bit and 32-bit payloads selected by `INDEX_TYPE`.
+Section 5.3.2.1 defines `DRAW_INDEX_IMMD_BE` as a special 16-bit form that
+requires 16-in-32 bit swapping. Decaf's Latte
+[`DrawIndexImmd` structure](https://github.com/decaf-emu/decaf-emu/blob/master/src/libgpu/latte/latte_pm4_commands.h#L369-L401)
+also models the count, initiator, and embedded index span. Cemu's
+`GX2DrawIndexedImmediateEx` helper provides implementation evidence for the
+payload packing, including separate U16 and U32 handling, but write-gather
+endian conversion is command-buffer specific. Affogato accepts only
+unpredicated `DRAW_INDEX_IMMD` with U32 index types 1 or 9. It reconstructs the
+original guest payload bytes from decoded DWORDs and reuses the existing
+synchronous index/vertex snapshot path; it does not interpret those bytes as
+Latte shader or render-target behavior. U16 immediate packets,
+`DRAW_INDEX_IMMD_BE`, predicate evaluation, and Latte-produced packet fixtures
+remain unsupported or unverified. This implementation boundary is narrower
+than packet formats documented for related AMD generations.
 
 Decaf's GPL-3.0 [`DrawIndex2` packet structure](https://github.com/decaf-emu/decaf-emu/blob/master/src/libgpu/latte/latte_pm4_commands.h#L348-L367)
 serializes those fields in that order and models the base as `phys_addr`;
@@ -166,7 +185,8 @@ single host callback: constructing a guest display list, queuing an indirect
 call into a command stream, and submitting a display-list buffer directly.
 Affogato registers `GX2DirectCallDisplayList` for a narrow subset: it validates
 and copies the guest bytes at call time, then queues supported config/context/
-control register writes and unpredicated `DRAW_INDEX_AUTO` / `DRAW_INDEX_2`
+control register writes and unpredicated `DRAW_INDEX_AUTO`, `DRAW_INDEX_2`, and
+32-bit `DRAW_INDEX_IMMD`
 records in guest order. A self-contained auto-draw requires preceding
 `VGT_PRIMITIVE_TYPE`,
 `NUM_INSTANCES`, and base-vertex writes in that list; absent base-instance
@@ -224,14 +244,16 @@ verified against a Latte fixture or Wii U behavior.
   Type-3 NOP, config/context/control Type-0 writes, Type-3 register sets, and
   one-word `INDEX_TYPE` / `NUM_INSTANCES` packets into typed register commands;
   `GX2SetContextState` rejects draw packets. `GX2DirectCallDisplayList` also
-  captures unpredicated `DRAW_INDEX_AUTO` and `DRAW_INDEX_2` packets when their
-  required setup state occurs earlier in the same list. The indexed form
-  accepts low-32-bit addresses within flat guest memory, checks `MAX_SIZE`, and
-  snapshots U16/U32 indices plus referenced vertex bytes at HLE time when
-  diagnostic capture is enabled. Base vertex is carried separately and
-  applied when resolving indexed vertex ranges. It rejects predicated headers,
-  unsupported index/address forms, zero instance counts, truncation, and
-  unsupported operations.
+  captures unpredicated `DRAW_INDEX_AUTO`, `DRAW_INDEX_2`, and 32-bit
+  `DRAW_INDEX_IMMD` packets when their required setup state occurs earlier in
+  the same list. The DMA indexed form accepts low-32-bit addresses within flat
+  guest memory, checks `MAX_SIZE`, and snapshots U16/U32 indices plus referenced
+  vertex bytes at HLE time when diagnostic capture is enabled. The immediate
+  form preserves embedded U32 index bytes from the copied command list and
+  snapshots referenced vertex bytes at HLE time. Base vertex is carried
+  separately and applied when resolving indexed vertex ranges. It rejects
+  predicated headers, unsupported index/address forms, zero instance counts,
+  truncation, and unsupported operations.
   Queuing/capturing these values does not execute guest Latte shaders or
   retire a fence.
 - `tests/cpu_test.cpp` covers command-pool attributes, context-state setup,
@@ -239,10 +261,11 @@ verified against a Latte fixture or Wii U behavior.
   playback, Type-3 NOP payload advancement, ordered Type-0 sequential and
   Type-3 config/context/control register writes, and range and malformed-list
   rejection. The direct-call test also verifies an ordered unpredicated
-  `DRAW_INDEX_AUTO` and `DRAW_INDEX_2`, draw-time guest-byte capture, maximum
-  count, physical-range, and nonzero-base-vertex rejection, malformed-payload
-  and missing-state atomicity, unsupported-opcode atomicity, alignment and
-  guest-memory errors, and empty-list behavior.
+  `DRAW_INDEX_AUTO`, `DRAW_INDEX_2`, and 32-bit `DRAW_INDEX_IMMD`, draw-time
+  guest-byte capture, immediate-payload/count and index-width rejection,
+  maximum count, physical-range, and nonzero-base-vertex rejection,
+  malformed-payload and missing-state atomicity, unsupported-opcode atomicity,
+  alignment and guest-memory errors, and empty-list behavior.
 - `Gx2RegisterState::apply` models writes to `SQ_VTX_SEMANTIC_CLEAR` at
   `0x288E0`: each set bit clears the matching entry in the 32-word semantic
   table beginning at `0x28380`, storing `0xFFFFFFFF` in the shadow. The clear
@@ -269,7 +292,7 @@ lists and guest-written command streams remain unsupported.
 | Typed GX2 HLE event ordering | Partial and tested | `pending_commands`, register shadow and frontend drain |
 | PM4 packet framing | Partial and tested | Type-0 payload lengths, Type-2 filler and Type-3 lengths; Type-1 remains unsupported |
 | PM4 register writes | Partial and tested | Type-0 sequential writes and Type-3 config/context/control register sets are bounded to supported byte windows |
-| Type-3 operations | Partial and tested | `NOP`, register sets, `INDEX_TYPE`, `NUM_INSTANCES`, and self-contained unpredicated `DRAW_INDEX_AUTO` / bounded `DRAW_INDEX_2`; predicated draws and other opcodes are rejected |
+| Type-3 operations | Partial and tested | `NOP`, register sets, `INDEX_TYPE`, `NUM_INSTANCES`, and self-contained unpredicated `DRAW_INDEX_AUTO`, bounded `DRAW_INDEX_2`, and 32-bit `DRAW_INDEX_IMMD`; predicated draws and other opcodes are rejected |
 | Indirect buffers / nested lists | Missing | Guest bounds, alignment, recursion limit, lifetime and ordering |
 | Context display-list generation/decoding | Partial | generation leaves size zero; empty lists restore the register shadow; bounded Type-0 config/context/control writes, Type-2/Type-3 register sets, `INDEX_TYPE`, and `NUM_INSTANCES` decode into typed writes; GPU packet execution is not implemented |
 | GPU completion and waits | Partial / not renderer-backed | Must follow actual submission, fence, and memory-visibility semantics |

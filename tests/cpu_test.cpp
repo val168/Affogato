@@ -29224,6 +29224,92 @@ void gx2_direct_call_display_list_hle_tests()
     assert(indexed_draw_command.draw_vertex_data.front().byte_offset == 8U);
     assert(indexed_draw_command.draw_vertex_data.front().bytes.size() == 24U);
 
+    // DRAW_INDEX_IMMD carries the index bytes in the command stream. The
+    // snapshot must preserve those bytes instead of treating them as a guest
+    // physical-memory address.
+    constexpr std::array<std::uint32_t, 16U> immediate_indexed_draw_words{
+        0xC0016F00U, 0U, 1U,
+        0xC0016800U, 0x256U, 4U,
+        0xC0002A00U, 9U,
+        0xC0002F00U, 1U,
+        0xC0042E00U, 3U, 0U, 1U, 2U, 0U};
+    for (std::size_t index = 0U; index < immediate_indexed_draw_words.size(); ++index)
+    {
+        core.memory.write32_be(
+            display_list_address + static_cast<std::uint32_t>(
+                index * sizeof(std::uint32_t)),
+            immediate_indexed_draw_words[index]);
+    }
+
+    const std::size_t commands_before_immediate_draw =
+        core.gx2.pending_commands.size();
+    const RunResult decoded_immediate_draw = invoke(
+        display_list_address,
+        static_cast<std::uint32_t>(immediate_indexed_draw_words.size() *
+                                   sizeof(std::uint32_t)));
+    assert(decoded_immediate_draw.reason == StopReason::instruction_limit);
+    assert(core.gx2.pending_commands.size() == commands_before_immediate_draw + 5U);
+    const Gx2Command& immediate_draw_command = core.gx2.pending_commands.back();
+    assert(immediate_draw_command.type == Gx2CommandType::draw);
+    assert((immediate_draw_command.draw_call ==
+            std::optional<Gx2DrawCall>{Gx2DrawCall{
+                4U, 3U, true, 9U, 0U, 0U, 1U, 0U, 0U, 1U}}));
+    assert(immediate_draw_command.draw_index_data.has_value());
+    assert(immediate_draw_command.draw_index_data->is_valid);
+    assert(immediate_draw_command.draw_index_data->byte_offset == 0U);
+    assert((immediate_draw_command.draw_index_data->bytes ==
+            std::vector<std::uint8_t>{
+                0U, 0U, 0U, 1U,
+                0U, 0U, 0U, 2U,
+                0U, 0U, 0U, 0U}));
+    assert(immediate_draw_command.draw_vertex_data.size() == 1U);
+    assert(immediate_draw_command.draw_vertex_data.front().is_valid);
+    assert(immediate_draw_command.draw_vertex_data.front().byte_offset == 8U);
+    assert(immediate_draw_command.draw_vertex_data.front().bytes.size() == 24U);
+
+    const auto commands_before_invalid_immediate_draw =
+        core.gx2.pending_commands;
+    auto mismatched_immediate_draw_words = immediate_indexed_draw_words;
+    mismatched_immediate_draw_words[11U] = 2U;
+    for (std::size_t index = 0U;
+         index < mismatched_immediate_draw_words.size();
+         ++index)
+    {
+        core.memory.write32_be(
+            display_list_address + static_cast<std::uint32_t>(
+                index * sizeof(std::uint32_t)),
+            mismatched_immediate_draw_words[index]);
+    }
+    const RunResult mismatched_immediate_draw = invoke(
+        display_list_address,
+        static_cast<std::uint32_t>(mismatched_immediate_draw_words.size() *
+                                   sizeof(std::uint32_t)));
+    assert(mismatched_immediate_draw.reason == StopReason::hle_error);
+    assert(mismatched_immediate_draw.detail.find(
+               "payload does not match its 32-bit index count") !=
+           std::string::npos);
+    assert(core.gx2.pending_commands == commands_before_invalid_immediate_draw);
+
+    auto unsupported_immediate_index_type_words = immediate_indexed_draw_words;
+    unsupported_immediate_index_type_words[7U] = 4U;
+    for (std::size_t index = 0U;
+         index < unsupported_immediate_index_type_words.size();
+         ++index)
+    {
+        core.memory.write32_be(
+            display_list_address + static_cast<std::uint32_t>(
+                index * sizeof(std::uint32_t)),
+            unsupported_immediate_index_type_words[index]);
+    }
+    const RunResult unsupported_immediate_index_type = invoke(
+        display_list_address,
+        static_cast<std::uint32_t>(unsupported_immediate_index_type_words.size() *
+                                   sizeof(std::uint32_t)));
+    assert(unsupported_immediate_index_type.reason == StopReason::hle_error);
+    assert(unsupported_immediate_index_type.detail.find(
+               "supports only 32-bit index state") != std::string::npos);
+    assert(core.gx2.pending_commands == commands_before_invalid_immediate_draw);
+
     const auto commands_before_invalid_indexed_draw =
         core.gx2.pending_commands;
     auto oversized_indexed_draw_words = indexed_draw_packet_words;

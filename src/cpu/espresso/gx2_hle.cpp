@@ -1011,7 +1011,11 @@ std::vector<Gx2Command> decode_gx2_pm4_display_list_commands(
         const bool is_auto_draw = decoded_command.type ==
             affogato::gpu::LattePm4DisplayListCommandType::draw_index_auto;
         const bool is_indexed_draw = decoded_command.type ==
-            affogato::gpu::LattePm4DisplayListCommandType::draw_index_2;
+            affogato::gpu::LattePm4DisplayListCommandType::draw_index_2 ||
+            decoded_command.type == affogato::gpu::
+                LattePm4DisplayListCommandType::draw_index_immediate;
+        const bool is_immediate_indexed_draw = decoded_command.type ==
+            affogato::gpu::LattePm4DisplayListCommandType::draw_index_immediate;
         if (is_auto_draw || is_indexed_draw)
         {
             if (!allow_pm4_draw_packets)
@@ -1031,7 +1035,7 @@ std::vector<Gx2Command> decode_gx2_pm4_display_list_commands(
             {
                 throw HleExecutionError(
                     std::string("gx2::") + api_name +
-                    ": DRAW_INDEX_2 is missing INDEX_TYPE state in this list");
+                    ": indexed PM4 draw is missing INDEX_TYPE state in this list");
             }
             if (*instance_count == 0U)
             {
@@ -1046,7 +1050,26 @@ std::vector<Gx2Command> decode_gx2_pm4_display_list_commands(
                     ": PM4 draw uses an unsupported draw initiator value");
             }
 
-            if (is_indexed_draw && decoded_command.index_address >
+            if (is_immediate_indexed_draw &&
+                (*index_type != 1U && *index_type != 9U))
+            {
+                throw HleExecutionError(
+                    std::string("gx2::") + api_name +
+                    ": DRAW_INDEX_IMMD currently supports only 32-bit index state");
+            }
+
+            if (is_immediate_indexed_draw &&
+                decoded_command.immediate_index_words.size() !=
+                    decoded_command.index_count)
+            {
+                throw HleExecutionError(
+                    std::string("gx2::") + api_name +
+                    ": DRAW_INDEX_IMMD payload does not match its 32-bit index count");
+            }
+
+            if (decoded_command.type == affogato::gpu::
+                    LattePm4DisplayListCommandType::draw_index_2 &&
+                decoded_command.index_address >
                 std::numeric_limits<std::uint32_t>::max())
             {
                 throw HleExecutionError(
@@ -1055,7 +1078,8 @@ std::vector<Gx2Command> decode_gx2_pm4_display_list_commands(
                     "physical-memory range");
             }
 
-            if (is_indexed_draw &&
+            if (decoded_command.type == affogato::gpu::
+                    LattePm4DisplayListCommandType::draw_index_2 &&
                 decoded_command.index_count > decoded_command.max_index_count)
             {
                 throw HleExecutionError(
@@ -1068,7 +1092,8 @@ std::vector<Gx2Command> decode_gx2_pm4_display_list_commands(
                 decoded_command.index_count,
                 is_indexed_draw,
                 is_indexed_draw ? *index_type : 0U,
-                is_indexed_draw
+                decoded_command.type == affogato::gpu::
+                        LattePm4DisplayListCommandType::draw_index_2
                     ? static_cast<std::uint32_t>(decoded_command.index_address)
                     : 0U,
                 is_indexed_draw ? 0U : *base_vertex,
@@ -1084,6 +1109,28 @@ std::vector<Gx2Command> decode_gx2_pm4_display_list_commands(
                 0U,
                 0U,
                 draw_call};
+            if (is_immediate_indexed_draw)
+            {
+                Gx2IndexBufferSnapshot index_snapshot{};
+                index_snapshot.index_type = *index_type;
+                index_snapshot.is_valid = true;
+                index_snapshot.bytes.reserve(
+                    decoded_command.immediate_index_words.size() *
+                    sizeof(std::uint32_t));
+                for (const std::uint32_t index_word :
+                     decoded_command.immediate_index_words)
+                {
+                    index_snapshot.bytes.push_back(
+                        static_cast<std::uint8_t>(index_word >> 24U));
+                    index_snapshot.bytes.push_back(
+                        static_cast<std::uint8_t>(index_word >> 16U));
+                    index_snapshot.bytes.push_back(
+                        static_cast<std::uint8_t>(index_word >> 8U));
+                    index_snapshot.bytes.push_back(
+                        static_cast<std::uint8_t>(index_word));
+                }
+                command.draw_index_data = std::move(index_snapshot);
+            }
             commands.push_back(std::move(command));
             continue;
         }
@@ -5765,9 +5812,10 @@ void register_gx2_hle(HleDispatcher& dispatcher)
                         const std::uint64_t byte_count =
                             static_cast<std::uint64_t>(
                                 command.draw_call->element_count) * index_size_bytes;
-                        if ((physical_address % index_size_bytes) != 0U ||
-                            physical_address > core.memory.size() ||
-                            byte_count > core.memory.size() - physical_address)
+                        if (!command.draw_index_data &&
+                            ((physical_address % index_size_bytes) != 0U ||
+                             physical_address > core.memory.size() ||
+                             byte_count > core.memory.size() - physical_address))
                         {
                             throw HleExecutionError(
                                 "gx2::GX2DirectCallDisplayList: DRAW_INDEX_2 "
@@ -5775,7 +5823,17 @@ void register_gx2_hle(HleDispatcher& dispatcher)
                                 "or is misaligned");
                         }
 
-                        if (core.gx2.capture_draw_vertex_data && byte_count != 0U)
+                        if (core.gx2.capture_draw_vertex_data &&
+                            command.draw_index_data)
+                        {
+                            command.draw_vertex_data =
+                                capture_indexed_vertex_data(
+                                    core,
+                                    *command.draw_call,
+                                    *command.draw_index_data);
+                        }
+                        else if (core.gx2.capture_draw_vertex_data &&
+                                 byte_count != 0U)
                         {
                             command.draw_index_data = capture_indexed_draw_data(
                                 core, *command.draw_call);

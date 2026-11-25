@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <span>
+#include <utility>
 #include <vector>
 
 namespace affogato::gpu
@@ -44,6 +45,7 @@ enum class LattePm4DisplayListCommandType
     register_write,
     draw_index_auto,
     draw_index_2,
+    draw_index_immediate,
 };
 
 struct LattePm4RegisterWrite
@@ -63,6 +65,7 @@ struct LattePm4DisplayListCommand
     std::uint32_t draw_initiator{};
     std::uint32_t max_index_count{};
     std::uint64_t index_address{};
+    std::vector<std::uint32_t> immediate_index_words;
 
     bool operator==(const LattePm4DisplayListCommand&) const = default;
 };
@@ -82,7 +85,8 @@ struct LattePm4DisplayListDecodeResult
 // Input words are host-order values decoded from guest big-endian memory.
 // Only bounded config/context/control register writes, Type-2 filler,
 // Type-3 NOP, register-set packets, INDEX_TYPE, NUM_INSTANCES, and
-// unpredicated DRAW_INDEX_AUTO and DRAW_INDEX_2 packets are accepted.
+// unpredicated DRAW_INDEX_AUTO, DRAW_INDEX_2, and DRAW_INDEX_IMMD packets
+// are accepted.
 [[nodiscard]] inline LattePm4DisplayListDecodeResult
 decode_latte_pm4_display_list(
     std::span<const std::uint32_t> words)
@@ -100,6 +104,7 @@ decode_latte_pm4_display_list(
     constexpr std::uint32_t index_type_opcode = 0x2AU;
     constexpr std::uint32_t draw_index_auto_opcode = 0x2DU;
     constexpr std::uint32_t draw_index_2_opcode = 0x27U;
+    constexpr std::uint32_t draw_index_immediate_opcode = 0x2EU;
     constexpr std::uint32_t num_instances_opcode = 0x2FU;
     constexpr std::uint32_t packet_count_shift = 16U;
     constexpr std::uint32_t packet_count_mask = 0x3FFFU;
@@ -224,7 +229,10 @@ decode_latte_pm4_display_list(
                         register_address + register_index * register_stride,
                         words[word_offset + register_index]},
                     0U,
-                    0U});
+                    0U,
+                    0U,
+                    0U,
+                    {}});
             }
 
             word_offset += payload_word_count;
@@ -272,7 +280,10 @@ decode_latte_pm4_display_list(
                     register_address,
                     words[word_offset]},
                 0U,
-                0U});
+                0U,
+                0U,
+                0U,
+                {}});
             ++word_offset;
             continue;
         }
@@ -292,7 +303,10 @@ decode_latte_pm4_display_list(
                 LattePm4DisplayListCommandType::draw_index_auto,
                 {},
                 words[word_offset],
-                words[word_offset + 1U]});
+                words[word_offset + 1U],
+                0U,
+                0U,
+                {}});
             word_offset += payload_word_count;
             continue;
         }
@@ -318,7 +332,33 @@ decode_latte_pm4_display_list(
                 words[word_offset + 3U],
                 words[word_offset + 4U],
                 words[word_offset],
-                index_address});
+                index_address,
+                {}});
+            word_offset += payload_word_count;
+            continue;
+        }
+
+        if (opcode == draw_index_immediate_opcode)
+        {
+            if (payload_word_count < 2U)
+            {
+                result.error =
+                    LattePm4DisplayListError::invalid_packet_payload_length;
+                result.error_word_offset = packet_header_offset;
+                result.commands.clear();
+                return result;
+            }
+
+            LattePm4DisplayListCommand command{};
+            command.type =
+                LattePm4DisplayListCommandType::draw_index_immediate;
+            command.index_count = words[word_offset];
+            command.draw_initiator = words[word_offset + 1U];
+            command.immediate_index_words.assign(
+                words.begin() + static_cast<std::ptrdiff_t>(word_offset + 2U),
+                words.begin() + static_cast<std::ptrdiff_t>(
+                    word_offset + payload_word_count));
+            result.commands.push_back(std::move(command));
             word_offset += payload_word_count;
             continue;
         }
@@ -384,7 +424,10 @@ decode_latte_pm4_display_list(
                         (register_offset + register_index) * register_stride,
                     words[value_index]},
                 0U,
-                0U});
+                0U,
+                0U,
+                0U,
+                {}});
         }
 
         word_offset += payload_word_count;
