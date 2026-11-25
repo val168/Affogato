@@ -262,6 +262,12 @@ private:
 
     void execute_clause(const LatteShaderIrAluClause& clause)
     {
+        if (!clause.op3_groups.empty())
+        {
+            throw std::runtime_error(
+                "Latte SPIR-V vertex subset does not support OP3 groups");
+        }
+
         if (clause.groups.empty())
         {
             throw std::runtime_error(

@@ -40,7 +40,8 @@ namespace
     position_export.component_selectors = {0U, 1U, 2U, 3U};
 
     LatteShaderIrProgram program{};
-    program.instructions.emplace_back(LatteShaderIrAluClause{{move_group}});
+    program.instructions.emplace_back(
+        LatteShaderIrAluClause{{move_group}, {}});
     program.instructions.emplace_back(
         LatteShaderIrExport{true, position_export});
     return program;

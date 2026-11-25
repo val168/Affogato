@@ -33,6 +33,7 @@ struct LatteShaderExecutionResult
 struct LatteShaderIrAluClause
 {
     std::vector<LatteAluOp2InstructionGroup> groups;
+    std::vector<LatteAluOp3InstructionGroup> op3_groups;
 
     bool operator==(const LatteShaderIrAluClause&) const = default;
 };
@@ -55,7 +56,7 @@ struct LatteShaderIrProgram
     bool operator==(const LatteShaderIrProgram&) const = default;
 };
 
-// Decode only the straight-line CPU/SPIR-V subset: OP2 ALU clauses and normal
+// Decode only the straight-line CPU subset: OP2 or OP3 ALU clauses and normal
 // exports. A vertex caller may declare its leading canonical CALL_FS handled
 // separately by the captured fetch-shader subset.
 [[nodiscard]] inline LatteShaderIrProgram decode_latte_shader_ir_subset(
@@ -129,15 +130,45 @@ struct LatteShaderIrProgram
         {
             const std::vector<LatteAluClauseSlot> slots =
                 decode_latte_alu_clause_slots(guest_big_endian_words, record);
-            std::vector<LatteAluOp2InstructionGroup> groups =
-                decode_latte_alu_op2_groups(slots);
-            if (groups.empty())
+            bool contains_op2 = false;
+            bool contains_op3 = false;
+            for (const LatteAluClauseSlot& slot : slots)
+            {
+                const std::uint32_t opcode_encoding =
+                    (slot.word1 >> latte_alu_opcode_encoding_shift) &
+                    latte_alu_opcode_encoding_mask;
+                contains_op3 = contains_op3 ||
+                    opcode_encoding >= latte_alu_first_op3_encoding;
+                contains_op2 = contains_op2 ||
+                    opcode_encoding < latte_alu_first_op3_encoding;
+            }
+
+            if (contains_op2 && contains_op3)
             {
                 throw std::runtime_error(
-                    "Latte shader subset requires at least one OP2 group per ALU clause");
+                    "Latte shader subset does not support mixed OP2/OP3 ALU clauses");
+            }
+
+            std::vector<LatteAluOp2InstructionGroup> groups;
+            std::vector<LatteAluOp3InstructionGroup> op3_groups;
+            if (contains_op3)
+            {
+                op3_groups = decode_latte_alu_op3_groups(slots);
+            }
+            else
+            {
+                groups = decode_latte_alu_op2_groups(slots);
+            }
+
+            if (groups.empty() && op3_groups.empty())
+            {
+                throw std::runtime_error(
+                    "Latte shader subset requires at least one supported ALU group per clause");
             }
             program.instructions.emplace_back(
-                LatteShaderIrAluClause{std::move(groups)});
+                LatteShaderIrAluClause{
+                    std::move(groups),
+                    std::move(op3_groups)});
             continue;
         }
 
@@ -187,10 +218,27 @@ namespace detail
         if (const auto* alu_clause =
                 std::get_if<LatteShaderIrAluClause>(&instruction))
         {
-            static_cast<void>(execute_latte_alu_op2_clause(
-                alu_clause->groups,
-                result.registers,
-                constant_file));
+            if (!alu_clause->groups.empty() &&
+                !alu_clause->op3_groups.empty())
+            {
+                throw std::runtime_error(
+                    "Latte shader IR clause contains both OP2 and OP3 groups");
+            }
+
+            if (!alu_clause->op3_groups.empty())
+            {
+                static_cast<void>(execute_latte_alu_op3_clause(
+                    alu_clause->op3_groups,
+                    result.registers,
+                    constant_file));
+            }
+            else
+            {
+                static_cast<void>(execute_latte_alu_op2_clause(
+                    alu_clause->groups,
+                    result.registers,
+                    constant_file));
+            }
             continue;
         }
 

@@ -32844,6 +32844,102 @@ void latte_control_flow_decoder_tests()
     assert(shader_result.exports[0U].values[0U].components[3U] ==
         shader_registers[1U][3U]);
 
+    auto op3_shader_words = linear_shader_words;
+    std::array<LatteShaderRegister, 8U> op3_initial_registers =
+        shader_registers;
+    op3_initial_registers[1U] = {
+        0x3F000001U,
+        0x80000000U,
+        0x7FC12345U,
+        0x00000000U};
+    op3_initial_registers[2U] = {
+        0xBF000001U,
+        0x00000000U,
+        0xFFC54321U,
+        0x3F800000U};
+    op3_initial_registers[4U] = {
+        0x00000000U,
+        0x80000000U,
+        0x3F800000U,
+        0x7FC00000U};
+
+    for (std::uint32_t lane = 0U; lane < 4U; ++lane)
+    {
+        const bool last_in_group = lane == 3U;
+        std::uint16_t op3_opcode =
+            affogato::gpu::latte_alu_op3_conditional_move_equal_opcode;
+        if (lane == 2U)
+        {
+            op3_opcode =
+                affogato::gpu::latte_alu_op3_conditional_move_greater_opcode;
+        }
+        else if (lane == 3U)
+        {
+            op3_opcode = affogato::gpu::
+                latte_alu_op3_conditional_move_greater_equal_opcode;
+        }
+
+        const std::uint32_t word0 =
+            4U |
+            (lane << 10U) |
+            (1U << 13U) |
+            (lane << 23U) |
+            (last_in_group ? 0x80000000U : 0U);
+        const std::uint32_t word1 =
+            2U |
+            (lane << 10U) |
+            (static_cast<std::uint32_t>(op3_opcode)
+                << affogato::gpu::latte_alu_opcode_encoding_shift) |
+            (3U << 21U) |
+            (lane << 29U);
+        const std::size_t slot_word_offset = 64U + lane * 2U;
+        op3_shader_words[slot_word_offset] = std::byteswap(word0);
+        op3_shader_words[slot_word_offset + 1U] = std::byteswap(word1);
+    }
+
+    const auto op3_shader_ir =
+        affogato::gpu::decode_latte_shader_ir_subset(op3_shader_words);
+    const auto* op3_ir_clause = std::get_if<
+        affogato::gpu::LatteShaderIrAluClause>(
+            &op3_shader_ir.instructions[0U]);
+    assert(op3_ir_clause != nullptr);
+    assert(op3_ir_clause->groups.empty());
+    assert(op3_ir_clause->op3_groups.size() == 1U);
+    assert(op3_ir_clause->op3_groups[0U].instructions.size() == 4U);
+
+    const auto op3_shader_result = execute_latte_shader_subset(
+        op3_shader_words,
+        op3_initial_registers);
+    assert((op3_shader_result.registers[3U] == LatteShaderRegister{
+        0x3F000001U,
+        0x80000000U,
+        0x7FC12345U,
+        0x3F800000U}));
+    assert(op3_shader_result.exports.size() == 1U);
+    assert(op3_shader_result.exports[0U].values[0U].components[2U] ==
+        0x7FC12345U);
+
+    auto mixed_op2_op3_shader_words = op3_shader_words;
+    const std::size_t mixed_slot_word_offset = 64U;
+    const std::uint32_t first_op3_word1 =
+        std::byteswap(mixed_op2_op3_shader_words[mixed_slot_word_offset + 1U]);
+    mixed_op2_op3_shader_words[mixed_slot_word_offset + 1U] =
+        std::byteswap(
+            first_op3_word1 &
+            ~(affogato::gpu::latte_alu_opcode_encoding_mask <<
+              affogato::gpu::latte_alu_opcode_encoding_shift));
+    bool rejected_mixed_op2_op3_clause = false;
+    try
+    {
+        static_cast<void>(affogato::gpu::decode_latte_shader_ir_subset(
+            mixed_op2_op3_shader_words));
+    }
+    catch (const std::runtime_error&)
+    {
+        rejected_mixed_op2_op3_clause = true;
+    }
+    assert(rejected_mixed_op2_op3_clause);
+
     const auto fetched_shader_ir =
         affogato::gpu::decode_latte_shader_ir_subset(
             captured_guest_words,

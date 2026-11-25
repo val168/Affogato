@@ -392,6 +392,39 @@ evaluate_latte_normal_export(
     return group_vector;
 }
 
+// Execute an OP3-only clause transactionally. PV is forwarded between its
+// groups; the caller starts a new clause with no incoming PV value.
+[[nodiscard]] inline LatteShaderRegister execute_latte_alu_op3_clause(
+    std::span<const LatteAluOp3InstructionGroup> groups,
+    std::span<LatteShaderRegister> guest_registers,
+    const LatteShaderConstantFile* constant_file = nullptr)
+{
+    if (groups.empty())
+    {
+        throw std::runtime_error("Latte OP3 clause must contain a group");
+    }
+
+    std::vector<LatteShaderRegister> working_registers(
+        guest_registers.begin(),
+        guest_registers.end());
+    std::optional<LatteShaderRegister> previous_vector;
+
+    for (const LatteAluOp3InstructionGroup& group : groups)
+    {
+        previous_vector = execute_latte_alu_op3_vector_group(
+            group,
+            working_registers,
+            previous_vector,
+            constant_file);
+    }
+
+    std::copy(
+        working_registers.begin(),
+        working_registers.end(),
+        guest_registers.begin());
+    return *previous_vector;
+}
+
 // Evaluate supported GPR, inline-constant, constant-file, and prior-PV MOVs.
 // The group executor applies destination writes and returns the vector result;
 // previous-scalar state and other source modes remain unsupported.

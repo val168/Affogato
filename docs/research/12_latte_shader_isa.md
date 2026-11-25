@@ -9,10 +9,11 @@ program words when `GX2SetVertexShader`, `GX2SetGeometryShader`, or
 at each draw. Structural control-flow decoding recognizes fixture-verified
 `CALL_FS`, `EXPORT`, `EXPORT_DONE`, and one ALU-clause header encoding. Raw
 ALU slots, OP2/OP3 fields, no-literal OP2/OP3 groups, and narrow four-lane
-shader execution subsets are also implemented. A typed IR represents the
-bounded OP2 CPU subset; an experimental SPIR-V vertex emitter lowers MOV,
-binary32 ADD, IEEE multiply, and DX10 min/max groups. The diagnostic Vulkan triangle still uses
-an explicit bounded shader test path rather than normal guest programs.
+shader execution subsets are also implemented. A typed IR represents bounded
+OP2 or OP3 CPU clauses; an experimental SPIR-V vertex emitter lowers MOV,
+binary32 ADD, IEEE multiply, and DX10 min/max OP2 groups. The diagnostic
+Vulkan triangle still uses an explicit bounded shader test path rather than
+normal guest programs.
 
 Relevant local implementation:
 
@@ -63,11 +64,12 @@ Relevant local implementation:
   guest-register updates only after all supported groups succeed. It also
   materializes the supported normal-export swizzle form into typed output
   records.
-- `src/gpu/latte_shader_program.hpp` executes a straight-line subset containing
-  the supported ALU clauses and normal exports. It requires caller-provided
-  initial GPRs and explicitly rejects fetch-shader calls, branches, texture
-  clauses, and all unsupported CF operations. It is a testable CPU execution
-  slice, not connected to guest draw submission or Vulkan.
+- `src/gpu/latte_shader_program.hpp` executes straight-line OP2-only or
+  supported OP3-only ALU clauses and normal exports. It requires
+  caller-provided initial GPRs, rejects mixed OP2/OP3 clauses, and explicitly
+  rejects fetch-shader calls, branches, texture clauses, and unsupported CF
+  operations. It is a testable CPU execution slice, not connected to guest
+  draw submission or Vulkan. The SPIR-V emitter still accepts OP2 clauses only.
 
 ## Evidence categories
 
@@ -690,16 +692,17 @@ unsupported later group cannot leave partial host-side test state. Tests cover
 PV forwarding across two groups and rejection without partial register writes.
 This is R700-family behavior and has not been validated against Latte hardware.
 
-`execute_latte_shader_subset()` connects the tested clause executor and normal
-export materializer for a bounded straight-line program. It processes CF
-records in guest order, resolves each ALU clause from its bytecode address,
-and records `EXPORT`/`EXPORT_DONE` batches in order. The caller supplies the
-initial GPR file, which means fetch-shader input generation is outside this
-subset. Unsupported CF records, including `CALL_FS`, fail explicitly; this
-avoids pretending to execute a fetch shader or control-flow operation. The
-fixture test removes the fetch-shader record from an assembled MOV/export
-program and verifies the resulting GPR and position export. No shader is yet
-executed by the emulator's normal draw path.
+`execute_latte_shader_subset()` connects the tested OP2 and OP3 clause
+executors and normal export materializer for a bounded straight-line program.
+It processes CF records in guest order, resolves each ALU clause from its
+bytecode address, and records `EXPORT`/`EXPORT_DONE` batches in order. A clause
+may contain only OP2 or only OP3 slots; mixed clauses are explicitly rejected
+until a unified group model can preserve mixed slot semantics. The caller
+supplies the initial GPR file, which means fetch-shader input generation is
+outside this subset. Unsupported CF records, including `CALL_FS`, fail
+explicitly. The fixture test exercises an encoded OP3 clause through program
+decoding, execution, and position export. No shader is yet executed by the
+emulator's normal draw path, and the SPIR-V emitter remains OP2-only.
 
 Normal `EXPORT` and `EXPORT_DONE` records use the R700 Chapter 3.4.1
 `CF_ALLOC_EXPORT_DWORD0` and `CF_ALLOC_EXPORT_DWORD1_SWIZ` formats. The manual

@@ -1,5 +1,17 @@
 # Affogato Development Status
 
+## OP3-only CPU shader clauses (2026-11-25)
+
+The straight-line CPU shader subset now identifies and decodes ALU clauses
+containing OP3 instructions, stores their groups in the existing shader IR,
+and executes the supported conditional-move family transactionally. The
+decoder rejects clauses containing both OP2 and OP3 slots instead of
+misclassifying them. Regression coverage builds a guest-word fixture, decodes
+the program, executes it, and verifies register/export results plus mixed
+clause rejection. Debug and Release CTest each passed 18/18. The SPIR-V emitter
+still rejects OP3 groups, and normal GX2 draws do not invoke this CPU shader
+subset. See [`research/12_latte_shader_isa.md`](research/12_latte_shader_isa.md).
+
 ## Bounded Latte OP3 conditional moves (2026-11-25)
 
 Added CPU-reference evaluation for floating-point OP3 `CMOVE` (`0x18`),

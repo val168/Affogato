@@ -14,6 +14,10 @@
 namespace affogato::gpu
 {
 
+inline constexpr std::uint32_t latte_alu_opcode_encoding_shift = 13U;
+inline constexpr std::uint32_t latte_alu_opcode_encoding_mask = 0x1FU;
+inline constexpr std::uint32_t latte_alu_first_op3_encoding = 0x08U;
+
 enum class LatteControlFlowOpcode : std::uint8_t
 {
     call_fetch_shader = 0x13U,
@@ -385,13 +389,10 @@ decode_latte_alu_clause_slots(
 [[nodiscard]] inline LatteAluOp2Instruction decode_latte_alu_op2_instruction(
     const LatteAluClauseSlot& slot)
 {
-    constexpr std::uint32_t op3_encoding_shift = 13U;
-    constexpr std::uint32_t op3_encoding_mask = 0x1FU;
-    constexpr std::uint32_t first_op3_encoding = 0x08U;
-
     const std::uint32_t op3_encoding =
-        (slot.word1 >> op3_encoding_shift) & op3_encoding_mask;
-    if (op3_encoding >= first_op3_encoding)
+        (slot.word1 >> latte_alu_opcode_encoding_shift) &
+        latte_alu_opcode_encoding_mask;
+    if (op3_encoding >= latte_alu_first_op3_encoding)
     {
         throw std::runtime_error(
             "Latte ALU slot uses OP3 encoding, not the OP2 layout");
@@ -435,13 +436,10 @@ decode_latte_alu_clause_slots(
 [[nodiscard]] inline LatteAluOp3Instruction decode_latte_alu_op3_instruction(
     const LatteAluClauseSlot& slot)
 {
-    constexpr std::uint32_t op3_encoding_shift = 13U;
-    constexpr std::uint32_t op3_encoding_mask = 0x1FU;
-    constexpr std::uint32_t first_op3_encoding = 0x08U;
-
     const std::uint32_t opcode =
-        (slot.word1 >> op3_encoding_shift) & op3_encoding_mask;
-    if (opcode < first_op3_encoding)
+        (slot.word1 >> latte_alu_opcode_encoding_shift) &
+        latte_alu_opcode_encoding_mask;
+    if (opcode < latte_alu_first_op3_encoding)
     {
         throw std::runtime_error(
             "Latte ALU slot uses OP2 encoding, not the OP3 layout");
