@@ -616,7 +616,8 @@ decode_diagnostic_latte_spirv_pixel_shader(
                     "Vulkan varying passthrough requires exactly one matched guest pixel input");
             }
             decoded_shader_code =
-                emit_latte_spirv_fragment_varying_passthrough_subset(
+                emit_latte_spirv_fragment_matched_move_subset(
+                    shader_ir,
                     linked_inputs.front());
         }
         else
@@ -893,7 +894,7 @@ void VulkanRenderer::consume_guest_commands(
                 translated_fragment_shader_code);
         }
         else if (draw_policy == GuestDrawPolicy::
-                     diagnostic_latte_vertex_varying_passthrough_base_zero)
+                     diagnostic_latte_vertex_fragment_matched_move_base_zero)
         {
             const std::vector<LatteLinkedPixelShaderInput> linked_inputs =
                 decode_diagnostic_latte_spirv_pixel_shader(
@@ -958,7 +959,7 @@ void VulkanRenderer::consume_guest_commands(
                         draw_policy == GuestDrawPolicy::
                                 diagnostic_latte_vertex_fragment_spirv_position_base_zero ||
                             draw_policy == GuestDrawPolicy::
-                                diagnostic_latte_vertex_varying_passthrough_base_zero
+                                diagnostic_latte_vertex_fragment_matched_move_base_zero
                             ? latte_guest_color_buffer_pipeline_
                             : guest_color_buffer_diagnostic_pipeline_);
                 if (existing_update == guest_color_buffer_updates_.end())
@@ -1007,7 +1008,7 @@ void VulkanRenderer::consume_guest_commands(
             translated_fragment_shader_code);
     }
     else if (draw_policy == GuestDrawPolicy::
-                 diagnostic_latte_vertex_varying_passthrough_base_zero)
+                 diagnostic_latte_vertex_fragment_matched_move_base_zero)
     {
         set_latte_graphics_pipeline(
             translated_vertex_shader_code,
@@ -1024,7 +1025,7 @@ void VulkanRenderer::consume_guest_commands(
     diagnostic_draw_uses_latte_vertex_pipeline_ =
         diagnostic_draw_uses_latte_vertex_pipeline_ ||
         draw_policy == GuestDrawPolicy::
-            diagnostic_latte_vertex_varying_passthrough_base_zero;
+            diagnostic_latte_vertex_fragment_matched_move_base_zero;
 }
 
 cpu::espresso::Gx2ColorBufferSnapshot

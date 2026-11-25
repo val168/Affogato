@@ -1,29 +1,28 @@
 # Affogato Development Status
 
-## Matched varying through Vulkan readback (2026-11-25)
+## Matched varying and guest MOV through Vulkan readback (2026-11-25)
 
-The new `--gx2-guest-triangle-varying-passthrough-smoke-test` runs a controlled
+The new `--gx2-guest-triangle-matched-varying-move-smoke-test` runs a controlled
 guest PPC/GX2 setup whose vertex shader exports a parameter with semantic
 `0x31`. Affogato captures the draw-time VS/PS descriptors, links that semantic,
 emits the guest VS position and parameter export at matching SPIR-V locations,
-and uses the explicit diagnostic fragment passthrough. Vulkan interpolates the
-varying; deterministic readback verifies a green gradient in the emulated color
-buffer and swapchain frame, and the scanout copy path remains in the test. Full
-Debug and Release CTest passed 34/34. This
-does not execute the guest pixel shader, support ordinary game draw routing, or
-establish WWHD rendering.
+and translates the captured guest four-lane MOV group into a Vulkan fragment
+shader reading the matched varying. Vulkan interpolates the varying;
+deterministic readback verifies a green gradient in the emulated color buffer
+and swapchain frame, and the scanout copy path remains in the test. This
+executes the tested guest MOV subset, while other guest pixel operations,
+ordinary game draw routing, and WWHD rendering remain unsupported.
+Full Debug and Release CTest passed 35/35.
 
-## Explicit fragment varying passthrough module (2026-11-25)
+## Fragment varying interface fixture (2026-11-25)
 
-A diagnostic-only fragment module can now consume one semantic-linked vertex
-parameter at the pixel input's location and write the interpolated `float4` to
-MRT0. It accepts only the default perspective interpolation mode; flat,
-no-perspective, centroid, sample, and point-sprite inputs fail explicitly. The
-test confirms producer and consumer modules use the same location and validates
-both with `spirv-val`. The later controlled integration combines the modules,
-exercises Vulkan interpolation, and verifies framebuffer readback. Guest
-fragment shader execution, ordinary draw routing, and WWHD output remain
-unverified.
+An explicit fragment passthrough module remains as an interface fixture and
+accepts only the default perspective interpolation mode; flat, no-perspective,
+centroid, sample, and point-sprite inputs fail explicitly. The separate matched
+MOV module now consumes one linked `float4`, executes the captured four-lane
+guest MOV group, and applies the guest MRT0 swizzle. Both modules have
+`spirv-val` fixtures; only the MOV module is used by the controlled graphics
+integration.
 
 ## Vertex shader parameter exports to SPIR-V (2026-11-25)
 
@@ -47,14 +46,15 @@ black triangle, and guest color-buffer/scanout checks still pass. Cemu's current
 `LatteShader_CreatePSInputTable()` reads this field and asserts values are at
 most 1; the other two encodings remain based on related-family documentation
 and are not exercised end to end. This constant-folding path still rejects
-matched varyings; a separate opt-in diagnostic verifies one perspective
-varying through Vulkan using a fragment passthrough. The bounded MOV shader is evaluated on the host with constant
-inputs, and its color is emitted as a SPIR-V constant; this does not mean the
+matched varyings; a separate opt-in integration translates one perspective
+varying and its guest MOV group into the fragment stage. The bounded default-
+input MOV shader is evaluated on the host with constant inputs, and its color
+is emitted as a SPIR-V constant; this does not mean the
 Latte MOV executes in a Vulkan fragment shader. This verifies a controlled
 guest command and shader path under diagnostic policy; ordinary game draw
 routing, general PS ALU, Latte hardware behavior, visible output of this
 pixel-default path, and WWHD rendering remain unverified. The current full
-Debug and Release CTest suites pass 34/34, including `spirv-val` and the varying
+Debug and Release CTest suites pass 35/35, including `spirv-val` and the varying
 readback integration.
 
 ## Visible diagnostic triangle retest (2026-11-25)

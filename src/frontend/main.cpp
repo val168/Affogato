@@ -1970,7 +1970,7 @@ enum class GuestTriangleShader
     spirv_integer_alu_identity,
     spirv_constant_pixel_color,
     spirv_default_pixel_input,
-    spirv_varying_passthrough
+    spirv_matched_varying_move
 };
 
 [[nodiscard]] bool contains_interpolated_green_pixels(
@@ -2017,9 +2017,9 @@ int run_gx2_guest_triangle_test(
     const bool use_latte_pixel_spirv =
         shader == GuestTriangleShader::spirv_constant_pixel_color ||
         shader == GuestTriangleShader::spirv_default_pixel_input ||
-        shader == GuestTriangleShader::spirv_varying_passthrough;
+        shader == GuestTriangleShader::spirv_matched_varying_move;
     const bool use_varying_passthrough =
-        shader == GuestTriangleShader::spirv_varying_passthrough;
+        shader == GuestTriangleShader::spirv_matched_varying_move;
     constexpr std::uint32_t vertex_buffer_address = 0x10000U;
     constexpr std::uint32_t index_buffer_address = 0x4000U;
     constexpr std::uint32_t big_endian_index_buffer_address = 0x5000U;
@@ -2435,7 +2435,8 @@ int run_gx2_guest_triangle_test(
         {
             const std::uint32_t slot = 64U + component * 2U;
             const std::uint16_t source_selector =
-                shader == GuestTriangleShader::spirv_default_pixel_input
+                shader == GuestTriangleShader::spirv_default_pixel_input ||
+                        use_varying_passthrough
                     ? 0U
                     : color_selectors[component];
             const std::uint32_t source_word =
@@ -2904,7 +2905,7 @@ int run_gx2_guest_triangle_test(
     if (use_varying_passthrough)
     {
         draw_policy = affogato::gpu::vulkan::GuestDrawPolicy::
-            diagnostic_latte_vertex_varying_passthrough_base_zero;
+            diagnostic_latte_vertex_fragment_matched_move_base_zero;
     }
     renderer.consume_guest_commands(commands, draw_policy);
     const auto color_buffer_updates =
@@ -3297,11 +3298,11 @@ int run_gx2_guest_triangle_test(
     if (use_varying_passthrough)
     {
         shader_subset_description =
-            "the bounded guest vertex shader position/parameter exports";
+            "the bounded guest vertex position/parameter and pixel MOV subsets";
     }
     const char* fragment_shader_status = use_varying_passthrough
-        ? "an explicit diagnostic fragment passthrough read the matched guest "
-          "varying; guest pixel shader execution remains unsupported.\n"
+        ? "the captured guest fragment MOV subset executed on the matched "
+          "varying; other guest pixel operations remain unsupported.\n"
         : (use_latte_pixel_spirv
         ? "the captured guest pixel shader subset was translated; general Latte "
           "shader translation and WWHD graphics remain unsupported.\n"
@@ -3479,12 +3480,12 @@ int main(int argc, char* argv[])
                     GuestTriangleShader::spirv_default_pixel_input);
             }
             if (std::string_view(argv[1]) ==
-                    "--gx2-guest-triangle-varying-passthrough-smoke-test" &&
+                    "--gx2-guest-triangle-matched-varying-move-smoke-test" &&
                 argc == 2)
             {
                 return run_gx2_guest_triangle_test(
                     false,
-                    GuestTriangleShader::spirv_varying_passthrough);
+                    GuestTriangleShader::spirv_matched_varying_move);
             }
             if (std::string_view(argv[1]) == "--gx2-guest-triangle-display-test" &&
                 argc == 2)
@@ -3514,7 +3515,7 @@ int main(int argc, char* argv[])
                          "       AffogatoFrontend.exe --gx2-guest-triangle-integer-alu-spirv-smoke-test\n"
                          "       AffogatoFrontend.exe --gx2-guest-triangle-pixel-spirv-smoke-test\n"
                          "       AffogatoFrontend.exe --gx2-guest-triangle-pixel-default-spirv-smoke-test\n"
-                         "       AffogatoFrontend.exe --gx2-guest-triangle-varying-passthrough-smoke-test\n"
+                         "       AffogatoFrontend.exe --gx2-guest-triangle-matched-varying-move-smoke-test\n"
                          "       AffogatoFrontend.exe --gx2-guest-triangle-display-test\n";
             return 2;
         }

@@ -702,6 +702,45 @@ int main(int argc, char* argv[])
     }
     assert(rejected_flat_varying_passthrough);
 
+    auto matched_move_program = default_input_fragment_program;
+    auto& matched_move_clause = std::get<
+        affogato::gpu::LatteShaderIrAluClause>(
+            matched_move_program.instructions[0U]);
+    for (affogato::gpu::LatteAluOp2Instruction& move :
+         matched_move_clause.groups[0U].instructions)
+    {
+        move.source0_selector = 1U;
+    }
+    const std::vector<std::uint32_t> matched_move_module =
+        affogato::gpu::emit_latte_spirv_fragment_matched_move_subset(
+            matched_move_program,
+            matched_varying_input);
+    assert(module_contains_opcode(matched_move_module, 15U));
+    assert(module_contains_opcode(matched_move_module, 61U));
+    assert(module_contains_opcode(matched_move_module, 124U));
+    assert(module_contains_opcode(matched_move_module, 62U));
+    assert(module_contains_location(matched_move_module, 1U));
+
+    auto unsupported_matched_move_program = matched_move_program;
+    auto& unsupported_matched_move_clause = std::get<
+        affogato::gpu::LatteShaderIrAluClause>(
+            unsupported_matched_move_program.instructions[0U]);
+    unsupported_matched_move_clause.groups[0U].instructions[0U].opcode =
+        affogato::gpu::latte_alu_op2_add_float_opcode;
+    bool rejected_unsupported_matched_pixel_operation = false;
+    try
+    {
+        static_cast<void>(
+            affogato::gpu::emit_latte_spirv_fragment_matched_move_subset(
+                unsupported_matched_move_program,
+                matched_varying_input));
+    }
+    catch (const std::runtime_error&)
+    {
+        rejected_unsupported_matched_pixel_operation = true;
+    }
+    assert(rejected_unsupported_matched_pixel_operation);
+
     auto swizzled_fragment = fragment_program;
     auto& swizzled_export = std::get<
         affogato::gpu::LatteShaderIrExport>(
@@ -794,7 +833,7 @@ int main(int argc, char* argv[])
     }
     assert(rejected_nonzero_mrt);
 
-    if (argc == 16 && std::string_view(argv[1]) == "--write-modules")
+    if (argc == 17 && std::string_view(argv[1]) == "--write-modules")
     {
         write_module(argv[2], module);
         write_module(argv[3], modified_module);
@@ -810,6 +849,7 @@ int main(int argc, char* argv[])
         write_module(argv[13], default_input_fragment_module);
         write_module(argv[14], parameter_output_module);
         write_module(argv[15], varying_passthrough_module);
+        write_module(argv[16], matched_move_module);
     }
     return 0;
 }

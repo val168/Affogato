@@ -115,28 +115,27 @@ Vulkan's shader interface and interpolation requirements are documented in the
 and [Vulkan rasterization specification](https://docs.vulkan.org/spec/latest/chapters/primsrast.html).
 
 The explicit
-`emit_latte_spirv_fragment_varying_passthrough_subset()` fixture now emits a
+`emit_latte_spirv_fragment_varying_passthrough_subset()` fixture emits a
 fragment `Input` at the linked pixel-input location, loads its `float4`, and
-writes it to MRT0. The fixture pairs that location with the producer-side
-parameter output and validates both modules using `spirv-val`. It rejects flat,
+writes it to MRT0. It remains a diagnostic interface module and rejects flat,
 no-perspective, centroid, sample, and point-sprite inputs until their GX2
-semantics are mapped. This is an explicit diagnostic passthrough, not guest
-pixel-shader execution.
+semantics are mapped. A separate matched-input MOV emitter translates the
+bounded guest pixel program instead of substituting this passthrough module.
 
 ### Controlled matched-varying Vulkan integration (2026-11-25)
 
-The explicit `diagnostic_latte_vertex_varying_passthrough_base_zero` renderer
+The explicit `diagnostic_latte_vertex_fragment_matched_move_base_zero` renderer
 policy connects captured VS/PS descriptor linkage to both SPIR-V modules. The
 HLE fixture issues a parameter export at guest array index 0 with semantic
 `0x31`, and one matched PS input is assigned the same Vulkan location using
-`pixel_input_index`. The vertex module writes the selected guest GPR vector;
-the fragment diagnostic module loads the matching `float4` input and writes it
-to MRT0. The controlled fixture checks a range of green values in Vulkan
+`pixel_input_index`. The vertex module writes the selected guest GPR vector.
+The captured pixel program contains a four-lane OP2 MOV group from that input
+GPR to the MRT0 export GPR; the bounded fragment emitter translates those MOVs
+to SPIR-V. The controlled fixture checks a range of green values in Vulkan
 readback from both the guest color-buffer render and presented frame, then
-exercises scanout. This establishes the Vulkan interface and perspective
-interpolation for that fixture, not independent Latte hardware semantics. The
-captured guest pixel shader is deliberately bypassed; guest fragment
-instruction execution, other interpolation modes, ordinary game draw
+exercises scanout. This establishes Vulkan interface interpolation and guest
+MOV execution for that fixture, not independent Latte hardware semantics.
+Other guest pixel operations, other interpolation modes, ordinary game draw
 selection, and WWHD output remain unsupported.
 
 ## Evidence categories
