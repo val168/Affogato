@@ -11,9 +11,9 @@ at each draw. Structural control-flow decoding recognizes fixture-verified
 ALU slots, OP2/OP3 fields, no-literal OP2/OP3 groups, and narrow four-lane
 shader execution subsets are also implemented. A typed IR represents bounded
 OP2 or OP3 CPU clauses; an experimental SPIR-V vertex emitter lowers MOV,
-binary32 ADD, IEEE multiply, DX10 min/max OP2 groups, and conditional-move OP3
-groups. The diagnostic Vulkan triangle still uses an explicit bounded shader
-test path rather than normal guest programs.
+binary32 ADD, IEEE multiply, DX10 min/max OP2 groups, and floating-point and
+integer conditional-move OP3 groups. The diagnostic Vulkan triangle still
+uses an explicit bounded shader test path rather than normal guest programs.
 
 Relevant local implementation:
 
@@ -416,8 +416,8 @@ arbitrary guest fetch programs or claiming Latte hardware verification.
 | GX2 vertex/pixel/geometry descriptor capture | Implemented and tested as capture | HLE descriptor/program range checks and draw-time state snapshots |
 | Fetch-shader parsing and semantic linkage | Narrow CPU subset | `latte_vertex_fetch.hpp` recognizes Affogato-generated semantic VTX records, decodes supported formats, applies destination selectors (component swizzles, 0.0, 1.0, and masked writes), extracts a complete correctly typed 32-entry `SQ_VTX_SEMANTIC` table from a draw snapshot, and maps attributes plus immutable vertex snapshots into a caller-provided register file at an explicit vertex index and `VS_GPR_BASE + 1 + table index`. `execute_latte_vertex_shader_subset()` passes this input file to the supported CPU shader subset in one deterministic test path. Writes are validated transactionally. AMD references differ on semantic-field width (R6xx: 8; R700 ISA Chapter 5: 9, while its Chapter 9 semantic-format table says 8); Latte applicability remains unresolved. Arbitrary guest fetch programs are not executed, normal draw dispatch is not connected, and system-generated inputs remain unsupported. No Wii U hardware verification. |
 | Latte shader control-flow decoding | Partial | `latte_shader_decoder.hpp` decodes fixture-verified `CALL_FS`, `EXPORT`, `EXPORT_DONE`, and `ALU` clause headers, including EOP, bounded clause ranges, normal export metadata, and `CALL_FS` address/pop/condition/nesting fields. The generic straight-line executor rejects calls. A vertex-specific path accepts one leading canonical call only after separately processing the captured HLE fetch subset. Other call forms, branches, and loops remain unsupported; exports are typed values and are not connected to stage outputs. This behavior is not Wii U hardware-verified. |
-| Latte ALU decoding/execution | Experimental subset | OP2/OP3 fields and LAST-delimited no-literal groups are decoded. The CPU clause/program subset executes OP2 groups and OP3-only groups for floating CMOVE/CMOVGT/CMOVGE, forwards PV within clauses, and transactionally commits supported results. Mixed OP2/OP3 clauses are rejected. Fetch shader execution, ALU.Trans/PS, kcache/literal reads, other opcodes, relative addressing, general control flow, normal draw integration, and Latte-hardware validation remain absent. |
-| Vertex/pixel shader translation | Experimental vertex subset | `latte_spirv_vertex_subset.hpp` emits SPIR-V for no-literal OP2 MOV, binary32 ADD, IEEE binary32 multiply, and DX10 min/max, plus OP3 CMOVE/CMOVGT/CMOVGE groups and one identity position export. A controlled guest GX2 test executes a CMOVGE vertex program through Vulkan with the diagnostic fragment shader and verifies covered/uncovered readback pixels. Pixel shader translation, general interfaces, constants, textures, normal draw integration, and direct Latte hardware validation remain missing. |
+| Latte ALU decoding/execution | Experimental subset | OP2/OP3 fields and LAST-delimited no-literal groups are decoded. The CPU clause/program subset executes OP2 groups and OP3-only groups for floating CMOVE/CMOVGT/CMOVGE and integer CMOVE_INT/CMOVGT_INT/CMOVGE_INT, forwards PV within clauses, and transactionally commits supported results. Integer conditions use raw-zero equality and signed comparisons; integer source negation is rejected. Mixed OP2/OP3 clauses are rejected. Fetch shader execution, ALU.Trans/PS, kcache/literal reads, other opcodes, relative addressing, general control flow, normal draw integration, and Latte-hardware validation remain absent. |
+| Vertex/pixel shader translation | Experimental vertex subset | `latte_spirv_vertex_subset.hpp` emits SPIR-V for no-literal OP2 MOV, binary32 ADD, IEEE binary32 multiply, and DX10 min/max, plus floating and integer OP3 conditional moves and one identity position export. Controlled guest GX2 tests execute representative conditional-move vertex programs through Vulkan with the diagnostic fragment shader and verify framebuffer readback. Pixel shader translation, general interfaces, constants, textures, normal draw integration, and direct Latte hardware validation remain missing. |
 | Guest shader integration with Vulkan draws | Missing | Shader modules, pipeline cache, descriptor binding, render-target path |
 | WWHD shader requirements | Unknown in Affogato | Existing recorded WWHD runs stop before a guest draw is captured |
 
@@ -557,6 +557,20 @@ subset and OP3 SPIR-V emitter. A controlled Vulkan test verifies one covered
 and one uncovered readback pixel using an OP3 guest vertex program and a
 diagnostic host fragment shader. This is not direct Latte hardware output.
 See the [AMD R700 ISA manual](https://docs.amd.com/v/u/en-US/R700-Family_Instruction_Set_Architecture).
+
+The integer OP3 subset now additionally executes `CMOVE_INT` (`0x1C`),
+`CMOVGT_INT` (`0x1D`), and `CMOVGE_INT` (`0x1E`). AMD's R700-family ISA
+manual, Chapter 9, integer OP3 entries, describes equality to zero, signed
+greater-than-zero, and signed greater-or-equal-zero respectively. The CPU
+reference uses exact 32-bit zero checks and `std::bit_cast<std::int32_t>` for
+the signed comparisons; SPIR-V lowers these through signed `OpBitcast`,
+`OpIEqual`, `OpSGreaterThan`, and `OpSGreaterThanEqual`, then selects the
+original unsigned source bits. Source negation is explicitly rejected for
+these integer forms because this bounded subset does not model an integer
+negation modifier. Regression tests cover zero, negative, positive, and
+`INT_MIN` conditions, SPIR-V validation, and a controlled GX2/Vulkan output
+readback. This is still R700-family evidence rather than Latte hardware
+verification, and the Vulkan fixture uses a diagnostic host fragment shader.
 
 The R700 manual's Chapter 4.3 says the LAST bit delimits groups of ALU slots;
 Chapter 4.6.2 defines PV/PS as results from the previous group. Chapter 4.9.2

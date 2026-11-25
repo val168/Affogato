@@ -36,6 +36,7 @@ public:
         void_type_id_ = allocate_id();
         function_type_id_ = allocate_id();
         float_type_id_ = allocate_id();
+        int_type_id_ = allocate_id();
         uint_type_id_ = allocate_id();
         vector_type_id_ = allocate_id();
         input_pointer_type_id_ = allocate_id();
@@ -64,7 +65,11 @@ public:
         append_instruction(types_, 33U, {
             function_type_id_, void_type_id_});
         append_instruction(types_, 22U, {float_type_id_, 32U});
+        append_instruction(types_, 21U, {int_type_id_, 32U, 1U});
         append_instruction(types_, 21U, {uint_type_id_, 32U, 0U});
+        signed_zero_id_ = allocate_id();
+        append_instruction(constants_, 43U, {
+            int_type_id_, signed_zero_id_, 0U});
         bool_type_id_ = allocate_id();
         append_instruction(types_, 20U, {bool_type_id_});
         append_instruction(types_, 23U, {vector_type_id_, float_type_id_, 4U});
@@ -291,7 +296,13 @@ private:
                      operation.opcode !=
                          latte_alu_op3_conditional_move_greater_opcode &&
                      operation.opcode !=
-                         latte_alu_op3_conditional_move_greater_equal_opcode) ||
+                         latte_alu_op3_conditional_move_greater_equal_opcode &&
+                     operation.opcode !=
+                         latte_alu_op3_conditional_move_equal_integer_opcode &&
+                     operation.opcode !=
+                         latte_alu_op3_conditional_move_greater_integer_opcode &&
+                     operation.opcode !=
+                         latte_alu_op3_conditional_move_greater_equal_integer_opcode) ||
                     operation.destination_component != lane ||
                     operation.last_in_group != (lane == 3U) ||
                     operation.destination_gpr >= registers_.size() ||
@@ -304,6 +315,21 @@ private:
                 {
                     throw std::runtime_error(
                         "Latte SPIR-V vertex subset received an unsupported OP3 operation or modifier");
+                }
+
+                const bool is_integer_operation =
+                    operation.opcode ==
+                        latte_alu_op3_conditional_move_equal_integer_opcode ||
+                    operation.opcode ==
+                        latte_alu_op3_conditional_move_greater_integer_opcode ||
+                    operation.opcode ==
+                        latte_alu_op3_conditional_move_greater_equal_integer_opcode;
+                if (is_integer_operation &&
+                    (operation.source0_negate || operation.source1_negate ||
+                     operation.source2_negate))
+                {
+                    throw std::runtime_error(
+                        "Latte SPIR-V integer OP3 conditional move does not support source negation");
                 }
 
                 std::uint32_t source0_id = source_value(
@@ -332,32 +358,59 @@ private:
                     false,
                     operation.source2_negate);
 
-                const std::uint32_t source0_float_id = allocate_id();
-                append_instruction(function_body_, 124U, {
-                    float_type_id_, source0_float_id, source0_id});
-                const std::uint32_t zero_float_id = allocate_id();
-                append_instruction(function_body_, 124U, {
-                    float_type_id_, zero_float_id, constant(0U)});
                 std::uint32_t comparison_id = allocate_id();
                 std::uint16_t comparison_opcode = 0U;
-                switch (operation.opcode)
+                std::uint32_t comparison_source_id = 0U;
+                std::uint32_t zero_id = 0U;
+                if (is_integer_operation)
                 {
-                case latte_alu_op3_conditional_move_equal_opcode:
-                    comparison_opcode = 180U;
-                    break;
-                case latte_alu_op3_conditional_move_greater_opcode:
-                    comparison_opcode = 186U;
-                    break;
-                case latte_alu_op3_conditional_move_greater_equal_opcode:
-                    comparison_opcode = 190U;
-                    break;
-                default:
-                    throw std::runtime_error(
-                        "Latte SPIR-V vertex subset received an unsupported OP3 opcode");
+                    comparison_source_id = allocate_id();
+                    append_instruction(function_body_, 124U, {
+                        int_type_id_, comparison_source_id, source0_id});
+                    zero_id = signed_zero_id_;
+                    switch (operation.opcode)
+                    {
+                    case latte_alu_op3_conditional_move_equal_integer_opcode:
+                        comparison_opcode = 170U;
+                        break;
+                    case latte_alu_op3_conditional_move_greater_integer_opcode:
+                        comparison_opcode = 173U;
+                        break;
+                    case latte_alu_op3_conditional_move_greater_equal_integer_opcode:
+                        comparison_opcode = 175U;
+                        break;
+                    default:
+                        throw std::runtime_error(
+                            "Latte SPIR-V vertex subset received an unsupported integer OP3 opcode");
+                    }
+                }
+                else
+                {
+                    comparison_source_id = allocate_id();
+                    append_instruction(function_body_, 124U, {
+                        float_type_id_, comparison_source_id, source0_id});
+                    const std::uint32_t zero_float_id = allocate_id();
+                    append_instruction(function_body_, 124U, {
+                        float_type_id_, zero_float_id, constant(0U)});
+                    zero_id = zero_float_id;
+                    switch (operation.opcode)
+                    {
+                    case latte_alu_op3_conditional_move_equal_opcode:
+                        comparison_opcode = 180U;
+                        break;
+                    case latte_alu_op3_conditional_move_greater_opcode:
+                        comparison_opcode = 186U;
+                        break;
+                    case latte_alu_op3_conditional_move_greater_equal_opcode:
+                        comparison_opcode = 190U;
+                        break;
+                    default:
+                        throw std::runtime_error(
+                            "Latte SPIR-V vertex subset received an unsupported floating-point OP3 opcode");
+                    }
                 }
                 append_instruction(function_body_, comparison_opcode, {
-                    bool_type_id_, comparison_id,
-                    source0_float_id, zero_float_id});
+                    bool_type_id_, comparison_id, comparison_source_id, zero_id});
 
                 const std::uint32_t result_id = allocate_id();
                 append_instruction(function_body_, 169U, {
@@ -570,7 +623,9 @@ private:
     std::uint32_t void_type_id_{};
     std::uint32_t function_type_id_{};
     std::uint32_t float_type_id_{};
+    std::uint32_t int_type_id_{};
     std::uint32_t uint_type_id_{};
+    std::uint32_t signed_zero_id_{};
     std::uint32_t bool_type_id_{};
     std::uint32_t vector_type_id_{};
     std::uint32_t input_pointer_type_id_{};

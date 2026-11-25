@@ -1,5 +1,20 @@
 # Affogato Development Status
 
+## OP3 integer conditional moves (2026-11-25)
+
+The experimental CPU shader subset and vertex SPIR-V emitter now support OP3
+`CMOVE_INT` (`0x1C`), `CMOVGT_INT` (`0x1D`), and `CMOVGE_INT` (`0x1E`).
+Equality compares the raw 32-bit condition to zero; greater-than and
+greater-or-equal interpret the condition as signed 32-bit. Integer source
+negation is rejected. Tests cover zero, negative, positive, and `INT_MIN`
+conditions, select emission, SPIR-V validation, and a controlled guest shader
+readback. Debug and Release CTest each passed 22/22. The graphics test uses the
+existing diagnostic host fragment shader and controlled GX2 path; this is not
+normal guest draw integration, Latte hardware verification, visible-window
+verification, or WWHD rendering. The opcode semantics follow AMD's R700-family
+manual (Chapter 9, integer OP3 entries); their exact applicability to Latte
+remains unverified.
+
 ## OP3 conditional moves in SPIR-V (2026-11-25)
 
 The experimental vertex SPIR-V emitter now lowers OP3 `CMOVE`, `CMOVGT`, and

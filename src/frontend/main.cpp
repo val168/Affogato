@@ -1925,7 +1925,8 @@ enum class GuestTriangleShader
     spirv_minimum_self,
     spirv_maximum_zero,
     spirv_minimum_zero,
-    spirv_conditional_move
+    spirv_conditional_move,
+    spirv_integer_conditional_move
 };
 
 int run_gx2_guest_triangle_test(
@@ -2088,8 +2089,15 @@ int run_gx2_guest_triangle_test(
     vertex_shader_program[70U] = 0x010C0080U;
     vertex_shader_program[71U] = 0x900C6060U;
     if (use_latte_spirv &&
-        shader == GuestTriangleShader::spirv_conditional_move)
+        (shader == GuestTriangleShader::spirv_conditional_move ||
+         shader == GuestTriangleShader::spirv_integer_conditional_move))
     {
+        const std::uint16_t conditional_move_opcode =
+            shader == GuestTriangleShader::spirv_integer_conditional_move
+                ? affogato::gpu::
+                    latte_alu_op3_conditional_move_greater_equal_integer_opcode
+                : affogato::gpu::
+                    latte_alu_op3_conditional_move_greater_equal_opcode;
         for (std::uint32_t component = 0U; component < 4U; ++component)
         {
             const std::uint32_t slot = 64U + component * 2U;
@@ -2104,9 +2112,7 @@ int run_gx2_guest_triangle_test(
             const std::uint32_t destination_word =
                 affogato::gpu::latte_alu_source_zero_selector |
                 (component << 10U) |
-                (static_cast<std::uint32_t>(
-                     affogato::gpu::
-                         latte_alu_op3_conditional_move_greater_equal_opcode)
+                (static_cast<std::uint32_t>(conditional_move_opcode)
                  << affogato::gpu::latte_alu_opcode_encoding_shift) |
                 (3U << 21U) |
                 (component << 29U);
@@ -2708,7 +2714,8 @@ int run_gx2_guest_triangle_test(
         shader == GuestTriangleShader::spirv_multiply_zero ||
         shader == GuestTriangleShader::spirv_maximum_zero ||
         shader == GuestTriangleShader::spirv_minimum_zero ||
-        shader == GuestTriangleShader::spirv_conditional_move;
+        shader == GuestTriangleShader::spirv_conditional_move ||
+        shader == GuestTriangleShader::spirv_integer_conditional_move;
     if (verify_shader_output)
     {
         renderer.render_frame();
@@ -2747,7 +2754,8 @@ int run_gx2_guest_triangle_test(
             shader_sample_x = (shader_frame->width * 60U) / 100U;
             shader_sample_y = (shader_frame->height * 23U) / 40U;
         }
-        else if (shader == GuestTriangleShader::spirv_conditional_move)
+        else if (shader == GuestTriangleShader::spirv_conditional_move ||
+                 shader == GuestTriangleShader::spirv_integer_conditional_move)
         {
             shader_sample_x = (shader_frame->width * 80U) / 100U;
             shader_sample_y = (shader_frame->height * 60U) / 100U;
@@ -2778,7 +2786,8 @@ int run_gx2_guest_triangle_test(
                 ")");
         }
 
-        if (shader == GuestTriangleShader::spirv_conditional_move)
+        if (shader == GuestTriangleShader::spirv_conditional_move ||
+            shader == GuestTriangleShader::spirv_integer_conditional_move)
         {
             const std::uint32_t outside_x =
                 (shader_frame->width * 60U) / 100U;
@@ -2891,7 +2900,12 @@ int run_gx2_guest_triangle_test(
     if (shader == GuestTriangleShader::spirv_conditional_move)
     {
         shader_subset_description =
-            "the bounded OP3 conditional-move-to-position SPIR-V vertex subset";
+            "the bounded OP3 floating conditional-move-to-position SPIR-V vertex subset";
+    }
+    if (shader == GuestTriangleShader::spirv_integer_conditional_move)
+    {
+        shader_subset_description =
+            "the bounded OP3 signed-integer conditional-move-to-position SPIR-V vertex subset";
     }
     std::cout << "GX2 float32/float16/UNORM8x4 triangle-list, indexed, strip, and fan "
               << "geometry, "
@@ -3017,6 +3031,14 @@ int main(int argc, char* argv[])
                     false,
                     GuestTriangleShader::spirv_conditional_move);
             }
+            if (std::string_view(argv[1]) ==
+                    "--gx2-guest-triangle-op3-integer-conditional-move-spirv-smoke-test" &&
+                argc == 2)
+            {
+                return run_gx2_guest_triangle_test(
+                    false,
+                    GuestTriangleShader::spirv_integer_conditional_move);
+            }
             if (std::string_view(argv[1]) == "--gx2-guest-triangle-display-test" &&
                 argc == 2)
             {
@@ -3039,6 +3061,7 @@ int main(int argc, char* argv[])
                          "       AffogatoFrontend.exe --gx2-guest-triangle-maximum-zero-spirv-smoke-test\n"
                          "       AffogatoFrontend.exe --gx2-guest-triangle-minimum-zero-spirv-smoke-test\n"
                          "       AffogatoFrontend.exe --gx2-guest-triangle-op3-conditional-move-spirv-smoke-test\n"
+                         "       AffogatoFrontend.exe --gx2-guest-triangle-op3-integer-conditional-move-spirv-smoke-test\n"
                          "       AffogatoFrontend.exe --gx2-guest-triangle-display-test\n";
             return 2;
         }

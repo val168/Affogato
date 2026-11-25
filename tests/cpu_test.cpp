@@ -34433,6 +34433,10 @@ void latte_alu_op3_execution_tests()
     using affogato::gpu::latte_alu_op3_conditional_move_equal_opcode;
     using affogato::gpu::latte_alu_op3_conditional_move_greater_opcode;
     using affogato::gpu::latte_alu_op3_conditional_move_greater_equal_opcode;
+    using affogato::gpu::latte_alu_op3_conditional_move_equal_integer_opcode;
+    using affogato::gpu::latte_alu_op3_conditional_move_greater_integer_opcode;
+    using affogato::gpu::
+        latte_alu_op3_conditional_move_greater_equal_integer_opcode;
 
     const auto make_instruction = [](
         std::uint16_t opcode,
@@ -34551,6 +34555,72 @@ void latte_alu_op3_execution_tests()
         0xDEADBEEFU,
         0xDEADBEEFU,
         0xDEADBEEFU}));
+
+    std::array<LatteShaderRegister, 4U> integer_guest_registers{};
+    integer_guest_registers[0U] = {
+        0x00000000U,
+        0xFFFFFFFFU,
+        0x00000001U,
+        0x80000000U};
+    integer_guest_registers[1U] = {
+        0x11111111U,
+        0x22222222U,
+        0x33333333U,
+        0x44444444U};
+    integer_guest_registers[2U] = {
+        0xAAAAAAAAU,
+        0xBBBBBBBBU,
+        0xCCCCCCCCU,
+        0xDDDDDDDDU};
+    integer_guest_registers[3U].fill(0xDEADBEEFU);
+
+    LatteAluOp3InstructionGroup integer_group{};
+    integer_group.instructions = {
+        make_instruction(
+            latte_alu_op3_conditional_move_equal_integer_opcode,
+            0U,
+            0U),
+        make_instruction(
+            latte_alu_op3_conditional_move_equal_integer_opcode,
+            1U,
+            1U),
+        make_instruction(
+            latte_alu_op3_conditional_move_greater_integer_opcode,
+            2U,
+            2U),
+        make_instruction(
+            latte_alu_op3_conditional_move_greater_equal_integer_opcode,
+            3U,
+            3U,
+            true)};
+    const LatteShaderRegister integer_result =
+        execute_latte_alu_op3_vector_group(
+            integer_group,
+            integer_guest_registers);
+    assert((integer_result == LatteShaderRegister{
+        0x11111111U,
+        0xBBBBBBBBU,
+        0x33333333U,
+        0xDDDDDDDDU}));
+    assert(integer_guest_registers[3U] == integer_result);
+
+    auto negated_integer_condition = make_instruction(
+        latte_alu_op3_conditional_move_greater_integer_opcode,
+        0U,
+        2U);
+    negated_integer_condition.source0_negate = true;
+    bool rejected_integer_negate = false;
+    try
+    {
+        static_cast<void>(evaluate_latte_alu_op3_conditional_move_value(
+            negated_integer_condition,
+            integer_guest_registers));
+    }
+    catch (const std::runtime_error&)
+    {
+        rejected_integer_negate = true;
+    }
+    assert(rejected_integer_negate);
 }
 
 void gx2_set_shader_mode_ex_hle_tests()

@@ -282,6 +282,29 @@ int main(int argc, char* argv[])
     assert(module_contains_opcode(conditional_move_module, 190U));
     assert(module_contains_opcode(conditional_move_module, 169U));
 
+    auto integer_conditional_move_program = conditional_move_program;
+    auto& integer_conditional_move_clause = std::get<
+        affogato::gpu::LatteShaderIrAluClause>(
+            integer_conditional_move_program.instructions[0U]);
+    auto& integer_conditional_move_instructions =
+        integer_conditional_move_clause.op3_groups[0U].instructions;
+    integer_conditional_move_instructions[0U].opcode = affogato::gpu::
+        latte_alu_op3_conditional_move_equal_integer_opcode;
+    integer_conditional_move_instructions[1U].opcode = affogato::gpu::
+        latte_alu_op3_conditional_move_greater_integer_opcode;
+    integer_conditional_move_instructions[2U].opcode = affogato::gpu::
+        latte_alu_op3_conditional_move_greater_equal_integer_opcode;
+    integer_conditional_move_instructions[3U].opcode = affogato::gpu::
+        latte_alu_op3_conditional_move_greater_equal_integer_opcode;
+    const std::vector<std::uint32_t> integer_conditional_move_module =
+        affogato::gpu::emit_latte_spirv_vertex_position_subset(
+            integer_conditional_move_program,
+            {1U, 0U});
+    assert(module_contains_opcode(integer_conditional_move_module, 170U));
+    assert(module_contains_opcode(integer_conditional_move_module, 173U));
+    assert(module_contains_opcode(integer_conditional_move_module, 175U));
+    assert(module_contains_opcode(integer_conditional_move_module, 169U));
+
     conditional_move_clause.op3_groups[0U]
         .instructions[0U].source2_relative = true;
     bool rejected_relative_op3_source = false;
@@ -313,7 +336,7 @@ int main(int argc, char* argv[])
     }
     assert(rejected_relative_add_source);
 
-    if (argc == 9 && std::string_view(argv[1]) == "--write-modules")
+    if (argc == 10 && std::string_view(argv[1]) == "--write-modules")
     {
         write_module(argv[2], module);
         write_module(argv[3], modified_module);
@@ -322,6 +345,7 @@ int main(int argc, char* argv[])
         write_module(argv[6], maximum_module);
         write_module(argv[7], minimum_module);
         write_module(argv[8], conditional_move_module);
+        write_module(argv[9], integer_conditional_move_module);
     }
     return 0;
 }

@@ -22,6 +22,12 @@ inline constexpr std::uint16_t latte_alu_op3_conditional_move_greater_opcode =
     0x019U;
 inline constexpr std::uint16_t
     latte_alu_op3_conditional_move_greater_equal_opcode = 0x01AU;
+inline constexpr std::uint16_t
+    latte_alu_op3_conditional_move_equal_integer_opcode = 0x01CU;
+inline constexpr std::uint16_t
+    latte_alu_op3_conditional_move_greater_integer_opcode = 0x01DU;
+inline constexpr std::uint16_t
+    latte_alu_op3_conditional_move_greater_equal_integer_opcode = 0x01EU;
 inline constexpr std::uint16_t latte_alu_op2_add_float_opcode = 0x000U;
 inline constexpr std::uint16_t latte_alu_op2_multiply_ieee_opcode = 0x002U;
 inline constexpr std::uint16_t latte_alu_op2_maximum_dx10_opcode = 0x005U;
@@ -255,7 +261,13 @@ evaluate_latte_normal_export(
         instruction.opcode !=
             latte_alu_op3_conditional_move_greater_opcode &&
         instruction.opcode !=
-            latte_alu_op3_conditional_move_greater_equal_opcode)
+            latte_alu_op3_conditional_move_greater_equal_opcode &&
+        instruction.opcode !=
+            latte_alu_op3_conditional_move_equal_integer_opcode &&
+        instruction.opcode !=
+            latte_alu_op3_conditional_move_greater_integer_opcode &&
+        instruction.opcode !=
+            latte_alu_op3_conditional_move_greater_equal_integer_opcode)
     {
         throw std::runtime_error(
             "Latte OP3 conditional move received an unsupported opcode");
@@ -284,6 +296,19 @@ evaluate_latte_normal_export(
             "Latte OP3 conditional move destination is outside a four-component GPR");
     }
 
+    const bool is_integer_operation =
+        instruction.opcode == latte_alu_op3_conditional_move_equal_integer_opcode ||
+        instruction.opcode == latte_alu_op3_conditional_move_greater_integer_opcode ||
+        instruction.opcode ==
+            latte_alu_op3_conditional_move_greater_equal_integer_opcode;
+    if (is_integer_operation &&
+        (instruction.source0_negate || instruction.source1_negate ||
+         instruction.source2_negate))
+    {
+        throw std::runtime_error(
+            "Latte integer OP3 conditional move does not support source negation");
+    }
+
     const auto read_source = [&](std::uint16_t selector,
                                  std::uint8_t channel,
                                  bool negate)
@@ -305,19 +330,27 @@ evaluate_latte_normal_export(
         instruction.source0_selector,
         instruction.source0_channel,
         instruction.source0_negate);
-    const float condition = std::bit_cast<float>(condition_bits);
     bool take_source1 = false;
 
     switch (instruction.opcode)
     {
     case latte_alu_op3_conditional_move_equal_opcode:
-        take_source1 = condition == 0.0F;
+        take_source1 = std::bit_cast<float>(condition_bits) == 0.0F;
         break;
     case latte_alu_op3_conditional_move_greater_opcode:
-        take_source1 = condition > 0.0F;
+        take_source1 = std::bit_cast<float>(condition_bits) > 0.0F;
         break;
     case latte_alu_op3_conditional_move_greater_equal_opcode:
-        take_source1 = condition >= 0.0F;
+        take_source1 = std::bit_cast<float>(condition_bits) >= 0.0F;
+        break;
+    case latte_alu_op3_conditional_move_equal_integer_opcode:
+        take_source1 = condition_bits == 0U;
+        break;
+    case latte_alu_op3_conditional_move_greater_integer_opcode:
+        take_source1 = std::bit_cast<std::int32_t>(condition_bits) > 0;
+        break;
+    case latte_alu_op3_conditional_move_greater_equal_integer_opcode:
+        take_source1 = std::bit_cast<std::int32_t>(condition_bits) >= 0;
         break;
     default:
         throw std::runtime_error(
