@@ -6,7 +6,7 @@
 decoder. It accepts Type-0 writes in supported config/context and
 control-constant windows, Type-2 filler, Type-3 NOP, register-set packets,
 `INDEX_TYPE`, `NUM_INSTANCES`, unpredicated `DRAW_INDEX_AUTO`, and a bounded
-`DRAW_INDEX_2` and 32-bit `DRAW_INDEX_IMMD` subsets. The supported draw-register
+`DRAW_INDEX_2` subset plus U16/U32 `DRAW_INDEX_IMMD`. The supported draw-register
 state (primitive mode, instance count, index type, base vertex, and base
 instance) persists across successful direct-call lists, matching the
 command-processor register-shadow model. Each list is decoded using a
@@ -281,3 +281,14 @@ updates in order. It does not implement indirect recursion, recording APIs,
 draw execution, or GPU completion. The fixtures are synthetic and
 cross-checked against related-family packet definitions; no Latte-produced
 stream or WWHD use of these APIs has been verified.
+
+## PM4 immediate U16 index capture (2026-11-25)
+
+`DRAW_INDEX_IMMD` capture now supports WUT index types 0/4 (U16 little/big
+endian) alongside U32 types 1/9. U16 packets require one packed DWORD per pair
+of indices; capture reverses the documented pair-halfword swap and removes an
+odd trailing pad halfword. Deterministic HLE tests verify guest byte order and
+the resulting vertex snapshots for both U16 endian modes. Debug and Release
+builds and CTest passed 2/2. The hidden triangle smoke test passed in both
+builds. It uses diagnostic host shaders and does not establish guest shader
+execution or guest render-target writes.

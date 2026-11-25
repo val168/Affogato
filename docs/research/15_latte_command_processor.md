@@ -119,21 +119,30 @@ Latte's zero-count behavior.
 AMD's R6xx/R7xx guide, section 5.3.2.5, describes `DRAW_INDEX_IMMD` as a
 Type-3 packet containing index count, draw initiator, and embedded index data;
 it documents paired 16-bit and 32-bit payloads selected by `INDEX_TYPE`.
-Section 5.3.2.1 defines `DRAW_INDEX_IMMD_BE` as a special 16-bit form that
-requires 16-in-32 bit swapping. Decaf's Latte
+WUT assigns index types 0/1 to little-endian U16/U32 and 4/9 to big-endian
+U16/U32 ([`GX2IndexType`](https://github.com/devkitPro/wut/blob/master/include/gx2/enum.h#L211-L217)).
+Cemu's `GX2DrawIndexedImmediateEx` packs two U16 indices per DWORD, swaps the
+halfwords, and emits the packed words with command-buffer endian conversion.
+Decaf's write-only `DrawIndexImmdBE16` serializer independently swaps the two
+16-bit indices in each DWORD
+([`latte_pm4_commands.h`](https://github.com/decaf-emu/decaf-emu/blob/master/src/libgpu/latte/latte_pm4_commands.h#L2883-L2916)).
+Affogato now supports the regular Latte `DRAW_INDEX_IMMD` packet with U16 or
+U32 index state. For U16, it validates `ceil(index_count / 2)` packed DWORDs,
+swaps each halfword pair back, and trims an odd final padding halfword so the
+captured bytes retain the guest index buffer's endian representation. Both
+WUT U16 endian modes have deterministic HLE fixtures and feed the existing
+bounded vertex snapshot path. Section 5.3.2.1 of the related AMD guide also
+names a `DRAW_INDEX_IMMD_BE` form, but opcode naming differs across generations;
+Affogato does not add a separate opcode based on that family-only name.
+Decaf's Latte
 [`DrawIndexImmd` structure](https://github.com/decaf-emu/decaf-emu/blob/master/src/libgpu/latte/latte_pm4_commands.h#L369-L401)
-also models the count, initiator, and embedded index span. Cemu's
-`GX2DrawIndexedImmediateEx` helper provides implementation evidence for the
-payload packing, including separate U16 and U32 handling, but write-gather
-endian conversion is command-buffer specific. Affogato accepts only
-unpredicated `DRAW_INDEX_IMMD` with U32 index types 1 or 9. It validates the
-embedded DWORD count in all modes; only diagnostic draw capture reconstructs
-the original guest payload bytes and uses the existing synchronous
-index/vertex snapshot path. It does not interpret those bytes as Latte shader
-or render-target behavior. U16 immediate packets,
-`DRAW_INDEX_IMMD_BE`, predicate evaluation, and Latte-produced packet fixtures
-remain unsupported or unverified. This implementation boundary is narrower
-than packet formats documented for related AMD generations.
+models the packet count, initiator, and embedded index span. In no-capture mode,
+Affogato still validates the packet's expected DWORD count without allocating
+or copying the immediate index words. Snapshot support does not execute Latte
+shaders or write a guest render target. Predication and Latte-produced packet
+fixtures remain unsupported or unavailable. This subset is based on related
+AMD-family documentation and Cemu/Decaf behavior; it has not yet been verified
+against a command stream captured from Wii U hardware.
 
 Decaf's GPL-3.0 [`DrawIndex2` packet structure](https://github.com/decaf-emu/decaf-emu/blob/master/src/libgpu/latte/latte_pm4_commands.h#L348-L367)
 serializes those fields in that order and models the base as `phys_addr`;

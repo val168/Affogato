@@ -1075,21 +1075,33 @@ std::vector<Gx2Command> decode_gx2_pm4_display_list_commands(
             }
 
             if (is_immediate_indexed_draw &&
-                (*updated_draw_state.index_type != 1U &&
+                (*updated_draw_state.index_type != 0U &&
+                 *updated_draw_state.index_type != 1U &&
+                 *updated_draw_state.index_type != 4U &&
                  *updated_draw_state.index_type != 9U))
             {
                 throw HleExecutionError(
                     std::string("gx2::") + api_name +
-                    ": DRAW_INDEX_IMMD currently supports only 32-bit index state");
+                    ": DRAW_INDEX_IMMD uses an unsupported index type");
             }
 
+            std::uint32_t expected_immediate_index_word_count =
+                decoded_command.index_count;
+            if (is_immediate_indexed_draw &&
+                (*updated_draw_state.index_type == 0U ||
+                 *updated_draw_state.index_type == 4U))
+            {
+                expected_immediate_index_word_count =
+                    decoded_command.index_count / 2U +
+                    decoded_command.index_count % 2U;
+            }
             if (is_immediate_indexed_draw &&
                 decoded_command.immediate_index_word_count !=
-                    decoded_command.index_count)
+                    expected_immediate_index_word_count)
             {
                 throw HleExecutionError(
                     std::string("gx2::") + api_name +
-                    ": DRAW_INDEX_IMMD payload does not match its 32-bit index count");
+                    ": DRAW_INDEX_IMMD payload does not match its index count and type");
             }
 
             if (decoded_command.type == affogato::gpu::
@@ -1142,9 +1154,18 @@ std::vector<Gx2Command> decode_gx2_pm4_display_list_commands(
                 index_snapshot.bytes.reserve(
                     decoded_command.immediate_index_words.size() *
                     sizeof(std::uint32_t));
-                for (const std::uint32_t index_word :
+                for (std::uint32_t index_word :
                      decoded_command.immediate_index_words)
                 {
+                    if (*updated_draw_state.index_type == 0U ||
+                        *updated_draw_state.index_type == 4U)
+                    {
+                        // GX2 packs two U16 indices per DWORD with the
+                        // halfwords swapped before command-buffer byte swap.
+                        index_word = (index_word >> 16U) |
+                            (index_word << 16U);
+                    }
+
                     index_snapshot.bytes.push_back(
                         static_cast<std::uint8_t>(index_word >> 24U));
                     index_snapshot.bytes.push_back(
@@ -1153,6 +1174,14 @@ std::vector<Gx2Command> decode_gx2_pm4_display_list_commands(
                         static_cast<std::uint8_t>(index_word >> 8U));
                     index_snapshot.bytes.push_back(
                         static_cast<std::uint8_t>(index_word));
+                }
+                if (*updated_draw_state.index_type == 0U ||
+                    *updated_draw_state.index_type == 4U)
+                {
+                    const std::size_t index_byte_count =
+                        static_cast<std::size_t>(decoded_command.index_count) *
+                        sizeof(std::uint16_t);
+                    index_snapshot.bytes.resize(index_byte_count);
                 }
                 command.draw_index_data = std::move(index_snapshot);
             }

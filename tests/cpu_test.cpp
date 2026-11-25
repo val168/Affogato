@@ -29314,6 +29314,124 @@ void gx2_direct_call_display_list_hle_tests()
     assert(immediate_draw_command.draw_vertex_data.front().byte_offset == 8U);
     assert(immediate_draw_command.draw_vertex_data.front().bytes.size() == 24U);
 
+    const auto verify_u16_immediate_draw = [&](
+        std::uint32_t index_type,
+        std::uint32_t first_packed_word,
+        std::uint32_t second_packed_word,
+        const std::vector<std::uint8_t>& expected_index_bytes) {
+        const std::array<std::uint32_t, 15U> u16_immediate_draw_words{
+            0xC0016F00U, 0U, 0U,
+            0xC0016800U, 0x256U, 4U,
+            0xC0002A00U, index_type,
+            0xC0002F00U, 1U,
+            0xC0032E00U, 3U, 0U, first_packed_word,
+            second_packed_word};
+        for (std::size_t index = 0U;
+             index < u16_immediate_draw_words.size();
+             ++index)
+        {
+            core.memory.write32_be(
+                display_list_address + static_cast<std::uint32_t>(
+                    index * sizeof(std::uint32_t)),
+                u16_immediate_draw_words[index]);
+        }
+
+        const std::size_t commands_before_u16_draw =
+            core.gx2.pending_commands.size();
+        const RunResult result = invoke(
+            display_list_address,
+            static_cast<std::uint32_t>(u16_immediate_draw_words.size() *
+                                       sizeof(std::uint32_t)));
+        assert(result.reason == StopReason::instruction_limit);
+        assert(core.gx2.pending_commands.size() ==
+               commands_before_u16_draw + 5U);
+
+        const Gx2Command& command = core.gx2.pending_commands.back();
+        assert(command.draw_index_data.has_value());
+        assert(command.draw_index_data->is_valid);
+        assert(command.draw_index_data->index_type == index_type);
+        assert(command.draw_index_data->bytes == expected_index_bytes);
+        assert(command.draw_vertex_data.size() == 1U);
+        assert(command.draw_vertex_data.front().is_valid);
+        assert(command.draw_vertex_data.front().byte_offset == 8U);
+    };
+
+    verify_u16_immediate_draw(
+        0U,
+        0x02000100U,
+        0x00000300U,
+        {1U, 0U, 2U, 0U, 3U, 0U});
+    verify_u16_immediate_draw(
+        4U,
+        0x00020001U,
+        0x00000003U,
+        {0U, 1U, 0U, 2U, 0U, 3U});
+
+    constexpr std::array<std::uint32_t, 14U> truncated_u16_immediate_words{
+        0xC0016F00U, 0U, 0U,
+        0xC0016800U, 0x256U, 4U,
+        0xC0002A00U, 0U,
+        0xC0002F00U, 1U,
+        0xC0022E00U, 3U, 0U, 0x02000100U};
+    for (std::size_t index = 0U;
+         index < truncated_u16_immediate_words.size();
+         ++index)
+    {
+        core.memory.write32_be(
+            display_list_address + static_cast<std::uint32_t>(
+                index * sizeof(std::uint32_t)),
+            truncated_u16_immediate_words[index]);
+    }
+    const auto commands_before_truncated_u16 = core.gx2.pending_commands;
+    const RunResult truncated_u16_result = invoke(
+        display_list_address,
+        static_cast<std::uint32_t>(truncated_u16_immediate_words.size() *
+                                   sizeof(std::uint32_t)));
+    assert(truncated_u16_result.reason == StopReason::hle_error);
+    assert(truncated_u16_result.detail.find(
+               "payload does not match its index count and type") !=
+           std::string::npos);
+    assert(core.gx2.pending_commands == commands_before_truncated_u16);
+
+    constexpr std::array<std::uint32_t, 15U> uncaptured_u16_immediate_words{
+        0xC0016F00U, 0U, 0U,
+        0xC0016800U, 0x256U, 4U,
+        0xC0002A00U, 0U,
+        0xC0002F00U, 1U,
+        0xC0032E00U, 3U, 0U, 0x02000100U, 0x00000300U};
+    for (std::size_t index = 0U;
+         index < uncaptured_u16_immediate_words.size();
+         ++index)
+    {
+        core.memory.write32_be(
+            display_list_address + static_cast<std::uint32_t>(
+                index * sizeof(std::uint32_t)),
+            uncaptured_u16_immediate_words[index]);
+    }
+    core.gx2.capture_draw_vertex_data = false;
+    const std::size_t commands_before_uncaptured_u16 =
+        core.gx2.pending_commands.size();
+    const RunResult uncaptured_u16_result = invoke(
+        display_list_address,
+        static_cast<std::uint32_t>(uncaptured_u16_immediate_words.size() *
+                                   sizeof(std::uint32_t)));
+    assert(uncaptured_u16_result.reason == StopReason::instruction_limit);
+    assert(core.gx2.pending_commands.size() ==
+           commands_before_uncaptured_u16 + 5U);
+    assert(!core.gx2.pending_commands.back().draw_index_data);
+    assert(core.gx2.pending_commands.back().draw_vertex_data.empty());
+    core.gx2.capture_draw_vertex_data = true;
+
+    for (std::size_t index = 0U;
+         index < immediate_indexed_draw_words.size();
+         ++index)
+    {
+        core.memory.write32_be(
+            display_list_address + static_cast<std::uint32_t>(
+                index * sizeof(std::uint32_t)),
+            immediate_indexed_draw_words[index]);
+    }
+
     core.gx2.capture_draw_vertex_data = false;
     const std::size_t commands_before_uncaptured_immediate_draw =
         core.gx2.pending_commands.size();
@@ -29350,13 +29468,13 @@ void gx2_direct_call_display_list_hle_tests()
                                    sizeof(std::uint32_t)));
     assert(mismatched_immediate_draw.reason == StopReason::hle_error);
     assert(mismatched_immediate_draw.detail.find(
-               "payload does not match its 32-bit index count") !=
+               "payload does not match its index count and type") !=
            std::string::npos);
     assert(core.gx2.pending_commands == commands_before_invalid_immediate_draw);
     assert(core.gx2.pm4_draw_state == draw_state_before_invalid_list);
 
     auto unsupported_immediate_index_type_words = immediate_indexed_draw_words;
-    unsupported_immediate_index_type_words[7U] = 4U;
+    unsupported_immediate_index_type_words[7U] = 2U;
     for (std::size_t index = 0U;
          index < unsupported_immediate_index_type_words.size();
          ++index)
@@ -29372,7 +29490,7 @@ void gx2_direct_call_display_list_hle_tests()
                                    sizeof(std::uint32_t)));
     assert(unsupported_immediate_index_type.reason == StopReason::hle_error);
     assert(unsupported_immediate_index_type.detail.find(
-               "supports only 32-bit index state") != std::string::npos);
+               "uses an unsupported index type") != std::string::npos);
     assert(core.gx2.pending_commands == commands_before_invalid_immediate_draw);
 
     const auto commands_before_invalid_indexed_draw =
