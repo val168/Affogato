@@ -8,10 +8,13 @@ output. The explicitly selected diagnostic Vulkan policy now decodes the
 captured VS output interface and PS input controls, links their semantics, and
 uses that emitter when the PS inputs resolve entirely to `DEFAULT_VAL`. A
 controlled GX2 HLE fixture issues a draw with a guest pixel shader that reads
-the default vector; Vulkan framebuffer readback verifies the resulting white
-triangle, and guest color-buffer/scanout checks still pass. A matched varying
-is explicitly rejected because stage interface variables and interpolation
-have not been implemented. This verifies a controlled guest command and
+`DEFAULT_VAL=1` (`0,0,0,1`); Vulkan framebuffer readback verifies the resulting
+black triangle, and guest color-buffer/scanout checks still pass. Cemu's current
+`LatteShader_CreatePSInputTable()` reads this field and asserts values are at
+most 1; the other two encodings remain based on related-family documentation
+and are not exercised end to end. A matched varying is explicitly rejected
+because stage interface variables and interpolation have not been
+implemented. This verifies a controlled guest command and
 shader path under diagnostic policy; ordinary game draw routing, general PS
 ALU, Latte hardware behavior, visible-window output, and WWHD rendering remain
 unverified. Debug and Release builds succeeded; both full CTest suites passed

@@ -83,7 +83,13 @@ Relevant local implementation:
   vertex output descriptor and pixel input controls, links semantics, and
   invokes the emitter only when all linked inputs use `DEFAULT_VAL`. Its
   controlled guest fixture reads a default vector in MOV lanes and verifies
-  white fragment pixels using framebuffer readback. This does not establish
+  the `DEFAULT_VAL=1` (`0,0,0,1`) behavior with black fragment pixels using
+  framebuffer readback. Cemu's
+  [`LatteShader_CreatePSInputTable()`](https://github.com/cemu-project/Cemu/blob/main/src/Cafe/HW/Latte/Core/LatteShader.cpp#L2548)
+  reads bits 8–9 of each control and debug-asserts values at most 1, while its
+  source comments list all four related-family values. This controlled test
+  therefore stays within Cemu's observed subset; values 2 and 3 are still
+  unverified on Latte. This does not establish
   ordinary guest draw support; matched varyings lack Vulkan stage-interface
   variables and interpolation, and general fragment ALU remains unsupported.
   The default-value encoding is taken from the AMD R700-family reference

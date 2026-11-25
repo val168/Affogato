@@ -2355,13 +2355,14 @@ int run_gx2_guest_triangle_test(
         if (shader == GuestTriangleShader::spirv_default_pixel_input)
         {
             constexpr std::uint32_t pixel_input_semantic = 0x31U;
-            constexpr std::uint32_t pixel_input_default_value_one = 3U;
+            constexpr std::uint32_t pixel_input_default_value_zero_rgb_one_alpha =
+                1U;
             constexpr std::uint32_t pixel_input_default_value_shift = 8U;
             pixel_shader_descriptor[pixel_shader_input_count_word_index] = 1U;
             pixel_shader_descriptor[
                 pixel_shader_first_input_control_word_index] =
                     pixel_input_semantic |
-                    (pixel_input_default_value_one <<
+                    (pixel_input_default_value_zero_rgb_one_alpha <<
                      pixel_input_default_value_shift);
         }
         pixel_shader_descriptor[0xA4U / sizeof(std::uint32_t)] = 72U * 4U;
@@ -2881,9 +2882,9 @@ int run_gx2_guest_triangle_test(
     if (shader == GuestTriangleShader::spirv_default_pixel_input)
     {
         has_diagnostic_color =
-            diagnostic_pixel[0U] >= 200U &&
-            diagnostic_pixel[1U] >= 200U &&
-            diagnostic_pixel[2U] >= 200U;
+            diagnostic_pixel[0U] <= 40U &&
+            diagnostic_pixel[1U] <= 40U &&
+            diagnostic_pixel[2U] <= 40U;
     }
     if (!has_diagnostic_color)
     {
@@ -3022,10 +3023,10 @@ int run_gx2_guest_triangle_test(
                 shader_frame->pixels[shader_sample_offset] >= 200U &&
                 shader_frame->pixels[shader_sample_offset + 1U] <= 40U &&
                 shader_frame->pixels[shader_sample_offset + 2U] >= 200U;
-            const bool shader_sample_is_white =
-                shader_frame->pixels[shader_sample_offset] >= 200U &&
-                shader_frame->pixels[shader_sample_offset + 1U] >= 200U &&
-                shader_frame->pixels[shader_sample_offset + 2U] >= 200U;
+            const bool shader_sample_is_black =
+                shader_frame->pixels[shader_sample_offset] <= 40U &&
+                shader_frame->pixels[shader_sample_offset + 1U] <= 40U &&
+                shader_frame->pixels[shader_sample_offset + 2U] <= 40U;
             bool shader_sample_matches =
                 shader_sample_is_red == expect_red;
             if (shader == GuestTriangleShader::spirv_constant_pixel_color)
@@ -3034,7 +3035,7 @@ int run_gx2_guest_triangle_test(
             }
             if (shader == GuestTriangleShader::spirv_default_pixel_input)
             {
-                shader_sample_matches = shader_sample_is_white;
+                shader_sample_matches = shader_sample_is_black;
             }
             if (!shader_sample_matches)
             {
@@ -3115,9 +3116,9 @@ int run_gx2_guest_triangle_test(
     if (shader == GuestTriangleShader::spirv_default_pixel_input)
     {
         presented_diagnostic_color =
-            rendered_frame->pixels[sample_offset] >= 200U &&
-            rendered_frame->pixels[sample_offset + 1U] >= 200U &&
-            rendered_frame->pixels[sample_offset + 2U] >= 200U;
+            rendered_frame->pixels[sample_offset] <= 40U &&
+            rendered_frame->pixels[sample_offset + 1U] <= 40U &&
+            rendered_frame->pixels[sample_offset + 2U] <= 40U;
     }
     if (!presented_diagnostic_color)
     {
