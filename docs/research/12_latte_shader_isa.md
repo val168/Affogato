@@ -51,6 +51,30 @@ does not specify Latte's customizations, so its fields and semantics are
 candidate hypotheses until checked against Wii U shader fixtures and
 Latte-focused emulator evidence.
 
+The AMD R700 manual gives a useful structural model for planning a decoder:
+
+- A program's control-flow stream invokes separate ALU, vertex-fetch, and
+  texture-fetch clauses; the clause payloads are not one flat instruction
+  stream (Chapter 2, §2.4 and Chapter 3, §§3.3–3.4).
+- The generic ALU clause header carries a clause address and a slot count
+  encoded as `COUNT - 1`; the documented R700 range is 1–128 64-bit slots
+  (Chapter 10, §10.1, `CF_ALU_WORD[0,1]`). The same format family includes
+  clause control variants such as `ALU_PUSH_BEFORE` and `ALU_POP_AFTER`.
+- An ALU instruction occupies two 32-bit dwords. An instruction group has
+  vector X/Y/Z/W and transcendental slots, and group boundaries/forwarding
+  affect observable register values (Chapter 4, §§4.1–4.4).
+- OP2 and OP3 encodings use different field widths; they cannot safely be
+  decoded by treating every slot as one uniform opcode layout (Chapter 4,
+  §4.5; Chapter 10, §10.2).
+
+These are **R700-family reference facts**, not yet verified Latte decoding
+rules. In particular, they do not establish how a GX2 shader's guest bytes map
+to decoder dwords on this implementation, nor which R700 encodings Latte
+changes. Affogato currently reads shader program memory using guest
+big-endian `read32_be()` calls. That establishes the capture representation,
+not the GPU microcode's field/word ordering. The first shader fixtures must
+settle that distinction before any decoder uses these candidate layouts.
+
 The older public [AMD R600 ISA reference](https://www.amd.com/system/files/TechDocs/R600_Instruction_Set_Architecture.pdf)
 can help explain shared R6xx/R7xx lineage, but it is a less direct baseline
 and is not an Espresso/Latte specification. Any field, opcode, or behavior
@@ -71,6 +95,11 @@ real shader fixtures before implementation.
   and publishes a separate
   [Wii U test repository](https://github.com/decaf-emu/wiiu-tests). Its
   architecture and test assumptions need review before any fixture is adapted.
+- Decaf's legacy GLSL translator is a useful comparison point at
+  `src/libgpu/src/glsl2/glsl2_translate.cpp`; Cemu's current ISA and legacy
+  decompiler directories are useful for comparison of decoder organization.
+  Implementation disagreement is evidence to investigate, not enough by
+  itself to choose hardware behavior.
 - Cemu issue [#2122](https://github.com/cemu-project/Cemu/issues/2122)
   documents a concrete VLIW dependency hazard: when vector and transcendental
   ALU units write the same GPR component in a group, previous-value and
@@ -159,6 +188,14 @@ snapshot/coherence requirements.
   current toolchain can build and run that test in this environment.
 - Whether a reproducible standalone Latte assembler is available through a
   compatible license and usable without the Wii U RPX build toolchain.
+- Whether the R700 ALU clause address and count interpretation applies without
+  Latte-specific adjustment to shader words captured by Affogato.
+
+The next shader milestone is a non-executing control-flow record decoder only
+after a known Latte fixture independently confirms word order, the end-of-
+program marker, ALU clause address units, and count encoding. Its initial
+contract should preserve raw words and reject unknown CF opcodes; it should not
+attempt to execute clauses, infer omitted slot behavior, or generate SPIR-V.
 
 Next implementation work should begin with a source-backed decoder
 specification and fixtures for a small, fully understood instruction family.

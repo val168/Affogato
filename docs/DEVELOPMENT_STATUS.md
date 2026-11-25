@@ -320,3 +320,15 @@ the resulting vertex snapshots for both U16 endian modes. Debug and Release
 builds and CTest passed 2/2. The hidden triangle smoke test passed in both
 builds. It uses diagnostic host shaders and does not establish guest shader
 execution or guest render-target writes.
+
+## Latte shader decoder research checkpoint (2026-11-25)
+
+Updated [`docs/research/12_latte_shader_isa.md`](research/12_latte_shader_isa.md)
+with structural facts from AMD's R700-family manual and explicit limits on
+applying them to Latte. Shader program capture currently stores checked guest
+memory words via `read32_be()` and snapshots them with draw state; it does not
+establish the GPU microcode dword order. No `latte-assembler` or devkitPPC tool
+was found in the configured environment. A decoder is therefore deferred until
+a known Latte fixture verifies ordering, end-of-program, and clause addressing
+and count semantics. This is a research update only; no shader execution
+capability was added.
