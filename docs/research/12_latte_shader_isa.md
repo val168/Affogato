@@ -9,7 +9,7 @@ program words when `GX2SetVertexShader`, `GX2SetGeometryShader`, or
 at each draw. Structural control-flow decoding recognizes fixture-verified
 `CALL_FS`, `EXPORT`, `EXPORT_DONE`, and one ALU-clause header encoding. Raw
 ALU slots, OP2 fields, no-literal OP2 groups, and a narrow four-lane shader
-execution subset are also implemented. There is no shader IR or SPIR-V
+execution subset are also implemented. A typed IR now represents the bounded CPU subset; SPIR-V
 generator, and the diagnostic Vulkan triangle uses fixed host shaders rather
 than these captured guest programs.
 
@@ -553,7 +553,7 @@ The group behavior follows the R700-family reference and the assembled fixture;
 it is not independently verified against Latte hardware. Absolute constant-file
 reads are implemented for selectors 256 through 511 using an explicit caller-provided
 vector span. PS, literal and kcache reads, relative addressing, other
-groups/opcodes, shader IR, and translation remain absent. The pass-through
+groups/opcodes and SPIR-V translation remain absent. The pass-through
 shader does not establish complete shader decoding.
 
 For the integer logic subset, the R700 manual documents `AND_INT` as
@@ -705,15 +705,22 @@ rendering.
 
 ### Verified Affogato state
 
-`latte_shader_decoder.hpp` currently produces typed control-flow records,
-decoded OP2 fields/groups, and export metadata. `latte_shader_interpreter.hpp`
-executes a deliberately bounded CPU subset. `latte_vertex_shader_subset.hpp`
-connects captured draw-time fetch inputs, semantic registers, shader words, and
-vertex constants for one selected vertex. `Gx2RegisterState::draw_snapshot()`
-provides a borrowed view over one draw's captured state. The controlled
-diagnostic path now calls this CPU subset, but there is no shared shader IR,
-SPIR-V generator, shader-module cache, or guest shader pipeline in
-`VulkanRenderer`.
+`latte_shader_decoder.hpp` produces typed control-flow records, decoded OP2
+fields/groups, and export metadata. `latte_shader_program.hpp` now converts
+the supported straight-line OP2 clauses and normal exports into a typed
+`LatteShaderIrProgram`; the existing CPU reference executor runs this
+representation. A leading canonical `CALL_FS` can be omitted from the IR only
+for the vertex path that separately handled Affogato's captured fetch subset.
+`latte_shader_interpreter.hpp` executes a deliberately bounded CPU subset and
+accepts decoded ALU groups, while retaining the raw-slot clause overload for
+other callers. `latte_vertex_shader_subset.hpp` connects captured draw-time
+fetch inputs, semantic registers, shader words, and vertex constants for one
+selected vertex. `Gx2RegisterState::draw_snapshot()` provides a borrowed view
+over one draw's captured state. The controlled diagnostic path calls this CPU
+subset, but there is no SPIR-V generator, shader-module cache, or guest shader
+pipeline in `VulkanRenderer`. The IR currently represents only the existing
+supported subset; it does not establish broader Latte shader coverage or
+independently verified hardware semantics.
 
 The Vulkan SDK installed for this workspace provides `glslc`,
 `glslangValidator`, `spirv-as`, and `spirv-val`, plus glslang and shaderc
@@ -759,14 +766,14 @@ dependency.
 
 ### Design constraints for Affogato
 
-The next translator must reuse the current decoder and its explicit rejection
-behavior rather than create a second opcode parser. A typed, immutable shader
-program representation should be the boundary between bytecode decoding and
-both backends. The CPU subset remains the semantic reference; SPIR-V lowering
-must reject every operation, control-flow form, source mode, or export it does
-not implement. Supported operations should be added in complete tested
-families, with CPU-versus-SPIR-V output comparisons for deterministic shader
-fixtures.
+The translator must reuse the current decoder and its explicit rejection
+behavior rather than create a second opcode parser. `LatteShaderIrProgram` is
+now the initial boundary between bytecode decoding and backends, but its
+variant currently covers only OP2 clauses and normal exports. The CPU subset
+remains the semantic reference; future IR additions and SPIR-V lowering must
+reject every operation, control-flow form, source mode, or export they do not
+implement. Supported operations should be added in complete tested families,
+with CPU-versus-SPIR-V output comparisons for deterministic shader fixtures.
 
 Translation variants must include all shader-affecting captured state, at
 minimum stage and bytecode, fetch program, vertex semantic linkage, relevant

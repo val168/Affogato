@@ -1,5 +1,19 @@
 # Affogato Development Status
 
+## Shared typed IR for the bounded Latte CPU shader subset (2026-11-25)
+
+The straight-line shader subset now decodes supported OP2 clauses and normal
+exports into a typed `LatteShaderIrProgram`. The existing CPU reference
+executor runs that IR, and ALU execution accepts already-decoded instruction
+groups while retaining a raw-slot overload for existing callers. Tests check
+the IR's clause groups, export metadata, and the separately handled leading
+`CALL_FS` case. Debug and Release builds passed, CTest passed 2/2 in both
+configurations, and the hidden diagnostic guest-triangle smoke passed in both.
+This is a small CPU/SPIR-V-subset IR foundation only: it does not decode new
+shader operations, generate SPIR-V, execute guest shaders in normal draws, or
+write guest render targets. See
+[`research/12_latte_shader_isa.md`](research/12_latte_shader_isa.md).
+
 ## Controlled guest vertex-shader subset in Vulkan diagnostic (2026-11-25)
 
 The controlled GX2 triangle harness now installs a guest vertex shader through

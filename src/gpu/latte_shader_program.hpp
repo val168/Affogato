@@ -8,6 +8,7 @@
 #include <span>
 #include <stdexcept>
 #include <string>
+#include <variant>
 #include <vector>
 
 namespace affogato::gpu
@@ -29,14 +30,37 @@ struct LatteShaderExecutionResult
     bool operator==(const LatteShaderExecutionResult&) const = default;
 };
 
-namespace detail
+struct LatteShaderIrAluClause
 {
+    std::vector<LatteAluOp2InstructionGroup> groups;
 
-[[nodiscard]] inline LatteShaderExecutionResult execute_latte_shader_subset_impl(
+    bool operator==(const LatteShaderIrAluClause&) const = default;
+};
+
+struct LatteShaderIrExport
+{
+    bool completes_type{};
+    LatteExportFields fields;
+
+    bool operator==(const LatteShaderIrExport&) const = default;
+};
+
+using LatteShaderIrInstruction =
+    std::variant<LatteShaderIrAluClause, LatteShaderIrExport>;
+
+struct LatteShaderIrProgram
+{
+    std::vector<LatteShaderIrInstruction> instructions;
+
+    bool operator==(const LatteShaderIrProgram&) const = default;
+};
+
+// Decode only the straight-line CPU/SPIR-V subset: OP2 ALU clauses and normal
+// exports. A vertex caller may declare its leading canonical CALL_FS handled
+// separately by the captured fetch-shader subset.
+[[nodiscard]] inline LatteShaderIrProgram decode_latte_shader_ir_subset(
     std::span<const std::uint32_t> guest_big_endian_words,
-    std::span<const LatteShaderRegister> initial_registers,
-    bool fetch_subroutine_already_executed,
-    const LatteShaderConstantFile* constant_file = nullptr)
+    bool fetch_subroutine_already_executed = false)
 {
     const std::vector<LatteControlFlowRecord> control_flow =
         decode_latte_control_flow(guest_big_endian_words);
@@ -94,11 +118,8 @@ namespace detail
         }
     }
 
-    LatteShaderExecutionResult result{};
-    result.registers.assign(
-        initial_registers.begin(),
-        initial_registers.end());
-
+    LatteShaderIrProgram program{};
+    program.instructions.reserve(control_flow.size() - first_record_index);
     for (std::size_t record_index = first_record_index;
          record_index < control_flow.size();
          ++record_index)
@@ -108,10 +129,15 @@ namespace detail
         {
             const std::vector<LatteAluClauseSlot> slots =
                 decode_latte_alu_clause_slots(guest_big_endian_words, record);
-            static_cast<void>(execute_latte_alu_op2_clause(
-                slots,
-                result.registers,
-                constant_file));
+            std::vector<LatteAluOp2InstructionGroup> groups =
+                decode_latte_alu_op2_groups(slots);
+            if (groups.empty())
+            {
+                throw std::runtime_error(
+                    "Latte shader subset requires at least one OP2 group per ALU clause");
+            }
+            program.instructions.emplace_back(
+                LatteShaderIrAluClause{std::move(groups)});
             continue;
         }
 
@@ -123,12 +149,9 @@ namespace detail
                 throw std::runtime_error(
                     "Latte shader export record has no decoded fields");
             }
-
-            result.exports.push_back({
+            program.instructions.emplace_back(LatteShaderIrExport{
                 record.opcode == LatteControlFlowOpcode::export_done,
-                evaluate_latte_normal_export(
-                    *record.export_fields,
-                    result.registers)});
+                *record.export_fields});
             continue;
         }
 
@@ -136,6 +159,48 @@ namespace detail
             "Latte shader subset does not support control-flow opcode " +
             std::to_string(static_cast<std::uint32_t>(record.opcode)) +
             " at DWORD " + std::to_string(record.word_offset));
+    }
+
+    return program;
+}
+
+namespace detail
+{
+
+[[nodiscard]] inline LatteShaderExecutionResult execute_latte_shader_subset_impl(
+    std::span<const std::uint32_t> guest_big_endian_words,
+    std::span<const LatteShaderRegister> initial_registers,
+    bool fetch_subroutine_already_executed,
+    const LatteShaderConstantFile* constant_file = nullptr)
+{
+    const LatteShaderIrProgram program = decode_latte_shader_ir_subset(
+        guest_big_endian_words,
+        fetch_subroutine_already_executed);
+
+    LatteShaderExecutionResult result{};
+    result.registers.assign(
+        initial_registers.begin(),
+        initial_registers.end());
+
+    for (const LatteShaderIrInstruction& instruction : program.instructions)
+    {
+        if (const auto* alu_clause =
+                std::get_if<LatteShaderIrAluClause>(&instruction))
+        {
+            static_cast<void>(execute_latte_alu_op2_clause(
+                alu_clause->groups,
+                result.registers,
+                constant_file));
+            continue;
+        }
+
+        const auto& export_instruction =
+            std::get<LatteShaderIrExport>(instruction);
+        result.exports.push_back({
+            export_instruction.completes_type,
+            evaluate_latte_normal_export(
+                export_instruction.fields,
+                result.registers)});
     }
 
     return result;

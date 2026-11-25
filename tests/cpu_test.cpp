@@ -32689,6 +32689,21 @@ void latte_control_flow_decoder_tests()
     linear_shader_words[1U] = captured_alu_guest_words[3U];
     linear_shader_words[2U] = captured_alu_guest_words[4U];
     linear_shader_words[3U] = captured_alu_guest_words[5U];
+    const auto shader_ir =
+        affogato::gpu::decode_latte_shader_ir_subset(linear_shader_words);
+    assert(shader_ir.instructions.size() == 2U);
+    const auto* ir_alu_clause = std::get_if<
+        affogato::gpu::LatteShaderIrAluClause>(
+            &shader_ir.instructions[0U]);
+    assert(ir_alu_clause != nullptr);
+    assert(ir_alu_clause->groups == alu_groups);
+    const auto* ir_export = std::get_if<
+        affogato::gpu::LatteShaderIrExport>(
+            &shader_ir.instructions[1U]);
+    assert(ir_export != nullptr);
+    assert(ir_export->completes_type);
+    assert(ir_export->fields.type == LatteExportType::position);
+
     const auto shader_result = execute_latte_shader_subset(
         linear_shader_words,
         shader_registers);
@@ -32703,6 +32718,14 @@ void latte_control_flow_decoder_tests()
         shader_registers[1U][0U]);
     assert(shader_result.exports[0U].values[0U].components[3U] ==
         shader_registers[1U][3U]);
+
+    const auto fetched_shader_ir =
+        affogato::gpu::decode_latte_shader_ir_subset(
+            captured_guest_words,
+            true);
+    assert(fetched_shader_ir.instructions.size() == 2U);
+    assert(std::holds_alternative<affogato::gpu::LatteShaderIrExport>(
+        fetched_shader_ir.instructions[0U]));
 
     affogato::gpu::LatteShaderConstantFile shader_constant_registers{};
     shader_constant_registers.entries[0U] = {

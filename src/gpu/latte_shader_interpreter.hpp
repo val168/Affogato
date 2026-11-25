@@ -639,12 +639,10 @@ execute_latte_alu_op2_vector_group(
 // separate clause. Work on a temporary register file so an unsupported later
 // group cannot leave partially updated guest shader state.
 [[nodiscard]] inline LatteShaderRegister execute_latte_alu_op2_clause(
-    std::span<const LatteAluClauseSlot> slots,
+    std::span<const LatteAluOp2InstructionGroup> groups,
     std::span<LatteShaderRegister> guest_registers,
     const LatteShaderConstantFile* constant_file = nullptr)
 {
-    const std::vector<LatteAluOp2InstructionGroup> groups =
-        decode_latte_alu_op2_groups(slots);
     if (groups.empty())
     {
         throw std::runtime_error("Latte OP2 clause must contain a group");
@@ -669,6 +667,20 @@ execute_latte_alu_op2_vector_group(
         working_registers.end(),
         guest_registers.begin());
     return *previous_vector;
+}
+
+// Decode and execute a raw clause for callers that do not retain decoded IR.
+[[nodiscard]] inline LatteShaderRegister execute_latte_alu_op2_clause(
+    std::span<const LatteAluClauseSlot> slots,
+    std::span<LatteShaderRegister> guest_registers,
+    const LatteShaderConstantFile* constant_file = nullptr)
+{
+    const std::vector<LatteAluOp2InstructionGroup> groups =
+        decode_latte_alu_op2_groups(slots);
+    return execute_latte_alu_op2_clause(
+        groups,
+        guest_registers,
+        constant_file);
 }
 
 } // namespace affogato::gpu
