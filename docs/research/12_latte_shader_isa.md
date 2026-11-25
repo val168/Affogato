@@ -1274,9 +1274,31 @@ with the centroid sampling constraint. The synthetic GX2 fixture passes
 independent meanings of these AMD-family fields and Vulkan's qualifier model;
 it has not been checked against a Latte trace or hardware.
 
-Flat shading remains deferred until Affogato captures and matches the guest
-provoking-vertex convention. Sample and point-sprite inputs also remain
-unsupported. The Vulkan
+### Flat shading and provoking vertex (2026-11-25)
+
+`FLAT_SHADE` is decoded from `SPI_PS_INPUT_CNTL_n` bit 10 and retained in the
+linked input, but the bounded SPIR-V emitter still rejects it. Cemu's
+[`LatteShader_CreatePSInputTable()`](https://github.com/cemu-project/Cemu/blob/main/src/Cafe/HW/Latte/Core/LatteShader.cpp#L2623)
+also retains bit 10 as `isFlat` (except for the position import); this confirms
+the reference implementation's shader-interface treatment, not the selected
+provoking vertex.
+
+The AMD [R6xx/R7xx programming guide](https://docs.amd.com/api/khub/documents/xDBXM48WBJcW95tjxhFwWw/content)
+describes `SPI_INTERP_CONTROL_0.FLAT_SHADE_ENA` as a global enable used with
+each parameter's flat-shade control. The related AMD [R6xx register
+reference](https://docs.amd.com/api/khub/documents/gREhYogvzT1O602630AkSg/content)
+lists `GA_ENHANCE.PROVOKING_VERTEX` values for first, second, third, or last
+vertex, with zero as the register default. These are family references rather
+than direct Latte documentation. Affogato does not yet capture a verified
+Latte global flat-shading enable or provoking-vertex selection, and it has no
+per-device Vulkan provoking-vertex capability path. Vulkan's [default
+provoking-vertex rules](https://docs.vulkan.org/spec/latest/chapters/vertexpostproc.html#vertexpostproc-flatshading)
+alone are therefore insufficient to claim compatibility. Continue rejecting
+flat inputs until those guest state semantics are verified and can be matched
+by the backend; do not infer a safe default from the diagnostic triangle's
+vertex order.
+
+Sample and point-sprite inputs also remain unsupported. The Vulkan
 [shader interface and interpolation rules](https://docs.vulkan.org/spec/latest/chapters/shaders.html)
 and [SPIR-V `NoPerspective` decoration](https://registry.khronos.org/SPIR-V/specs/unified1/SPIRV.html)
 were used as backend requirements.
