@@ -1229,9 +1229,10 @@ matched input while retaining captured defaults for unmatched inputs. Tests
 cover multiple varying locations, a mixed matched-varying/default shader
 module, duplicate GPR rejection, and `spirv-val` validation. A controlled
 guest GX2 test also reads back a varying gradient with zero alpha sourced from
-an unmatched input's `DEFAULT_VAL`. Multiple-varying framebuffer readback has
-not yet been added; this is not ordinary Latte draw execution or WWHD
-rendering.
+an unmatched input's `DEFAULT_VAL`. A second controlled guest draw captures two
+vertex parameter exports and two matched PS inputs, then verifies independent
+red and green gradients from the respective PS GPRs. This is not ordinary
+Latte draw execution or WWHD rendering.
 
 This follows Affogato's decoded `SPI_PS_INPUT_CNTL_n` linkage model and is
 consistent with the issue report for Cemu [#2029](https://github.com/cemu-project/Cemu/issues/2029),

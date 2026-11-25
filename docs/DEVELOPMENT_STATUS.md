@@ -15,8 +15,10 @@ input pass `spirv-val`, and duplicate-input rejection is covered. The
 `--gx2-guest-triangle-matched-varying-default-alpha-test` runs through guest
 GX2 HLE and the diagnostic draw path; Vulkan readback confirms the interpolated
 green gradient and zero alpha loaded from the unmatched input's default.
-Multiple-varying framebuffer readback remains untested. These checks do not
-establish ordinary Latte draw execution or WWHD rendering.
+`--gx2-guest-triangle-matched-two-varyings-test` captures two vertex parameter
+exports and two matched pixel inputs; readback checks red and green gradients
+from the two PS GPRs. These checks do not establish ordinary Latte draw
+execution or WWHD rendering.
 
 ## GX2 renderer draw-snapshot batch lifetime (2026-11-25)
 
