@@ -249,6 +249,8 @@ if(BUILD_TESTING)
         "${CMAKE_CURRENT_BINARY_DIR}/latte_vertex_subset_conditional_move.spv")
     set(AFFOGATO_LATTE_SPIRV_INTEGER_CONDITIONAL_MOVE_TEST_MODULE
         "${CMAKE_CURRENT_BINARY_DIR}/latte_vertex_subset_integer_conditional_move.spv")
+    set(AFFOGATO_LATTE_SPIRV_MIXED_ALU_TEST_MODULE
+        "${CMAKE_CURRENT_BINARY_DIR}/latte_vertex_subset_mixed_alu.spv")
     add_test(NAME affogato_latte_spirv_tests
         COMMAND affogato_latte_spirv_tests
             --write-modules
@@ -259,7 +261,8 @@ if(BUILD_TESTING)
             "${AFFOGATO_LATTE_SPIRV_MAXIMUM_TEST_MODULE}"
             "${AFFOGATO_LATTE_SPIRV_MINIMUM_TEST_MODULE}"
             "${AFFOGATO_LATTE_SPIRV_CONDITIONAL_MOVE_TEST_MODULE}"
-            "${AFFOGATO_LATTE_SPIRV_INTEGER_CONDITIONAL_MOVE_TEST_MODULE}")
+            "${AFFOGATO_LATTE_SPIRV_INTEGER_CONDITIONAL_MOVE_TEST_MODULE}"
+            "${AFFOGATO_LATTE_SPIRV_MIXED_ALU_TEST_MODULE}")
     set_tests_properties(affogato_latte_spirv_tests PROPERTIES
         FIXTURES_SETUP affogato_latte_spirv_module
     )
@@ -323,6 +326,13 @@ if(BUILD_TESTING)
                 --target-env vulkan1.0
                 "${AFFOGATO_LATTE_SPIRV_INTEGER_CONDITIONAL_MOVE_TEST_MODULE}")
         set_tests_properties(affogato_latte_spirv_integer_conditional_move_validation PROPERTIES
+            FIXTURES_REQUIRED affogato_latte_spirv_module
+        )
+        add_test(NAME affogato_latte_spirv_mixed_alu_validation
+            COMMAND "${AFFOGATO_SPIRV_VAL_EXECUTABLE}"
+                --target-env vulkan1.0
+                "${AFFOGATO_LATTE_SPIRV_MIXED_ALU_TEST_MODULE}")
+        set_tests_properties(affogato_latte_spirv_mixed_alu_validation PROPERTIES
             FIXTURES_REQUIRED affogato_latte_spirv_module
         )
     endif()
@@ -398,6 +408,11 @@ if(BUILD_TESTING)
             NAME affogato_vulkan_guest_op3_integer_conditional_move_readback
             COMMAND affogato_frontend
                 --gx2-guest-triangle-op3-integer-conditional-move-spirv-smoke-test
+        )
+        add_test(
+            NAME affogato_vulkan_guest_mixed_alu_readback
+            COMMAND affogato_frontend
+                --gx2-guest-triangle-mixed-alu-spirv-smoke-test
         )
     endif()
 

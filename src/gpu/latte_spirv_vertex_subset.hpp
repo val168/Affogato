@@ -265,166 +265,293 @@ private:
         return value;
     }
 
-    void execute_op3_clause(
-        const std::vector<LatteAluOp3InstructionGroup>& groups)
+    [[nodiscard]] std::uint32_t emit_op3_value(
+        const LatteAluOp3Instruction& operation,
+        const RegisterValues& source_registers,
+        const std::optional<VectorValue>& previous_vector)
+    {
+        if ((operation.opcode != latte_alu_op3_conditional_move_equal_opcode &&
+             operation.opcode != latte_alu_op3_conditional_move_greater_opcode &&
+             operation.opcode != latte_alu_op3_conditional_move_greater_equal_opcode &&
+             operation.opcode != latte_alu_op3_conditional_move_equal_integer_opcode &&
+             operation.opcode != latte_alu_op3_conditional_move_greater_integer_opcode &&
+             operation.opcode != latte_alu_op3_conditional_move_greater_equal_integer_opcode) ||
+            operation.destination_gpr >= registers_.size() ||
+            operation.source0_relative || operation.source1_relative ||
+            operation.source2_relative || operation.index_mode != 0U ||
+            operation.bank_swizzle != 0U ||
+            operation.predicate_selection != 0U ||
+            operation.destination_relative || operation.destination_clamp)
+        {
+            throw std::runtime_error(
+                "Latte SPIR-V vertex subset received an unsupported OP3 operation or modifier");
+        }
+
+        const bool is_integer_operation =
+            operation.opcode ==
+                latte_alu_op3_conditional_move_equal_integer_opcode ||
+            operation.opcode ==
+                latte_alu_op3_conditional_move_greater_integer_opcode ||
+            operation.opcode ==
+                latte_alu_op3_conditional_move_greater_equal_integer_opcode;
+        if (is_integer_operation &&
+            (operation.source0_negate || operation.source1_negate ||
+             operation.source2_negate))
+        {
+            throw std::runtime_error(
+                "Latte SPIR-V integer OP3 conditional move does not support source negation");
+        }
+
+        std::uint32_t source0_id = source_value(
+            operation.source0_selector,
+            operation.source0_channel,
+            source_registers,
+            previous_vector);
+        source0_id = apply_source_modifiers(
+            source0_id,
+            false,
+            operation.source0_negate);
+        const std::uint32_t source1_id = apply_source_modifiers(
+            source_value(
+                operation.source1_selector,
+                operation.source1_channel,
+                source_registers,
+                previous_vector),
+            false,
+            operation.source1_negate);
+        const std::uint32_t source2_id = apply_source_modifiers(
+            source_value(
+                operation.source2_selector,
+                operation.source2_channel,
+                source_registers,
+                previous_vector),
+            false,
+            operation.source2_negate);
+
+        std::uint32_t comparison_id = allocate_id();
+        std::uint16_t comparison_opcode = 0U;
+        std::uint32_t comparison_source_id = allocate_id();
+        std::uint32_t zero_id = 0U;
+        if (is_integer_operation)
+        {
+            append_instruction(function_body_, 124U, {
+                int_type_id_, comparison_source_id, source0_id});
+            zero_id = signed_zero_id_;
+            switch (operation.opcode)
+            {
+            case latte_alu_op3_conditional_move_equal_integer_opcode:
+                comparison_opcode = 170U;
+                break;
+            case latte_alu_op3_conditional_move_greater_integer_opcode:
+                comparison_opcode = 173U;
+                break;
+            case latte_alu_op3_conditional_move_greater_equal_integer_opcode:
+                comparison_opcode = 175U;
+                break;
+            default:
+                throw std::runtime_error(
+                    "Latte SPIR-V vertex subset received an unsupported integer OP3 opcode");
+            }
+        }
+        else
+        {
+            append_instruction(function_body_, 124U, {
+                float_type_id_, comparison_source_id, source0_id});
+            zero_id = allocate_id();
+            append_instruction(function_body_, 124U, {
+                float_type_id_, zero_id, constant(0U)});
+            switch (operation.opcode)
+            {
+            case latte_alu_op3_conditional_move_equal_opcode:
+                comparison_opcode = 180U;
+                break;
+            case latte_alu_op3_conditional_move_greater_opcode:
+                comparison_opcode = 186U;
+                break;
+            case latte_alu_op3_conditional_move_greater_equal_opcode:
+                comparison_opcode = 190U;
+                break;
+            default:
+                throw std::runtime_error(
+                    "Latte SPIR-V vertex subset received an unsupported floating-point OP3 opcode");
+            }
+        }
+        append_instruction(function_body_, comparison_opcode, {
+            bool_type_id_, comparison_id, comparison_source_id, zero_id});
+
+        const std::uint32_t result_id = allocate_id();
+        append_instruction(function_body_, 169U, {
+            uint_type_id_, result_id, comparison_id, source1_id, source2_id});
+        return result_id;
+    }
+
+    [[nodiscard]] std::uint32_t emit_op2_value(
+        const LatteAluOp2Instruction& operation,
+        const RegisterValues& source_registers,
+        const std::optional<VectorValue>& previous_vector)
+    {
+        if ((operation.opcode != latte_alu_op2_move_opcode &&
+             operation.opcode != latte_alu_op2_add_float_opcode &&
+             operation.opcode != latte_alu_op2_multiply_ieee_opcode &&
+             operation.opcode != latte_alu_op2_maximum_dx10_opcode &&
+             operation.opcode != latte_alu_op2_minimum_dx10_opcode) ||
+            operation.destination_gpr >= registers_.size() ||
+            !operation.write_mask || operation.source0_relative ||
+            operation.update_execute_mask || operation.update_predicate ||
+            operation.bank_swizzle != 0U ||
+            operation.predicate_selection != 0U ||
+            operation.destination_relative || operation.destination_clamp ||
+            operation.output_modifier != 0U || operation.index_mode != 0U ||
+            (operation.opcode == latte_alu_op2_move_opcode &&
+             (operation.source1_relative || operation.source1_absolute ||
+              operation.source1_negate)) ||
+            (operation.opcode != latte_alu_op2_move_opcode &&
+             operation.source1_relative))
+        {
+            throw std::runtime_error(
+                "Latte SPIR-V vertex subset received an unsupported ALU operation or modifier");
+        }
+
+        std::uint32_t source0_id = source_value(
+            operation.source0_selector,
+            operation.source0_channel,
+            source_registers,
+            previous_vector);
+        source0_id = apply_source_modifiers(
+            source0_id,
+            operation.source0_absolute,
+            operation.source0_negate);
+        if (operation.opcode == latte_alu_op2_move_opcode)
+        {
+            return source0_id;
+        }
+
+        std::uint32_t source1_id = source_value(
+            operation.source1_selector,
+            operation.source1_channel,
+            source_registers,
+            previous_vector);
+        source1_id = apply_source_modifiers(
+            source1_id,
+            operation.source1_absolute,
+            operation.source1_negate);
+        const std::uint32_t source0_float_id = allocate_id();
+        append_instruction(function_body_, 124U, {
+            float_type_id_, source0_float_id, source0_id});
+        const std::uint32_t source1_float_id = allocate_id();
+        append_instruction(function_body_, 124U, {
+            float_type_id_, source1_float_id, source1_id});
+        const std::uint32_t result_float_id = allocate_id();
+        if (operation.opcode == latte_alu_op2_add_float_opcode ||
+            operation.opcode == latte_alu_op2_multiply_ieee_opcode)
+        {
+            const std::uint16_t spirv_opcode =
+                operation.opcode == latte_alu_op2_add_float_opcode
+                    ? 129U
+                    : 133U;
+            append_instruction(function_body_, spirv_opcode, {
+                float_type_id_, result_float_id,
+                source0_float_id, source1_float_id});
+        }
+        else
+        {
+            const std::uint32_t comparison_id = allocate_id();
+            const std::uint16_t comparison_opcode =
+                operation.opcode == latte_alu_op2_maximum_dx10_opcode
+                    ? 190U
+                    : 184U;
+            append_instruction(function_body_, comparison_opcode, {
+                bool_type_id_, comparison_id,
+                source0_float_id, source1_float_id});
+            append_instruction(function_body_, 169U, {
+                float_type_id_, result_float_id,
+                comparison_id, source0_float_id, source1_float_id});
+        }
+        const std::uint32_t result_id = allocate_id();
+        append_instruction(function_body_, 124U, {
+            uint_type_id_, result_id, result_float_id});
+        return result_id;
+    }
+
+    void execute_vector_clause(
+        const std::vector<LatteAluVectorInstructionGroup>& groups)
     {
         if (groups.empty())
         {
             throw std::runtime_error(
-                "Latte SPIR-V OP3 clause must contain an instruction group");
+                "Latte SPIR-V ALU clause must contain an instruction group");
         }
 
         std::optional<VectorValue> previous_vector;
-        for (const LatteAluOp3InstructionGroup& group : groups)
+        for (const LatteAluVectorInstructionGroup& group : groups)
         {
             if (group.instructions.size() != 4U)
             {
                 throw std::runtime_error(
-                    "Latte SPIR-V OP3 group has an invalid lane count");
+                    "Latte SPIR-V ALU group has an invalid lane count");
             }
-
             const RegisterValues source_registers = registers_;
             VectorValue group_result{};
             for (std::size_t lane = 0U;
                  lane < group.instructions.size();
                  ++lane)
             {
-                const LatteAluOp3Instruction& operation =
+                const LatteAluVectorInstruction& vector_instruction =
                     group.instructions[lane];
-                if ((operation.opcode !=
-                         latte_alu_op3_conditional_move_equal_opcode &&
-                     operation.opcode !=
-                         latte_alu_op3_conditional_move_greater_opcode &&
-                     operation.opcode !=
-                         latte_alu_op3_conditional_move_greater_equal_opcode &&
-                     operation.opcode !=
-                         latte_alu_op3_conditional_move_equal_integer_opcode &&
-                     operation.opcode !=
-                         latte_alu_op3_conditional_move_greater_integer_opcode &&
-                     operation.opcode !=
-                         latte_alu_op3_conditional_move_greater_equal_integer_opcode) ||
-                    operation.destination_component != lane ||
-                    operation.last_in_group != (lane == 3U) ||
-                    operation.destination_gpr >= registers_.size() ||
-                    operation.source0_relative || operation.source1_relative ||
-                    operation.source2_relative || operation.index_mode != 0U ||
-                    operation.bank_swizzle != 0U ||
-                    operation.predicate_selection != 0U ||
-                    operation.destination_relative ||
-                    operation.destination_clamp)
-                {
-                    throw std::runtime_error(
-                        "Latte SPIR-V vertex subset received an unsupported OP3 operation or modifier");
-                }
-
-                const bool is_integer_operation =
-                    operation.opcode ==
-                        latte_alu_op3_conditional_move_equal_integer_opcode ||
-                    operation.opcode ==
-                        latte_alu_op3_conditional_move_greater_integer_opcode ||
-                    operation.opcode ==
-                        latte_alu_op3_conditional_move_greater_equal_integer_opcode;
-                if (is_integer_operation &&
-                    (operation.source0_negate || operation.source1_negate ||
-                     operation.source2_negate))
-                {
-                    throw std::runtime_error(
-                        "Latte SPIR-V integer OP3 conditional move does not support source negation");
-                }
-
-                std::uint32_t source0_id = source_value(
-                    operation.source0_selector,
-                    operation.source0_channel,
-                    source_registers,
-                    previous_vector);
-                source0_id = apply_source_modifiers(
-                    source0_id,
-                    false,
-                    operation.source0_negate);
-                const std::uint32_t source1_id = apply_source_modifiers(
-                    source_value(
-                        operation.source1_selector,
-                        operation.source1_channel,
-                        source_registers,
-                        previous_vector),
-                    false,
-                    operation.source1_negate);
-                const std::uint32_t source2_id = apply_source_modifiers(
-                    source_value(
-                        operation.source2_selector,
-                        operation.source2_channel,
-                        source_registers,
-                        previous_vector),
-                    false,
-                    operation.source2_negate);
-
-                std::uint32_t comparison_id = allocate_id();
-                std::uint16_t comparison_opcode = 0U;
-                std::uint32_t comparison_source_id = 0U;
-                std::uint32_t zero_id = 0U;
-                if (is_integer_operation)
-                {
-                    comparison_source_id = allocate_id();
-                    append_instruction(function_body_, 124U, {
-                        int_type_id_, comparison_source_id, source0_id});
-                    zero_id = signed_zero_id_;
-                    switch (operation.opcode)
+                const std::uint8_t destination_component = std::visit(
+                    [](const auto& operation)
                     {
-                    case latte_alu_op3_conditional_move_equal_integer_opcode:
-                        comparison_opcode = 170U;
-                        break;
-                    case latte_alu_op3_conditional_move_greater_integer_opcode:
-                        comparison_opcode = 173U;
-                        break;
-                    case latte_alu_op3_conditional_move_greater_equal_integer_opcode:
-                        comparison_opcode = 175U;
-                        break;
-                    default:
-                        throw std::runtime_error(
-                            "Latte SPIR-V vertex subset received an unsupported integer OP3 opcode");
-                    }
+                        return operation.destination_component;
+                    },
+                    vector_instruction);
+                const bool last_in_group = std::visit(
+                    [](const auto& operation)
+                    {
+                        return operation.last_in_group;
+                    },
+                    vector_instruction);
+                const std::uint8_t destination_gpr = std::visit(
+                    [](const auto& operation)
+                    {
+                        return operation.destination_gpr;
+                    },
+                    vector_instruction);
+                if (destination_component != lane ||
+                    last_in_group != (lane == 3U) ||
+                    destination_gpr >= registers_.size())
+                {
+                    throw std::runtime_error(
+                        "Latte SPIR-V ALU group has an invalid destination lane");
+                }
+
+                if (const auto* op2_operation = std::get_if<
+                        LatteAluOp2Instruction>(&vector_instruction))
+                {
+                    group_result[lane] = emit_op2_value(
+                        *op2_operation,
+                        source_registers,
+                        previous_vector);
                 }
                 else
                 {
-                    comparison_source_id = allocate_id();
-                    append_instruction(function_body_, 124U, {
-                        float_type_id_, comparison_source_id, source0_id});
-                    const std::uint32_t zero_float_id = allocate_id();
-                    append_instruction(function_body_, 124U, {
-                        float_type_id_, zero_float_id, constant(0U)});
-                    zero_id = zero_float_id;
-                    switch (operation.opcode)
-                    {
-                    case latte_alu_op3_conditional_move_equal_opcode:
-                        comparison_opcode = 180U;
-                        break;
-                    case latte_alu_op3_conditional_move_greater_opcode:
-                        comparison_opcode = 186U;
-                        break;
-                    case latte_alu_op3_conditional_move_greater_equal_opcode:
-                        comparison_opcode = 190U;
-                        break;
-                    default:
-                        throw std::runtime_error(
-                            "Latte SPIR-V vertex subset received an unsupported floating-point OP3 opcode");
-                    }
+                    group_result[lane] = emit_op3_value(
+                        std::get<LatteAluOp3Instruction>(vector_instruction),
+                        source_registers,
+                        previous_vector);
                 }
-                append_instruction(function_body_, comparison_opcode, {
-                    bool_type_id_, comparison_id, comparison_source_id, zero_id});
-
-                const std::uint32_t result_id = allocate_id();
-                append_instruction(function_body_, 169U, {
-                    uint_type_id_, result_id,
-                    comparison_id, source1_id, source2_id});
-                group_result[lane] = result_id;
             }
 
             for (std::size_t lane = 0U;
                  lane < group.instructions.size();
                  ++lane)
             {
-                registers_[group.instructions[lane].destination_gpr][lane] =
-                    group_result[lane];
+                const std::uint8_t destination_gpr = std::visit(
+                    [](const auto& operation)
+                    {
+                        return operation.destination_gpr;
+                    },
+                    group.instructions[lane]);
+                registers_[destination_gpr][lane] = group_result[lane];
             }
             previous_vector = group_result;
         }
@@ -432,147 +559,54 @@ private:
 
     void execute_clause(const LatteShaderIrAluClause& clause)
     {
+        const std::size_t active_group_representations =
+            static_cast<std::size_t>(!clause.groups.empty()) +
+            static_cast<std::size_t>(!clause.op3_groups.empty()) +
+            static_cast<std::size_t>(!clause.vector_groups.empty());
+        if (active_group_representations != 1U)
+        {
+            throw std::runtime_error(
+                "Latte SPIR-V ALU clause has incompatible or empty group representations");
+        }
+
+        std::vector<LatteAluVectorInstructionGroup> vector_groups;
         if (!clause.vector_groups.empty())
         {
-            throw std::runtime_error(
-                "Latte SPIR-V vertex subset does not support mixed OP2/OP3 groups");
-        }
-
-        if (!clause.groups.empty() && !clause.op3_groups.empty())
-        {
-            throw std::runtime_error(
-                "Latte SPIR-V vertex subset cannot mix OP2 and OP3 groups");
-        }
-
-        if (!clause.op3_groups.empty())
-        {
-            execute_op3_clause(clause.op3_groups);
+            execute_vector_clause(clause.vector_groups);
             return;
         }
 
-        if (clause.groups.empty())
+        if (!clause.groups.empty())
         {
-            throw std::runtime_error(
-                "Latte SPIR-V ALU clause must contain an instruction group");
+            vector_groups.reserve(clause.groups.size());
+            for (const LatteAluOp2InstructionGroup& group : clause.groups)
+            {
+                LatteAluVectorInstructionGroup vector_group{};
+                vector_group.word_offset = group.word_offset;
+                vector_group.instructions.reserve(group.instructions.size());
+                for (const LatteAluOp2Instruction& operation : group.instructions)
+                {
+                    vector_group.instructions.emplace_back(operation);
+                }
+                vector_groups.push_back(std::move(vector_group));
+            }
         }
-
-        std::optional<VectorValue> previous_vector;
-        for (const LatteAluOp2InstructionGroup& group : clause.groups)
+        else
         {
-            if (group.instructions.size() != 4U)
+            vector_groups.reserve(clause.op3_groups.size());
+            for (const LatteAluOp3InstructionGroup& group : clause.op3_groups)
             {
-                throw std::runtime_error(
-                    "Latte SPIR-V MOV group has an invalid lane count");
-            }
-            const RegisterValues source_registers = registers_;
-            VectorValue group_result{};
-            for (std::size_t lane = 0U;
-                 lane < group.instructions.size();
-                 ++lane)
-            {
-                const LatteAluOp2Instruction& operation =
-                    group.instructions[lane];
-                if ((operation.opcode != latte_alu_op2_move_opcode &&
-                     operation.opcode != latte_alu_op2_add_float_opcode &&
-                     operation.opcode !=
-                         latte_alu_op2_multiply_ieee_opcode &&
-                     operation.opcode != latte_alu_op2_maximum_dx10_opcode &&
-                     operation.opcode != latte_alu_op2_minimum_dx10_opcode) ||
-                    operation.destination_component != lane ||
-                    operation.last_in_group != (lane == 3U) ||
-                    operation.destination_gpr >= registers_.size() ||
-                    !operation.write_mask || operation.source0_relative ||
-                    operation.update_execute_mask || operation.update_predicate ||
-                    operation.bank_swizzle != 0U ||
-                    operation.predicate_selection != 0U ||
-                    operation.destination_relative ||
-                    operation.destination_clamp ||
-                    operation.output_modifier != 0U ||
-                    operation.index_mode != 0U ||
-                    (operation.opcode == latte_alu_op2_move_opcode &&
-                     (operation.source1_relative ||
-                      operation.source1_absolute ||
-                      operation.source1_negate)) ||
-                    (operation.opcode != latte_alu_op2_move_opcode &&
-                     operation.source1_relative))
+                LatteAluVectorInstructionGroup vector_group{};
+                vector_group.word_offset = group.word_offset;
+                vector_group.instructions.reserve(group.instructions.size());
+                for (const LatteAluOp3Instruction& operation : group.instructions)
                 {
-                    throw std::runtime_error(
-                        "Latte SPIR-V vertex subset received an unsupported ALU operation or modifier");
+                    vector_group.instructions.emplace_back(operation);
                 }
-
-                std::uint32_t source0_id = source_value(
-                    operation.source0_selector,
-                    operation.source0_channel,
-                    source_registers,
-                    previous_vector);
-                source0_id = apply_source_modifiers(
-                    source0_id,
-                    operation.source0_absolute,
-                    operation.source0_negate);
-
-                std::uint32_t result_id = source0_id;
-                if (operation.opcode != latte_alu_op2_move_opcode)
-                {
-                    std::uint32_t source1_id = source_value(
-                        operation.source1_selector,
-                        operation.source1_channel,
-                        source_registers,
-                        previous_vector);
-                    source1_id = apply_source_modifiers(
-                        source1_id,
-                        operation.source1_absolute,
-                        operation.source1_negate);
-
-                    const std::uint32_t source0_float_id = allocate_id();
-                    append_instruction(function_body_, 124U, {
-                        float_type_id_, source0_float_id, source0_id});
-                    const std::uint32_t source1_float_id = allocate_id();
-                    append_instruction(function_body_, 124U, {
-                        float_type_id_, source1_float_id, source1_id});
-                    std::uint32_t result_float_id = allocate_id();
-                    if (operation.opcode == latte_alu_op2_add_float_opcode ||
-                        operation.opcode ==
-                            latte_alu_op2_multiply_ieee_opcode)
-                    {
-                        const std::uint16_t spirv_opcode =
-                            operation.opcode == latte_alu_op2_add_float_opcode
-                                ? 129U
-                                : 133U;
-                        append_instruction(function_body_, spirv_opcode, {
-                            float_type_id_, result_float_id,
-                            source0_float_id, source1_float_id});
-                    }
-                    else
-                    {
-                        const std::uint32_t comparison_id = allocate_id();
-                        const std::uint16_t comparison_opcode =
-                            operation.opcode ==
-                                    latte_alu_op2_maximum_dx10_opcode
-                                ? 190U
-                                : 184U;
-                        append_instruction(function_body_, comparison_opcode, {
-                            bool_type_id_, comparison_id,
-                            source0_float_id, source1_float_id});
-                        append_instruction(function_body_, 169U, {
-                            float_type_id_, result_float_id,
-                            comparison_id, source0_float_id, source1_float_id});
-                    }
-                    result_id = allocate_id();
-                    append_instruction(function_body_, 124U, {
-                        uint_type_id_, result_id, result_float_id});
-                }
-                group_result[lane] = result_id;
+                vector_groups.push_back(std::move(vector_group));
             }
-
-            for (std::size_t lane = 0U;
-                 lane < group.instructions.size();
-                 ++lane)
-            {
-                registers_[group.instructions[lane].destination_gpr][lane] =
-                    group_result[lane];
-            }
-            previous_vector = group_result;
         }
+        execute_vector_clause(vector_groups);
     }
 
     static void validate_position_export(

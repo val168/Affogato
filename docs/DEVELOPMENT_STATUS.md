@@ -7,11 +7,14 @@ types together in a shared four-lane X/Y/Z/W group. The executor reads all
 lanes from the pre-group register snapshot, commits lane results together, and
 forwards PV between groups in the clause. A decoded guest-word fixture mixes
 an OP2 MOV lane with three OP3 conditional moves and checks the resulting
-register state. The SPIR-V emitter rejects this mixed IR explicitly until its
-lane lowering supports it. ALU.Trans, literals, incomplete groups, and Latte
-hardware behavior remain unsupported or unverified. Debug CTest passed 22/22;
-Release CTest passed 22/22. These controlled tests do not exercise ordinary
-guest draw execution or establish WWHD rendering.
+register state. The vertex SPIR-V emitter lowers those lanes through shared
+per-operation emitters, and `spirv-val` accepts the generated module.
+ALU.Trans, literals, incomplete groups, and Latte hardware behavior remain
+unsupported or unverified. A controlled guest GX2/Vulkan fixture executes the
+mixed bytecode and confirms red pixels in framebuffer readback. Debug and
+Release CTest each passed 24/24. The test uses the diagnostic host fragment
+shader and does not exercise ordinary guest draw execution or establish WWHD
+rendering.
 
 ## OP3 integer conditional moves (2026-11-25)
 

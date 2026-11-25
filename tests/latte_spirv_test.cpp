@@ -321,21 +321,13 @@ int main(int argc, char* argv[])
             conditional_move_group.instructions[lane]);
     }
     mixed_clause.vector_groups.push_back(std::move(mixed_group));
-    bool rejected_mixed_group = false;
-    try
-    {
-        static_cast<void>(
-            affogato::gpu::emit_latte_spirv_vertex_position_subset(
-                mixed_program,
-                {1U, 0U}));
-    }
-    catch (const std::runtime_error& error)
-    {
-        rejected_mixed_group =
-            std::string_view(error.what()).find("mixed OP2/OP3") !=
-            std::string_view::npos;
-    }
-    assert(rejected_mixed_group);
+    const std::vector<std::uint32_t> mixed_module =
+        affogato::gpu::emit_latte_spirv_vertex_position_subset(
+            mixed_program,
+            {1U, 0U});
+    assert(module_contains_opcode(mixed_module, 186U));
+    assert(module_contains_opcode(mixed_module, 190U));
+    assert(module_contains_opcode(mixed_module, 169U));
 
     conditional_move_clause.op3_groups[0U]
         .instructions[0U].source2_relative = true;
@@ -368,7 +360,7 @@ int main(int argc, char* argv[])
     }
     assert(rejected_relative_add_source);
 
-    if (argc == 10 && std::string_view(argv[1]) == "--write-modules")
+    if (argc == 11 && std::string_view(argv[1]) == "--write-modules")
     {
         write_module(argv[2], module);
         write_module(argv[3], modified_module);
@@ -378,6 +370,7 @@ int main(int argc, char* argv[])
         write_module(argv[7], minimum_module);
         write_module(argv[8], conditional_move_module);
         write_module(argv[9], integer_conditional_move_module);
+        write_module(argv[10], mixed_module);
     }
     return 0;
 }

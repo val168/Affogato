@@ -1926,7 +1926,8 @@ enum class GuestTriangleShader
     spirv_maximum_zero,
     spirv_minimum_zero,
     spirv_conditional_move,
-    spirv_integer_conditional_move
+    spirv_integer_conditional_move,
+    spirv_mixed_conditional_move
 };
 
 int run_gx2_guest_triangle_test(
@@ -2090,7 +2091,8 @@ int run_gx2_guest_triangle_test(
     vertex_shader_program[71U] = 0x900C6060U;
     if (use_latte_spirv &&
         (shader == GuestTriangleShader::spirv_conditional_move ||
-         shader == GuestTriangleShader::spirv_integer_conditional_move))
+         shader == GuestTriangleShader::spirv_integer_conditional_move ||
+         shader == GuestTriangleShader::spirv_mixed_conditional_move))
     {
         const std::uint16_t conditional_move_opcode =
             shader == GuestTriangleShader::spirv_integer_conditional_move
@@ -2101,6 +2103,21 @@ int run_gx2_guest_triangle_test(
         for (std::uint32_t component = 0U; component < 4U; ++component)
         {
             const std::uint32_t slot = 64U + component * 2U;
+            if (shader == GuestTriangleShader::spirv_mixed_conditional_move &&
+                component == 0U)
+            {
+                const std::uint32_t source_word = guest_position_gpr_selector;
+                const std::uint32_t destination_word =
+                    (static_cast<std::uint32_t>(
+                         affogato::gpu::latte_alu_op2_move_opcode)
+                     << 7U) |
+                    (1U << 4U) |
+                    (3U << 21U);
+                vertex_shader_program[slot] = std::byteswap(source_word);
+                vertex_shader_program[slot + 1U] =
+                    std::byteswap(destination_word);
+                continue;
+            }
             const std::uint32_t source_word =
                 guest_position_gpr_selector |
                 (component << 10U) |
@@ -2715,7 +2732,8 @@ int run_gx2_guest_triangle_test(
         shader == GuestTriangleShader::spirv_maximum_zero ||
         shader == GuestTriangleShader::spirv_minimum_zero ||
         shader == GuestTriangleShader::spirv_conditional_move ||
-        shader == GuestTriangleShader::spirv_integer_conditional_move;
+        shader == GuestTriangleShader::spirv_integer_conditional_move ||
+        shader == GuestTriangleShader::spirv_mixed_conditional_move;
     if (verify_shader_output)
     {
         renderer.render_frame();
@@ -2727,63 +2745,85 @@ int run_gx2_guest_triangle_test(
                 "Vulkan Latte shader output readback is unavailable");
         }
 
-        std::uint32_t shader_sample_x = shader_frame->width / 2U;
-        std::uint32_t shader_sample_y =
-            (shader_frame->height * 5U) / 12U;
-        bool expect_red = false;
-        if (shader == GuestTriangleShader::spirv_add_one_x)
+        if (shader == GuestTriangleShader::spirv_mixed_conditional_move)
         {
-            shader_sample_x = (shader_frame->width * 90U) / 100U;
-            shader_sample_y = (shader_frame->height * 7U) / 12U;
-            expect_red = true;
+            std::size_t red_pixel_count = 0U;
+            for (std::size_t pixel_offset = 0U;
+                 pixel_offset + 3U < shader_frame->pixels.size();
+                 pixel_offset += 4U)
+            {
+                if (shader_frame->pixels[pixel_offset] >= 200U &&
+                    shader_frame->pixels[pixel_offset + 2U] <= 40U)
+                {
+                    ++red_pixel_count;
+                }
+            }
+            if (red_pixel_count == 0U)
+            {
+                throw std::runtime_error(
+                    "Vulkan mixed OP2/OP3 shader produced no red readback pixels");
+            }
         }
-        else if (shader == GuestTriangleShader::spirv_add_negative_one_x)
+        else
         {
-            shader_sample_x = (shader_frame->width * 10U) / 100U;
-            shader_sample_y = (shader_frame->height * 7U) / 12U;
-            expect_red = true;
-        }
-        else if (shader == GuestTriangleShader::spirv_maximum_zero)
-        {
-            shader_sample_x = (shader_frame->width * 70U) / 100U;
-            shader_sample_y = (shader_frame->height * 7U) / 12U;
-            expect_red = true;
-        }
-        else if (shader == GuestTriangleShader::spirv_minimum_zero)
-        {
-            shader_sample_x = (shader_frame->width * 60U) / 100U;
-            shader_sample_y = (shader_frame->height * 23U) / 40U;
-        }
-        else if (shader == GuestTriangleShader::spirv_conditional_move ||
-                 shader == GuestTriangleShader::spirv_integer_conditional_move)
-        {
-            shader_sample_x = (shader_frame->width * 80U) / 100U;
-            shader_sample_y = (shader_frame->height * 60U) / 100U;
-            expect_red = true;
-        }
-        const std::size_t shader_sample_offset =
-            (static_cast<std::size_t>(shader_sample_y) * shader_frame->width +
-             shader_sample_x) * 4U;
-        if (shader_frame->pixels.size() < shader_sample_offset + 4U)
-        {
-            throw std::runtime_error(
-                "Vulkan Latte shader output readback is smaller than the expected sample");
-        }
-        const bool shader_sample_is_red =
-            shader_frame->pixels[shader_sample_offset] >= 200U &&
-            shader_frame->pixels[shader_sample_offset + 2U] <= 40U;
-        if (shader_sample_is_red != expect_red)
-        {
-            throw std::runtime_error(
-                "Vulkan Latte shader output pixel at (" +
-                std::to_string(shader_sample_x) + ", " +
-                std::to_string(shader_sample_y) + ") was (" +
-                std::to_string(shader_frame->pixels[shader_sample_offset]) +
-                ", " +
-                std::to_string(shader_frame->pixels[shader_sample_offset + 1U]) +
-                ", " +
-                std::to_string(shader_frame->pixels[shader_sample_offset + 2U]) +
-                ")");
+            std::uint32_t shader_sample_x = shader_frame->width / 2U;
+            std::uint32_t shader_sample_y =
+                (shader_frame->height * 5U) / 12U;
+            bool expect_red = false;
+            if (shader == GuestTriangleShader::spirv_add_one_x)
+            {
+                shader_sample_x = (shader_frame->width * 90U) / 100U;
+                shader_sample_y = (shader_frame->height * 7U) / 12U;
+                expect_red = true;
+            }
+            else if (shader == GuestTriangleShader::spirv_add_negative_one_x)
+            {
+                shader_sample_x = (shader_frame->width * 10U) / 100U;
+                shader_sample_y = (shader_frame->height * 7U) / 12U;
+                expect_red = true;
+            }
+            else if (shader == GuestTriangleShader::spirv_maximum_zero)
+            {
+                shader_sample_x = (shader_frame->width * 70U) / 100U;
+                shader_sample_y = (shader_frame->height * 7U) / 12U;
+                expect_red = true;
+            }
+            else if (shader == GuestTriangleShader::spirv_minimum_zero)
+            {
+                shader_sample_x = (shader_frame->width * 60U) / 100U;
+                shader_sample_y = (shader_frame->height * 23U) / 40U;
+            }
+            else if (shader == GuestTriangleShader::spirv_conditional_move ||
+                     shader == GuestTriangleShader::spirv_integer_conditional_move)
+            {
+                shader_sample_x = (shader_frame->width * 80U) / 100U;
+                shader_sample_y = (shader_frame->height * 60U) / 100U;
+                expect_red = true;
+            }
+            const std::size_t shader_sample_offset =
+                (static_cast<std::size_t>(shader_sample_y) * shader_frame->width +
+                 shader_sample_x) * 4U;
+            if (shader_frame->pixels.size() < shader_sample_offset + 4U)
+            {
+                throw std::runtime_error(
+                    "Vulkan Latte shader output readback is smaller than the expected sample");
+            }
+            const bool shader_sample_is_red =
+                shader_frame->pixels[shader_sample_offset] >= 200U &&
+                shader_frame->pixels[shader_sample_offset + 2U] <= 40U;
+            if (shader_sample_is_red != expect_red)
+            {
+                throw std::runtime_error(
+                    "Vulkan Latte shader output pixel at (" +
+                    std::to_string(shader_sample_x) + ", " +
+                    std::to_string(shader_sample_y) + ") was (" +
+                    std::to_string(shader_frame->pixels[shader_sample_offset]) +
+                    ", " +
+                    std::to_string(shader_frame->pixels[shader_sample_offset + 1U]) +
+                    ", " +
+                    std::to_string(shader_frame->pixels[shader_sample_offset + 2U]) +
+                    ")");
+            }
         }
 
         if (shader == GuestTriangleShader::spirv_conditional_move ||
@@ -2906,6 +2946,11 @@ int run_gx2_guest_triangle_test(
     {
         shader_subset_description =
             "the bounded OP3 signed-integer conditional-move-to-position SPIR-V vertex subset";
+    }
+    if (shader == GuestTriangleShader::spirv_mixed_conditional_move)
+    {
+        shader_subset_description =
+            "the bounded mixed OP2 MOV/OP3 conditional-move-to-position SPIR-V vertex subset";
     }
     std::cout << "GX2 float32/float16/UNORM8x4 triangle-list, indexed, strip, and fan "
               << "geometry, "
@@ -3039,6 +3084,14 @@ int main(int argc, char* argv[])
                     false,
                     GuestTriangleShader::spirv_integer_conditional_move);
             }
+            if (std::string_view(argv[1]) ==
+                    "--gx2-guest-triangle-mixed-alu-spirv-smoke-test" &&
+                argc == 2)
+            {
+                return run_gx2_guest_triangle_test(
+                    false,
+                    GuestTriangleShader::spirv_mixed_conditional_move);
+            }
             if (std::string_view(argv[1]) == "--gx2-guest-triangle-display-test" &&
                 argc == 2)
             {
@@ -3062,6 +3115,7 @@ int main(int argc, char* argv[])
                          "       AffogatoFrontend.exe --gx2-guest-triangle-minimum-zero-spirv-smoke-test\n"
                          "       AffogatoFrontend.exe --gx2-guest-triangle-op3-conditional-move-spirv-smoke-test\n"
                          "       AffogatoFrontend.exe --gx2-guest-triangle-op3-integer-conditional-move-spirv-smoke-test\n"
+                         "       AffogatoFrontend.exe --gx2-guest-triangle-mixed-alu-spirv-smoke-test\n"
                          "       AffogatoFrontend.exe --gx2-guest-triangle-display-test\n";
             return 2;
         }
