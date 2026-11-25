@@ -10,8 +10,11 @@ and unsupported source modes/modifiers still fail. AMD's R700-family manual
 documents the OP2 semantics, while Latte-specific behavior remains
 unconfirmed. Deterministic tests check the comparison/select instruction
 sequence and `spirv-val` accepts both modules. Debug and Release builds passed;
-CTest passed 11/11 in both. Neither min/max operation has been executed through
-the Vulkan smoke harness yet. See
+CTest passed 13/13 in both. Separate Vulkan smoke modes now submit
+`MAX_DX10(x, x)` and `MIN_DX10(x, x)` guest shaders and verify guest target and
+scanout readback. These identity comparisons keep the test geometry fixed;
+non-identity comparison outputs and Latte hardware behavior remain
+unverified. See
 [`research/12_latte_shader_isa.md`](research/12_latte_shader_isa.md).
 
 ## Controlled Vulkan run for Latte MUL_IEEE (2026-11-25)

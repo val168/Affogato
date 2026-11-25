@@ -1913,13 +1913,20 @@ int run_vulkan_texture_upload_smoke_test()
     return 0;
 }
 
+enum class GuestTriangleShader
+{
+    cpu_mov,
+    spirv_add_zero,
+    spirv_multiply_one,
+    spirv_maximum_self,
+    spirv_minimum_self
+};
+
 int run_gx2_guest_triangle_test(
     bool visible_window = false,
-    bool use_latte_spirv_add = false,
-    bool use_latte_spirv_multiply = false)
+    GuestTriangleShader shader = GuestTriangleShader::cpu_mov)
 {
-    const bool use_latte_spirv =
-        use_latte_spirv_add || use_latte_spirv_multiply;
+    const bool use_latte_spirv = shader != GuestTriangleShader::cpu_mov;
     constexpr std::uint32_t vertex_buffer_address = 0x10000U;
     constexpr std::uint32_t index_buffer_address = 0x4000U;
     constexpr std::uint32_t big_endian_index_buffer_address = 0x5000U;
@@ -1945,6 +1952,7 @@ int run_gx2_guest_triangle_test(
     constexpr std::uint32_t vertex_buffer_stride = 16U;
     constexpr std::uint32_t position_attribute_offset = 4U;
     constexpr std::uint32_t vertex_buffer_size = 4U * vertex_buffer_stride;
+    constexpr std::uint16_t guest_position_gpr_selector = 1U;
     constexpr std::array<affogato::gpu::vulkan::DiagnosticVertex, 3U> vertices{{
         {-0.65F, -0.60F}, {0.65F, -0.60F}, {0.0F, 0.70F}}};
 
@@ -2073,14 +2081,29 @@ int run_gx2_guest_triangle_test(
     vertex_shader_program[71U] = 0x900C6060U;
     if (use_latte_spirv)
     {
-        const std::uint32_t operation_opcode =
-            use_latte_spirv_multiply
-                ? affogato::gpu::latte_alu_op2_multiply_ieee_opcode
-                : affogato::gpu::latte_alu_op2_add_float_opcode;
-        const std::uint16_t second_operand_selector =
-            use_latte_spirv_multiply
-                ? affogato::gpu::latte_alu_source_one_float_selector
-                : affogato::gpu::latte_alu_source_zero_selector;
+        std::uint32_t operation_opcode =
+            affogato::gpu::latte_alu_op2_add_float_opcode;
+        std::uint16_t second_operand_selector =
+            affogato::gpu::latte_alu_source_zero_selector;
+        if (shader == GuestTriangleShader::spirv_multiply_one)
+        {
+            operation_opcode =
+                affogato::gpu::latte_alu_op2_multiply_ieee_opcode;
+            second_operand_selector =
+                affogato::gpu::latte_alu_source_one_float_selector;
+        }
+        else if (shader == GuestTriangleShader::spirv_maximum_self)
+        {
+            operation_opcode =
+                affogato::gpu::latte_alu_op2_maximum_dx10_opcode;
+            second_operand_selector = guest_position_gpr_selector;
+        }
+        else if (shader == GuestTriangleShader::spirv_minimum_self)
+        {
+            operation_opcode =
+                affogato::gpu::latte_alu_op2_minimum_dx10_opcode;
+            second_operand_selector = guest_position_gpr_selector;
+        }
         for (std::uint32_t component = 0U; component < 4U; ++component)
         {
             const std::uint32_t slot = 64U + component * 2U;
@@ -2631,15 +2654,25 @@ int run_gx2_guest_triangle_test(
     }
     const char* shader_subset_description =
         "the supported CPU MOV/export shader subset";
-    if (use_latte_spirv_add)
+    if (shader == GuestTriangleShader::spirv_add_zero)
     {
         shader_subset_description =
             "the bounded MOV/ADD-to-position SPIR-V vertex subset";
     }
-    if (use_latte_spirv_multiply)
+    if (shader == GuestTriangleShader::spirv_multiply_one)
     {
         shader_subset_description =
             "the bounded MOV/MUL-to-position SPIR-V vertex subset";
+    }
+    if (shader == GuestTriangleShader::spirv_maximum_self)
+    {
+        shader_subset_description =
+            "the bounded MOV/MAX_DX10-to-position SPIR-V vertex subset";
+    }
+    if (shader == GuestTriangleShader::spirv_minimum_self)
+    {
+        shader_subset_description =
+            "the bounded MOV/MIN_DX10-to-position SPIR-V vertex subset";
     }
     std::cout << "GX2 float32/float16/UNORM8x4 triangle-list, indexed, strip, and fan "
               << "geometry, "
@@ -2689,13 +2722,33 @@ int main(int argc, char* argv[])
                     "--gx2-guest-triangle-spirv-smoke-test" &&
                 argc == 2)
             {
-                return run_gx2_guest_triangle_test(false, true);
+                return run_gx2_guest_triangle_test(
+                    false,
+                    GuestTriangleShader::spirv_add_zero);
             }
             if (std::string_view(argv[1]) ==
                     "--gx2-guest-triangle-multiply-spirv-smoke-test" &&
                 argc == 2)
             {
-                return run_gx2_guest_triangle_test(false, false, true);
+                return run_gx2_guest_triangle_test(
+                    false,
+                    GuestTriangleShader::spirv_multiply_one);
+            }
+            if (std::string_view(argv[1]) ==
+                    "--gx2-guest-triangle-maximum-spirv-smoke-test" &&
+                argc == 2)
+            {
+                return run_gx2_guest_triangle_test(
+                    false,
+                    GuestTriangleShader::spirv_maximum_self);
+            }
+            if (std::string_view(argv[1]) ==
+                    "--gx2-guest-triangle-minimum-spirv-smoke-test" &&
+                argc == 2)
+            {
+                return run_gx2_guest_triangle_test(
+                    false,
+                    GuestTriangleShader::spirv_minimum_self);
             }
             if (std::string_view(argv[1]) == "--gx2-guest-triangle-display-test" &&
                 argc == 2)
@@ -2711,6 +2764,8 @@ int main(int argc, char* argv[])
                          "       AffogatoFrontend.exe --gx2-guest-triangle-smoke-test\n"
                          "       AffogatoFrontend.exe --gx2-guest-triangle-spirv-smoke-test\n"
                          "       AffogatoFrontend.exe --gx2-guest-triangle-multiply-spirv-smoke-test\n"
+                         "       AffogatoFrontend.exe --gx2-guest-triangle-maximum-spirv-smoke-test\n"
+                         "       AffogatoFrontend.exe --gx2-guest-triangle-minimum-spirv-smoke-test\n"
                          "       AffogatoFrontend.exe --gx2-guest-triangle-display-test\n";
             return 2;
         }
