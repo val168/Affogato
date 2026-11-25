@@ -722,3 +722,21 @@ byte-order interpretation. Debug and Release builds succeeded, CTest passed
 2/2 in both configurations, and `--gx2-guest-triangle-smoke-test` passed on an
 NVIDIA GeForce RTX 5070 Laptop GPU using the diagnostic Vulkan shader. This
 does not verify visual presentation or Latte shader execution.
+
+## GX2 vertex-shader register capture (2026-11-25)
+
+Extended `GX2SetVertexShader` from shader/semantic capture to emit an ordered
+register-write batch for the descriptor's program setup, vertex output state,
+semantic table, and reuse controls. Geometry mode selects the ES program range
+and captures its ring item size. Enabled stream-out writes four stride values
+in DWORD units. Output-ID and semantic counts are checked before pending
+commands or current shader state are modified. Tests cover register addresses
+and values, draw-time snapshot retention, stream-out stride conversion,
+geometry-mode setup, alias-resolved program starts, and invalid counts. WUT's
+descriptor layout and Decaf's GX2 setter were compared; register addresses
+were cross-checked against related-generation AMD/Linux references. This is
+reference-derived behavior, not Wii U hardware validation. Debug and Release
+builds succeeded, and CTest passed 2/2 in each configuration. The diagnostic
+Vulkan smoke test passed with its host shader. No guest shader is executed by
+the renderer, and this does not complete normal GX2 draw dispatch or establish
+guest-generated Vulkan pixels.

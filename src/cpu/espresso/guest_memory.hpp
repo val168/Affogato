@@ -127,6 +127,12 @@ public:
 
     [[nodiscard]] std::uint32_t reservation_address(std::uint32_t address) const noexcept
     {
+        return resolve_backing_address(address);
+    }
+
+    [[nodiscard]] std::uint32_t resolve_backing_address(
+        std::uint32_t address) const noexcept
+    {
         return resolve_alias_address(address);
     }
 

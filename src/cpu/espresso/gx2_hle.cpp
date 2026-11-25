@@ -177,9 +177,38 @@ constexpr std::uint32_t gx2_fetch_shader_struct_size = 0x20U;
 constexpr std::uint32_t gx2_vertex_shader_struct_size = 0x134U;
 constexpr std::uint32_t gx2_vertex_shader_program_size_offset = 0xD0U;
 constexpr std::uint32_t gx2_vertex_shader_program_address_offset = 0xD4U;
+constexpr std::uint32_t gx2_vertex_shader_mode_offset = 0xD8U;
+constexpr std::uint32_t gx2_vertex_shader_ring_item_size_offset = 0x10CU;
+constexpr std::uint32_t gx2_vertex_shader_has_stream_out_offset = 0x110U;
+constexpr std::uint32_t gx2_vertex_shader_stream_out_stride_offset = 0x114U;
+constexpr std::uint32_t gx2_vertex_shader_stream_out_stride_count = 4U;
+constexpr std::uint32_t gx2_vertex_shader_primitive_id_offset = 0x04U;
+constexpr std::uint32_t gx2_vertex_shader_output_config_offset = 0x08U;
+constexpr std::uint32_t gx2_vertex_shader_output_id_count_offset = 0x0CU;
+constexpr std::uint32_t gx2_vertex_shader_output_id_values_offset = 0x10U;
+constexpr std::uint32_t gx2_vertex_shader_output_id_count = 10U;
+constexpr std::uint32_t gx2_vertex_shader_output_control_offset = 0x38U;
 constexpr std::uint32_t gx2_vertex_shader_semantic_clear_offset = 0x3CU;
 constexpr std::uint32_t gx2_vertex_shader_semantic_count_offset = 0x40U;
 constexpr std::uint32_t gx2_vertex_shader_semantic_values_offset = 0x44U;
+constexpr std::uint32_t gx2_vertex_shader_stream_out_enable_offset = 0xC4U;
+constexpr std::uint32_t gx2_vertex_shader_vertex_reuse_offset = 0xC8U;
+constexpr std::uint32_t gx2_vertex_shader_hos_reuse_offset = 0xCCU;
+constexpr std::uint32_t gx2_shader_mode_geometry = 2U;
+constexpr std::uint32_t gx2_vertex_shader_program_register = 0x00028858U;
+constexpr std::uint32_t gx2_vertex_shader_es_program_register = 0x00028880U;
+constexpr std::uint32_t gx2_vertex_shader_es_ring_item_size_register = 0x000288A8U;
+constexpr std::uint32_t gx2_vertex_primitive_id_enable_register = 0x00028A84U;
+constexpr std::uint32_t gx2_vertex_shader_output_config_register = 0x000286C4U;
+constexpr std::uint32_t gx2_vertex_shader_output_id_register = 0x00028614U;
+constexpr std::uint32_t gx2_vertex_shader_output_control_register = 0x0002881CU;
+constexpr std::uint32_t gx2_vertex_shader_cf_offset_register = 0x000288D0U;
+constexpr std::uint32_t gx2_vertex_stream_out_enable_register = 0x00028B20U;
+constexpr std::uint32_t gx2_vertex_stream_out_stride_register = 0x00028AD4U;
+constexpr std::uint32_t gx2_vertex_reuse_block_control_register = 0x00028C58U;
+constexpr std::uint32_t gx2_vertex_hos_reuse_depth_register = 0x00028A20U;
+constexpr std::uint32_t gx2_context_register_stride = sizeof(std::uint32_t);
+constexpr std::uint32_t gx2_vertex_stream_out_stride_register_spacing = 0x10U;
 constexpr std::uint32_t gx2_vertex_shader_semantic_register_base = 0x00028380U;
 constexpr std::uint32_t gx2_vertex_shader_semantic_clear_register = 0x000288E0U;
 constexpr std::uint32_t gx2_vertex_shader_semantic_count = 32U;
@@ -426,6 +455,164 @@ Gx2ProgramShaderBinding capture_program_shader(
         }
     }
     return binding;
+}
+
+std::vector<Gx2Command> make_vertex_shader_register_commands(
+    const Gx2ProgramShaderBinding& binding,
+    std::uint32_t resolved_program_address)
+{
+    const auto descriptor_word = [&binding](std::uint32_t byte_offset)
+    {
+        return binding.descriptor_words[byte_offset / sizeof(std::uint32_t)];
+    };
+
+    const std::uint32_t semantic_count = descriptor_word(
+        gx2_vertex_shader_semantic_count_offset);
+    const std::uint32_t output_id_count = descriptor_word(
+        gx2_vertex_shader_output_id_count_offset);
+    if (semantic_count > gx2_vertex_shader_semantic_count)
+    {
+        throw HleExecutionError(
+            "gx2::GX2SetVertexShader: semantic count exceeds the 32-entry Latte table");
+    }
+    if (output_id_count > gx2_vertex_shader_output_id_count)
+    {
+        throw HleExecutionError(
+            "gx2::GX2SetVertexShader: output ID count exceeds the 10-entry descriptor array");
+    }
+
+    const bool is_geometry_mode = descriptor_word(
+        gx2_vertex_shader_mode_offset) == gx2_shader_mode_geometry;
+    const bool has_stream_out = descriptor_word(
+        gx2_vertex_shader_has_stream_out_offset) != 0U;
+    const std::size_t stream_out_stride_count = has_stream_out
+        ? gx2_vertex_shader_stream_out_stride_count
+        : 0U;
+    const std::size_t stage_register_command_count = is_geometry_mode
+        ? 1U
+        : 5U + output_id_count + stream_out_stride_count;
+
+    std::vector<Gx2Command> commands;
+    commands.reserve(
+        5U + stage_register_command_count + 1U + semantic_count + 2U);
+
+    // GX2's program-start registers use a 256-byte address unit and an
+    // eight-byte size unit. Resolve memory aliases before storing the address;
+    // the shader program itself is captured separately above.
+    const std::uint32_t program_register = is_geometry_mode
+        ? gx2_vertex_shader_es_program_register
+        : gx2_vertex_shader_program_register;
+    const std::array<std::uint32_t, 5U> program_register_values{
+        resolved_program_address >> 8U,
+        binding.program_size >> 3U,
+        0x00100000U,
+        0x00100000U,
+        descriptor_word(0U),
+    };
+    for (std::size_t index = 0U;
+         index < program_register_values.size();
+         ++index)
+    {
+        commands.push_back({
+            Gx2CommandType::set_context_register,
+            program_register + static_cast<std::uint32_t>(
+                index * gx2_context_register_stride),
+            program_register_values[index]});
+    }
+
+    if (is_geometry_mode)
+    {
+        commands.push_back({
+            Gx2CommandType::set_context_register,
+            gx2_vertex_shader_es_ring_item_size_register,
+            descriptor_word(gx2_vertex_shader_ring_item_size_offset)});
+    }
+    else
+    {
+        commands.push_back({
+            Gx2CommandType::set_context_register,
+            gx2_vertex_primitive_id_enable_register,
+            descriptor_word(gx2_vertex_shader_primitive_id_offset)});
+        commands.push_back({
+            Gx2CommandType::set_context_register,
+            gx2_vertex_shader_output_config_register,
+            descriptor_word(gx2_vertex_shader_output_config_offset)});
+        commands.push_back({
+            Gx2CommandType::set_context_register,
+            gx2_vertex_shader_output_control_register,
+            descriptor_word(gx2_vertex_shader_output_control_offset)});
+
+        for (std::uint32_t output_index = 0U;
+             output_index < output_id_count;
+             ++output_index)
+        {
+            const std::uint32_t descriptor_offset =
+                gx2_vertex_shader_output_id_values_offset +
+                output_index * sizeof(std::uint32_t);
+            commands.push_back({
+                Gx2CommandType::set_context_register,
+                gx2_vertex_shader_output_id_register +
+                    output_index * gx2_context_register_stride,
+                descriptor_word(descriptor_offset)});
+        }
+
+        // GX2 initializes the vertex shader CF offset to zero during binding.
+        commands.push_back({
+            Gx2CommandType::set_context_register,
+            gx2_vertex_shader_cf_offset_register,
+            0U});
+
+        if (has_stream_out)
+        {
+            for (std::uint32_t stream_index = 0U;
+                 stream_index < gx2_vertex_shader_stream_out_stride_count;
+                 ++stream_index)
+            {
+                const std::uint32_t descriptor_offset =
+                    gx2_vertex_shader_stream_out_stride_offset +
+                    stream_index * sizeof(std::uint32_t);
+                commands.push_back({
+                    Gx2CommandType::set_context_register,
+                    gx2_vertex_stream_out_stride_register +
+                        stream_index *
+                            gx2_vertex_stream_out_stride_register_spacing,
+                    descriptor_word(descriptor_offset) >> 2U});
+            }
+        }
+        commands.push_back({
+            Gx2CommandType::set_context_register,
+            gx2_vertex_stream_out_enable_register,
+            descriptor_word(gx2_vertex_shader_stream_out_enable_offset)});
+    }
+
+    commands.push_back({
+        Gx2CommandType::set_context_register,
+        gx2_vertex_shader_semantic_clear_register,
+        descriptor_word(gx2_vertex_shader_semantic_clear_offset)});
+    for (std::uint32_t semantic_index = 0U;
+         semantic_index < semantic_count;
+         ++semantic_index)
+    {
+        const std::uint32_t descriptor_offset =
+            gx2_vertex_shader_semantic_values_offset +
+            semantic_index * sizeof(std::uint32_t);
+        commands.push_back({
+            Gx2CommandType::set_context_register,
+            gx2_vertex_shader_semantic_register_base +
+                semantic_index * gx2_context_register_stride,
+            descriptor_word(descriptor_offset)});
+    }
+
+    commands.push_back({
+        Gx2CommandType::set_context_register,
+        gx2_vertex_reuse_block_control_register,
+        descriptor_word(gx2_vertex_shader_vertex_reuse_offset)});
+    commands.push_back({
+        Gx2CommandType::set_context_register,
+        gx2_vertex_hos_reuse_depth_register,
+        descriptor_word(gx2_vertex_shader_hos_reuse_offset)});
+
+    return commands;
 }
 
 struct Gx2AttribStream
@@ -6565,17 +6752,13 @@ void register_gx2_hle(HleDispatcher& dispatcher)
                 gx2_vertex_shader_program_address_offset,
                 "gx2::GX2SetVertexShader");
 
-            constexpr std::uint32_t register_stride = sizeof(std::uint32_t);
-            const std::uint32_t semantic_count = binding.descriptor_words[
-                gx2_vertex_shader_semantic_count_offset / sizeof(std::uint32_t)];
-            if (semantic_count > gx2_vertex_shader_semantic_count)
-            {
-                throw HleExecutionError(
-                    "gx2::GX2SetVertexShader: semantic count exceeds the 32-entry Latte table");
-            }
-
-            core.gx2.pending_commands.reserve(
-                core.gx2.pending_commands.size() + semantic_count + 2U);
+            std::vector<Gx2Command> register_commands =
+                make_vertex_shader_register_commands(
+                    binding,
+                    core.memory.resolve_backing_address(binding.program_address));
+            auto& pending_commands = core.gx2.pending_commands;
+            pending_commands.reserve(
+                pending_commands.size() + register_commands.size() + 1U);
             core.gx2.pending_commands.push_back({
                 Gx2CommandType::set_program_shader,
                 0U,
@@ -6587,29 +6770,10 @@ void register_gx2_hle(HleDispatcher& dispatcher)
                 std::nullopt,
                 std::nullopt,
                 binding});
-
-            const std::uint32_t semantic_clear = binding.descriptor_words[
-                gx2_vertex_shader_semantic_clear_offset / sizeof(std::uint32_t)];
-            core.gx2.pending_commands.push_back({
-                Gx2CommandType::set_context_register,
-                gx2_vertex_shader_semantic_clear_register,
-                semantic_clear});
-
-            for (std::uint32_t semantic_index = 0U;
-                 semantic_index < semantic_count;
-                 ++semantic_index)
-            {
-                const std::size_t descriptor_word =
-                    gx2_vertex_shader_semantic_values_offset / sizeof(std::uint32_t) +
-                    semantic_index;
-                const std::uint32_t semantic_register =
-                    gx2_vertex_shader_semantic_register_base +
-                    semantic_index * register_stride;
-                core.gx2.pending_commands.push_back({
-                    Gx2CommandType::set_context_register,
-                    semantic_register,
-                    binding.descriptor_words[descriptor_word]});
-            }
+            pending_commands.insert(
+                pending_commands.end(),
+                std::make_move_iterator(register_commands.begin()),
+                std::make_move_iterator(register_commands.end()));
 
             core.gx2.program_shaders[
                 static_cast<std::size_t>(Gx2ProgramStage::vertex)] =

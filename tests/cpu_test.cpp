@@ -29653,6 +29653,7 @@ void gx2_draw_ex_hle_tests()
         Gx2CommandType::draw, 0U, 0U, 0U, 0U, 0U,
         Gx2DrawCall{4U, 36U, false, 0U, 0U, 12U, 2U, 0U}};
     EspressoCore core(0x1000U);
+    core.memory.map_alias(0x10000000U, 0U, 0x1000U);
     register_gx2_hle(core.hle);
     core.state.gpr.fill(0xD4000000U);
     core.state.gpr[3] = 4U;
@@ -29925,7 +29926,7 @@ void gx2_draw_ex_hle_tests()
     assert(core.gx2.fetch_shader == expected_replacement_fetch);
 
     constexpr std::uint32_t vertex_shader_descriptor_address = 0x500U;
-    constexpr std::uint32_t vertex_shader_program_address = 0x700U;
+    constexpr std::uint32_t vertex_shader_program_address = 0x10000700U;
     std::array<std::uint32_t, 0x134U / sizeof(std::uint32_t)>
         vertex_shader_descriptor{};
     for (std::size_t index = 0U; index < vertex_shader_descriptor.size(); ++index)
@@ -29933,6 +29934,7 @@ void gx2_draw_ex_hle_tests()
         vertex_shader_descriptor[index] =
             0xA5000000U | static_cast<std::uint32_t>(index);
     }
+    vertex_shader_descriptor[0x0CU / sizeof(std::uint32_t)] = 2U;
     vertex_shader_descriptor[0x3CU / sizeof(std::uint32_t)] = 0xFFFFFFFFU;
     vertex_shader_descriptor[0x40U / sizeof(std::uint32_t)] = 2U;
     vertex_shader_descriptor[0x44U / sizeof(std::uint32_t)] = 0x12340003U;
@@ -29940,6 +29942,8 @@ void gx2_draw_ex_hle_tests()
     vertex_shader_descriptor[0xD0U / sizeof(std::uint32_t)] = 12U;
     vertex_shader_descriptor[0xD4U / sizeof(std::uint32_t)] =
         vertex_shader_program_address;
+    vertex_shader_descriptor[0xD8U / sizeof(std::uint32_t)] = 0U;
+    vertex_shader_descriptor[0x110U / sizeof(std::uint32_t)] = 0U;
     const std::array<std::uint32_t, 3U> vertex_shader_program{
         0x7C000000U, 0xBF810000U, 0x00000000U};
     for (std::size_t index = 0U; index < vertex_shader_descriptor.size(); ++index)
@@ -29975,18 +29979,68 @@ void gx2_draw_ex_hle_tests()
     assert(core.state.ctr == vertex_shader_ctr_before);
     assert(core.state.fpscr == vertex_shader_fpscr_before);
     const auto vertex_shader_commands = take_gx2_commands(core.gx2);
-    assert(vertex_shader_commands.size() == 4U);
+    assert(vertex_shader_commands.size() == 18U);
     assert(vertex_shader_commands.front().type ==
            Gx2CommandType::set_program_shader);
+    const std::uint32_t resolved_vertex_shader_program_address =
+        core.memory.resolve_backing_address(vertex_shader_program_address);
     assert(vertex_shader_commands[1U] == (Gx2Command{
+        Gx2CommandType::set_context_register,
+        0x00028858U,
+        resolved_vertex_shader_program_address >> 8U}));
+    assert(vertex_shader_commands[2U] == (Gx2Command{
+        Gx2CommandType::set_context_register,
+        0x0002885CU,
+        1U}));
+    assert(vertex_shader_commands[3U] == (Gx2Command{
+        Gx2CommandType::set_context_register,
+        0x00028860U,
+        0x00100000U}));
+    assert(vertex_shader_commands[4U] == (Gx2Command{
+        Gx2CommandType::set_context_register,
+        0x00028864U,
+        0x00100000U}));
+    assert(vertex_shader_commands[5U] == (Gx2Command{
+        Gx2CommandType::set_context_register,
+        0x00028868U,
+        vertex_shader_descriptor[0U]}));
+    assert(vertex_shader_commands[6U] == (Gx2Command{
+        Gx2CommandType::set_context_register,
+        0x00028A84U,
+        vertex_shader_descriptor[0x04U / sizeof(std::uint32_t)]}));
+    assert(vertex_shader_commands[7U] == (Gx2Command{
+        Gx2CommandType::set_context_register,
+        0x000286C4U,
+        vertex_shader_descriptor[0x08U / sizeof(std::uint32_t)]}));
+    assert(vertex_shader_commands[8U] == (Gx2Command{
+        Gx2CommandType::set_context_register,
+        0x0002881CU,
+        vertex_shader_descriptor[0x38U / sizeof(std::uint32_t)]}));
+    assert(vertex_shader_commands[9U] == (Gx2Command{
+        Gx2CommandType::set_context_register,
+        0x00028614U,
+        vertex_shader_descriptor[0x10U / sizeof(std::uint32_t)]}));
+    assert(vertex_shader_commands[10U] == (Gx2Command{
+        Gx2CommandType::set_context_register,
+        0x00028618U,
+        vertex_shader_descriptor[0x14U / sizeof(std::uint32_t)]}));
+    assert(vertex_shader_commands[11U] == (Gx2Command{
+        Gx2CommandType::set_context_register,
+        0x000288D0U,
+        0U}));
+    assert(vertex_shader_commands[12U] == (Gx2Command{
+        Gx2CommandType::set_context_register,
+        0x00028B20U,
+        vertex_shader_descriptor[0xC4U / sizeof(std::uint32_t)]}));
+    assert(vertex_shader_commands[13U] == (Gx2Command{
         Gx2CommandType::set_context_register,
         0x000288E0U,
         0xFFFFFFFFU}));
-    assert(vertex_shader_commands[2U] == (Gx2Command{
+    assert(vertex_shader_commands[14U] == (Gx2Command{
         Gx2CommandType::set_context_register,
         0x00028380U,
         0x12340003U}));
-    assert(vertex_shader_commands[3U] == (Gx2Command{
+    assert(vertex_shader_commands[15U] == (Gx2Command{
         Gx2CommandType::set_context_register,
         0x00028384U,
         0xABCD0007U}));
@@ -30016,6 +30070,37 @@ void gx2_draw_ex_hle_tests()
                Gx2ProgramStage::vertex)] == expected_vertex_shader);
     const auto vertex_draw_snapshot = register_state.draw_snapshot(9U);
     assert(vertex_draw_snapshot.has_value());
+    const auto find_vertex_register = [](
+        std::span<const affogato::gpu::Gx2RegisterSnapshotEntry> registers,
+        std::uint32_t address)
+        -> std::optional<affogato::gpu::Gx2RegisterSnapshotEntry>
+    {
+        const auto found = std::find_if(
+            registers.begin(),
+            registers.end(),
+            [address](const auto& entry) { return entry.address == address; });
+        if (found == registers.end())
+        {
+            return std::nullopt;
+        }
+        return *found;
+    };
+    const auto vertex_program_start = find_vertex_register(
+        vertex_draw_snapshot->registers,
+        0x00028858U);
+    const auto vertex_resource_register = find_vertex_register(
+        vertex_draw_snapshot->registers,
+        0x00028868U);
+    const auto vertex_output_config = find_vertex_register(
+        vertex_draw_snapshot->registers,
+        0x000286C4U);
+    assert(vertex_program_start.has_value());
+    assert(vertex_program_start->value ==
+           (resolved_vertex_shader_program_address >> 8U));
+    assert(vertex_resource_register.has_value());
+    assert(vertex_resource_register->value == vertex_shader_descriptor[0U]);
+    assert(vertex_output_config.has_value());
+    assert(vertex_output_config->value == vertex_shader_descriptor[2U]);
     const auto semantic_table =
         affogato::gpu::capture_latte_vertex_semantic_table(
             vertex_draw_snapshot->registers);
@@ -30260,6 +30345,71 @@ void gx2_draw_ex_hle_tests()
     assert(core.gx2.program_shaders[static_cast<std::size_t>(
                Gx2ProgramStage::vertex)]->descriptor_address ==
            replacement_vertex_shader_descriptor_address);
+
+    vertex_shader_descriptor[0xD0U / sizeof(std::uint32_t)] = 12U;
+    vertex_shader_descriptor[0x0CU / sizeof(std::uint32_t)] = 11U;
+    for (std::size_t index = 0U; index < vertex_shader_descriptor.size(); ++index)
+    {
+        core.memory.write32_be(
+            vertex_shader_descriptor_address +
+                static_cast<std::uint32_t>(index * sizeof(std::uint32_t)),
+            vertex_shader_descriptor[index]);
+    }
+    core.state.gpr[3] = vertex_shader_descriptor_address;
+    core.state.lr = return_address;
+    core.state.cia = core.hle.bind_import("gx2", "GX2SetVertexShader");
+    assert(core.run(1U).reason == StopReason::hle_error);
+    assert(take_gx2_commands(core.gx2).empty());
+
+    vertex_shader_descriptor[0x0CU / sizeof(std::uint32_t)] = 2U;
+    vertex_shader_descriptor[0x40U / sizeof(std::uint32_t)] = 2U;
+    vertex_shader_descriptor[0x110U / sizeof(std::uint32_t)] = 1U;
+    vertex_shader_descriptor[0x114U / sizeof(std::uint32_t)] = 4U;
+    vertex_shader_descriptor[0x118U / sizeof(std::uint32_t)] = 8U;
+    vertex_shader_descriptor[0x11CU / sizeof(std::uint32_t)] = 12U;
+    vertex_shader_descriptor[0x120U / sizeof(std::uint32_t)] = 16U;
+    for (std::size_t index = 0U; index < vertex_shader_descriptor.size(); ++index)
+    {
+        core.memory.write32_be(
+            vertex_shader_descriptor_address +
+                static_cast<std::uint32_t>(index * sizeof(std::uint32_t)),
+            vertex_shader_descriptor[index]);
+    }
+    core.state.gpr[3] = vertex_shader_descriptor_address;
+    core.state.lr = return_address;
+    core.state.cia = core.hle.bind_import("gx2", "GX2SetVertexShader");
+    assert(core.run(1U).reason == StopReason::instruction_limit);
+    const auto stream_out_commands = take_gx2_commands(core.gx2);
+    assert(stream_out_commands.size() == 22U);
+    for (std::uint32_t stream_index = 0U; stream_index < 4U; ++stream_index)
+    {
+        const std::size_t command_index = 12U + stream_index;
+        assert(stream_out_commands[command_index].register_address ==
+               0x00028AD4U + stream_index * 0x10U);
+        assert(stream_out_commands[command_index].value == stream_index + 1U);
+    }
+
+    vertex_shader_descriptor[0xD8U / sizeof(std::uint32_t)] = 2U;
+    vertex_shader_descriptor[0x10CU / sizeof(std::uint32_t)] = 0x20U;
+    vertex_shader_descriptor[0x110U / sizeof(std::uint32_t)] = 0U;
+    for (std::size_t index = 0U; index < vertex_shader_descriptor.size(); ++index)
+    {
+        core.memory.write32_be(
+            vertex_shader_descriptor_address +
+                static_cast<std::uint32_t>(index * sizeof(std::uint32_t)),
+            vertex_shader_descriptor[index]);
+    }
+    core.state.gpr[3] = vertex_shader_descriptor_address;
+    core.state.lr = return_address;
+    core.state.cia = core.hle.bind_import("gx2", "GX2SetVertexShader");
+    assert(core.run(1U).reason == StopReason::instruction_limit);
+    const auto geometry_mode_vertex_commands = take_gx2_commands(core.gx2);
+    assert(geometry_mode_vertex_commands.size() == 12U);
+    assert(geometry_mode_vertex_commands[1U].register_address == 0x00028880U);
+    assert(geometry_mode_vertex_commands[6U] == (Gx2Command{
+        Gx2CommandType::set_context_register,
+        0x000288A8U,
+        0x20U}));
 
     EspressoCore snapshot_core(0x1000U);
     register_gx2_hle(snapshot_core.hle);

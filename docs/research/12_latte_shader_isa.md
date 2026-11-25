@@ -264,6 +264,39 @@ corresponding register writes after the shader binding. Tests verify command
 ordering and that a draw snapshot contains the resulting table. This is
 cross-checked reference behavior, not Wii U hardware verification.
 
+### Vertex shader binding register state
+
+WUT's [`GX2VertexShader` definition](https://github.com/devkitPro/wut/blob/master/include/gx2/shaders.h)
+lays out the register block at offset `0x00` and statically verifies offsets
+including `SQ_PGM_RESOURCES_VS` (`0x00`), output configuration (`0x08`),
+output-ID count/table (`0x0C`/`0x10`), primitive output control (`0x38`),
+semantic clear/count/table (`0x3C`/`0x40`/`0x44`), stream-out enable (`0xC4`),
+reuse controls (`0xC8`/`0xCC`), program size/address (`0xD0`/`0xD4`), mode
+(`0xD8`), ring item size (`0x10C`), and stream-out strides (`0x114`).
+Affogato now turns the bounded non-geometry VS fields into ordered context
+register commands at `GX2SetVertexShader`, validates the declared output-ID
+and semantic counts against their fixed descriptor arrays, and retains those
+writes in subsequent draw snapshots. Geometry-shader mode uses the ES program
+register range (`SQ_PGM_START_ES` at `0x28880`) and captures the ring item size
+at the R6xx-reference address `0x288A8`. When stream-out is enabled, the four
+byte strides are converted to DWORD units; the enable word is written to
+`VGT_STRMOUT_BUFFER_EN` at `0x28B20`. The program start address resolves the
+existing guest-memory alias mapping before conversion to the register's
+256-byte address units; this is alias resolution only, not MMU translation.
+
+This setup sequence is cross-checked against Decaf's
+[`GX2SetVertexShader`](https://github.com/decaf-emu/decaf-emu/blob/master/src/libdecaf/src/cafe/libraries/gx2/gx2_shaders.cpp)
+and register names/addresses against the related-generation
+[AMD R6xx register reference](https://www.x.org/docs/AMD/old/R6xx_3D_Registers.pdf)
+and Linux's [R600 register definitions](https://github.com/torvalds/linux/blob/master/drivers/gpu/drm/radeon/r600d.h).
+These are reconstructed/reference sources, not a Wii U hardware specification;
+the register behavior is not validated on a Latte device. The descriptor and
+program capture remains the source of guest shader words. The new register
+commands only improve state fidelity: normal draw commands still do not execute
+the shader, configure a Vulkan guest pipeline, or produce translated guest
+pixels. Loop-constant uploads and broader GPU register state remain separate
+work.
+
 For the HLE-generated fetch subset, the overlapping word-1 field is now treated
 as a semantic ID because word 0 selects `VTX_INST_SEMANTIC`. This interpretation
 matches the alternative semantic and direct-GPR word-1 layouts in AMD's R700
