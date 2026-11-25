@@ -1,8 +1,10 @@
 #pragma once
 
+#include <array>
 #include <bit>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -20,6 +22,30 @@ enum class LatteControlFlowOpcode : std::uint8_t
     alu_clause = 0x48U
 };
 
+enum class LatteExportType : std::uint8_t
+{
+    pixel,
+    position,
+    parameter,
+    unused
+};
+
+struct LatteExportFields
+{
+    LatteExportType type{};
+    std::uint32_t array_base{};
+    std::uint8_t read_write_gpr{};
+    std::uint8_t index_gpr{};
+    std::uint8_t burst_count{};
+    std::array<std::uint8_t, 4U> component_selectors{};
+    bool read_write_relative{};
+    bool uses_buffer_encoding{};
+    bool valid_pixel_mode{};
+    bool whole_quad_mode{};
+
+    bool operator==(const LatteExportFields&) const = default;
+};
+
 struct LatteControlFlowRecord
 {
     std::size_t word_offset{}; // Index of this record's first captured DWORD.
@@ -29,9 +55,41 @@ struct LatteControlFlowRecord
     bool end_of_program{};
     std::uint32_t clause_address_8byte_units{};
     std::uint32_t alu_slot_count{};
+    std::optional<LatteExportFields> export_fields;
 
     bool operator==(const LatteControlFlowRecord&) const = default;
 };
+
+[[nodiscard]] inline LatteExportFields decode_latte_export_fields(
+    std::uint32_t word0,
+    std::uint32_t word1)
+{
+    const std::uint32_t raw_type = (word0 >> 13U) & 0x03U;
+    const auto type = static_cast<LatteExportType>(raw_type);
+    const bool uses_buffer_encoding = ((word1 >> 12U) & 0x0FU) != 0U;
+
+    std::array<std::uint8_t, 4U> component_selectors{};
+    if (!uses_buffer_encoding)
+    {
+        component_selectors = {
+            static_cast<std::uint8_t>(word1 & 0x07U),
+            static_cast<std::uint8_t>((word1 >> 3U) & 0x07U),
+            static_cast<std::uint8_t>((word1 >> 6U) & 0x07U),
+            static_cast<std::uint8_t>((word1 >> 9U) & 0x07U)};
+    }
+
+    return {
+        type,
+        word0 & 0x1FFFU,
+        static_cast<std::uint8_t>((word0 >> 15U) & 0x7FU),
+        static_cast<std::uint8_t>((word0 >> 23U) & 0x7FU),
+        static_cast<std::uint8_t>(((word1 >> 17U) & 0x0FU) + 1U),
+        component_selectors,
+        ((word0 >> 22U) & 1U) != 0U,
+        uses_buffer_encoding,
+        ((word1 >> 22U) & 1U) != 0U,
+        ((word1 >> 30U) & 1U) != 0U};
+}
 
 struct LatteAluClauseSlot
 {
@@ -167,14 +225,23 @@ decode_latte_control_flow(
             }
         }
 
-        records.push_back({
+        LatteControlFlowRecord record{
             word_offset,
             word0,
             word1,
             opcode,
             end_of_program,
             clause_address_8byte_units,
-            alu_slot_count});
+            alu_slot_count,
+            std::nullopt};
+
+        if (opcode == LatteControlFlowOpcode::export_data ||
+            opcode == LatteControlFlowOpcode::export_done)
+        {
+            record.export_fields = decode_latte_export_fields(word0, word1);
+        }
+
+        records.push_back(std::move(record));
 
         if (end_of_program)
         {

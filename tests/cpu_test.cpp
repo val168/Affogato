@@ -31952,6 +31952,7 @@ void latte_control_flow_decoder_tests()
     using affogato::gpu::decode_latte_alu_op2_instruction;
     using affogato::gpu::decode_latte_alu_op2_groups;
     using affogato::gpu::decode_latte_control_flow;
+    using affogato::gpu::LatteExportType;
     using affogato::gpu::evaluate_latte_alu_move_value;
     using affogato::gpu::execute_latte_alu_op2_clause;
     using affogato::gpu::execute_latte_alu_op2_vector_group;
@@ -31979,11 +31980,25 @@ void latte_control_flow_decoder_tests()
     assert(records[1U].word1 == 0x94000688U);
     assert(records[1U].opcode == LatteControlFlowOpcode::export_done);
     assert(!records[1U].end_of_program);
+    assert(records[1U].export_fields.has_value());
+    assert(records[1U].export_fields->type == LatteExportType::position);
+    assert(records[1U].export_fields->array_base == 0x3CU);
+    assert(records[1U].export_fields->read_write_gpr == 1U);
+    assert(records[1U].export_fields->index_gpr == 0U);
+    assert(records[1U].export_fields->burst_count == 1U);
+    assert((records[1U].export_fields->component_selectors ==
+        std::array<std::uint8_t, 4U>{0U, 1U, 2U, 3U}));
+    assert(!records[1U].export_fields->read_write_relative);
+    assert(!records[1U].export_fields->uses_buffer_encoding);
+    assert(!records[1U].export_fields->valid_pixel_mode);
+    assert(!records[1U].export_fields->whole_quad_mode);
     assert(records[2U].word_offset == 4U);
     assert(records[2U].word0 == 0x00014000U);
     assert(records[2U].word1 == 0x14200688U);
     assert(records[2U].opcode == LatteControlFlowOpcode::export_done);
     assert(records[2U].end_of_program);
+    assert(records[2U].export_fields.has_value());
+    assert(records[2U].export_fields->type == LatteExportType::parameter);
 
     // The assembled ALU fixture's control-flow and slot words are materialized
     // at their captured offsets in a zero-filled 288-byte program span.

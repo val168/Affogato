@@ -118,7 +118,10 @@ real shader fixtures before implementation.
   from OP3 and identifies the final slot in a group with word0 bit 31. The
   legacy decompiler lists `MOV` as OP2 opcode `0x019`. These are useful
   cross-reference points for the next decoder step, not independent Latte
-  hardware verification.
+  hardware verification. `LatteCFInstruction_EXPORT_IMPORT` decodes export
+  type, array base, source GPR/relative flag, index GPR, burst count, and the
+  four swizzle selectors; these fields are cross-checked with the R700 export
+  format and the assembled pass-through fixture below.
 - Decaf keeps its GPU implementation under
   [`src/libgpu`](https://github.com/decaf-emu/decaf-emu/tree/master/src/libgpu)
   and its GFD raw shader-block reader at
@@ -187,7 +190,7 @@ real shader fixtures before implementation.
 | --- | --- | --- |
 | GX2 vertex/pixel/geometry descriptor capture | Implemented and tested as capture | HLE descriptor/program range checks and draw-time state snapshots |
 | Fetch-shader parsing | Narrow diagnostic subset | `latte_vertex_fetch.hpp`; generated VTX programs only |
-| Latte shader control-flow decoding | Partial | `latte_shader_decoder.hpp` decodes fixture-verified `CALL_FS`, `EXPORT`, `EXPORT_DONE`, and `ALU` clause headers, including EOP and bounded clause ranges. Unknown opcodes and malformed streams fail explicitly. No branch/loop decoding or clause execution. |
+| Latte shader control-flow decoding | Partial | `latte_shader_decoder.hpp` decodes fixture-verified `CALL_FS`, `EXPORT`, `EXPORT_DONE`, and `ALU` clause headers, including EOP, bounded clause ranges, and normal export metadata (type, GPRs, burst count, and component selectors). Unknown opcodes and malformed streams fail explicitly. Export values are not applied to stage outputs; branch/loop execution is absent. |
 | Latte ALU decoding/execution | Experimental subset | OP2 fields and LAST-delimited no-literal groups are decoded. A bounded clause executor runs sequential four-slot X/Y/Z/W groups with MOV and selected integer operations, forwards PV between groups within the clause, and leaves external registers unchanged if a later supported-subset check fails. ALU.Trans/PS, constant-file/literal reads, other opcodes, full shader control flow, and Latte-hardware validation are absent. |
 | Vertex/pixel shader translation | Missing | Stage interfaces, exports, constants, textures, and SPIR-V backend |
 | Guest shader integration with Vulkan draws | Missing | Shader modules, pipeline cache, descriptor binding, render-target path |
@@ -400,3 +403,16 @@ temporary register file and commits only after every group is supported, so an
 unsupported later group cannot leave partial host-side test state. Tests cover
 PV forwarding across two groups and rejection without partial register writes.
 This is R700-family behavior and has not been validated against Latte hardware.
+
+Normal `EXPORT` and `EXPORT_DONE` records use the R700 Chapter 3.4.1
+`CF_ALLOC_EXPORT_DWORD0` and `CF_ALLOC_EXPORT_DWORD1_SWIZ` formats. The manual
+defines the output type (pixel, position, or parameter), source GPR and optional
+relative addressing, burst count, and four component selectors; the last
+export for a type is marked by `EXPORT_DONE`. Cemu's
+`LatteCFInstruction_EXPORT_IMPORT` accessors use matching fields, and the
+assembled pass-through vertex-shader fixture decodes its first export as
+position from GPR 1 with identity XYZW selectors. Affogato now exposes those
+fields on the decoded CF record. This step only decodes metadata: it does not
+read GPR exports into Vulkan stage outputs or implement export ordering,
+relative GPR addressing, or memory-buffer export semantics. R700/Cemu evidence
+is not independent Latte hardware validation.
