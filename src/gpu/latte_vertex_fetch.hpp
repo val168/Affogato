@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -30,6 +31,59 @@ struct LatteVertexAttribute
 
     bool operator==(const LatteVertexAttribute&) const = default;
 };
+
+inline constexpr std::size_t latte_vertex_semantic_entry_count = 32U;
+
+// Resolve a semantic fetched by the vertex fetch shader to its destination VS
+// GPR. The caller supplies VS_GPR_BASE because its value is shader state.
+[[nodiscard]] inline std::optional<std::uint32_t>
+resolve_latte_vertex_input_gpr(
+    std::uint8_t semantic_id,
+    std::span<const std::uint32_t> semantic_table,
+    std::uint32_t vertex_shader_gpr_base)
+{
+    constexpr std::uint32_t cleared_semantic_entry = 0xFFFFFFFFU;
+    constexpr std::uint32_t semantic_id_mask = 0xFFU;
+    constexpr std::uint32_t system_input_gpr_count = 1U;
+
+    if (semantic_table.size() > latte_vertex_semantic_entry_count)
+    {
+        throw std::runtime_error(
+            "Latte vertex semantic table exceeds its 32-entry hardware limit");
+    }
+
+    std::optional<std::uint32_t> destination_gpr;
+    for (std::size_t table_index = 0U;
+         table_index < semantic_table.size();
+         ++table_index)
+    {
+        const std::uint32_t entry = semantic_table[table_index];
+        if (entry == cleared_semantic_entry ||
+            (entry & semantic_id_mask) != semantic_id)
+        {
+            continue;
+        }
+
+        if (destination_gpr.has_value())
+        {
+            throw std::runtime_error(
+                "Latte vertex semantic maps to multiple shader input GPRs");
+        }
+
+        const std::uint64_t resolved_gpr =
+            static_cast<std::uint64_t>(vertex_shader_gpr_base) +
+            system_input_gpr_count + table_index;
+        if (resolved_gpr > std::numeric_limits<std::uint32_t>::max())
+        {
+            throw std::runtime_error(
+                "Latte vertex semantic destination GPR overflows 32 bits");
+        }
+
+        destination_gpr = static_cast<std::uint32_t>(resolved_gpr);
+    }
+
+    return destination_gpr;
+}
 
 [[nodiscard]] inline float decode_ieee754_binary16(std::uint16_t value) noexcept
 {

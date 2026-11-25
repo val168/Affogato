@@ -31786,6 +31786,70 @@ void latte_vertex_fetch_decoder_tests()
 {
     using affogato::gpu::decode_latte_vertex_fetch_shader;
     using affogato::gpu::decode_latte_vertex_component;
+    using affogato::gpu::resolve_latte_vertex_input_gpr;
+
+    std::array<std::uint32_t, 32U> semantic_table{};
+    semantic_table.fill(0xFFFFFFFFU);
+    semantic_table[3U] = 0xABCD0007U;
+    const auto semantic_gpr = resolve_latte_vertex_input_gpr(
+        7U,
+        semantic_table,
+        5U);
+    assert(semantic_gpr == 9U);
+    assert(!resolve_latte_vertex_input_gpr(
+        8U,
+        semantic_table,
+        5U).has_value());
+    assert(!resolve_latte_vertex_input_gpr(
+        0xFFU,
+        semantic_table,
+        0U).has_value());
+
+    semantic_table[4U] = 7U;
+    bool rejected_ambiguous_semantic = false;
+    try
+    {
+        static_cast<void>(resolve_latte_vertex_input_gpr(
+            7U,
+            semantic_table,
+            0U));
+    }
+    catch (const std::runtime_error&)
+    {
+        rejected_ambiguous_semantic = true;
+    }
+    assert(rejected_ambiguous_semantic);
+
+    semantic_table.fill(0xFFFFFFFFU);
+    semantic_table[0U] = 3U;
+    bool rejected_semantic_gpr_overflow = false;
+    try
+    {
+        static_cast<void>(resolve_latte_vertex_input_gpr(
+            3U,
+            semantic_table,
+            std::numeric_limits<std::uint32_t>::max()));
+    }
+    catch (const std::runtime_error&)
+    {
+        rejected_semantic_gpr_overflow = true;
+    }
+    assert(rejected_semantic_gpr_overflow);
+
+    std::array<std::uint32_t, 33U> oversized_semantic_table{};
+    bool rejected_oversized_semantic_table = false;
+    try
+    {
+        static_cast<void>(resolve_latte_vertex_input_gpr(
+            0U,
+            oversized_semantic_table,
+            0U));
+    }
+    catch (const std::runtime_error&)
+    {
+        rejected_oversized_semantic_table = true;
+    }
+    assert(rejected_oversized_semantic_table);
 
     assert(affogato::gpu::decode_ieee754_binary16(0x3C00U) == 1.0F);
     assert(affogato::gpu::decode_ieee754_binary16(0xBC00U) == -1.0F);
