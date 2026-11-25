@@ -2039,9 +2039,11 @@ int run_gx2_guest_triangle_test(bool visible_window = false)
         static_cast<std::uint32_t>(pm4_immediate_indexed_draw_words.size() *
                                    sizeof(std::uint32_t))});
 
-    attribute_stream[3U] = 0x04U;
+    attribute_stream[3U] = 0x0AU;
     attribute_stream[7U] = 0U; // Explicit GX2_ENDIAN_SWAP_NONE.
+    attribute_stream[6U] = 0x00010203U;
     core.memory.write32_be(attribute_stream_address + 12U, attribute_stream[3U]);
+    core.memory.write32_be(attribute_stream_address + 24U, attribute_stream[6U]);
     core.memory.write32_be(attribute_stream_address + 28U, attribute_stream[7U]);
     invoke("GX2InitFetchShaderEx", std::array<std::uint32_t, 6U>{
         fetch_shader_descriptor_address,
@@ -2052,15 +2054,23 @@ int run_gx2_guest_triangle_test(bool visible_window = false)
         0U});
     invoke("GX2SetFetchShader", std::array<std::uint32_t, 1U>{
         fetch_shader_descriptor_address});
-    constexpr std::array<std::array<std::uint8_t, 2U>, 3U> unorm8_positions{{
-        {26U, 32U}, {230U, 32U}, {128U, 224U}}};
+    constexpr std::array<std::array<std::uint8_t, 4U>, 3U> unorm8_positions{{
+        {26U, 32U, 64U, 255U},
+        {230U, 32U, 128U, 255U},
+        {128U, 224U, 192U, 255U}}};
     for (std::size_t vertex = 0U; vertex < unorm8_positions.size(); ++vertex)
     {
         const std::uint32_t vertex_address = vertex_buffer_address +
             static_cast<std::uint32_t>(
                 vertex * vertex_buffer_stride + position_attribute_offset);
-        core.memory.write8(vertex_address, unorm8_positions[vertex][0U]);
-        core.memory.write8(vertex_address + 1U, unorm8_positions[vertex][1U]);
+        for (std::size_t component = 0U;
+             component < unorm8_positions[vertex].size();
+             ++component)
+        {
+            core.memory.write8(
+                vertex_address + static_cast<std::uint32_t>(component),
+                unorm8_positions[vertex][component]);
+        }
     }
     invoke("GX2DrawEx", std::array<std::uint32_t, 4U>{
         gx2_primitive_mode_triangles, 3U, 0U, 1U});
@@ -2270,10 +2280,10 @@ int run_gx2_guest_triangle_test(bool visible_window = false)
                 0U,
                 0U} ||
         ((captured_state.draw_fetch_shaders()[9U]->program_words[1U] >> 22U) &
-         0x3FU) != 0x04U)
+         0x3FU) != 0x0AU)
     {
         throw std::runtime_error(
-            "GX2 UNORM8x2 position format was not captured correctly");
+            "GX2 UNORM8x4 position format was not captured correctly");
     }
 
     affogato::gpu::vulkan::VulkanRenderer renderer(visible_window);
@@ -2287,7 +2297,7 @@ int run_gx2_guest_triangle_test(bool visible_window = false)
         renderer.poll_events();
         renderer.render_frame();
     }
-    std::cout << "GX2 float32/float16/UNORM8x2 triangle-list, indexed, strip, and fan "
+    std::cout << "GX2 float32/float16/UNORM8x4 triangle-list, indexed, strip, and fan "
               << "geometry, "
               << "including unpredicated PM4 auto-index, indexed, and immediate-index "
               << "draws, using guest "

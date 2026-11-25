@@ -165,6 +165,7 @@ std::vector<DiagnosticVertex> decode_diagnostic_float2_draw(
         position_attribute->selectors[0U] != 0U ||
         position_attribute->selectors[1U] != 1U ||
         (position_attribute->data_format != 0x04U &&
+         position_attribute->data_format != 0x0AU &&
          position_attribute->data_format != 0x08U &&
          position_attribute->data_format != 0x0DU &&
          position_attribute->data_format != 0x11U &&

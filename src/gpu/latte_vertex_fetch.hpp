@@ -128,8 +128,16 @@ decode_latte_vertex_fetch_shader(
         // supported below.
         switch (attribute.data_format)
         {
+        case 0x00U: // GX2_ATTRIB_FORMAT_UNORM_8
+            attribute.component_count = 1U;
+            attribute.component_size_bytes = sizeof(std::uint8_t);
+            break;
         case 0x04U: // GX2_ATTRIB_FORMAT_UNORM_8_8
             attribute.component_count = 2U;
+            attribute.component_size_bytes = sizeof(std::uint8_t);
+            break;
+        case 0x0AU: // GX2_ATTRIB_FORMAT_UNORM_8_8_8_8
+            attribute.component_count = 4U;
             attribute.component_size_bytes = sizeof(std::uint8_t);
             break;
         case 0x06U:
@@ -158,14 +166,16 @@ decode_latte_vertex_fetch_shader(
                 std::to_string(attribute.data_format));
         }
 
-        const bool is_unorm8x2 = attribute.data_format == 0x04U;
+        const bool is_unorm8 = attribute.data_format == 0x00U ||
+            attribute.data_format == 0x04U ||
+            attribute.data_format == 0x0AU;
         const bool is_float16x2 = attribute.data_format == 0x08U;
-        if ((is_unorm8x2 &&
+        if ((is_unorm8 &&
              (attribute.number_format != 0U || attribute.endian_swap != 0U ||
               ((word1 >> 30U) & 0x1U) != 0U)) ||
             (is_float16x2 &&
              (attribute.number_format != 0U || attribute.endian_swap != 1U)) ||
-            (!is_unorm8x2 && !is_float16x2 &&
+            (!is_unorm8 && !is_float16x2 &&
              (attribute.number_format != 2U || attribute.endian_swap != 2U)))
         {
             throw std::runtime_error(
@@ -216,7 +226,8 @@ decode_latte_vertex_fetch_shader(
             "Latte vertex component exceeds the captured vertex bytes");
     }
 
-    if (attribute.data_format == 0x04U)
+    if (attribute.data_format == 0x00U || attribute.data_format == 0x04U ||
+        attribute.data_format == 0x0AU)
     {
         constexpr float unorm8_max = 255.0F;
         return static_cast<float>(vertex_bytes[component_offset]) / unorm8_max;

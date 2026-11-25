@@ -31888,6 +31888,40 @@ void latte_vertex_fetch_decoder_tests()
     }
     assert(rejected_out_of_range_component);
 
+    constexpr std::array<std::pair<std::uint32_t, std::uint32_t>, 2U>
+        additional_unorm8_formats{{{0x00U, 1U}, {0x0AU, 4U}}};
+    for (const auto& [data_format, component_count] : additional_unorm8_formats)
+    {
+        affogato::cpu::espresso::Gx2FetchShaderBinding fetch_shader{};
+        fetch_shader.program_size = 16U;
+        fetch_shader.attribute_count = 1U;
+        fetch_shader.program_words = {
+            1U | (2U << 8U) | ((component_count - 1U) << 26U),
+            (1U << 12U) | (2U << 15U) | (3U << 18U) |
+                (data_format << 22U),
+            0U,
+            0U};
+
+        const auto decoded = decode_latte_vertex_fetch_shader(fetch_shader);
+        assert(decoded.size() == 1U);
+        assert(decoded.front().data_format == data_format);
+        assert(decoded.front().component_count == component_count);
+        assert(decoded.front().component_size_bytes == sizeof(std::uint8_t));
+        assert(decoded.front().byte_size == component_count);
+        assert(decoded.front().number_format == 0U);
+        assert(decoded.front().endian_swap == 0U);
+
+        constexpr std::array<std::uint8_t, 4U> known_components{
+            0U, 64U, 192U, 255U};
+        const std::span<const std::uint8_t> known_component_bytes(
+            known_components);
+        const float normalized_value = decode_latte_vertex_component(
+            known_component_bytes, decoded.front(), component_count - 1U);
+        const float expected_value =
+            static_cast<float>(known_components[component_count - 1U]) / 255.0F;
+        assert(std::abs(normalized_value - expected_value) < 0.000001F);
+    }
+
     affogato::cpu::espresso::Gx2FetchShaderBinding unsupported_fetch_shader{};
     unsupported_fetch_shader.program_size = 16U;
     unsupported_fetch_shader.attribute_count = 1U;

@@ -121,10 +121,10 @@ positions into transient host vertices. The fixed diagnostic host shaders draw
 to the host swapchain. These operations do not execute arbitrary guest
 attributes or shaders and do not modify the guest render target.
 
-The decoder now also accepts `GX2_ATTRIB_FORMAT_UNORM_8_8` in its verified
-HLE-generated VTX encoding (data format `0x04`, unsigned normalized number
-format, with `GX2_ENDIAN_SWAP_NONE` selected explicitly). WUT defines the GX2
-format ID in [`include/gx2/enum.h`](https://github.com/devkitPro/wut/blob/master/include/gx2/enum.h)
+The decoder now accepts the unsigned normalized 8-bit GX2 family in its
+verified HLE-generated VTX encoding: data formats `0x00` (x1), `0x04` (x2),
+and `0x0A` (x4), with `GX2_ENDIAN_SWAP_NONE` selected explicitly. WUT defines
+the GX2 format IDs in [`include/gx2/enum.h`](https://github.com/devkitPro/wut/blob/master/include/gx2/enum.h)
 and its attribute selector mapping in
 [`libraries/libwhb/src/gfx_shader.c`](https://github.com/devkitPro/wut/blob/master/libraries/libwhb/src/gfx_shader.c);
 the [AMD R700 ISA reference](https://docs.amd.com/v/u/en-US/R700-Family_Instruction_Set_Architecture)
@@ -133,10 +133,10 @@ related GPU-family reference rather than a Latte specification, Affogato limits
 this addition to the HLE VTX encoding and records the remaining
 hardware-specific uncertainty. The diagnostic renderer converts each byte by
 dividing by 255 and uses the first two components as its diagnostic position.
-CPU tests cover descriptor decoding, component values, and bounds; the hidden
-guest-triangle Vulkan smoke test also submits a guest `UNORM_8_8` triangle with
-the diagnostic host shader. No visible-window rerun or Latte shader execution
-is claimed for this format.
+CPU tests cover x1/x2/x4 descriptor decoding, component values, and bounds; the
+hidden guest-triangle Vulkan smoke test submits a guest `UNORM_8_8_8_8` triangle
+with the diagnostic host shader. No visible-window rerun or Latte shader
+execution is claimed for these formats.
 
 ## Important state, formats, and invariants
 
@@ -147,8 +147,8 @@ is claimed for this format.
   mip offsets, view, and register words. A descriptor being captured does not
   mean its surface addressing is implemented.
 - The current diagnostic fetch decoder accepts HLE-generated, non-instanced
-  VTX programs and Float32x1/x2/x3/x4, Float16x2, and unsigned UNORM8x2 in the
-  supported encoding combinations. Draw rendering uses two position
+  VTX programs and Float32x1/x2/x3/x4, Float16x2, and unsigned UNORM8x1/x2/x4
+  with explicit no-swap. Draw rendering uses two position
   components. Arbitrary guest fetch programs, other normalized/integer
   attributes, divisors, and general multi-attribute vertex layouts are not
   supported.
