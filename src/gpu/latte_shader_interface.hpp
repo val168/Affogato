@@ -1,7 +1,7 @@
 #pragma once
 
 #include "cpu/espresso/gx2_hle.hpp"
-#include "gpu/latte_shader_interpreter.hpp"
+#include "gpu/latte_shader_program.hpp"
 
 #include <array>
 #include <cstddef>
@@ -327,6 +327,44 @@ resolve_latte_pixel_shader_input_registers(
     }
 
     return input_registers;
+}
+
+[[nodiscard]] inline LatteShaderExecutionResult
+execute_latte_pixel_shader_subset(
+    std::span<const std::uint32_t> guest_big_endian_words,
+    std::span<const LatteShaderRegister> initial_registers,
+    std::span<const LatteLinkedPixelShaderInput> linked_inputs,
+    std::span<const LatteShaderRegister> interpolated_parameter_values,
+    const LatteShaderConstantFile* constant_file = nullptr)
+{
+    const LattePixelShaderInputRegisters input_registers =
+        resolve_latte_pixel_shader_input_registers(
+            linked_inputs,
+            interpolated_parameter_values);
+
+    std::vector<LatteShaderRegister> shader_registers(
+        initial_registers.begin(),
+        initial_registers.end());
+    for (std::size_t input_index = 0U;
+         input_index < input_registers.size();
+         ++input_index)
+    {
+        if (!input_registers[input_index].has_value())
+        {
+            continue;
+        }
+        if (input_index >= shader_registers.size())
+        {
+            throw std::invalid_argument(
+                "Latte pixel shader input GPR exceeds the supplied register file");
+        }
+        shader_registers[input_index] = *input_registers[input_index];
+    }
+
+    return execute_latte_shader_subset(
+        guest_big_endian_words,
+        shader_registers,
+        constant_file);
 }
 
 [[nodiscard]] inline std::vector<LattePixelShaderInputControl>

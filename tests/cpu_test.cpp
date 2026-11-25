@@ -33148,6 +33148,52 @@ void latte_control_flow_decoder_tests()
     assert(shader_result.exports[0U].values[0U].components[3U] ==
         shader_registers[1U][3U]);
 
+    const std::array<affogato::gpu::LatteLinkedPixelShaderInput, 2U>
+        pixel_input_links{{
+            {0U, 0x10U,
+                affogato::gpu::LattePixelInputSource::default_value,
+                std::nullopt, {0U, 0U, 0U, 0U},
+                false, false, false, false, false},
+            {1U, 0x11U,
+                affogato::gpu::LattePixelInputSource::vertex_parameter,
+                0U, {0U, 0U, 0U, 0U},
+                false, false, false, false, false}}};
+    const std::array<LatteShaderRegister, 1U> interpolated_parameters{{
+        {0x3F000000U, 0x3F800000U, 0x40000000U, 0x3F800000U}}};
+    std::array<LatteShaderRegister, 8U> pixel_shader_initial_registers{};
+    const auto pixel_shader_result =
+        affogato::gpu::execute_latte_pixel_shader_subset(
+            linear_shader_words,
+            pixel_shader_initial_registers,
+            pixel_input_links,
+            interpolated_parameters);
+    assert(pixel_shader_result.registers.size() ==
+        pixel_shader_initial_registers.size());
+    assert((pixel_shader_result.registers[0U] == LatteShaderRegister{
+        0U, 0U, 0U, 0U}));
+    assert(pixel_shader_result.registers[1U] ==
+        interpolated_parameters[0U]);
+    assert(pixel_shader_result.exports.size() == 1U);
+    assert((pixel_shader_result.exports[0U].values[0U].components ==
+        std::array<std::optional<std::uint32_t>, 4U>{
+            0x3F000000U, 0x3F800000U, 0x40000000U, 0x3F800000U}));
+
+    bool rejected_pixel_input_outside_initial_registers = false;
+    try
+    {
+        static_cast<void>(affogato::gpu::execute_latte_pixel_shader_subset(
+            linear_shader_words,
+            std::span<const LatteShaderRegister>(
+                pixel_shader_initial_registers.data(), 1U),
+            pixel_input_links,
+            interpolated_parameters));
+    }
+    catch (const std::invalid_argument&)
+    {
+        rejected_pixel_input_outside_initial_registers = true;
+    }
+    assert(rejected_pixel_input_outside_initial_registers);
+
     auto op3_shader_words = linear_shader_words;
     std::array<LatteShaderRegister, 8U> op3_initial_registers =
         shader_registers;

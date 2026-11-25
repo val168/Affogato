@@ -1096,9 +1096,12 @@ unmatched inputs from `DEFAULT_VAL`. The related-family AMD R6xx/R7xx guide,
 section 3.7, explicitly states that input control 0 maps to GPR 0 and that
 each control maps a GPR; this register assignment remains cross-family
 evidence rather than direct Latte validation. The helper accepts already
-interpolated parameter vectors and does not perform interpolation. No
-fragment SPIR-V inputs are emitted, and neither helper is connected to the
-shader executor or Vulkan pipeline.
+interpolated parameter vectors and does not perform interpolation.
+`execute_latte_pixel_shader_subset()` feeds the resolved, contiguous PS GPR
+inputs into Affogato's existing straight-line CPU shader subset and returns
+its registers and normal exports. It remains a CPU reference path; no
+fragment SPIR-V inputs are emitted and it is not connected to the Vulkan
+pipeline.
 
 Cemu's [`LatteShader_CreatePSInputTable()`](https://github.com/cemu-project/Cemu/blob/main/src/Cafe/HW/Latte/Core/LatteShader.cpp#L209)
 is a useful architectural comparison: it walks active PS input controls,
