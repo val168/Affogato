@@ -2,6 +2,7 @@
 
 #include "cpu/espresso/gx2_hle.hpp"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <stdexcept>
@@ -31,6 +32,74 @@ struct LattePixelShaderInputControl
 
     bool operator==(const LattePixelShaderInputControl&) const = default;
 };
+
+struct LatteVertexShaderOutputId
+{
+    std::array<std::uint8_t, 4U> semantics{};
+
+    bool operator==(const LatteVertexShaderOutputId&) const = default;
+};
+
+struct LatteVertexShaderOutputInterface
+{
+    bool outputs_per_component{};
+    std::vector<LatteVertexShaderOutputId> output_ids;
+
+    bool operator==(const LatteVertexShaderOutputInterface&) const = default;
+};
+
+[[nodiscard]] inline LatteVertexShaderOutputInterface
+decode_latte_vertex_shader_output_interface(
+    const cpu::espresso::Gx2ProgramShaderBinding& shader)
+{
+    constexpr std::size_t minimum_vertex_shader_descriptor_words = 4U;
+    constexpr std::size_t output_configuration_register_index = 2U;
+    constexpr std::size_t output_id_count_register_index = 3U;
+    constexpr std::size_t first_output_id_register_index = 4U;
+    constexpr std::size_t maximum_vertex_shader_output_ids = 10U;
+    constexpr std::uint32_t output_per_component_mask = 1U;
+
+    if (shader.stage != cpu::espresso::Gx2ProgramStage::vertex)
+    {
+        throw std::invalid_argument(
+            "Latte vertex output decoding requires a vertex shader descriptor");
+    }
+    if (shader.descriptor_words.size() < minimum_vertex_shader_descriptor_words)
+    {
+        throw std::invalid_argument(
+            "Latte vertex shader descriptor is missing output registers");
+    }
+
+    const std::uint32_t output_id_count =
+        shader.descriptor_words[output_id_count_register_index];
+    if (output_id_count > maximum_vertex_shader_output_ids ||
+        shader.descriptor_words.size() <
+            first_output_id_register_index + output_id_count)
+    {
+        throw std::invalid_argument(
+            "Latte vertex shader output ID range exceeds its descriptor");
+    }
+
+    LatteVertexShaderOutputInterface output_interface{};
+    output_interface.outputs_per_component =
+        (shader.descriptor_words[output_configuration_register_index] &
+         output_per_component_mask) != 0U;
+    output_interface.output_ids.reserve(output_id_count);
+    for (std::uint32_t output_index = 0U;
+         output_index < output_id_count;
+         ++output_index)
+    {
+        const std::uint32_t packed_semantics = shader.descriptor_words[
+            first_output_id_register_index + output_index];
+        output_interface.output_ids.push_back({{
+            static_cast<std::uint8_t>(packed_semantics & 0xFFU),
+            static_cast<std::uint8_t>((packed_semantics >> 8U) & 0xFFU),
+            static_cast<std::uint8_t>((packed_semantics >> 16U) & 0xFFU),
+            static_cast<std::uint8_t>((packed_semantics >> 24U) & 0xFFU)}});
+    }
+
+    return output_interface;
+}
 
 [[nodiscard]] inline std::vector<LattePixelShaderInputControl>
 decode_latte_pixel_shader_input_controls(

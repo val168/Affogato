@@ -1064,3 +1064,13 @@ rejection, truncated descriptors, and excessive counts. A subsequent stage
 must resolve semantic linkage against `SPI_VS_OUT_ID`, carry the decoded
 default into unmatched-input handling, choose interpolation qualifiers, and
 verify generated fragment inputs through SPIR-V validation and Vulkan output.
+
+The paired `decode_latte_vertex_shader_output_interface()` helper reads
+`VS_PER_COMPONENT` from vertex descriptor word 2, `num_spi_vs_out_id` from
+word 3, and packed output semantic words from word 4 onward. Each output ID
+word is retained as four byte-sized semantic IDs. AMD's register reference
+defines `VS_PER_COMPONENT` at bit 0 of `SPI_VS_OUT_CONFIG` and the four
+`SEMANTIC_0..3` bytes at bits 0–31 of each `SPI_VS_OUT_ID` register. The helper
+validates the ten-entry maximum and descriptor range; it deliberately does
+not decide whether each entry is a parameter vector or a per-component value
+and does not infer export-to-input matches.

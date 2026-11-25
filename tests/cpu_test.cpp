@@ -32740,6 +32740,64 @@ void latte_pixel_input_control_decode_tests()
     assert(rejected_excessive_input_count);
 }
 
+void latte_vertex_output_interface_decode_tests()
+{
+    using affogato::cpu::espresso::Gx2ProgramShaderBinding;
+    using affogato::cpu::espresso::Gx2ProgramStage;
+    using affogato::gpu::LatteVertexShaderOutputId;
+    using affogato::gpu::decode_latte_vertex_shader_output_interface;
+
+    Gx2ProgramShaderBinding vertex_shader{};
+    vertex_shader.stage = Gx2ProgramStage::vertex;
+    vertex_shader.descriptor_words.resize(14U);
+    vertex_shader.descriptor_words[2U] = 1U;
+    vertex_shader.descriptor_words[3U] = 2U;
+    vertex_shader.descriptor_words[4U] = 0x04030201U;
+    vertex_shader.descriptor_words[5U] = 0x08070605U;
+
+    const auto output_interface =
+        decode_latte_vertex_shader_output_interface(vertex_shader);
+    assert(output_interface.outputs_per_component);
+    assert(output_interface.output_ids.size() == 2U);
+    assert((output_interface.output_ids[0U] == LatteVertexShaderOutputId{{
+        1U, 2U, 3U, 4U}}));
+    assert((output_interface.output_ids[1U] == LatteVertexShaderOutputId{{
+        5U, 6U, 7U, 8U}}));
+
+    vertex_shader.descriptor_words[2U] = 0U;
+    assert(!decode_latte_vertex_shader_output_interface(
+        vertex_shader).outputs_per_component);
+
+    bool rejected_non_vertex_shader = false;
+    try
+    {
+        Gx2ProgramShaderBinding pixel_shader = vertex_shader;
+        pixel_shader.stage = Gx2ProgramStage::pixel;
+        static_cast<void>(
+            decode_latte_vertex_shader_output_interface(pixel_shader));
+    }
+    catch (const std::invalid_argument&)
+    {
+        rejected_non_vertex_shader = true;
+    }
+    assert(rejected_non_vertex_shader);
+
+    bool rejected_truncated_output_ids = false;
+    try
+    {
+        Gx2ProgramShaderBinding truncated_shader = vertex_shader;
+        truncated_shader.descriptor_words.resize(5U);
+        truncated_shader.descriptor_words[3U] = 2U;
+        static_cast<void>(
+            decode_latte_vertex_shader_output_interface(truncated_shader));
+    }
+    catch (const std::invalid_argument&)
+    {
+        rejected_truncated_output_ids = true;
+    }
+    assert(rejected_truncated_output_ids);
+}
+
 void latte_control_flow_decoder_tests()
 {
     using affogato::gpu::LatteControlFlowOpcode;
@@ -45436,6 +45494,7 @@ int main(int argc, char* argv[])
     latte_vertex_fetch_decoder_tests();
     latte_draw_vertex_index_tests();
     latte_pixel_input_control_decode_tests();
+    latte_vertex_output_interface_decode_tests();
     latte_control_flow_decoder_tests();
     latte_alu_op3_execution_tests();
     gx2_gpu_time_to_cpu_time_hle_tests();
