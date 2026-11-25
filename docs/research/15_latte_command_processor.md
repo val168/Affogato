@@ -37,6 +37,10 @@ Reference emulator architecture:
   payload DWORDs minus one. This packet format is used here as family-level
   evidence; the supported destination is deliberately limited to Latte's
   documented context-register window.
+- Linux's Radeon R6xx/R7xx packet definitions assign Type-3 opcode `0x10` to
+  `NOP` ([`r600d.h`](https://github.com/torvalds/linux/blob/master/drivers/gpu/drm/radeon/r600d.h)). Affogato consumes its bounded payload without
+  producing register writes. This is family-level evidence, not a
+  Latte-specific stream fixture.
 
 These implementations establish useful subsystem boundaries, not proof that
 all packet behavior or register side effects match Latte.
@@ -126,8 +130,9 @@ verified against a Latte fixture or Wii U behavior.
   explicitly. Queuing these values does not execute GPU work or retire a fence.
 - `tests/cpu_test.cpp` covers command-pool attributes, context-state setup,
   zero-length display-list results, shadow restoration, big-endian packet
-  playback, ordered Type-0 sequential and Type-3 context register writes,
-  out-of-window Type-0 rejection, and malformed/unsupported-list rejection.
+  playback, Type-3 NOP payload advancement, ordered Type-0 sequential and
+  Type-3 context register writes, out-of-window Type-0 rejection, and
+  malformed/unsupported-list rejection.
 - `Gx2RegisterState::apply` models writes to `SQ_VTX_SEMANTIC_CLEAR` at
   `0x288E0`: each set bit clears the matching entry in the 32-word semantic
   table beginning at `0x28380`, storing `0xFFFFFFFF` in the shadow. The clear
@@ -154,7 +159,7 @@ lists and guest-written command streams remain unsupported.
 | Typed GX2 HLE event ordering | Partial and tested | `pending_commands`, register shadow and frontend drain |
 | PM4 packet framing | Partial and tested | Type-0 payload lengths, Type-2 filler and Type-3 lengths; Type-1 remains unsupported |
 | PM4 register writes | Partial and tested | Type-0 sequential writes and Type-3 `SET_CONTEXT_REG` are bounded to the context-register byte range |
-| Type-3 operations | Partial | `SET_CONTEXT_REG` only; all other opcodes are rejected |
+| Type-3 operations | Partial and tested | `NOP` and `SET_CONTEXT_REG`; other opcodes are rejected |
 | Indirect buffers / nested lists | Missing | Guest bounds, alignment, recursion limit, lifetime and ordering |
 | Context display-list generation/decoding | Partial | generation leaves size zero; empty lists restore the register shadow; bounded Type-0 context writes and Type-2/Type-3 `SET_CONTEXT_REG` lists decode into typed writes; GPU packet execution is not implemented |
 | GPU completion and waits | Partial / not renderer-backed | Must follow actual submission, fence, and memory-visibility semantics |
@@ -184,9 +189,11 @@ lists and guest-written command streams remain unsupported.
 ## Acceptance tests
 
 - Current fixtures cover Type-0 count/base-index and sequential-write behavior,
-  Type-2 filler, and Type-3 count/opcode/register-offset behavior. The Type-0
-  packet layout is cross-checked against AMD R6xx/R7xx guide section 5.2.1;
-  no independent Latte-produced Type-0 stream fixture is available yet.
+  Type-2 filler, and Type-3 NOP payload advancement and
+  `SET_CONTEXT_REG` count/opcode/register-offset behavior. The Type-0 packet
+  layout is cross-checked against AMD R6xx/R7xx guide section 5.2.1, and the
+  NOP opcode against Radeon R6xx/R7xx packet definitions; no independent
+  Latte-produced stream fixture is available yet.
 - Big-endian dword decoding, empty/truncated streams, count overflow, unknown
   type/opcode, invalid register range, and exact cursor advancement.
 - Tests proving malformed packets do not partially mutate the register shadow

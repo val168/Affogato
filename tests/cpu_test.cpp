@@ -28706,18 +28706,22 @@ void gx2_set_context_state_hle_tests()
                 0x28104U,
                 0xE5F60718U}));
 
-    // Type-0 BASE_INDEX addresses consecutive register dwords. The decoder
-    // accepts writes only when the complete range remains in context space.
+    // A Type-3 NOP consumes its complete payload and does not append a state
+    // command. The following Type-0 write must still begin at the next packet.
     core.state.cia = core.hle.bind_import("gx2", "GX2SetContextState");
     core.state.lr = return_address;
     core.state.gpr[3] = context_state;
     core.memory.write32_be(
-        context_state + display_list_offset, 0x0001A040U);
+        context_state + display_list_offset, 0xC0001000U);
     core.memory.write32_be(
-        context_state + display_list_offset + 4U, 0x10203040U);
+        context_state + display_list_offset + 4U, 0xDEADBEEFU);
     core.memory.write32_be(
-        context_state + display_list_offset + 8U, 0x50607080U);
-    core.memory.write32_be(context_state + display_list_size_offset, 12U);
+        context_state + display_list_offset + 8U, 0x0001A040U);
+    core.memory.write32_be(
+        context_state + display_list_offset + 12U, 0x10203040U);
+    core.memory.write32_be(
+        context_state + display_list_offset + 16U, 0x50607080U);
+    core.memory.write32_be(context_state + display_list_size_offset, 20U);
     const std::size_t commands_before_type0 =
         core.gx2.pending_commands.size();
     const RunResult type0_result = core.run(1U);
@@ -28734,6 +28738,8 @@ void gx2_set_context_state_hle_tests()
                 0x28104U,
                 0x50607080U}));
 
+    // Type-0 BASE_INDEX addresses consecutive register dwords. Reject the
+    // packet if its final register would leave the context window.
     core.state.cia = core.hle.bind_import("gx2", "GX2SetContextState");
     core.state.lr = return_address;
     core.state.gpr[3] = context_state;
@@ -28810,7 +28816,7 @@ void gx2_set_context_state_hle_tests()
     core.state.lr = return_address;
     core.state.gpr[3] = context_state;
     core.memory.write32_be(
-        context_state + display_list_offset, 0xC0001000U);
+        context_state + display_list_offset, 0xC0001100U);
     core.memory.write32_be(context_state + display_list_offset + 4U, 0U);
     core.memory.write32_be(context_state + display_list_size_offset, 8U);
     const auto commands_before_unsupported_packet = core.gx2.pending_commands;

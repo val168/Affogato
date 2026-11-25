@@ -57,6 +57,7 @@ decode_latte_context_display_list(
     constexpr std::uint32_t type3_predicate_mask = 0x00000001U;
     constexpr std::uint32_t type3_opcode_shift = 8U;
     constexpr std::uint32_t type3_opcode_mask = 0x0000FF00U;
+    constexpr std::uint32_t type3_nop_opcode = 0x10U;
     constexpr std::uint32_t packet_count_shift = 16U;
     constexpr std::uint32_t packet_count_mask = 0x3FFFU;
     // R7xx IT_SET_CONTEXT_REG; its offset is measured in register dwords.
@@ -150,6 +151,13 @@ decode_latte_context_display_list(
 
         const std::uint32_t opcode =
             (header & type3_opcode_mask) >> type3_opcode_shift;
+        if (opcode == type3_nop_opcode)
+        {
+            // A PM4 NOP consumes its declared payload but changes no state.
+            word_offset += payload_word_count;
+            continue;
+        }
+
         if (opcode != set_context_register_opcode)
         {
             result.error = LatteContextDisplayListError::unsupported_opcode;
