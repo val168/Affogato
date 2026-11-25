@@ -1,5 +1,16 @@
 # Affogato Development Status
 
+## Integer OP2 shader Vulkan readback (2026-11-25)
+
+Added a second controlled vertex-shader fixture that applies OP2 `AND_INT`
+with all bits set, `ADD_INT` with zero, `SUB_INT` from integer one to itself,
+and `OR_INT` with zero across the four position components. The resulting
+position preserves the triangle and passes the Vulkan framebuffer readback
+test. This executes these decoded operations in generated SPIR-V with the
+diagnostic fragment shader; it is still not normal guest draw execution or
+Latte hardware validation. Debug and Release builds passed; both full CTest
+suites passed 27/27.
+
 ## Integer comparison shader Vulkan readback (2026-11-25)
 
 Added a controlled guest-word shader path that executes OP2 `SETGT_INT` with
@@ -20,9 +31,11 @@ explicit signed bitcasts for signed ordering, and select operations for min/max
 and comparison masks. The combined generated module covering all 16 operations
 passes `spirv-val`; per-operation checks verify each emitted opcode. Debug and
 Release builds passed, and both full CTest suites passed 25/25. No Vulkan
-pixel-output test or Latte hardware verification exercises these new integer
-OP2 operations yet. A unary NOT fixture uses an invalid source 1 selector to
-verify the emitter leaves that unused operand unread.
+Vulkan readback now exercises a selected comparison and AND/ADD/SUB/OR case.
+Unary NOT uses an invalid source 1 selector in its emitter fixture to verify
+that unused operand is not read. The other integer operations still rely on
+module validation and per-opcode emission checks; none are Latte hardware
+verified.
 
 ## OP2 integer comparison SPIR-V lowering (2026-11-25)
 

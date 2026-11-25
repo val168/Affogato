@@ -1928,7 +1928,8 @@ enum class GuestTriangleShader
     spirv_conditional_move,
     spirv_integer_conditional_move,
     spirv_mixed_conditional_move,
-    spirv_integer_compare_clip_z
+    spirv_integer_compare_clip_z,
+    spirv_integer_alu_identity
 };
 
 int run_gx2_guest_triangle_test(
@@ -2197,6 +2198,39 @@ int run_gx2_guest_triangle_test(
                         latte_alu_source_zero_selector;
                     component_source1_selector = affogato::gpu::
                         latte_alu_source_one_integer_selector;
+                }
+            }
+            if (shader == GuestTriangleShader::spirv_integer_alu_identity)
+            {
+                component_source1_selector = affogato::gpu::
+                    latte_alu_source_zero_selector;
+                switch (component)
+                {
+                case 0U:
+                    component_opcode = affogato::gpu::
+                        latte_alu_op2_and_integer_opcode;
+                    component_source1_selector = affogato::gpu::
+                        latte_alu_source_negative_one_integer_selector;
+                    break;
+                case 1U:
+                    component_opcode = affogato::gpu::
+                        latte_alu_op2_add_integer_opcode;
+                    break;
+                case 2U:
+                    component_opcode = affogato::gpu::
+                        latte_alu_op2_subtract_integer_opcode;
+                    component_source0_selector = affogato::gpu::
+                        latte_alu_source_one_integer_selector;
+                    component_source1_selector = affogato::gpu::
+                        latte_alu_source_one_integer_selector;
+                    break;
+                case 3U:
+                    component_opcode = affogato::gpu::
+                        latte_alu_op2_or_integer_opcode;
+                    break;
+                default:
+                    throw std::runtime_error(
+                        "GX2 integer ALU smoke test has an invalid component");
                 }
             }
             if (shader == GuestTriangleShader::spirv_add_one_x &&
@@ -2750,7 +2784,8 @@ int run_gx2_guest_triangle_test(
         shader == GuestTriangleShader::spirv_conditional_move ||
         shader == GuestTriangleShader::spirv_integer_conditional_move ||
         shader == GuestTriangleShader::spirv_mixed_conditional_move ||
-        shader == GuestTriangleShader::spirv_integer_compare_clip_z;
+        shader == GuestTriangleShader::spirv_integer_compare_clip_z ||
+        shader == GuestTriangleShader::spirv_integer_alu_identity;
     if (verify_shader_output)
     {
         renderer.render_frame();
@@ -2818,7 +2853,8 @@ int run_gx2_guest_triangle_test(
                 expect_red = true;
             }
             else if (shader ==
-                     GuestTriangleShader::spirv_integer_compare_clip_z)
+                         GuestTriangleShader::spirv_integer_compare_clip_z ||
+                     shader == GuestTriangleShader::spirv_integer_alu_identity)
             {
                 expect_red = true;
             }
@@ -2979,6 +3015,11 @@ int run_gx2_guest_triangle_test(
         shader_subset_description =
             "the bounded OP2 SETGT_INT position SPIR-V vertex subset";
     }
+    if (shader == GuestTriangleShader::spirv_integer_alu_identity)
+    {
+        shader_subset_description =
+            "the bounded OP2 integer ALU position SPIR-V vertex subset";
+    }
     std::cout << "GX2 float32/float16/UNORM8x4 triangle-list, indexed, strip, and fan "
               << "geometry, "
               << "including unpredicated PM4 auto-index, indexed, and immediate-index "
@@ -3127,6 +3168,14 @@ int main(int argc, char* argv[])
                     false,
                     GuestTriangleShader::spirv_integer_compare_clip_z);
             }
+            if (std::string_view(argv[1]) ==
+                    "--gx2-guest-triangle-integer-alu-spirv-smoke-test" &&
+                argc == 2)
+            {
+                return run_gx2_guest_triangle_test(
+                    false,
+                    GuestTriangleShader::spirv_integer_alu_identity);
+            }
             if (std::string_view(argv[1]) == "--gx2-guest-triangle-display-test" &&
                 argc == 2)
             {
@@ -3152,6 +3201,7 @@ int main(int argc, char* argv[])
                          "       AffogatoFrontend.exe --gx2-guest-triangle-op3-integer-conditional-move-spirv-smoke-test\n"
                          "       AffogatoFrontend.exe --gx2-guest-triangle-mixed-alu-spirv-smoke-test\n"
                          "       AffogatoFrontend.exe --gx2-guest-triangle-integer-compare-spirv-smoke-test\n"
+                         "       AffogatoFrontend.exe --gx2-guest-triangle-integer-alu-spirv-smoke-test\n"
                          "       AffogatoFrontend.exe --gx2-guest-triangle-display-test\n";
             return 2;
         }
