@@ -1,5 +1,17 @@
 # Affogato Development Status
 
+## Controlled Vulkan run for Latte MUL_IEEE (2026-11-25)
+
+The guest-triangle integration harness now has a separate SPIR-V mode that
+captures and translates guest `MUL_IEEE` lanes with a `1.0` second operand,
+then submits that generated vertex module through Vulkan and verifies guest
+color-buffer and scanout readback. The identity operand keeps the fixture
+geometry unchanged; this verifies module routing and execution in the
+controlled pipeline, not a non-identity numerical result or Latte hardware
+behavior. Debug and Release builds passed; CTest passed 9/9 in both, including
+SPIR-V validation and both Vulkan readback modes. See
+[`research/12_latte_shader_isa.md`](research/12_latte_shader_isa.md).
+
 ## Bounded Latte IEEE multiply SPIR-V lowering (2026-11-25)
 
 The same bounded vertex emitter now lowers OP2 `MUL_IEEE` (`0x002`) lanes to
@@ -10,8 +22,8 @@ documented in AMD's R700-family ISA manual, section 9.2; Latte-specific
 confirmation is not available. The deterministic module test checks `OpFMul`
 emission and `spirv-val` accepts the generated module. Debug and Release builds
 passed; CTest passed 8/8 in both, including the GPU integration test. The GPU
-test executes the ADD-with-zero fixture, not MUL. MUL has not yet been executed
-through Vulkan or checked against output pixels. See
+test at this checkpoint executes the ADD-with-zero fixture, not MUL. A
+follow-up controlled MUL run is documented above. See
 [`research/12_latte_shader_isa.md`](research/12_latte_shader_isa.md).
 
 ## Bounded Latte binary32 ADD SPIR-V lowering (2026-11-25)

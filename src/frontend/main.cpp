@@ -1,4 +1,5 @@
 #include "emulator.hpp"
+#include "gpu/latte_shader_interpreter.hpp"
 #include "gpu/vulkan/vulkan_renderer.hpp"
 
 #include <SDL3/SDL.h>
@@ -1914,8 +1915,11 @@ int run_vulkan_texture_upload_smoke_test()
 
 int run_gx2_guest_triangle_test(
     bool visible_window = false,
-    bool use_latte_spirv = false)
+    bool use_latte_spirv_add = false,
+    bool use_latte_spirv_multiply = false)
 {
+    const bool use_latte_spirv =
+        use_latte_spirv_add || use_latte_spirv_multiply;
     constexpr std::uint32_t vertex_buffer_address = 0x10000U;
     constexpr std::uint32_t index_buffer_address = 0x4000U;
     constexpr std::uint32_t big_endian_index_buffer_address = 0x5000U;
@@ -2069,17 +2073,27 @@ int run_gx2_guest_triangle_test(
     vertex_shader_program[71U] = 0x900C6060U;
     if (use_latte_spirv)
     {
+        const std::uint32_t operation_opcode =
+            use_latte_spirv_multiply
+                ? affogato::gpu::latte_alu_op2_multiply_ieee_opcode
+                : affogato::gpu::latte_alu_op2_add_float_opcode;
+        const std::uint16_t second_operand_selector =
+            use_latte_spirv_multiply
+                ? affogato::gpu::latte_alu_source_one_float_selector
+                : affogato::gpu::latte_alu_source_zero_selector;
         for (std::uint32_t component = 0U; component < 4U; ++component)
         {
             const std::uint32_t slot = 64U + component * 2U;
             const std::uint32_t source_word =
                 1U |
-                (248U << 13U) |
+                (second_operand_selector << 13U) |
                 (component << 10U) |
                 (component << 23U) |
                 (component == 3U ? 0x80000000U : 0U);
             const std::uint32_t destination_word =
-                0x00600010U | (component << 29U);
+                0x00600010U |
+                (operation_opcode << 7U) |
+                (component << 29U);
             vertex_shader_program[slot] = std::byteswap(source_word);
             vertex_shader_program[slot + 1U] =
                 std::byteswap(destination_word);
@@ -2615,13 +2629,23 @@ int run_gx2_guest_triangle_test(
         renderer.poll_events();
         renderer.render_frame();
     }
+    const char* shader_subset_description =
+        "the supported CPU MOV/export shader subset";
+    if (use_latte_spirv_add)
+    {
+        shader_subset_description =
+            "the bounded MOV/ADD-to-position SPIR-V vertex subset";
+    }
+    if (use_latte_spirv_multiply)
+    {
+        shader_subset_description =
+            "the bounded MOV/MUL-to-position SPIR-V vertex subset";
+    }
     std::cout << "GX2 float32/float16/UNORM8x4 triangle-list, indexed, strip, and fan "
               << "geometry, "
               << "including unpredicated PM4 auto-index, indexed, and immediate-index "
               << "draws used captured guest vertex input and "
-              << (use_latte_spirv
-                    ? "the bounded MOV/ADD-to-position SPIR-V vertex subset"
-                    : "the supported CPU MOV/export shader subset")
+              << shader_subset_description
               << "; Vulkan readback and guest-memory writeback verified the "
                  "diagnostic color-buffer path on "
               << renderer.device_name()
@@ -2667,6 +2691,12 @@ int main(int argc, char* argv[])
             {
                 return run_gx2_guest_triangle_test(false, true);
             }
+            if (std::string_view(argv[1]) ==
+                    "--gx2-guest-triangle-multiply-spirv-smoke-test" &&
+                argc == 2)
+            {
+                return run_gx2_guest_triangle_test(false, false, true);
+            }
             if (std::string_view(argv[1]) == "--gx2-guest-triangle-display-test" &&
                 argc == 2)
             {
@@ -2680,6 +2710,7 @@ int main(int argc, char* argv[])
                          "       AffogatoFrontend.exe --gx2-guest-scanout-display-test\n"
                          "       AffogatoFrontend.exe --gx2-guest-triangle-smoke-test\n"
                          "       AffogatoFrontend.exe --gx2-guest-triangle-spirv-smoke-test\n"
+                         "       AffogatoFrontend.exe --gx2-guest-triangle-multiply-spirv-smoke-test\n"
                          "       AffogatoFrontend.exe --gx2-guest-triangle-display-test\n";
             return 2;
         }
